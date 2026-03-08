@@ -99,16 +99,16 @@ export default function NewContractPage() {
   const [extracting, setExtracting] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
+  const selectedProperty = dbProperties.find((p: any) => p.id === propertyId);
+  const availableUnits = selectedProperty?.units ?? [];
+  const selectedUnits = availableUnits.filter((u: any) => unitIds.includes(u.id));
+  const totalArea = selectedUnits.reduce((s: number, u: any) => s + (u.area ?? 0), 0);
   // חישוב ערבות אוטומטי
   const mgmtMonthly = mgmtFeePerSqm && totalArea ? Number(mgmtFeePerSqm) * totalArea : 0;
   const rentMonthly = rentPerSqm && totalArea ? Number(rentPerSqm) * totalArea + Number(investmentAddition) : 0;
   const vatMultiplier = vatType === "taxable" ? (1 + Number(vatPct)/100) : 1;
   const calcGuaranteeAmount = guaranteeCalcMethod === "months" && guaranteeMonths && rentMonthly
     ? Math.round((rentMonthly + (guaranteeIncludesMgmt ? mgmtMonthly : 0)) * Number(guaranteeMonths) * vatMultiplier)
-    : null;
-
-  const selectedProperty = dbProperties.find((p: any) => p.id === propertyId);
-  const availableUnits = selectedProperty?.units ?? [];
   const selectedUnits = availableUnits.filter((u: any) => unitIds.includes(u.id));
   const totalArea = selectedUnits.reduce((s: number, u: any) => s + (u.area ?? 0), 0);
   const monthlyRent = rentPerSqm && totalArea ? (Number(rentPerSqm) * totalArea + Number(investmentAddition)) : null;
