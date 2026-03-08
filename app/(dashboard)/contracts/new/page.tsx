@@ -109,8 +109,7 @@ export default function NewContractPage() {
   const vatMultiplier = vatType === "taxable" ? (1 + Number(vatPct)/100) : 1;
   const calcGuaranteeAmount = guaranteeCalcMethod === "months" && guaranteeMonths && rentMonthly
     ? Math.round((rentMonthly + (guaranteeIncludesMgmt ? mgmtMonthly : 0)) * Number(guaranteeMonths) * vatMultiplier)
-  const selectedUnits = availableUnits.filter((u: any) => unitIds.includes(u.id));
-  const totalArea = selectedUnits.reduce((s: number, u: any) => s + (u.area ?? 0), 0);
+    : null;
   const monthlyRent = rentPerSqm && totalArea ? (Number(rentPerSqm) * totalArea + Number(investmentAddition)) : null;
 
   function calcEnd(start: string, val: string, unit: "months"|"years") {
