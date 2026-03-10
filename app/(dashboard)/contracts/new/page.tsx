@@ -1,3 +1,4 @@
+
 "use client";
 import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
@@ -80,6 +81,28 @@ export default function NewContractPage() {
   // מדד
   const [indexBaseDate, setIndexBaseDate] = useState("");
   const [indexBaseValue, setIndexBaseValue] = useState("");
+  const [fetchingCpi, setFetchingCpi] = useState(false);
+
+  async function fetchCpiForBaseDate() {
+    if (!indexBaseDate) return;
+    setFetchingCpi(true);
+    try {
+      const [year, month] = indexBaseDate.split("-");
+      const res = await fetch(`/api/cpi?year=${year}`);
+      const data = await res.json();
+      const records = data.records ?? data ?? [];
+      const found = records.find((r: any) => r.year === Number(year) && r.month === Number(month));
+      if (found) {
+        setIndexBaseValue(found.value.toString());
+      } else {
+        alert(`לא נמצא מדד עבור ${month}/${year} — נסה לרענן את המדדים בעמוד מדד המחירים`);
+      }
+    } catch {
+      alert("שגיאה במשיכת המדד");
+    } finally {
+      setFetchingCpi(false);
+    }
+  }
 
   // דמי ניהול
   const [mgmtFeePerSqm, setMgmtFeePerSqm] = useState("");
@@ -558,7 +581,17 @@ export default function NewContractPage() {
             </div>
             <div>
               <label className="mb-1 block text-xs font-semibold text-slate-700">ערך מדד בסיס</label>
-              <input type="number" step="0.01" value={indexBaseValue} onChange={e => setIndexBaseValue(e.target.value)} placeholder="108.50" className={ic} />
+              <div className="flex gap-2">
+                <input type="number" step="0.01" value={indexBaseValue} onChange={e => setIndexBaseValue(e.target.value)} placeholder="108.50" className={ic} />
+                <button
+                  type="button"
+                  onClick={fetchCpiForBaseDate}
+                  disabled={!indexBaseDate || fetchingCpi}
+                  className="whitespace-nowrap rounded-lg bg-blue-600 px-3 py-2 text-xs font-bold text-white hover:bg-blue-700 disabled:opacity-40"
+                >
+                  {fetchingCpi ? "⏳" : "משוך מדד"}
+                </button>
+              </div>
             </div>
           </div>
           {indexBaseDate && indexBaseValue && (
@@ -652,7 +685,7 @@ export default function NewContractPage() {
               </div>
               {calcGuaranteeAmount && (
                 <div className="rounded-lg bg-green-50 border border-green-100 px-4 py-3 flex justify-between items-center">
-                  <span className="text-sm text-slate-600">סכום ערבות מחושב ({guaranteeMonths} חודשים{guaranteeIncludesMgmt ? " + ניהול" : ""}{vatType === "taxable" ? " + מע&quot;מ" : ""})</span>
+                  <span className="text-sm text-slate-600">סכום ערבות מחושב ({guaranteeMonths} חודשים{guaranteeIncludesMgmt ? " + ניהול" : ""}{includesVat ? " + מע&quot;מ" : ""})</span>
                   <span className="text-xl font-bold text-green-700">₪{calcGuaranteeAmount.toLocaleString()}</span>
                 </div>
               )}
