@@ -21,7 +21,7 @@ async function fetchFromCBS(seriesId: string, fromYear: number, toYear: number) 
   if (!Array.isArray(dateArray)) return [];
   return dateArray
     .filter((d: any) => d?.year && d?.month && d?.currBase?.value)
-    .map((d: any) => ({ year: d.year, month: d.month, value: d.currBase.value, baseDesc: d.currBase.baseDesc ?? "" }));
+    .map((d: any) => ({ year: d.year, month: d.month, value: d.currBase.value }));
 }
 
 export async function GET(request: Request) {
@@ -40,7 +40,7 @@ export async function GET(request: Request) {
   try {
     const records = await fetchFromCBS(seriesId, fromYear, toYear);
     if (records.length === 0) return NextResponse.json({ source: "cbs_empty", count: 0, message: 'הלמ"ס לא החזיר נתונים' });
-    const toInsert = records.map(r => ({ year: r.year, month: r.month, value: r.value, base_year: baseYear, base_desc: r.baseDesc }));
+    const toInsert = records.map(r => ({ year: r.year, month: r.month, value: r.value, base_year: baseYear }));
     const { error } = await supabase.from("cpi_records").upsert(toInsert, { onConflict: "year,month,base_year" });
     if (error) return NextResponse.json({ source: "cbs", error: error.message, records: toInsert, count: toInsert.length });
     return NextResponse.json({ source: "cbs", count: records.length, records: toInsert });
