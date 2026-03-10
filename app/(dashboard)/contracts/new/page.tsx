@@ -596,7 +596,7 @@ export default function NewContractPage() {
           </div>
           {indexBaseDate && indexBaseValue && (
             <div className="mt-2 text-xs text-slate-500 bg-slate-50 rounded-lg px-3 py-2">
-              מדד בסיס: <span className="font-bold text-slate-700">{indexBaseValue}</span> — {indexBaseDate.split("-")[1]}/{indexBaseDate.split("-")[0]}
+              מדד בסיס: <span className="font-bold text-slate-700">{indexBaseValue}</span> — {indexBaseDate.split("-")[1]}/{indexBaseDate.split("-")[0]} <span className="text-blue-600 font-semibold">(בסיס 2022=100)</span>
             </div>
           )}
         </div>
@@ -685,7 +685,7 @@ export default function NewContractPage() {
               </div>
               {calcGuaranteeAmount && (
                 <div className="rounded-lg bg-green-50 border border-green-100 px-4 py-3 flex justify-between items-center">
-                  <span className="text-sm text-slate-600">סכום ערבות מחושב ({guaranteeMonths} חודשים{guaranteeIncludesMgmt ? " + ניהול" : ""}(vatType === "taxable" ? " + מעu0026quot;מ" : ""))</span>
+                  <span className="text-sm text-slate-600">סכום ערבות מחושב ({guaranteeMonths} חודשים{guaranteeIncludesMgmt ? " + ניהול" : ""}{includesVat ? " + מע&quot;מ" : ""})</span>
                   <span className="text-xl font-bold text-green-700">₪{calcGuaranteeAmount.toLocaleString()}</span>
                 </div>
               )}
