@@ -76,6 +76,7 @@ export default function NewContractPage() {
   const [increaseType, setIncreaseType] = useState<"percent"|"fixed">("percent");
   const [increaseValue, setIncreaseValue] = useState("");
   const [increaseFreqMonths, setIncreaseFreqMonths] = useState("12");
+  const [increaseUntilYear, setIncreaseUntilYear] = useState(""); // שנה אחרונה לעלייה (ריק = כל תקופת החוזה)
 
   // מדד
   const [indexBaseDate, setIndexBaseDate] = useState("");
@@ -207,6 +208,10 @@ export default function NewContractPage() {
         start_date: startDate, end_date: endDate,
         rent_per_sqm: Number(rentPerSqm), charged_area: totalArea,
         investment_addition: Number(investmentAddition), payment_frequency: paymentFrequency,
+        price_increase_type: hasPriceIncrease ? increaseType : undefined,
+        price_increase_value: hasPriceIncrease && increaseValue ? Number(increaseValue) : undefined,
+        price_increase_freq_months: hasPriceIncrease ? Number(increaseFreqMonths) : undefined,
+        price_increase_until_year: hasPriceIncrease && increaseUntilYear ? Number(increaseUntilYear) : undefined,
         index_base_date: indexBaseDate || undefined, index_base_value: indexBaseValue ? Number(indexBaseValue) : undefined,
         option_months: hasOptions && options[0]?.durationValue ? (options[0].durationUnit === "years" ? Number(options[0].durationValue)*12 : Number(options[0].durationValue)) : undefined,
         guarantee_type: guaranteeType || undefined, guarantee_amount: guaranteeAmount ? Number(guaranteeAmount) : undefined, guarantee_expiry: guaranteeExpiry || undefined
@@ -471,13 +476,28 @@ export default function NewContractPage() {
                     <input type="number" value={increaseValue} onChange={e => setIncreaseValue(e.target.value)} placeholder={increaseType === "percent" ? "3" : "500"} className={ic} />
                   </div>
                 </div>
-                <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-700">תדירות (כל כמה חודשים)</label>
-                  <select value={increaseFreqMonths} onChange={e => setIncreaseFreqMonths(e.target.value)} className={ic}>
-                    <option value="12">כל שנה (12 חודשים)</option>
-                    <option value="24">כל שנתיים (24 חודשים)</option>
-                    <option value="36">כל 3 שנים (36 חודשים)</option>
-                  </select>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-slate-700">תדירות (כל כמה חודשים)</label>
+                    <select value={increaseFreqMonths} onChange={e => setIncreaseFreqMonths(e.target.value)} className={ic}>
+                      <option value="12">כל שנה (12 חודשים)</option>
+                      <option value="24">כל שנתיים (24 חודשים)</option>
+                      <option value="36">כל 3 שנים (36 חודשים)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-slate-700">עלייה עד שנה (כולל)</label>
+                    <input
+                      type="number"
+                      value={increaseUntilYear}
+                      onChange={e => setIncreaseUntilYear(e.target.value)}
+                      placeholder="ריק = כל התקופה"
+                      min={startDate ? new Date(startDate).getFullYear() : 2020}
+                      max={2060}
+                      className={ic}
+                    />
+                    <div className="text-[10px] text-slate-400 mt-0.5">לאחר שנה זו המחיר קפוא</div>
+                  </div>
                 </div>
                 {/* סימולציה */}
                 {rentPerSqm && totalArea && increaseValue && startDate && endDate && (
@@ -489,16 +509,28 @@ export default function NewContractPage() {
                         let current = Number(rentPerSqm);
                         const freq = Number(increaseFreqMonths);
                         const totalMonths = monthsBetween(startDate, endDate);
+                        const untilYear = increaseUntilYear ? Number(increaseUntilYear) : null;
                         for (let m = 0; m <= totalMonths; m += freq) {
                           const d = addMonths(startDate, m);
-                          rows.push({ date: d, rent: current });
-                          if (increaseType === "percent") current = current * (1 + Number(increaseValue)/100);
-                          else current = current + Number(increaseValue);
+                          rows.push({ date: d, rent: current, frozen: untilYear !== null && new Date(d).getFullYear() > untilYear });
+                          // עלייה רק אם עדיין בתוך שנות העלייה
+                          const nextDate = addMonths(startDate, m + freq);
+                          const nextYear = new Date(nextDate).getFullYear();
+                          if (untilYear === null || nextYear <= untilYear) {
+                            if (increaseType === "percent") current = current * (1 + Number(increaseValue)/100);
+                            else current = current + Number(increaseValue);
+                          }
                         }
-                        return rows.slice(0,6).map((r,i) => (
-                          <div key={i} className="flex justify-between text-xs bg-white rounded px-3 py-1.5">
-                            <span className="text-slate-500">{formatDate(r.date)}</span>
-                            <span className="font-medium text-slate-700">₪{r.rent.toFixed(2)} למ"ר <span className="text-slate-400">({totalArea > 0 ? "₪"+Math.round(r.rent * totalArea).toLocaleString() : "—"} / חודש)</span></span>
+                        return rows.slice(0,10).map((r,i) => (
+                          <div key={i} className={`flex justify-between text-xs rounded px-3 py-1.5 ${r.frozen ? "bg-slate-100" : "bg-white"}`}>
+                            <span className="text-slate-500">
+                              {formatDate(r.date)}
+                              {r.frozen && <span className="mr-1 text-[10px] text-orange-500">קפוא</span>}
+                            </span>
+                            <span className="font-medium text-slate-700">
+                              ₪{r.rent.toFixed(2)} למ"ר{" "}
+                              <span className="text-slate-400">({totalArea > 0 ? "₪"+Math.round(r.rent * totalArea).toLocaleString() : "—"} / חודש)</span>
+                            </span>
                           </div>
                         ));
                       })()}
@@ -621,7 +653,7 @@ export default function NewContractPage() {
               </div>
               {calcGuaranteeAmount && (
                 <div className="rounded-lg bg-green-50 border border-green-100 px-4 py-3 flex justify-between items-center">
-                  <span className="text-sm text-slate-600">סכום ערבות מחושב ({guaranteeMonths} חודשים{guaranteeIncludesMgmt ? " + ניהול" : ""}{vatType === "taxable" ? " + מע&quot;מ" : ""})</span>
+                  <span className="text-sm text-slate-600">סכום ערבות מחושב ({guaranteeMonths} חודשים{guaranteeIncludesMgmt ? " + ניהול" : ""}{includesVat ? " + מע&quot;מ" : ""})</span>
                   <span className="text-xl font-bold text-green-700">₪{calcGuaranteeAmount.toLocaleString()}</span>
                 </div>
               )}
