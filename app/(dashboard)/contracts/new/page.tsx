@@ -234,9 +234,17 @@ export default function NewContractPage() {
         start_date: startDate, end_date: endDate,
         rent_per_sqm: Number(rentPerSqm), charged_area: totalArea,
         investment_addition: Number(investmentAddition), payment_frequency: paymentFrequency,
-        index_base_date: indexBaseDate || undefined, index_base_value: indexBaseValue ? Number(indexBaseValue) : undefined,
+        index_base_date: indexBaseDate || undefined,
+        index_base_value: indexBaseValue ? Number(indexBaseValue) : undefined,
+        index_base_month: indexBaseDate ? Number(indexBaseDate.split("-")[1]) : undefined,
+        index_base_year: indexBaseDate ? Number(indexBaseDate.split("-")[0]) : undefined,
+        mgmt_fee_per_sqm: mgmtFeePerSqm ? Number(mgmtFeePerSqm) : undefined,
+        vat_type: vatType,
+        vat_pct: Number(vatPct),
         option_months: hasOptions && options[0]?.durationValue ? (options[0].durationUnit === "years" ? Number(options[0].durationValue)*12 : Number(options[0].durationValue)) : undefined,
-        guarantee_type: guaranteeType || undefined, guarantee_amount: guaranteeAmount ? Number(guaranteeAmount) : undefined, guarantee_expiry: guaranteeExpiry || undefined
+        guarantee_type: guaranteeType || undefined,
+        guarantee_amount: guaranteeAmount ? Number(guaranteeAmount) : undefined,
+        guarantee_expiry: guaranteeExpiry || undefined
       });
       try { sessionStorage.removeItem("contract_draft"); } catch {}
       alert("חוזה נשמר!");
