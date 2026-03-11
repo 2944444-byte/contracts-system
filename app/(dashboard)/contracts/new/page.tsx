@@ -194,14 +194,17 @@ export default function NewContractPage() {
   }
 
   async function handleSave() {
-    if (indexBaseDate && indexBaseValue) {
+  async function handleSave() {
+    if (indexBaseDate) {
       try {
-        const res = await fetch(`/api/cpi-check?from=${indexBaseDate}&base_year=2020`);
+        const res = await fetch(`/api/cpi-check?from=${indexBaseDate}`);
         const { missing } = await res.json();
         if (missing?.length > 0) {
           const proceed = confirm(`⚠️ חסרים ${missing.length} מדדים מ-${missing[0]} עד ${missing[missing.length-1]}.\nהמערכת תנסה למשוך אותם אוטומטית. להמשיך?`);
           if (!proceed) return;
-          await fetch(`/api/cpi?year=${new Date().getFullYear()}&refresh=true`);
+          const fromYear = indexBaseDate.split("-")[0];
+          const toYear = new Date().getFullYear();
+          await fetch(`/api/cpi?from_year=${fromYear}&to_year=${toYear}&refresh=true`);
         }
       } catch {}
     }
