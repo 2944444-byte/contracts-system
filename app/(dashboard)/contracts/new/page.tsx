@@ -216,7 +216,7 @@ export default function NewContractPage() {
         price_increase_value: hasPriceIncrease && increaseValue ? Number(increaseValue) : undefined,
         price_increase_freq_months: hasPriceIncrease ? Number(increaseFreqMonths) : undefined,
         price_increase_until_year: hasPriceIncrease && increaseUntilYear ? Number(increaseUntilYear) : undefined,
-        index_base_date: indexBaseDate || undefined,
+        index_base_date: indexBaseDate ? indexBaseDate + "-01" : undefined,
         index_base_value: indexBaseValue ? Number(indexBaseValue) : undefined,
         index_base_month: indexBaseDate ? Number(indexBaseDate.split("-")[1]) : undefined,
         index_base_year: indexBaseDate ? Number(indexBaseDate.split("-")[0]) : undefined,
@@ -518,11 +518,13 @@ export default function NewContractPage() {
                         const freq = Number(increaseFreqMonths);
                         const totalMonths = monthsBetween(startDate, endDate);
                         const untilYear = increaseUntilYear ? Number(increaseUntilYear) : null;
+                        let lastValidRent = current;
                         for (let m = 0; m <= totalMonths; m += freq) {
                           const d = addMonths(startDate, m);
                           const yearOfDate = new Date(d).getFullYear();
                           const frozen = untilYear !== null && yearOfDate > untilYear;
-                          rows.push({ date: d, rent: current, frozen });
+                          if (!frozen) lastValidRent = current;
+                          rows.push({ date: d, rent: frozen ? lastValidRent : current, frozen });
                           if (!frozen) {
                             if (increaseType === "percent") current = current * (1 + Number(increaseValue)/100);
                             else current = current + Number(increaseValue);
