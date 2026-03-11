@@ -39,7 +39,7 @@ export default function ContractsPage() {
   async function load() {
     const { data } = await supabase
       .from("contracts")
-      .select("*, tenants(name, contact_phone, contact_email, contacts:tenant_contacts(*)), properties(name, address)")
+      .select("*, tenants(name, contact_phone, contact_email), properties(name, address)")
       .order("start_date", { ascending: false });
 
     const today = new Date(); today.setHours(0,0,0,0);
