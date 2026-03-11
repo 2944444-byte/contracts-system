@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useState, Fragment } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "../../../lib/supabase";
 
@@ -159,9 +159,9 @@ export default function ContractsPage() {
                 const monthly = (c.rent_per_sqm ?? 0) * (c.charged_area ?? 0) + (c.investment_addition ?? 0);
                 const isExpanded = expandedId === c.id;
 
-                return [
-                  /* שורה ראשית */
-                  <tr key={c.id}
+                return (
+                  <Fragment key={c.id}>
+                  <tr
                     onClick={() => toggleExpand(c.id)}
                     className={`border-t border-slate-100 cursor-pointer transition-colors ${isExpanded ? "bg-blue-50" : "hover:bg-slate-50"}`}>
                     <td className="px-3 py-3 text-slate-400 text-center">
@@ -301,7 +301,8 @@ export default function ContractsPage() {
                       </td>
                     </tr>
                   )
-                ];
+                  </Fragment>
+                );
               })}
             </tbody>
           </table>
