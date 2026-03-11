@@ -1,4 +1,3 @@
-
 "use client";
 import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
@@ -7,51 +6,21 @@ import { createContract } from "../../../../lib/db";
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 
-function addMonths(dateStr: string, months: number): string {
-  if (!dateStr) return "";
-  const d = new Date(dateStr);
-  d.setMonth(d.getMonth() + months);
-  d.setDate(d.getDate() - 1);
-  return d.toISOString().split("T")[0];
-}
+function addMonths(dateStr: string, months: number): string { if (!dateStr) return ""; const d = new Date(dateStr); d.setMonth(d.getMonth() + months); d.setDate(d.getDate() - 1); return d.toISOString().split("T")[0]; }
+function nextDay(dateStr: string): string { if (!dateStr) return ""; const d = new Date(dateStr); d.setDate(d.getDate() + 1); return d.toISOString().split("T")[0]; }
+function monthsBetween(start: string, end: string): number { if (!start || !end) return 0; const s = new Date(start), e = new Date(end); return (e.getFullYear() - s.getFullYear()) * 12 + (e.getMonth() - s.getMonth()); }
+function formatDate(d: string) { if (!d) return ""; const [y,m,day] = d.split("-"); return `${day}/${m}/${y}`; }
 
-function nextDay(dateStr: string): string {
-  if (!dateStr) return "";
-  const d = new Date(dateStr);
-  d.setDate(d.getDate() + 1);
-  return d.toISOString().split("T")[0];
-}
-
-function monthsBetween(start: string, end: string): number {
-  if (!start || !end) return 0;
-  const s = new Date(start), e = new Date(end);
-  return (e.getFullYear() - s.getFullYear()) * 12 + (e.getMonth() - s.getMonth());
-}
-
-function formatDate(d: string) {
-  if (!d) return "";
-  const [y,m,day] = d.split("-");
-  return `${day}/${m}/${y}`;
-}
-
-interface Option {
-  id: number;
-  durationValue: string;
-  durationUnit: "months" | "years";
-  noticeType: "non_renewal" | "exercise";
-  noticeMonths: string;
-  priceType: "fixed" | "percent" | "none";
-  priceValue: string;
-}
+interface Option { id: number; durationValue: string; durationUnit: "months" | "years"; noticeType: "non_renewal" | "exercise"; noticeMonths: string; priceType: "fixed" | "percent" | "none"; priceValue: string; }
 
 export default function NewContractPage() {
   const router = useRouter();
   const [dbProperties, setDbProperties] = useState<any[]>([]);
   const [dbTenants, setDbTenants] = useState<any[]>([]);
+
   useEffect(() => {
     supabase.from("properties").select("id, name, address, units(*)").then(({ data }) => setDbProperties(data ?? []));
     supabase.from("tenants").select("id, name").then(({ data }) => setDbTenants(data ?? []));
-    // טעינת טיוטה שמורה אם יש
     try {
       const draft = sessionStorage.getItem("contract_draft");
       if (draft) {
@@ -76,26 +45,24 @@ export default function NewContractPage() {
         if (d.guaranteeExpiry) setGuaranteeExpiry(d.guaranteeExpiry);
         if (d.hasOptions !== undefined) setHasOptions(d.hasOptions);
         if (d.options) setOptions(d.options);
+        if (d.hasPriceIncrease !== undefined) setHasPriceIncrease(d.hasPriceIncrease);
+        if (d.increaseType) setIncreaseType(d.increaseType);
+        if (d.increaseValue) setIncreaseValue(d.increaseValue);
+        if (d.increaseFreqMonths) setIncreaseFreqMonths(d.increaseFreqMonths);
+        if (d.increaseUntilYear) setIncreaseUntilYear(d.increaseUntilYear);
       }
     } catch {}
   }, []);
 
-  // נכס ויחידות
   const [propertyId, setPropertyId] = useState("");
   const [unitIds, setUnitIds] = useState<string[]>([]);
   const [tenantId, setTenantId] = useState("");
-
-  // תקופה
   const [startDate, setStartDate] = useState("");
   const [durationValue, setDurationValue] = useState("");
   const [durationUnit, setDurationUnit] = useState<"months"|"years">("months");
   const [endDate, setEndDate] = useState("");
-
-  // אופציות
   const [hasOptions, setHasOptions] = useState(false);
   const [options, setOptions] = useState<Option[]>([{ id: 1, durationValue: "", durationUnit: "months", noticeType: "non_renewal", noticeMonths: "3", priceType: "none", priceValue: "" }]);
-
-  // מחיר
   const [rentPerSqm, setRentPerSqm] = useState("");
   const [investmentAddition, setInvestmentAddition] = useState("0");
   const [paymentFrequency, setPaymentFrequency] = useState("monthly");
@@ -104,17 +71,12 @@ export default function NewContractPage() {
   const [increaseValue, setIncreaseValue] = useState("");
   const [increaseFreqMonths, setIncreaseFreqMonths] = useState("12");
   const [increaseUntilYear, setIncreaseUntilYear] = useState("");
-
-  // מדד
   const [indexBaseDate, setIndexBaseDate] = useState("");
   const [indexBaseValue, setIndexBaseValue] = useState("");
-
-  // דמי ניהול
+  const [fetchingCpi, setFetchingCpi] = useState(false);
   const [mgmtFeePerSqm, setMgmtFeePerSqm] = useState("");
-  const [vatType, setVatType] = useState<"taxable"|"exempt">("taxable"); // מסחרי=חייב, מגורים=פטור
-  const [vatPct, setVatPct] = useState("18"); // אחוז מע&quot;מ נוכחי בישראל
-
-  // ערבות
+  const [vatType, setVatType] = useState<"taxable"|"exempt">("taxable");
+  const [vatPct, setVatPct] = useState("18");
   const [guaranteeType, setGuaranteeType] = useState("");
   const [guaranteeCalcMethod, setGuaranteeCalcMethod] = useState("months");
   const [guaranteeMonths, setGuaranteeMonths] = useState("3");
@@ -122,8 +84,6 @@ export default function NewContractPage() {
   const [guaranteeExpiry, setGuaranteeExpiry] = useState("");
   const [guaranteeInitialExpiry, setGuaranteeInitialExpiry] = useState("");
   const [guaranteeIncludesMgmt, setGuaranteeIncludesMgmt] = useState(false);
-
-  // PDF
   const [extracting, setExtracting] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -131,13 +91,10 @@ export default function NewContractPage() {
   const availableUnits = selectedProperty?.units ?? [];
   const selectedUnits = availableUnits.filter((u: any) => unitIds.includes(u.id));
   const totalArea = selectedUnits.reduce((s: number, u: any) => s + (u.area ?? 0), 0);
-  // חישוב ערבות אוטומטי
   const mgmtMonthly = mgmtFeePerSqm && totalArea ? Number(mgmtFeePerSqm) * totalArea : 0;
   const rentMonthly = rentPerSqm && totalArea ? Number(rentPerSqm) * totalArea + Number(investmentAddition) : 0;
   const vatMultiplier = vatType === "taxable" ? (1 + Number(vatPct)/100) : 1;
-  const calcGuaranteeAmount = guaranteeCalcMethod === "months" && guaranteeMonths && rentMonthly
-    ? Math.round((rentMonthly + (guaranteeIncludesMgmt ? mgmtMonthly : 0)) * Number(guaranteeMonths) * vatMultiplier)
-    : null;
+  const calcGuaranteeAmount = guaranteeCalcMethod === "months" && guaranteeMonths && rentMonthly ? Math.round((rentMonthly + (guaranteeIncludesMgmt ? mgmtMonthly : 0)) * Number(guaranteeMonths) * vatMultiplier) : null;
   const monthlyRent = rentPerSqm && totalArea ? (Number(rentPerSqm) * totalArea + Number(investmentAddition)) : null;
 
   function calcEnd(start: string, val: string, unit: "months"|"years") {
@@ -145,16 +102,13 @@ export default function NewContractPage() {
     const months = unit === "years" ? Number(val) * 12 : Number(val);
     setEndDate(addMonths(start, months));
   }
-
   function updateOption(id: number, field: keyof Option, value: string) {
     setOptions(prev => prev.map(o => o.id === id ? { ...o, [field]: value } : o));
   }
-
   function addOption() {
     setOptions(prev => [...prev, { id: Date.now(), durationValue: "", durationUnit: "months", noticeType: "non_renewal", noticeMonths: "3", priceType: "none", priceValue: "" }]);
   }
 
-  // ציר זמן
   const optionStartDates: string[] = [];
   const optionEndDates: string[] = [];
   options.forEach((o, i) => {
@@ -164,6 +118,35 @@ export default function NewContractPage() {
     const months = o.durationUnit === "years" ? Number(o.durationValue) * 12 : Number(o.durationValue);
     optionEndDates.push(optStart && months ? addMonths(optStart, months) : "");
   });
+
+  async function fetchCpiForBaseDate() {
+    if (!indexBaseDate) return;
+    setFetchingCpi(true);
+    try {
+      const [year, month] = indexBaseDate.split("-");
+      const res = await fetch(`/api/cpi?year=${year}`);
+      const data = await res.json();
+      const records = data.records ?? data ?? [];
+      const found = Array.isArray(records) && records.find((r: any) => r.year === Number(year) && r.month === Number(month));
+      if (found) {
+        setIndexBaseValue(found.value.toString());
+      } else {
+        const res2 = await fetch(`/api/cpi?from_year=${year}&to_year=${year}&refresh=true`);
+        const data2 = await res2.json();
+        const records2 = data2.records ?? data2 ?? [];
+        const found2 = Array.isArray(records2) && records2.find((r: any) => r.year === Number(year) && r.month === Number(month));
+        if (found2) {
+          setIndexBaseValue(found2.value.toString());
+        } else {
+          alert(`לא נמצא מדד עבור ${month}/${year} — בדוק שהמדדים נמשכו עבור שנה זו`);
+        }
+      }
+    } catch {
+      alert("שגיאה במשיכת המדד");
+    } finally {
+      setFetchingCpi(false);
+    }
+  }
 
   async function handlePdfUpload(file: File) {
     if (file.size > 20 * 1024 * 1024) { alert("מקסימום 20MB"); return; }
@@ -182,11 +165,8 @@ export default function NewContractPage() {
       const response = await fetch("/api/extract-contract", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
       const data = await response.json();
       if (data.error) { alert("שגיאה: " + data.error); return; }
-
       let computedEnd = data.end_date ?? "";
-      if (!computedEnd && data.start_date && data.duration_months) {
-        computedEnd = addMonths(data.start_date, Number(data.duration_months));
-      }
+      if (!computedEnd && data.start_date && data.duration_months) computedEnd = addMonths(data.start_date, Number(data.duration_months));
       if (data.start_date) setStartDate(data.start_date);
       if (computedEnd) setEndDate(computedEnd);
       if (data.duration_months) { setDurationValue(data.duration_months.toString()); setDurationUnit("months"); }
@@ -200,7 +180,6 @@ export default function NewContractPage() {
       if (data.index_base_date) setIndexBaseDate(data.index_base_date);
       if (data.payment_frequency) setPaymentFrequency(data.payment_frequency);
       if (data.tenant_name) { const t = dbTenants.find((t: any) => t.name === data.tenant_name); if (t) setTenantId(t.id); }
-
       const ex = [];
       if (data.start_date) ex.push("התחלה: " + data.start_date);
       if (computedEnd) ex.push("סיום: " + computedEnd);
@@ -211,12 +190,10 @@ export default function NewContractPage() {
       if (data.guarantee_amount) ex.push("ערבות: ₪" + data.guarantee_amount);
       if (data.index_base_value) ex.push("מדד בסיס: " + data.index_base_value);
       alert("חולץ בהצלחה:\n" + (ex.length ? ex.join("\n") : "לא נמצאו נתונים"));
-    } catch(e) { alert("שגיאה: " + e); }
-    finally { setExtracting(false); }
+    } catch(e) { alert("שגיאה: " + e); } finally { setExtracting(false); }
   }
 
   async function handleSave() {
-    // בדיקת מדדים חסרים
     if (indexBaseDate && indexBaseValue) {
       try {
         const res = await fetch(`/api/cpi-check?from=${indexBaseDate}&base_year=2020`);
@@ -235,6 +212,10 @@ export default function NewContractPage() {
         start_date: startDate, end_date: endDate,
         rent_per_sqm: Number(rentPerSqm), charged_area: totalArea,
         investment_addition: Number(investmentAddition), payment_frequency: paymentFrequency,
+        price_increase_type: hasPriceIncrease ? increaseType : undefined,
+        price_increase_value: hasPriceIncrease && increaseValue ? Number(increaseValue) : undefined,
+        price_increase_freq_months: hasPriceIncrease ? Number(increaseFreqMonths) : undefined,
+        price_increase_until_year: hasPriceIncrease && increaseUntilYear ? Number(increaseUntilYear) : undefined,
         index_base_date: indexBaseDate || undefined,
         index_base_value: indexBaseValue ? Number(indexBaseValue) : undefined,
         index_base_month: indexBaseDate ? Number(indexBaseDate.split("-")[1]) : undefined,
@@ -246,10 +227,6 @@ export default function NewContractPage() {
         guarantee_type: guaranteeType || undefined,
         guarantee_amount: guaranteeAmount ? Number(guaranteeAmount) : undefined,
         guarantee_expiry: guaranteeExpiry || undefined,
-        price_increase_until_year: hasPriceIncrease && increaseUntilYear ? Number(increaseUntilYear) : undefined,
-        price_increase_type: hasPriceIncrease ? increaseType : undefined,
-        price_increase_value: hasPriceIncrease && increaseValue ? Number(increaseValue) : undefined,
-        price_increase_freq_months: hasPriceIncrease ? Number(increaseFreqMonths) : undefined
       });
       try { sessionStorage.removeItem("contract_draft"); } catch {}
       alert("חוזה נשמר!");
@@ -260,7 +237,7 @@ export default function NewContractPage() {
           propertyId, unitIds, tenantId, startDate, endDate, durationValue, durationUnit,
           rentPerSqm, investmentAddition, paymentFrequency, indexBaseDate, indexBaseValue,
           mgmtFeePerSqm, vatType, vatPct, guaranteeType, guaranteeAmount, guaranteeExpiry,
-          hasOptions, options
+          hasOptions, options, hasPriceIncrease, increaseType, increaseValue, increaseFreqMonths, increaseUntilYear
         }));
       } catch {}
       const msg = e?.message || e?.details || e?.hint || JSON.stringify(e) || "שגיאה לא ידועה";
@@ -359,12 +336,8 @@ export default function NewContractPage() {
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-sm font-bold text-slate-700">אופציות הארכה</h2>
             <div className="flex gap-3">
-              <label className="flex items-center gap-1.5 text-sm cursor-pointer">
-                <input type="radio" checked={!hasOptions} onChange={() => setHasOptions(false)} /> לא
-              </label>
-              <label className="flex items-center gap-1.5 text-sm cursor-pointer">
-                <input type="radio" checked={hasOptions} onChange={() => setHasOptions(true)} /> כן
-              </label>
+              <label className="flex items-center gap-1.5 text-sm cursor-pointer"><input type="radio" checked={!hasOptions} onChange={() => setHasOptions(false)} /> לא</label>
+              <label className="flex items-center gap-1.5 text-sm cursor-pointer"><input type="radio" checked={hasOptions} onChange={() => setHasOptions(true)} /> כן</label>
             </div>
           </div>
           {hasOptions && (
@@ -413,19 +386,15 @@ export default function NewContractPage() {
                       </div>
                     </div>
                     {o.priceType !== "none" && (
-                    <div>
-                      <label className="mb-1 block text-xs font-semibold text-slate-700">
-                        {o.priceType === "percent" ? "אחוז עלייה" : 'מחיר חדש למ"ר (₪)'}
-                      </label>
-                      <input type="number" value={o.priceValue} onChange={e => updateOption(o.id, "priceValue", e.target.value)} placeholder={o.priceType === "percent" ? "5" : "0"} className={ic} />
-                    </div>
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold text-slate-700">{o.priceType === "percent" ? "אחוז עלייה" : 'מחיר חדש למ"ר (₪)'}</label>
+                        <input type="number" value={o.priceValue} onChange={e => updateOption(o.id, "priceValue", e.target.value)} placeholder={o.priceType === "percent" ? "5" : "0"} className={ic} />
+                      </div>
                     )}
                   </div>
                 );
               })}
-              <button onClick={addOption} className="w-full rounded-lg border border-dashed border-blue-300 py-2 text-sm text-blue-600 hover:bg-blue-50">
-                + הוסף אופציה נוספת
-              </button>
+              <button onClick={addOption} className="w-full rounded-lg border border-dashed border-blue-300 py-2 text-sm text-blue-600 hover:bg-blue-50">+ הוסף אופציה נוספת</button>
             </div>
           )}
         </div>
@@ -523,13 +492,20 @@ export default function NewContractPage() {
                     <input type="number" value={increaseValue} onChange={e => setIncreaseValue(e.target.value)} placeholder={increaseType === "percent" ? "3" : "500"} className={ic} />
                   </div>
                 </div>
-                <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-700">תדירות (כל כמה חודשים)</label>
-                  <select value={increaseFreqMonths} onChange={e => setIncreaseFreqMonths(e.target.value)} className={ic}>
-                    <option value="12">כל שנה (12 חודשים)</option>
-                    <option value="24">כל שנתיים (24 חודשים)</option>
-                    <option value="36">כל 3 שנים (36 חודשים)</option>
-                  </select>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-slate-700">תדירות (כל כמה חודשים)</label>
+                    <select value={increaseFreqMonths} onChange={e => setIncreaseFreqMonths(e.target.value)} className={ic}>
+                      <option value="12">כל שנה (12 חודשים)</option>
+                      <option value="24">כל שנתיים (24 חודשים)</option>
+                      <option value="36">כל 3 שנים (36 חודשים)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-slate-700">עלייה עד שנה (כולל)</label>
+                    <input type="number" value={increaseUntilYear} onChange={e => setIncreaseUntilYear(e.target.value)} placeholder={endDate ? new Date(endDate).getFullYear().toString() : "2028"} className={ic} />
+                    <div className="text-xs text-slate-400 mt-1">ריק = עד סוף החוזה</div>
+                  </div>
                 </div>
                 {/* סימולציה */}
                 {rentPerSqm && totalArea && increaseValue && startDate && endDate && (
@@ -541,16 +517,25 @@ export default function NewContractPage() {
                         let current = Number(rentPerSqm);
                         const freq = Number(increaseFreqMonths);
                         const totalMonths = monthsBetween(startDate, endDate);
+                        const untilYear = increaseUntilYear ? Number(increaseUntilYear) : null;
                         for (let m = 0; m <= totalMonths; m += freq) {
                           const d = addMonths(startDate, m);
-                          rows.push({ date: d, rent: current });
-                          if (increaseType === "percent") current = current * (1 + Number(increaseValue)/100);
-                          else current = current + Number(increaseValue);
+                          const yearOfDate = new Date(d).getFullYear();
+                          const frozen = untilYear !== null && yearOfDate > untilYear;
+                          rows.push({ date: d, rent: current, frozen });
+                          if (!frozen) {
+                            if (increaseType === "percent") current = current * (1 + Number(increaseValue)/100);
+                            else current = current + Number(increaseValue);
+                          }
                         }
-                        return rows.slice(0,6).map((r,i) => (
-                          <div key={i} className="flex justify-between text-xs bg-white rounded px-3 py-1.5">
+                        return rows.slice(0,8).map((r,i) => (
+                          <div key={i} className={`flex justify-between text-xs rounded px-3 py-1.5 ${r.frozen ? "bg-orange-50 border border-orange-100" : "bg-white"}`}>
                             <span className="text-slate-500">{formatDate(r.date)}</span>
-                            <span className="font-medium text-slate-700">₪{r.rent.toFixed(2)} למ"ר <span className="text-slate-400">({totalArea > 0 ? "₪"+Math.round(r.rent * totalArea).toLocaleString() : "—"} / חודש)</span></span>
+                            <span className={`font-medium ${r.frozen ? "text-orange-600" : "text-slate-700"}`}>
+                              ₪{r.rent.toFixed(2)} למ"ר
+                              <span className="text-slate-400"> (₪{totalArea > 0 ? Math.round(r.rent * totalArea).toLocaleString() : "—"}/חודש)</span>
+                              {r.frozen && <span className="mr-1 text-orange-500 font-bold">❄️ קפוא</span>}
+                            </span>
                           </div>
                         ));
                       })()}
@@ -579,12 +564,20 @@ export default function NewContractPage() {
             </div>
             <div>
               <label className="mb-1 block text-xs font-semibold text-slate-700">ערך מדד בסיס</label>
-              <input type="number" step="0.01" value={indexBaseValue} onChange={e => setIndexBaseValue(e.target.value)} placeholder="108.50" className={ic} />
+              <div className="flex gap-1">
+                <input type="number" step="0.01" value={indexBaseValue} onChange={e => setIndexBaseValue(e.target.value)} placeholder="108.50" className={ic} />
+                {indexBaseDate && (
+                  <button onClick={fetchCpiForBaseDate} disabled={fetchingCpi} title="משוך מדד אוטומטית" className="rounded-lg border border-blue-300 bg-blue-50 px-2 text-blue-600 hover:bg-blue-100 disabled:opacity-50 whitespace-nowrap text-xs">
+                    {fetchingCpi ? "⏳" : "🔄"}
+                  </button>
+                )}
+              </div>
             </div>
           </div>
           {indexBaseDate && indexBaseValue && (
             <div className="mt-2 text-xs text-slate-500 bg-slate-50 rounded-lg px-3 py-2">
               מדד בסיס: <span className="font-bold text-slate-700">{indexBaseValue}</span> — {indexBaseDate.split("-")[1]}/{indexBaseDate.split("-")[0]}
+              <span className="mr-2 text-blue-600">(בסיס 2022=100)</span>
             </div>
           )}
         </div>
@@ -656,7 +649,6 @@ export default function NewContractPage() {
               </select>
             </div>
           </div>
-
           {guaranteeCalcMethod === "months" ? (
             <div className="space-y-3">
               <div className="grid grid-cols-2 gap-4">
@@ -684,7 +676,6 @@ export default function NewContractPage() {
               <input type="number" value={guaranteeAmount} onChange={e => setGuaranteeAmount(e.target.value)} placeholder="0" className={ic} />
             </div>
           )}
-
           <div className="mt-4 pt-4 border-t border-slate-100 grid grid-cols-2 gap-4">
             <div>
               <label className="mb-1 block text-xs font-semibold text-slate-700">תוקף ערבות קיימת (בחתימה)</label>
