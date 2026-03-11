@@ -3,12 +3,12 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "../../../lib/supabase";
 
-const statusConfig: Record<string, { label: string; bg: string; color: string }> = {
-  active:   { label: "פעיל",     bg: "bg-green-100",  color: "text-green-700"  },
-  upcoming: { label: "עתידי",    bg: "bg-blue-100",   color: "text-blue-700"   },
-  expiring: { label: "פג בקרוב", bg: "bg-yellow-100", color: "text-yellow-700" },
-  ended:    { label: "הסתיים",   bg: "bg-slate-100",  color: "text-slate-500"  },
-  extended: { label: "הוארך",    bg: "bg-purple-100", color: "text-purple-700" },
+const statusConfig: Record<string, { label: string; bg: string; color: string; border: string }> = {
+  active:   { label: "פעיל",     bg: "bg-green-100",  color: "text-green-800",  border: "border-green-200" },
+  upcoming: { label: "עתידי",    bg: "bg-blue-100",   color: "text-blue-800",   border: "border-blue-200"  },
+  expiring: { label: "פג בקרוב", bg: "bg-yellow-100", color: "text-yellow-800", border: "border-yellow-200"},
+  ended:    { label: "הסתיים",   bg: "bg-slate-100",  color: "text-slate-600",  border: "border-slate-200" },
+  extended: { label: "הוארך",    bg: "bg-purple-100", color: "text-purple-800", border: "border-purple-200"},
 };
 
 function daysLeft(dateStr: string) {
@@ -19,6 +19,14 @@ function formatDate(d: string) {
   const [y,m,day] = d.split("-");
   return `${day}/${m}/${y}`;
 }
+function Row({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="flex justify-between items-center py-1.5 border-b border-slate-100 last:border-0">
+      <span className="text-slate-500 text-xs">{label}</span>
+      <span className="text-slate-900 text-sm font-medium">{value}</span>
+    </div>
+  );
+}
 
 export default function ContractsPage() {
   const router = useRouter();
@@ -26,37 +34,26 @@ export default function ContractsPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
-  const [selected, setSelected] = useState<any>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   async function load() {
     const { data } = await supabase
       .from("contracts")
-      .select("*, tenants(name, contact_phone, contact_email), properties(name, address)")
+      .select("*, tenants(name, contact_phone, contact_email, contacts:tenant_contacts(*)), properties(name, address)")
       .order("start_date", { ascending: false });
 
-    const today = new Date();
-    today.setHours(0,0,0,0);
-
+    const today = new Date(); today.setHours(0,0,0,0);
     const enriched = (data ?? []).map((c: any) => {
       const start = new Date(c.start_date);
       const end = new Date(c.end_date);
       const days = daysLeft(c.end_date);
       let status = c.status;
-
-      if (today < start) {
-        status = "upcoming";
-      } else if (today > end) {
-        // בדוק אם יש אופציה שממומשת (option_exercised=true) — אז הסטטוס "הוארך"
-        status = c.option_exercised ? "extended" : "ended";
-      } else if (days <= 90) {
-        status = "expiring";
-      } else {
-        status = "active";
-      }
-
+      if (today < start) status = "upcoming";
+      else if (today > end) status = c.option_exercised ? "extended" : "ended";
+      else if (days <= 90) status = "expiring";
+      else status = "active";
       return { ...c, computedStatus: status, daysLeft: days };
     });
-
     setContracts(enriched);
     setLoading(false);
   }
@@ -70,9 +67,9 @@ export default function ContractsPage() {
   });
 
   const stats = {
-    active:      contracts.filter(c => c.computedStatus === "active" || c.computedStatus === "expiring").length,
-    expiring:    contracts.filter(c => c.computedStatus === "expiring").length,
-    upcoming:    contracts.filter(c => c.computedStatus === "upcoming").length,
+    active: contracts.filter(c => c.computedStatus === "active" || c.computedStatus === "expiring").length,
+    expiring: contracts.filter(c => c.computedStatus === "expiring").length,
+    upcoming: contracts.filter(c => c.computedStatus === "upcoming").length,
     totalRevenue: contracts
       .filter(c => c.computedStatus === "active" || c.computedStatus === "expiring")
       .reduce((s, c) => s + (c.rent_per_sqm ?? 0) * (c.charged_area ?? 0) + (c.investment_addition ?? 0), 0),
@@ -81,16 +78,17 @@ export default function ContractsPage() {
   async function handleDelete(id: string) {
     if (!confirm("למחוק חוזה זה?")) return;
     await supabase.from("contracts").delete().eq("id", id);
-    setSelected(null);
+    setExpandedId(null);
     load();
   }
 
-  async function handleExtend(c: any) {
-    router.push(`/contracts/${c.id}/edit?mode=extend`);
+  function toggleExpand(id: string) {
+    setExpandedId(prev => prev === id ? null : id);
   }
 
   return (
     <div dir="rtl">
+      {/* כותרת */}
       <div className="mb-6 flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold text-slate-800">חוזים</h1>
@@ -103,19 +101,19 @@ export default function ContractsPage() {
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
         <div className="rounded-xl border border-green-100 bg-green-50 p-4 shadow-sm text-center">
           <div className="text-2xl font-bold text-green-700">{stats.active}</div>
-          <div className="text-xs text-green-600 mt-1">חוזים פעילים</div>
+          <div className="text-xs text-green-700 mt-1 font-medium">חוזים פעילים</div>
         </div>
         <div className="rounded-xl border border-yellow-100 bg-yellow-50 p-4 shadow-sm text-center">
           <div className="text-2xl font-bold text-yellow-700">{stats.expiring}</div>
-          <div className="text-xs text-yellow-600 mt-1">פגים בקרוב</div>
+          <div className="text-xs text-yellow-700 mt-1 font-medium">פגים בקרוב</div>
         </div>
         <div className="rounded-xl border border-blue-100 bg-blue-50 p-4 shadow-sm text-center">
           <div className="text-2xl font-bold text-blue-700">{stats.upcoming}</div>
-          <div className="text-xs text-blue-600 mt-1">עתידיים</div>
+          <div className="text-xs text-blue-700 mt-1 font-medium">עתידיים</div>
         </div>
-        <div className="rounded-xl border border-slate-100 bg-white p-4 shadow-sm text-center">
-          <div className="text-2xl font-bold text-slate-800">₪{stats.totalRevenue.toLocaleString()}</div>
-          <div className="text-xs text-slate-500 mt-1">הכנסה חודשית</div>
+        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm text-center">
+          <div className="text-2xl font-bold text-slate-900">₪{stats.totalRevenue.toLocaleString()}</div>
+          <div className="text-xs text-slate-600 mt-1 font-medium">הכנסה חודשית</div>
         </div>
       </div>
 
@@ -137,12 +135,12 @@ export default function ContractsPage() {
       ) : (
         <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
           <table className="w-full text-right text-sm">
-            <thead className="bg-slate-50 text-slate-600 border-b border-slate-100">
+            <thead className="bg-slate-50 text-slate-700 border-b border-slate-200">
               <tr>
+                <th className="px-4 py-3 font-semibold w-6"></th>
                 <th className="px-4 py-3 font-semibold">סטטוס</th>
                 <th className="px-4 py-3 font-semibold">שוכר</th>
                 <th className="px-4 py-3 font-semibold">נכס</th>
-                <th className="px-4 py-3 font-semibold">תאריך התחלה</th>
                 <th className="px-4 py-3 font-semibold">תאריך סיום</th>
                 <th className="px-4 py-3 font-semibold">ימים לסיום</th>
                 <th className="px-4 py-3 font-semibold">שכ"ד חודשי</th>
@@ -159,154 +157,154 @@ export default function ContractsPage() {
               ) : filtered.map(c => {
                 const sc = statusConfig[c.computedStatus] ?? statusConfig.active;
                 const monthly = (c.rent_per_sqm ?? 0) * (c.charged_area ?? 0) + (c.investment_addition ?? 0);
-                return (
-                  <tr key={c.id} onClick={() => setSelected(c)} className="border-t border-slate-50 hover:bg-slate-50 cursor-pointer">
+                const isExpanded = expandedId === c.id;
+
+                return [
+                  /* שורה ראשית */
+                  <tr key={c.id}
+                    onClick={() => toggleExpand(c.id)}
+                    className={`border-t border-slate-100 cursor-pointer transition-colors ${isExpanded ? "bg-blue-50" : "hover:bg-slate-50"}`}>
+                    <td className="px-3 py-3 text-slate-400 text-center">
+                      <span className="text-xs">{isExpanded ? "▲" : "▼"}</span>
+                    </td>
                     <td className="px-4 py-3">
                       <span className={`rounded-full px-2.5 py-0.5 text-xs font-bold ${sc.bg} ${sc.color}`}>{sc.label}</span>
                     </td>
-                    <td className="px-4 py-3 font-medium text-slate-800">{c.tenants?.name ?? "—"}</td>
-                    <td className="px-4 py-3 text-slate-600">{c.properties?.name ?? "—"}</td>
-                    <td className="px-4 py-3 text-slate-600">{formatDate(c.start_date)}</td>
-                    <td className="px-4 py-3 text-slate-600">{formatDate(c.end_date)}</td>
+                    <td className="px-4 py-3 font-semibold text-slate-900">{c.tenants?.name ?? "—"}</td>
+                    <td className="px-4 py-3 text-slate-700">{c.properties?.name ?? "—"}</td>
+                    <td className="px-4 py-3 text-slate-700">{formatDate(c.end_date)}</td>
                     <td className="px-4 py-3">
                       {c.end_date && (() => {
                         const d = c.daysLeft;
-                        return <span className={`text-xs font-medium ${d < 0 ? "text-red-600" : d < 90 ? "text-yellow-600" : "text-slate-500"}`}>
+                        return <span className={`text-xs font-semibold ${d < 0 ? "text-red-600" : d < 90 ? "text-yellow-700" : "text-slate-600"}`}>
                           {d < 0 ? `פג לפני ${Math.abs(d)}י` : `${d} ימים`}
                         </span>;
                       })()}
                     </td>
-                    <td className="px-4 py-3 font-semibold text-slate-800">{monthly > 0 ? "₪"+monthly.toLocaleString() : "—"}</td>
+                    <td className="px-4 py-3 font-bold text-slate-900">{monthly > 0 ? "₪"+monthly.toLocaleString() : "—"}</td>
                     <td className="px-4 py-3">
                       {c.option_months
-                        ? <span className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full font-medium">{c.option_months} חודשים</span>
+                        ? <span className="text-xs bg-purple-100 text-purple-800 px-2 py-0.5 rounded-full font-semibold">{c.option_months} חודשים</span>
                         : <span className="text-slate-300 text-xs">אין</span>}
                     </td>
-                    <td className="px-4 py-3 flex gap-1" onClick={e => e.stopPropagation()}>
-                      <button onClick={() => router.push(`/contracts/${c.id}/edit`)}
-                        className="text-xs border border-blue-100 rounded px-2 py-1 text-blue-500 hover:bg-blue-50">עריכה</button>
-                      <button onClick={() => handleDelete(c.id)}
-                        className="text-xs border border-red-100 rounded px-2 py-1 text-red-400 hover:text-red-600">מחיקה</button>
+                    <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
+                      <div className="flex gap-1">
+                        <button onClick={() => router.push(`/contracts/${c.id}/edit`)}
+                          className="text-xs border border-blue-200 rounded px-2 py-1 text-blue-700 hover:bg-blue-50 font-medium">עריכה</button>
+                        <button onClick={() => handleDelete(c.id)}
+                          className="text-xs border border-red-100 rounded px-2 py-1 text-red-500 hover:bg-red-50">מחיקה</button>
+                      </div>
                     </td>
-                  </tr>
-                );
+                  </tr>,
+
+                  /* פאנל פרטים inline */
+                  isExpanded && (
+                    <tr key={c.id+"-details"}>
+                      <td colSpan={9} className="p-0 border-t border-blue-100">
+                        <div className="bg-blue-50 border-b border-blue-100 px-6 py-5">
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+
+                            {/* עמודה 1: שוכר + קשר */}
+                            <div className="space-y-4">
+                              <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+                                <div className="text-xs font-bold text-slate-500 mb-3 uppercase tracking-wide">👤 פרטי שוכר</div>
+                                <div className="text-slate-900 font-bold text-base mb-3">{c.tenants?.name}</div>
+                                {c.tenants?.contact_phone && (
+                                  <div className="flex items-center justify-between py-1.5 border-b border-slate-100">
+                                    <span className="text-slate-500 text-xs">📞 טלפון</span>
+                                    <a href={"tel:"+c.tenants.contact_phone} className="text-blue-700 font-semibold text-sm hover:underline">{c.tenants.contact_phone}</a>
+                                  </div>
+                                )}
+                                {c.tenants?.contact_email && (
+                                  <div className="flex items-center justify-between py-1.5">
+                                    <span className="text-slate-500 text-xs">✉️ אימייל</span>
+                                    <a href={"mailto:"+c.tenants.contact_email} className="text-blue-700 text-xs hover:underline">{c.tenants.contact_email}</a>
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* מסמך */}
+                              <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+                                <div className="text-xs font-bold text-slate-500 mb-2 uppercase tracking-wide">📎 מסמכים</div>
+                                {c.document_url
+                                  ? <a href={c.document_url} target="_blank" rel="noopener noreferrer" className="text-blue-700 text-sm font-semibold hover:underline">פתח חוזה ↗</a>
+                                  : <span className="text-slate-400 text-xs">לא הוסף קישור</span>}
+                              </div>
+                            </div>
+
+                            {/* עמודה 2: תנאי חוזה */}
+                            <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+                              <div className="text-xs font-bold text-slate-500 mb-3 uppercase tracking-wide">📅 תנאי חוזה</div>
+                              <Row label="נכס" value={c.properties?.name ?? "—"} />
+                              <Row label="התחלה" value={formatDate(c.start_date)} />
+                              <Row label="סיום" value={formatDate(c.end_date)} />
+                              {c.option_months && <Row label="אופציה" value={<span className="text-purple-700 font-bold">{c.option_months} חודשים</span>} />}
+                              {c.option_exercised && <Row label="מומשה" value={<span className="text-green-700 font-bold">✓ כן</span>} />}
+                              {c.price_increase_type && (
+                                <Row label="עליית מחיר" value={
+                                  c.price_increase_type === "percent"
+                                    ? `${c.price_increase_value}% כל ${c.price_increase_freq_months} חודשים`
+                                    : `₪${c.price_increase_value} כל ${c.price_increase_freq_months} חודשים`
+                                } />
+                              )}
+                              {c.guarantee_type && (
+                                <>
+                                  <Row label="ערבות" value={c.guarantee_type === "bank" ? "בנקאית" : c.guarantee_type === "check" ? "שיק" : "מזומן"} />
+                                  {c.guarantee_amount && <Row label="סכום ערבות" value={`₪${c.guarantee_amount.toLocaleString()}`} />}
+                                </>
+                              )}
+                            </div>
+
+                            {/* עמודה 3: תשלום + פעולות */}
+                            <div className="space-y-4">
+                              <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+                                <div className="text-xs font-bold text-slate-500 mb-3 uppercase tracking-wide">💰 תשלום</div>
+                                {c.rent_per_sqm && <Row label='מחיר למ"ר' value={`₪${c.rent_per_sqm}`} />}
+                                {c.charged_area && <Row label='שטח מחויב' value={`${c.charged_area} מ"ר`} />}
+                                {c.investment_addition > 0 && <Row label="תוספת השקעות" value={`₪${c.investment_addition.toLocaleString()}`} />}
+                                {c.mgmt_fee_per_sqm > 0 && <Row label='דמי ניהול למ"ר' value={`₪${c.mgmt_fee_per_sqm}`} />}
+                                {c.index_base_value && <Row label="מדד בסיס" value={`${c.index_base_value} (${c.index_base_month}/${c.index_base_year})`} />}
+                                <div className="mt-3 pt-3 border-t border-green-100 flex justify-between items-center">
+                                  <span className="text-slate-600 font-semibold">סה"כ חודשי</span>
+                                  <span className="text-green-800 font-bold text-lg">₪{monthly.toLocaleString()}</span>
+                                </div>
+                              </div>
+
+                              {/* פעולות */}
+                              <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm space-y-2">
+                                <div className="text-xs font-bold text-slate-500 mb-2 uppercase tracking-wide">⚡ פעולות</div>
+                                <button onClick={() => router.push(`/contracts/${c.id}/edit`)}
+                                  className="w-full rounded-lg border border-blue-200 py-2 text-sm text-blue-800 hover:bg-blue-50 font-semibold">✏️ עריכת חוזה</button>
+                                {(c.computedStatus === "ended" || c.computedStatus === "expiring" || c.computedStatus === "extended") && (
+                                  <button onClick={() => router.push(`/contracts/${c.id}/edit?mode=extend`)}
+                                    className="w-full rounded-lg bg-purple-600 py-2 text-sm text-white hover:bg-purple-700 font-semibold">🔄 הארך חוזה</button>
+                                )}
+                                {c.document_url && (
+                                  <a href={c.document_url} target="_blank" rel="noopener noreferrer"
+                                    className="block w-full rounded-lg border border-slate-200 py-2 text-sm text-slate-700 hover:bg-slate-50 font-medium text-center">📄 פתח מסמך</a>
+                                )}
+                                <button onClick={() => handleDelete(c.id)}
+                                  className="w-full rounded-lg border border-red-100 py-2 text-sm text-red-600 hover:bg-red-50">🗑️ מחיקה</button>
+                              </div>
+                            </div>
+
+                          </div>
+
+                          {/* הערות */}
+                          {c.notes && (
+                            <div className="mt-4 bg-yellow-50 border border-yellow-100 rounded-xl p-3">
+                              <span className="text-xs font-bold text-yellow-700">📝 הערות: </span>
+                              <span className="text-slate-800 text-xs">{c.notes}</span>
+                            </div>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                ];
               })}
             </tbody>
           </table>
-        </div>
-      )}
-
-      {/* פאנל פרטים */}
-      {selected && (
-        <div className="fixed inset-y-0 left-0 w-96 bg-white border-r border-slate-200 shadow-xl z-40 overflow-y-auto" dir="rtl">
-          <div className="sticky top-0 bg-white border-b border-slate-100 px-6 py-4 flex items-center justify-between">
-            <div>
-              <div className="font-bold text-slate-800">{selected.tenants?.name}</div>
-              <div className="text-xs text-slate-400">{selected.properties?.name}</div>
-            </div>
-            <div className="flex gap-2">
-              <button onClick={() => router.push(`/contracts/${selected.id}/edit`)}
-                className="text-sm text-blue-600 hover:underline font-medium">✏️ עריכה</button>
-              <button onClick={() => setSelected(null)} className="text-2xl text-slate-400">&times;</button>
-            </div>
-          </div>
-          <div className="p-6 space-y-4">
-            {/* סטטוס */}
-            <div className={`rounded-xl p-3 text-center font-bold text-sm ${statusConfig[selected.computedStatus]?.bg} ${statusConfig[selected.computedStatus]?.color}`}>
-              {statusConfig[selected.computedStatus]?.label}
-              {selected.daysLeft > 0 && selected.computedStatus !== "upcoming" && ` — ${selected.daysLeft} ימים לסיום`}
-            </div>
-
-            {/* פעולות מהירות */}
-            {(selected.computedStatus === "ended" || selected.computedStatus === "expiring") && (
-              <div className="rounded-xl border border-purple-100 bg-purple-50 p-3 space-y-2">
-                <div className="text-xs font-bold text-purple-700 mb-1">📋 פעולות לחוזה זה</div>
-                <button onClick={() => handleExtend(selected)}
-                  className="w-full rounded-lg bg-purple-600 py-2 text-sm font-bold text-white hover:bg-purple-700">
-                  🔄 הארך חוזה / חדש הסכם
-                </button>
-              </div>
-            )}
-
-            {/* קישור מסמך */}
-            {selected.document_url ? (
-              <div className="rounded-xl bg-blue-50 border border-blue-100 p-3 flex items-center justify-between">
-                <span className="text-sm font-medium text-blue-700">📎 מסמך חוזה</span>
-                <a href={selected.document_url} target="_blank" rel="noopener noreferrer"
-                  className="text-xs text-blue-600 hover:underline font-medium">פתח ↗</a>
-              </div>
-            ) : (
-              <button onClick={() => router.push(`/contracts/${selected.id}/edit`)}
-                className="w-full rounded-xl border border-dashed border-slate-200 p-3 text-xs text-slate-400 hover:text-blue-500 hover:border-blue-200">
-                📎 הוסף קישור למסמך (Dropbox/Drive)
-              </button>
-            )}
-
-            {/* שוכר */}
-            <div className="rounded-xl bg-blue-50 border border-blue-100 p-4 space-y-1.5 text-sm">
-              <div className="font-bold text-blue-800 mb-2">👤 פרטי שוכר</div>
-              {selected.tenants?.contact_phone && <div className="flex justify-between"><span className="text-blue-600">טלפון</span><a href={"tel:"+selected.tenants.contact_phone} className="font-medium">{selected.tenants.contact_phone}</a></div>}
-              {selected.tenants?.contact_email && <div className="flex justify-between"><span className="text-blue-600">אימייל</span><span className="text-xs">{selected.tenants.contact_email}</span></div>}
-            </div>
-
-            {/* תקופה */}
-            <div className="rounded-xl bg-slate-50 p-4 space-y-2 text-sm">
-              <div className="font-medium text-slate-600 mb-1">📅 תקופת חוזה</div>
-              <div className="flex justify-between"><span className="text-slate-500">התחלה</span><span className="font-medium">{formatDate(selected.start_date)}</span></div>
-              <div className="flex justify-between"><span className="text-slate-500">סיום</span><span className="font-medium">{formatDate(selected.end_date)}</span></div>
-              {selected.option_months && <div className="flex justify-between"><span className="text-slate-500">אופציה</span><span className="font-medium text-purple-600">{selected.option_months} חודשים</span></div>}
-              {selected.option_exercised && <div className="flex justify-between"><span className="text-slate-500">מומשה</span><span className="font-medium text-green-600">✓ כן</span></div>}
-            </div>
-
-            {/* תשלום */}
-            {selected.rent_per_sqm && (
-              <div className="rounded-xl bg-green-50 border border-green-100 p-4 space-y-2 text-sm">
-                <div className="font-medium text-green-700 mb-1">💰 תשלום</div>
-                <div className="flex justify-between"><span className="text-slate-500">מחיר למ"ר</span><span className="font-bold">₪{selected.rent_per_sqm}</span></div>
-                {selected.charged_area && <div className="flex justify-between"><span className="text-slate-500">שטח מחויב</span><span>{selected.charged_area} מ"ר</span></div>}
-                {selected.investment_addition > 0 && <div className="flex justify-between"><span className="text-slate-500">תוספת השקעות</span><span>₪{selected.investment_addition}</span></div>}
-                {selected.mgmt_fee_per_sqm > 0 && <div className="flex justify-between"><span className="text-slate-500">דמי ניהול למ"ר</span><span>₪{selected.mgmt_fee_per_sqm}</span></div>}
-                <div className="border-t border-green-200 pt-2 flex justify-between font-bold text-green-700">
-                  <span>חודשי</span>
-                  <span>₪{((selected.rent_per_sqm * selected.charged_area) + (selected.investment_addition ?? 0)).toLocaleString()}</span>
-                </div>
-              </div>
-            )}
-
-            {/* מדד */}
-            {selected.index_base_value && (
-              <div className="rounded-xl bg-slate-50 p-4 space-y-2 text-sm">
-                <div className="font-medium text-slate-600 mb-1">📈 מדד בסיס</div>
-                <div className="flex justify-between"><span className="text-slate-500">ערך</span><span className="font-bold">{selected.index_base_value}</span></div>
-                {selected.index_base_month && selected.index_base_year && <div className="flex justify-between"><span className="text-slate-500">תאריך</span><span>{selected.index_base_month}/{selected.index_base_year}</span></div>}
-              </div>
-            )}
-
-            {/* ערבות */}
-            {selected.guarantee_type && (
-              <div className="rounded-xl bg-slate-50 p-4 space-y-2 text-sm">
-                <div className="font-medium text-slate-600 mb-1">🛡️ ערבות</div>
-                <div className="flex justify-between"><span className="text-slate-500">סוג</span><span className="font-medium">{selected.guarantee_type === "bank" ? "בנקאית" : selected.guarantee_type === "check" ? "שיק" : selected.guarantee_type === "cash" ? "מזומן" : selected.guarantee_type}</span></div>
-                {selected.guarantee_amount && <div className="flex justify-between"><span className="text-slate-500">סכום</span><span className="font-bold">₪{selected.guarantee_amount.toLocaleString()}</span></div>}
-                {selected.guarantee_expiry && <div className="flex justify-between"><span className="text-slate-500">תפוגה</span><span>{formatDate(selected.guarantee_expiry)}</span></div>}
-              </div>
-            )}
-
-            {/* הערות */}
-            {selected.notes && (
-              <div className="rounded-xl bg-yellow-50 border border-yellow-100 p-4 text-sm">
-                <div className="font-medium text-yellow-700 mb-1">📝 הערות</div>
-                <p className="text-slate-700 text-xs whitespace-pre-wrap">{selected.notes}</p>
-              </div>
-            )}
-
-            <div className="flex gap-2 pt-2">
-              <button onClick={() => router.push(`/contracts/${selected.id}/edit`)}
-                className="flex-1 rounded-lg border border-blue-200 py-2 text-sm text-blue-600 hover:bg-blue-50 font-medium">✏️ עריכה</button>
-              <button onClick={() => handleDelete(selected.id)}
-                className="flex-1 rounded-lg border border-red-200 py-2 text-sm text-red-500 hover:bg-red-50">🗑️ מחיקה</button>
-            </div>
-          </div>
         </div>
       )}
     </div>
