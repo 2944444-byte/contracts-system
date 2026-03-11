@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { supabase } from "../../../lib/supabase";
 
@@ -53,6 +53,14 @@ interface PaymentRow {
 }
 
 export default function IndexationPage() {
+  return (
+    <Suspense fallback={<div className="p-8 text-center text-slate-400">טוען...</div>}>
+      <IndexationContent />
+    </Suspense>
+  );
+}
+
+function IndexationContent() {
   const searchParams = useSearchParams();
   const contractIdParam = searchParams.get("contract_id");
 
