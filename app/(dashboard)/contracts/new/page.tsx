@@ -194,7 +194,6 @@ export default function NewContractPage() {
   }
 
   async function handleSave() {
-  async function handleSave() {
     if (indexBaseDate) {
       try {
         const res = await fetch(`/api/cpi-check?from=${indexBaseDate}`);
