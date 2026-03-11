@@ -13,7 +13,8 @@ const navItems = [
   { href: "/letters", label: "מכתבים", icon: "✉" },
   { href: "/reports", label: "דוחות", icon: "📊" },
   { href: "/alerts", label: "התראות", icon: "🔔" },
-  { href: "/cpi", label: "מדד המחירים", icon: "📊" },
+  { href: "/cpi", label: "מדד המחירים", icon: "📈" },
+  { href: "/indexation", label: "חישוב הצמדות", icon: "🔢" },
     { href: "/documents", label: "מסמכים", icon: "🗂" },
   { href: "/settings", label: "הגדרות", icon: "⚙" },
 ];
