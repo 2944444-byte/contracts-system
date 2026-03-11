@@ -86,7 +86,7 @@ export default function ContractsPage() {
   }
 
   async function handleExtend(c: any) {
-    router.push(`/contracts/new?extend=${c.id}`);
+    router.push(`/contracts/${c.id}/edit?mode=extend`);
   }
 
   return (
