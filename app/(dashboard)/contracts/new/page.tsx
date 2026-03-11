@@ -103,6 +103,7 @@ export default function NewContractPage() {
   const [increaseType, setIncreaseType] = useState<"percent"|"fixed">("percent");
   const [increaseValue, setIncreaseValue] = useState("");
   const [increaseFreqMonths, setIncreaseFreqMonths] = useState("12");
+  const [increaseUntilYear, setIncreaseUntilYear] = useState("");
 
   // מדד
   const [indexBaseDate, setIndexBaseDate] = useState("");
@@ -244,7 +245,11 @@ export default function NewContractPage() {
         option_months: hasOptions && options[0]?.durationValue ? (options[0].durationUnit === "years" ? Number(options[0].durationValue)*12 : Number(options[0].durationValue)) : undefined,
         guarantee_type: guaranteeType || undefined,
         guarantee_amount: guaranteeAmount ? Number(guaranteeAmount) : undefined,
-        guarantee_expiry: guaranteeExpiry || undefined
+        guarantee_expiry: guaranteeExpiry || undefined,
+        price_increase_until_year: hasPriceIncrease && increaseUntilYear ? Number(increaseUntilYear) : undefined,
+        price_increase_type: hasPriceIncrease ? increaseType : undefined,
+        price_increase_value: hasPriceIncrease && increaseValue ? Number(increaseValue) : undefined,
+        price_increase_freq_months: hasPriceIncrease ? Number(increaseFreqMonths) : undefined
       });
       try { sessionStorage.removeItem("contract_draft"); } catch {}
       alert("חוזה נשמר!");
