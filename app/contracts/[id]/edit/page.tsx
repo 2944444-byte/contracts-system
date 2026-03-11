@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { useRouter, useParams, useSearchParams } from "next/navigation";
 import { supabase } from "../../../../lib/supabase";
 
@@ -14,18 +14,17 @@ function addMonths(dateStr: string, months: number): string {
   return d.toISOString().split("T")[0];
 }
 
-export default function EditContractPage() {
+// קומפוננטה פנימית שמשתמשת ב-useSearchParams
+function EditContractInner() {
   const router = useRouter();
   const params = useParams();
   const searchParams = useSearchParams();
   const id = params?.id as string;
-  const isExtension = searchParams?.get("mode") === "extend"; // מצב הארכה
+  const isExtension = searchParams?.get("mode") === "extend";
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [contract, setContract] = useState<any>(null);
-
-  // שדות
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [rentPerSqm, setRentPerSqm] = useState("");
@@ -51,23 +50,19 @@ export default function EditContractPage() {
   const [status, setStatus] = useState("active");
   const [notes, setNotes] = useState("");
   const [documentUrl, setDocumentUrl] = useState("");
-
-  // הארכה — תקופה חדשה
   const [extendDurationValue, setExtendDurationValue] = useState("12");
   const [extendDurationUnit, setExtendDurationUnit] = useState<"months"|"years">("months");
 
   useEffect(() => {
     if (!id) return;
     supabase.from("contracts")
-      .select("*, tenants(name), properties(name), units:contract_units(unit_id, units(name, area))")
+      .select("*, tenants(name), properties(name)")
       .eq("id", id)
       .single()
       .then(({ data }) => {
         if (!data) { router.push("/contracts"); return; }
         setContract(data);
-
         if (isExtension) {
-          // הארכה: התחלה = יום אחרי סיום המקורי
           const origEnd = fmt(data.end_date);
           const newStart = origEnd ? (() => {
             const d = new Date(origEnd); d.setDate(d.getDate() + 1);
@@ -75,12 +70,10 @@ export default function EditContractPage() {
           })() : "";
           setStartDate(newStart);
           setEndDate(newStart ? addMonths(newStart, 12) : "");
-          setExtendDurationValue("12");
         } else {
           setStartDate(fmt(data.start_date));
           setEndDate(fmt(data.end_date));
         }
-
         setRentPerSqm(data.rent_per_sqm?.toString() ?? "");
         setChargedArea(data.charged_area?.toString() ?? "");
         setInvestmentAddition(data.investment_addition?.toString() ?? "0");
@@ -108,7 +101,6 @@ export default function EditContractPage() {
       });
   }, [id, isExtension]);
 
-  // חישוב תאריך סיום הארכה
   function updateExtendEnd(val: string, unit: "months"|"years") {
     if (!startDate) return;
     const months = unit === "years" ? Number(val) * 12 : Number(val);
@@ -120,8 +112,7 @@ export default function EditContractPage() {
     setSaving(true);
     try {
       const payload: any = {
-        start_date: startDate,
-        end_date: endDate,
+        start_date: startDate, end_date: endDate,
         rent_per_sqm: rentPerSqm ? Number(rentPerSqm) : null,
         charged_area: chargedArea ? Number(chargedArea) : null,
         investment_addition: Number(investmentAddition),
@@ -131,8 +122,7 @@ export default function EditContractPage() {
         index_base_value: indexBaseValue ? Number(indexBaseValue) : null,
         index_base_date: indexBaseYear && indexBaseMonth ? `${indexBaseYear}-${indexBaseMonth.padStart(2,"0")}-01` : null,
         mgmt_fee_per_sqm: mgmtFeePerSqm ? Number(mgmtFeePerSqm) : null,
-        vat_type: vatType,
-        vat_pct: Number(vatPct),
+        vat_type: vatType, vat_pct: Number(vatPct),
         option_months: optionMonths ? Number(optionMonths) : null,
         option_exercised: optionExercised,
         guarantee_type: guaranteeType || null,
@@ -142,27 +132,17 @@ export default function EditContractPage() {
         price_increase_value: hasPriceIncrease && priceIncreaseValue ? Number(priceIncreaseValue) : null,
         price_increase_freq_months: hasPriceIncrease ? Number(priceIncreaseFreqMonths) : null,
         price_increase_until_year: hasPriceIncrease && priceIncreaseUntilYear ? Number(priceIncreaseUntilYear) : null,
-        notes: notes || null,
-        document_url: documentUrl || null,
+        notes: notes || null, document_url: documentUrl || null,
       };
-
       if (isExtension) {
-        // יצירת חוזה חדש + סגירת המקורי
-        const newContract = {
-          ...payload,
-          property_id: contract.property_id,
-          tenant_id: contract.tenant_id,
-          unit_ids: contract.unit_ids,
-          status: "active",
-          parent_contract_id: id,
-        };
-        const { error: insertError } = await supabase.from("contracts").insert(newContract);
+        const { error: insertError } = await supabase.from("contracts").insert({
+          ...payload, property_id: contract.property_id, tenant_id: contract.tenant_id,
+          unit_ids: contract.unit_ids, status: "active", parent_contract_id: id,
+        });
         if (insertError) throw insertError;
-        // סגור את המקורי
         await supabase.from("contracts").update({ status: "ended", option_exercised: true }).eq("id", id);
         alert("✅ החוזה הוארך בהצלחה! נוצר חוזה חדש.");
       } else {
-        // עדכון רגיל
         payload.status = status;
         const { error } = await supabase.from("contracts").update(payload).eq("id", id);
         if (error) throw error;
@@ -171,12 +151,10 @@ export default function EditContractPage() {
       router.push("/contracts");
     } catch(e: any) {
       alert("שגיאה: " + (e?.message || JSON.stringify(e)));
-    } finally {
-      setSaving(false);
-    }
+    } finally { setSaving(false); }
   }
 
-  if (loading) return <div dir="rtl" className="p-8 text-center text-slate-400">טוען...</div>;
+  if (loading) return <div className="p-8 text-center text-slate-400">טוען...</div>;
 
   const area = Number(chargedArea) || contract?.charged_area || 0;
   const monthlyRent = rentPerSqm && area ? Number(rentPerSqm) * area + Number(investmentAddition) : null;
@@ -186,9 +164,7 @@ export default function EditContractPage() {
       <div className="mb-6 flex items-center gap-3">
         <button onClick={() => router.back()} className="text-slate-400 hover:text-slate-700 text-2xl">&larr;</button>
         <div>
-          <h1 className="text-2xl font-bold text-slate-800">
-            {isExtension ? "🔄 הארכת חוזה" : "✏️ עריכת חוזה"}
-          </h1>
+          <h1 className="text-2xl font-bold text-slate-800">{isExtension ? "🔄 הארכת חוזה" : "✏️ עריכת חוזה"}</h1>
           <p className="text-sm text-slate-500">{contract?.tenants?.name} — {contract?.properties?.name}</p>
         </div>
       </div>
@@ -202,36 +178,27 @@ export default function EditContractPage() {
       )}
 
       <div className="space-y-5">
-
         {/* תקופה */}
         <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h2 className="mb-4 text-sm font-bold text-slate-500">
-            {isExtension ? "📅 תקופת ההארכה" : "📅 תקופת חוזה"}
-          </h2>
-
+          <h2 className="mb-4 text-sm font-bold text-slate-500">{isExtension ? "📅 תקופת ההארכה" : "📅 תקופת חוזה"}</h2>
           {isExtension && (
             <div className="mb-4 p-3 bg-slate-50 rounded-lg text-sm">
               <div className="flex justify-between mb-2">
                 <span className="text-slate-500">חוזה מקורי הסתיים:</span>
                 <span className="font-medium">{fmt(contract.end_date).split("-").reverse().join("/")}</span>
               </div>
-              <div className="mb-2">
-                <label className="mb-1 block text-xs font-semibold text-slate-700">משך ההארכה</label>
-                <div className="flex gap-2">
-                  <input type="number" value={extendDurationValue}
-                    onChange={e => { setExtendDurationValue(e.target.value); updateExtendEnd(e.target.value, extendDurationUnit); }}
-                    className={ic} placeholder="12" />
-                  <select value={extendDurationUnit}
-                    onChange={e => { setExtendDurationUnit(e.target.value as any); updateExtendEnd(extendDurationValue, e.target.value as any); }}
-                    className="rounded-lg border border-slate-300 px-2 py-2 text-sm bg-white">
-                    <option value="months">חודשים</option>
-                    <option value="years">שנים</option>
-                  </select>
-                </div>
+              <label className="mb-1 block text-xs font-semibold text-slate-700">משך ההארכה</label>
+              <div className="flex gap-2">
+                <input type="number" value={extendDurationValue} className={ic} placeholder="12"
+                  onChange={e => { setExtendDurationValue(e.target.value); updateExtendEnd(e.target.value, extendDurationUnit); }} />
+                <select value={extendDurationUnit} className="rounded-lg border border-slate-300 px-2 py-2 text-sm bg-white"
+                  onChange={e => { setExtendDurationUnit(e.target.value as any); updateExtendEnd(extendDurationValue, e.target.value as any); }}>
+                  <option value="months">חודשים</option>
+                  <option value="years">שנים</option>
+                </select>
               </div>
             </div>
           )}
-
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="mb-1 block text-xs font-semibold text-slate-700">תאריך התחלה</label>
@@ -242,7 +209,6 @@ export default function EditContractPage() {
               <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className={ic} />
             </div>
           </div>
-
           {!isExtension && (
             <div className="mt-3">
               <label className="mb-1 block text-xs font-semibold text-slate-700">אופציות (חודשים)</label>
@@ -284,8 +250,6 @@ export default function EditContractPage() {
               <span className="font-bold text-green-700">₪{monthlyRent.toLocaleString()}</span>
             </div>
           )}
-
-          {/* עליית מחיר */}
           <div className="mt-4 pt-4 border-t border-slate-100">
             <div className="flex items-center justify-between mb-3">
               <label className="text-xs font-medium text-slate-600">מנגנון עליית מחיר</label>
@@ -331,9 +295,6 @@ export default function EditContractPage() {
         {/* מדד */}
         <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
           <h2 className="mb-4 text-sm font-bold text-slate-700">📈 מדד הצמדה</h2>
-          {isExtension && (
-            <p className="text-xs text-slate-400 mb-3">בהארכה ניתן לעדכן את מדד הבסיס לחוזה החדש</p>
-          )}
           <div className="grid grid-cols-3 gap-3">
             <div>
               <label className="mb-1 block text-xs font-semibold text-slate-700">חודש בסיס</label>
@@ -360,14 +321,8 @@ export default function EditContractPage() {
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-sm font-bold text-slate-700">🏢 דמי ניהול</h2>
             <div className="flex gap-3 text-sm">
-              <label className="flex items-center gap-1.5 cursor-pointer">
-                <input type="radio" checked={vatType === "taxable"} onChange={() => setVatType("taxable")} />
-                <span>חייב מע"מ</span>
-              </label>
-              <label className="flex items-center gap-1.5 cursor-pointer">
-                <input type="radio" checked={vatType === "exempt"} onChange={() => setVatType("exempt")} />
-                <span>פטור</span>
-              </label>
+              <label className="flex items-center gap-1.5 cursor-pointer"><input type="radio" checked={vatType==="taxable"} onChange={() => setVatType("taxable")} /> חייב מע"מ</label>
+              <label className="flex items-center gap-1.5 cursor-pointer"><input type="radio" checked={vatType==="exempt"} onChange={() => setVatType("exempt")} /> פטור</label>
             </div>
           </div>
           <div className="grid grid-cols-2 gap-4">
@@ -378,9 +333,7 @@ export default function EditContractPage() {
             <div>
               <label className="mb-1 block text-xs font-semibold text-slate-700">מע"מ %</label>
               <select value={vatPct} onChange={e => setVatPct(e.target.value)} className={ic}>
-                <option value="0">0%</option>
-                <option value="17">17%</option>
-                <option value="18">18%</option>
+                <option value="0">0%</option><option value="17">17%</option><option value="18">18%</option>
               </select>
             </div>
           </div>
@@ -411,7 +364,7 @@ export default function EditContractPage() {
           </div>
         </div>
 
-        {/* סטטוס + מימוש אופציה (עריכה בלבד) */}
+        {/* סטטוס — עריכה בלבד */}
         {!isExtension && (
           <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
             <h2 className="mb-4 text-sm font-bold text-slate-500">סטטוס</h2>
@@ -424,18 +377,10 @@ export default function EditContractPage() {
             {optionMonths && (
               <div className="mt-3 pt-3 border-t border-slate-100">
                 <label className="flex items-center gap-2 cursor-pointer text-sm text-slate-700">
-                  <input type="checkbox" checked={optionExercised} onChange={e => {
-                    setOptionExercised(e.target.checked);
-                    if (e.target.checked) setStatus("extended");
-                  }} className="w-4 h-4" />
+                  <input type="checkbox" checked={optionExercised} onChange={e => { setOptionExercised(e.target.checked); if (e.target.checked) setStatus("extended"); }} className="w-4 h-4" />
                   <span className="font-medium">✅ האופציה מומשה</span>
                   <span className="text-slate-400 text-xs">({optionMonths} חודשים)</span>
                 </label>
-                {optionExercised && (
-                  <p className="mt-1.5 text-xs text-purple-600 bg-purple-50 rounded px-3 py-1.5">
-                    החוזה יוצג כ"הוארך" — אם תרצה ליצור חוזה הארכה רשמי, לחץ "הארך חוזה" מרשימת החוזים
-                  </p>
-                )}
               </div>
             )}
           </div>
@@ -445,20 +390,14 @@ export default function EditContractPage() {
         <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
           <h2 className="mb-3 text-sm font-bold text-slate-500">📎 קישור למסמך</h2>
           <input type="url" value={documentUrl} onChange={e => setDocumentUrl(e.target.value)}
-            placeholder="https://www.dropbox.com/... או https://drive.google.com/..."
-            className={ic} />
-          {documentUrl && (
-            <a href={documentUrl} target="_blank" rel="noopener noreferrer"
-              className="mt-2 inline-block text-xs text-blue-600 hover:underline">פתח קישור ↗</a>
-          )}
+            placeholder="https://www.dropbox.com/... או https://drive.google.com/..." className={ic} />
+          {documentUrl && <a href={documentUrl} target="_blank" rel="noopener noreferrer" className="mt-2 inline-block text-xs text-blue-600 hover:underline">פתח קישור ↗</a>}
         </div>
 
         {/* הערות */}
         <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
           <h2 className="mb-3 text-sm font-bold text-slate-500">📝 הערות</h2>
-          <textarea value={notes} onChange={e => setNotes(e.target.value)}
-            rows={3} placeholder="הערות נוספות..."
-            className={ic + " resize-none"} />
+          <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={3} placeholder="הערות נוספות..." className={ic + " resize-none"} />
         </div>
 
         {/* כפתורים */}
@@ -470,5 +409,14 @@ export default function EditContractPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+// wrapper עם Suspense — נדרש ע"י Next.js 15 עבור useSearchParams
+export default function EditContractPage() {
+  return (
+    <Suspense fallback={<div dir="rtl" className="p-8 text-center text-slate-400">טוען...</div>}>
+      <EditContractInner />
+    </Suspense>
   );
 }
