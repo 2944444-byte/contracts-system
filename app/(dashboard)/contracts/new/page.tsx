@@ -668,7 +668,7 @@ export default function NewContractPage() {
               </div>
               {calcGuaranteeAmount && (
                 <div className="rounded-lg bg-green-50 border border-green-100 px-4 py-3 flex justify-between items-center">
-                  <span className="text-sm text-slate-600">סכום ערבות מחושב ({guaranteeMonths} חודשים{guaranteeIncludesMgmt ? " + ניהול" : ""}{includesVat ? " + מע&quot;מ" : ""})</span>
+                  <span className="text-sm text-slate-600">סכום ערבות מחושב ({guaranteeMonths} חודשים{guaranteeIncludesMgmt ? " + ניהול" : ""}{vatType === "taxable" ? " + מע&quot;מ" : ""})</span>
                   <span className="text-xl font-bold text-green-700">₪{calcGuaranteeAmount.toLocaleString()}</span>
                 </div>
               )}
