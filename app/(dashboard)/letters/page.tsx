@@ -385,12 +385,6 @@ export default function LettersPage() {
   return (
     <Suspense fallback={<div dir="rtl" className="p-8 text-center text-slate-400">טוען...</div>}>
       <LettersInner />
-              <button onClick={function() { handleSendEmail("annual_start"); }}
-                disabled={!contract || emailSending}
-                className="bg-green-100 text-green-700 rounded-lg px-3 py-2 text-sm font-semibold hover:bg-green-200 disabled:opacity-40 no-print"
-                title="שלח במייל לשוכר">
-                {emailSending ? "⏳" : "📧 מייל"}
-              </button>
     </Suspense>
   );
 }
