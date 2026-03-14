@@ -11,6 +11,7 @@ const navItems = [
   { href: "/tenants",     label: "שוכרים",          icon: "👥" },
   { href: "/contracts",   label: "חוזים",           icon: "📄" },
   { href: "/payments",    label: "חיובים",          icon: "₪"  },
+  { href: "/management",  label: "דמי ניהול",       icon: "🔧" },
   { href: "/letters",     label: "מכתבים",          icon: "✉"  },
   { href: "/reports",     label: "דוחות",           icon: "📊" },
   { href: "/alerts",      label: "התראות",          icon: "🔔", badge: true },
