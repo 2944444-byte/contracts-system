@@ -14,7 +14,6 @@ const navItems = [
   { href: "/letters",     label: "מכתבים",          icon: "✉"  },
   { href: "/reports",     label: "דוחות",           icon: "📊" },
   { href: "/alerts",      label: "התראות",          icon: "🔔", badge: true },
-  { href: "/cpi",         label: "מדד המחירים",     icon: "📈" },
   { href: "/indexation",  label: "חישוב הצמדות",   icon: "🔢" },
   { href: "/insurances",  label: "ביטוחים",         icon: "🛡️" },
   { href: "/documents",   label: "מסמכים",          icon: "🗂" },
@@ -27,13 +26,12 @@ export default function Sidebar() {
   const [user, setUser] = useState<any>(null);
 
   useEffect(() => {
-    // טען מספר התראות פתוחות
-    supabase.from("alerts").select("id", { count: "exact", head: true })
+    supabase.from("alerts")
+      .select("id", { count: "exact", head: true })
       .eq("is_handled", false)
-      .then(({ count }) => setAlertCount(count ?? 0));
+      .then(function({ count }) { setAlertCount(count ?? 0); });
 
-    // טען משתמש
-    supabase.auth.getUser().then(({ data }) => setUser(data?.user));
+    supabase.auth.getUser().then(function({ data }) { setUser(data?.user); });
   }, [pathname]);
 
   return (
@@ -51,23 +49,21 @@ export default function Sidebar() {
 
       {/* ניווט */}
       <nav className="flex-1 overflow-y-auto py-3 px-2">
-        {navItems.map(item => {
-          const isActive = pathname === item.href || pathname?.startsWith(item.href + "/");
+        {navItems.map(function(item) {
+          const isActive = pathname === item.href || (pathname?.startsWith(item.href + "/") ?? false);
           return (
             <Link key={item.href} href={item.href}
-              className={`flex items-center justify-between gap-2.5 rounded-lg px-3 py-2 mb-0.5 text-sm transition-colors ${
-                isActive
+              className={"flex items-center justify-between gap-2.5 rounded-lg px-3 py-2 mb-0.5 text-sm transition-colors " +
+                (isActive
                   ? "bg-blue-700 text-white font-semibold"
-                  : "text-slate-600 hover:bg-slate-100 hover:text-slate-800"
-              }`}>
+                  : "text-slate-600 hover:bg-slate-100 hover:text-slate-800")}>
               <div className="flex items-center gap-2.5">
                 <span className="text-base w-5 text-center">{item.icon}</span>
                 <span>{item.label}</span>
               </div>
               {item.badge && alertCount > 0 && (
-                <span className={`text-xs font-bold px-1.5 py-0.5 rounded-full min-w-[20px] text-center ${
-                  isActive ? "bg-white/20 text-white" : "bg-red-500 text-white"
-                }`}>
+                <span className={"text-xs font-bold px-1.5 py-0.5 rounded-full min-w-[20px] text-center " +
+                  (isActive ? "bg-white/20 text-white" : "bg-red-500 text-white")}>
                   {alertCount > 99 ? "99+" : alertCount}
                 </span>
               )}
@@ -86,7 +82,8 @@ export default function Sidebar() {
             <div className="text-xs font-semibold text-slate-700 truncate">
               {user?.email ?? "אדמין"}
             </div>
-            <button onClick={() => supabase.auth.signOut().then(() => window.location.href = "/")}
+            <button
+              onClick={function() { supabase.auth.signOut().then(function() { window.location.href = "/"; }); }}
               className="text-xs text-slate-400 hover:text-red-500 transition-colors">
               התנתק
             </button>
