@@ -7,6 +7,7 @@ import { supabase } from "../lib/supabase";
 const navItems = [
   { href: "/dashboard",   label: "דשבורד",         icon: "⊞"  },
   { href: "/properties",  label: "נכסים",           icon: "🏢" },
+  { href: "/groups",      label: "קבוצות נכסים",    icon: "🏙️" },
   { href: "/units",       label: "יחידות",          icon: "🚪" },
   { href: "/tenants",     label: "שוכרים",          icon: "👥" },
   { href: "/contracts",   label: "חוזים",           icon: "📄" },

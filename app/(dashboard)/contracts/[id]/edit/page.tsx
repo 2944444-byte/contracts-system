@@ -3,7 +3,8 @@ import { useState, useEffect, Suspense } from "react";
 import { useRouter, useParams, useSearchParams } from "next/navigation";
 import { supabase } from "../../../../../lib/supabase";
 import { ContractSpacesSelector, SpaceCharge } from "../../../../../components/ContractSpacesSelector";
-// import { TIManager } from "../../../../../components/TIManager"; // TODO: uncomment after TIManager.tsx is uploaded
+// import { TIManager }
+import { PriceTiersManager } from "../../../../../components/PriceTiersManager"; from "../../../../../components/TIManager"; // TODO: uncomment after TIManager.tsx is uploaded
 import { logAudit } from "../../../../../lib/audit-log";
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
@@ -340,6 +341,7 @@ function EditInner() {
             { key: "details", label: "פרטי חוזה" },
             { key: "spaces", label: "שטחים (" + contractSpaces.length + ")" },
             { key: "ti",      label: "השקעות TI" },
+            { key: "tiers",   label: "מדרגות מחיר" },
             { key: "options", label: "אופציות (" + contractOptions.length + ")" },
           ].map(function(t) {
             return (
@@ -616,6 +618,18 @@ function EditInner() {
         </div>
       )}
 
+      {/* טאב מדרגות */}
+      {tab === "tiers" && !isExtension && (
+        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <PriceTiersManager
+            contractId={id as string}
+            chargedArea={contract?.charged_area ?? 0}
+            startDate={startDate}
+            endDate={endDate}
+          />
+        </div>
+      )}
+
       {/* טאב TI */}
       {tab === "ti" && !isExtension && (
         <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -623,6 +637,18 @@ function EditInner() {
             <div className="text-3xl mb-2">🔨</div>
             <div className="text-sm">מודול השקעות משכיר — בקרוב</div>
           </div>
+        </div>
+      )}
+
+      {/* טאב מדרגות */}
+      {tab === "tiers" && !isExtension && (
+        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <PriceTiersManager
+            contractId={id as string}
+            chargedArea={contract?.charged_area ?? 0}
+            startDate={startDate}
+            endDate={endDate}
+          />
         </div>
       )}
 
