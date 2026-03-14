@@ -93,12 +93,12 @@ export default function SettingsPage() {
 
   const MONTHS_HE = ["ינו","פבר","מרץ","אפר","מאי","יוני","יולי","אוג","ספט","אוק","נוב","דצמ"];
 
-  const tabs = [
+  const tabs: { key: "company"|"vat"|"cpi"|"users"; label: string }[] = [
     { key: "company", label: "🏢 פרטי חברה" },
-    { key: "vat",     label: "💰 מע\"מ" },
+    { key: "vat",     label: '💰 מע"מ' },
     { key: "cpi",     label: "📈 מדד מחירים" },
     { key: "users",   label: "👤 משתמשים" },
-  ] as const;
+  ];
 
   return (
     <div dir="rtl" className="max-w-2xl mx-auto">
