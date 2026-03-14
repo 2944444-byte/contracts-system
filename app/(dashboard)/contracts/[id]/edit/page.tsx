@@ -231,7 +231,7 @@ function EditInner() {
         start_date: optStart,
         end_date: optEnd,
         notice_type: newOpt.notice_type,
-        notice_days_before_end: Number(newOpt.notice_days_before_end),
+        notice_days_before_end: Number(newOpt.notice_days_before_end) * 30, // המרה מחודשים לימים
         rent_mechanism: newOpt.rent_mechanism,
         rent_increase_pct: newOpt.rent_increase_pct ? Number(newOpt.rent_increase_pct) : null,
         new_rent_value: newOpt.new_rent_value ? Number(newOpt.new_rent_value) : null,
@@ -597,7 +597,7 @@ function EditInner() {
                     <div className="text-sm text-slate-600 space-y-0.5">
                       <div>{opt.duration_months} חודשים | {formatDate(opt.start_date)} — {formatDate(opt.end_date)}</div>
                       {opt.notice_deadline && (
-                        <div>מועד הודעה: <span className="font-medium">{formatDate(opt.notice_deadline)}</span> ({opt.notice_days_before_end} ימים לפני סיום)</div>
+                        <div>מועד הודעה: <span className="font-medium">{formatDate(opt.notice_deadline)}</span> ({Math.round((opt.notice_days_before_end || 0) / 30)} חודשים לפני סיום)</div>
                       )}
                       {opt.notes && <div className="text-slate-400">{opt.notes}</div>}
                     </div>
@@ -632,10 +632,10 @@ function EditInner() {
                   className={ic} placeholder="24" />
               </div>
               <div>
-                <label className="mb-1 block text-xs font-semibold text-slate-700">ימי הודעה מוקדמת</label>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">הודעה מוקדמת (חודשים)</label>
                 <input type="number" value={newOpt.notice_days_before_end}
                   onChange={function(e) { setNewOpt(function(p) { return {...p, notice_days_before_end: e.target.value}; }); }}
-                  className={ic} placeholder="90" />
+                  className={ic} placeholder="3" />
               </div>
             </div>
             <div className="grid grid-cols-2 gap-3 mb-3">
