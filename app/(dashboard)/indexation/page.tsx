@@ -1,536 +1,356 @@
 "use client";
-import { useEffect, useState, useCallback, Suspense } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { supabase } from "../../../lib/supabase";
 
-const MONTHS_HE = ["","ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
-const MONTHS_SHORT = ["","ינו","פבר","מרץ","אפר","מאי","יוני","יולי","אוג","ספט","אוק","נוב","דצמ"];
+const MONTHS_HE = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני",
+                   "יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
 
-function fmt(n: number, decimals = 2) {
-  return n.toLocaleString("he-IL", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+function pad2(n: number) { return String(n).padStart(2,"0"); }
+function fmtDate(d: string) {
+  if (!d) return "—";
+  const [y,m,day] = d.split("-");
+  return `${day}/${m}/${y}`;
 }
-function fmtInt(n: number) {
-  return Math.round(n).toLocaleString("he-IL");
+// t-2: מדד קובע = 2 חודשים לפני תאריך תשלום
+function getT2Month(paymentDate: string): string {
+  const d = new Date(paymentDate);
+  d.setMonth(d.getMonth() - 2);
+  return `${pad2(d.getMonth()+1)}-${d.getFullYear()}`;
 }
-
-// Payment on 1st of month X uses index published on 15th of X-1 (= index of X-2)
-// e.g. payment 1.1.2025 → index Oct-2024 (published 15-Nov-2024)
-function getKnownIndexMonth(payYear: number, payMonth: number): { year: number; month: number } {
-  let m = payMonth - 2;
-  let y = payYear;
-  if (m <= 0) { m += 12; y -= 1; }
-  return { year: y, month: m };
-}
-
-interface Contract {
-  id: string;
-  tenant_name?: string;
-  property_name?: string;
-  property_address?: string;
-  rent_per_sqm: number;
-  charged_area: number;
-  mgmt_fee_per_sqm?: number;
-  vat_type?: string;
-  vat_pct?: number;
-  index_base_month: number;
-  index_base_year: number;
-  index_base_value: number;
-  start_date: string;
-  end_date: string;
-  payment_frequency?: string;
-  tenants?: { name: string; contact_email?: string };
-  properties?: { name: string; address?: string };
+function addMonths(dateStr: string, n: number): string {
+  const d = new Date(dateStr);
+  d.setMonth(d.getMonth() + n);
+  return d.toISOString().split("T")[0];
 }
 
-interface PaymentRow {
-  payMonth: number; payYear: number;
-  indexMonth: number; indexYear: number;
-  indexValue: number | null;
-  baseRent: number; ratio: number;
-  indexedRent: number; mgmt: number;
-  totalBeforeVat: number; totalWithVat: number;
-  paid: number; diff: number;
+interface CalcResult {
+  paymentDate: string;
+  periodLabel: string;
+  baseRent: number;
+  indexedRent: number | null;
+  changePercent: number | null;
+  determinativeMonth: string;
+  baseMonth: string;
+  error?: string;
+  verificationUrl?: string;
+}
+
+function IndexationInner() {
+  const searchParams = useSearchParams();
+  const [contracts, setContracts] = useState<any[]>([]);
+  const [selectedContract, setSelectedContract] = useState("");
+  const [contract, setContract] = useState<any>(null);
+  const [year, setYear] = useState(new Date().getFullYear());
+  const [mode, setMode] = useState<"annex_a"|"annex_b">("annex_a");
+  const [results, setResults] = useState<CalcResult[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    supabase.from("contracts")
+      .select("id, tenants(name), properties(name), start_date, end_date, rent_per_sqm, charged_area, investment_addition, index_base_date, index_base_value, index_base_month, index_base_year, payment_frequency")
+      .in("status", ["active","expiring","extended"])
+      .order("start_date", { ascending: false })
+      .then(({ data }) => setContracts(data ?? []));
+
+    const preselect = searchParams?.get("contract");
+    if (preselect) setSelectedContract(preselect);
+  }, []);
+
+  useEffect(() => {
+    if (!selectedContract) { setContract(null); return; }
+    const c = contracts.find(x => x.id === selectedContract);
+    setContract(c ?? null);
+  }, [selectedContract, contracts]);
+
+  const baseRent = contract
+    ? (contract.rent_per_sqm ?? 0) * (contract.charged_area ?? 0) + (contract.investment_addition ?? 0)
+    : 0;
+
+  async function calcSingle(value: number, fromMM: string, toMM: string): Promise<{
+    to_value: number; change_percent: number; verification_url: string; error?: string;
+  }> {
+    const res = await fetch(`/api/cpi-calc?value=${value}&from=${fromMM}&to=${toMM}`);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    return data;
+  }
+
+  async function handleCalculate() {
+    if (!contract) { setError("בחר חוזה"); return; }
+    if (!contract.index_base_month || !contract.index_base_year) {
+      setError("החוזה לא מוגדר עם מדד בסיס"); return;
+    }
+    setLoading(true);
+    setError("");
+    setResults([]);
+
+    const baseMonthStr = `${pad2(contract.index_base_month)}-${contract.index_base_year}`;
+    const freq = contract.payment_frequency;
+    const stepMonths = freq === "quarterly" ? 3 : freq === "annual" ? 12 : 1;
+
+    try {
+      if (mode === "annex_a") {
+        // נספח א' — שיקים לשנה הקרובה
+        const payments: CalcResult[] = [];
+        const startDate = new Date(year, 0, 1); // 1.1.YEAR
+
+        for (let i = 0; i < 12 / stepMonths; i++) {
+          const payDate = addMonths(startDate.toISOString().split("T")[0], i * stepMonths);
+          const determinativeMonth = getT2Month(payDate);
+          const periodLabel = stepMonths === 1
+            ? MONTHS_HE[new Date(payDate).getMonth()] + " " + year
+            : `רבעון ${i+1} ${year}`;
+
+          try {
+            const calc = await calcSingle(baseRent, baseMonthStr, determinativeMonth);
+            payments.push({
+              paymentDate: payDate,
+              periodLabel,
+              baseRent,
+              indexedRent: Math.round(calc.to_value * 100) / 100,
+              changePercent: calc.change_percent,
+              determinativeMonth,
+              baseMonth: baseMonthStr,
+              verificationUrl: calc.verification_url,
+            });
+          } catch(e: any) {
+            payments.push({
+              paymentDate: payDate, periodLabel, baseRent,
+              indexedRent: null, changePercent: null,
+              determinativeMonth, baseMonth: baseMonthStr,
+              error: e.message,
+            });
+          }
+        }
+        setResults(payments);
+
+      } else {
+        // נספח ב' — הפרשי הצמדה על שיקים ששולמו בשנה שעברה
+        const payments: CalcResult[] = [];
+        const prevYear = year - 1;
+        const startDate = new Date(prevYear, 0, 1);
+
+        for (let i = 0; i < 12 / stepMonths; i++) {
+          const payDate = addMonths(startDate.toISOString().split("T")[0], i * stepMonths);
+          // מדד ידוע ביום כתיבת השיק (t-2 מתחילת הרבעון הקודם)
+          const writtenMonth = getT2Month(payDate);
+          // מדד קובע ביום פירעון (t-2 מתאריך הפירעון בפועל)
+          const paidMonth = getT2Month(payDate);
+          const periodLabel = stepMonths === 1
+            ? MONTHS_HE[new Date(payDate).getMonth()] + " " + prevYear
+            : `רבעון ${i+1} ${prevYear}`;
+
+          try {
+            // חישוב מה היה צריך להיות (מבסיס לפירעון)
+            const shouldBe = await calcSingle(baseRent, baseMonthStr, paidMonth);
+            // חישוב מה שולם בפועל (מבסיס לכתיבה)
+            const wasPaid  = await calcSingle(baseRent, baseMonthStr, writtenMonth);
+            const diff = (shouldBe.to_value - wasPaid.to_value);
+
+            payments.push({
+              paymentDate: payDate, periodLabel, baseRent,
+              indexedRent: Math.round(diff * 100) / 100,
+              changePercent: shouldBe.change_percent,
+              determinativeMonth: paidMonth,
+              baseMonth: baseMonthStr,
+              verificationUrl: shouldBe.verification_url,
+            });
+          } catch(e: any) {
+            payments.push({
+              paymentDate: payDate, periodLabel, baseRent,
+              indexedRent: null, changePercent: null,
+              determinativeMonth: paidMonth, baseMonth: baseMonthStr,
+              error: e.message,
+            });
+          }
+        }
+        setResults(payments);
+      }
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const totalIndexed  = results.reduce((s, r) => s + (r.indexedRent ?? 0), 0);
+  const totalBase     = results.reduce((s, r) => s + r.baseRent, 0);
+  const totalDiff     = totalIndexed - (mode === "annex_b" ? 0 : totalBase);
+
+  return (
+    <div dir="rtl" className="max-w-4xl mx-auto">
+      <div className="mb-6">
+        <h1 className="text-3xl font-bold text-slate-800">חישוב הצמדה למדד</h1>
+        <p className="text-sm text-slate-500 mt-1">חישוב חי מול API הלמ"ס — מחשבון רשמי</p>
+      </div>
+
+      {/* הגדרות חישוב */}
+      <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm mb-5">
+        <h2 className="text-sm font-bold text-slate-700 mb-4">הגדרות חישוב</h2>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+          <div>
+            <label className="mb-1 block text-xs font-semibold text-slate-700">חוזה</label>
+            <select value={selectedContract}
+              onChange={e => setSelectedContract(e.target.value)}
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-400">
+              <option value="">-- בחר חוזה --</option>
+              {contracts.map(c => (
+                <option key={c.id} value={c.id}>
+                  {c.tenants?.name} — {c.properties?.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-semibold text-slate-700">שנה</label>
+            <select value={year} onChange={e => setYear(Number(e.target.value))}
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-400">
+              {[2023,2024,2025,2026,2027].map(y => <option key={y} value={y}>{y}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-semibold text-slate-700">סוג חישוב</label>
+            <div className="flex rounded-lg border border-slate-300 overflow-hidden">
+              <button onClick={() => setMode("annex_a")}
+                className={`flex-1 py-2 text-xs font-semibold transition-colors ${mode === "annex_a" ? "bg-blue-700 text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}>
+                נספח א׳ — שיקים לשנה
+              </button>
+              <button onClick={() => setMode("annex_b")}
+                className={`flex-1 py-2 text-xs font-semibold transition-colors ${mode === "annex_b" ? "bg-blue-700 text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}>
+                נספח ב׳ — הפרשים
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* פרטי חוזה נבחר */}
+        {contract && (
+          <div className="rounded-lg bg-blue-50 border border-blue-100 p-3 text-sm mb-4">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div><span className="text-blue-600 text-xs">שכ"ד בסיס</span><div className="font-bold text-slate-800">₪{baseRent.toLocaleString()}</div></div>
+              <div><span className="text-blue-600 text-xs">מדד בסיס</span><div className="font-bold text-slate-800">{MONTHS_HE[(contract.index_base_month ?? 1)-1]} {contract.index_base_year}</div></div>
+              <div><span className="text-blue-600 text-xs">תדירות</span><div className="font-bold text-slate-800">
+                {contract.payment_frequency === "monthly" ? "חודשי" : contract.payment_frequency === "quarterly" ? "רבעוני" : "שנתי"}
+              </div></div>
+              <div><span className="text-blue-600 text-xs">תקופה</span><div className="font-bold text-slate-800">{fmtDate(contract.start_date)} — {fmtDate(contract.end_date)}</div></div>
+            </div>
+          </div>
+        )}
+
+        {error && <div className="mb-3 rounded-lg bg-red-50 border border-red-200 px-4 py-2 text-sm text-red-700">{error}</div>}
+
+        <button onClick={handleCalculate} disabled={loading || !contract}
+          className="w-full rounded-lg bg-blue-700 py-3 font-bold text-white hover:bg-blue-800 disabled:opacity-50 flex items-center justify-center gap-2">
+          {loading ? (
+            <><span className="animate-spin">⟳</span> מחשב מול API הלמ"ס...</>
+          ) : (
+            <>🔢 חשב {mode === "annex_a" ? "נספח א׳" : "נספח ב׳"}</>
+          )}
+        </button>
+      </div>
+
+      {/* תוצאות */}
+      {results.length > 0 && (
+        <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+          <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+            <div>
+              <h2 className="font-bold text-slate-800">
+                {mode === "annex_a" ? `📋 נספח א׳ — שיקים לשנת ${year}` : `📋 נספח ב׳ — הפרשי הצמדה ${year-1}`}
+              </h2>
+              <p className="text-xs text-slate-500 mt-0.5">
+                {contract?.tenants?.name} | {contract?.properties?.name} | מדד בסיס: {MONTHS_HE[(contract?.index_base_month ?? 1)-1]} {contract?.index_base_year}
+              </p>
+            </div>
+            <div className="text-left">
+              <div className="text-xs text-slate-500">{mode === "annex_a" ? "סה״כ לשנה" : "סה״כ הפרשים"}</div>
+              <div className={`text-lg font-bold ${mode === "annex_b" ? (totalIndexed >= 0 ? "text-red-700" : "text-green-700") : "text-green-700"}`}>
+                ₪{Math.abs(totalIndexed).toLocaleString()}
+                {mode === "annex_b" && <span className="text-sm mr-1">{totalIndexed >= 0 ? "(לחיוב)" : "(לזיכוי)"}</span>}
+              </div>
+            </div>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-right text-sm">
+              <thead className="bg-slate-50 text-slate-600 text-xs border-b border-slate-100">
+                <tr>
+                  <th className="px-4 py-3 font-semibold">תקופה</th>
+                  <th className="px-4 py-3 font-semibold">תאריך תשלום</th>
+                  <th className="px-4 py-3 font-semibold">מדד בסיס</th>
+                  <th className="px-4 py-3 font-semibold">מדד קובע (t-2)</th>
+                  <th className="px-4 py-3 font-semibold">שינוי מדד</th>
+                  <th className="px-4 py-3 font-semibold">
+                    {mode === "annex_a" ? "שכ״ד מוצמד" : "הפרש"}
+                  </th>
+                  <th className="px-4 py-3 font-semibold">אימות</th>
+                </tr>
+              </thead>
+              <tbody>
+                {results.map((r, i) => (
+                  <tr key={i} className={`border-t border-slate-50 ${r.error ? "bg-red-50" : "hover:bg-slate-50"}`}>
+                    <td className="px-4 py-3 font-medium text-slate-800">{r.periodLabel}</td>
+                    <td className="px-4 py-3 text-slate-600">{fmtDate(r.paymentDate)}</td>
+                    <td className="px-4 py-3 text-slate-600">{r.baseMonth}</td>
+                    <td className="px-4 py-3 text-slate-600">{r.determinativeMonth}</td>
+                    <td className="px-4 py-3">
+                      {r.changePercent != null ? (
+                        <span className={`font-semibold ${r.changePercent >= 0 ? "text-red-600" : "text-green-600"}`}>
+                          {r.changePercent >= 0 ? "+" : ""}{r.changePercent.toFixed(2)}%
+                        </span>
+                      ) : <span className="text-red-400 text-xs">{r.error ?? "—"}</span>}
+                    </td>
+                    <td className="px-4 py-3">
+                      {r.indexedRent != null ? (
+                        <span className={`font-bold ${mode === "annex_b" ? (r.indexedRent >= 0 ? "text-red-700" : "text-green-700") : "text-slate-900"}`}>
+                          ₪{Math.abs(r.indexedRent).toLocaleString()}
+                          {mode === "annex_b" && r.indexedRent !== 0 && (
+                            <span className="text-xs font-normal mr-1">{r.indexedRent > 0 ? "לחיוב" : "לזיכוי"}</span>
+                          )}
+                        </span>
+                      ) : "—"}
+                    </td>
+                    <td className="px-4 py-3">
+                      {r.verificationUrl && (
+                        <a href={r.verificationUrl} target="_blank" rel="noopener noreferrer"
+                          className="text-xs text-blue-600 hover:underline">
+                          אמת ↗
+                        </a>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot className="bg-slate-50 border-t-2 border-slate-200">
+                <tr>
+                  <td colSpan={5} className="px-4 py-3 font-bold text-slate-700 text-left">
+                    {mode === "annex_a" ? "סה״כ לשנה" : "סה״כ הפרשים"}
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className={`font-bold text-base ${mode === "annex_b" ? (totalIndexed >= 0 ? "text-red-700" : "text-green-700") : "text-green-700"}`}>
+                      ₪{Math.abs(totalIndexed).toLocaleString()}
+                    </span>
+                  </td>
+                  <td></td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+
+          {/* הסבר */}
+          <div className="px-5 py-3 bg-slate-50 border-t border-slate-100 text-xs text-slate-500">
+            <strong>כלל t-2:</strong> המדד הקובע לתשלום בתאריך X הוא המדד המפורסם 2 חודשים לפני — כי הלמ"ס מפרסם ב-15 לחודש את מדד החודש הקודם.
+            כל חישוב מבוסס על <strong>API הלמ"ס הרשמי</strong> (מחשבון 120010). לחץ "אמת" לאימות ישיר.
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function IndexationPage() {
   return (
-    <Suspense fallback={<div className="p-8 text-center text-slate-400">טוען...</div>}>
-      <IndexationContent />
+    <Suspense fallback={<div dir="rtl" className="p-8 text-center text-slate-400">טוען...</div>}>
+      <IndexationInner />
     </Suspense>
-  );
-}
-
-function IndexationContent() {
-  const searchParams = useSearchParams();
-  const contractIdParam = searchParams.get("contract_id");
-
-  const [contracts, setContracts] = useState<Contract[]>([]);
-  const [selectedId, setSelectedId] = useState<string>(contractIdParam ?? "");
-  const [contract, setContract] = useState<Contract | null>(null);
-  const [calcYear, setCalcYear] = useState(new Date().getFullYear());
-  const [latestIndex, setLatestIndex] = useState<{ value: number; month: number; year: number } | null>(null);
-  const [rows, setRows] = useState<PaymentRow[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<"a" | "b">("a");
-  const [paidOverrides, setPaidOverrides] = useState<Record<string, number>>({});
-  const [emailSending, setEmailSending] = useState(false);
-
-  useEffect(() => {
-    supabase.from("contracts")
-      .select("*, tenants(name, contact_email), properties(name, address)")
-      .order("start_date", { ascending: false })
-      .then(({ data }) => {
-        const list = (data ?? []).map((c: any) => ({
-          ...c,
-          tenant_name: c.tenants?.name,
-          property_name: c.properties?.name,
-          property_address: c.properties?.address,
-        }));
-        setContracts(list);
-        if (contractIdParam) {
-          const found = list.find((c: Contract) => c.id === contractIdParam);
-          if (found) setContract(found);
-        }
-      });
-  }, [contractIdParam]);
-
-  useEffect(() => {
-    supabase.from("cpi_records")
-      .select("year, month, value")
-      .order("year", { ascending: false })
-      .order("month", { ascending: false })
-      .limit(1)
-      .then(({ data }) => {
-        if (data?.[0]) setLatestIndex({ value: data[0].value, month: data[0].month, year: data[0].year });
-      });
-  }, []);
-
-  const selectContract = (id: string) => {
-    setSelectedId(id);
-    const found = contracts.find(c => c.id === id);
-    setContract(found ?? null);
-    setRows([]);
-    setPaidOverrides({});
-  };
-
-  const calculateAnnexB = useCallback(async () => {
-    if (!contract) return;
-    setLoading(true);
-    setRows([]);
-
-    const vatMult = (contract.vat_type === "taxable" || contract.vat_type === "חייב")
-      ? (1 + (contract.vat_pct ?? 18) / 100) : 1;
-    const baseRent = (contract.rent_per_sqm ?? 0) * (contract.charged_area ?? 0);
-    const mgmtMonthly = (contract.mgmt_fee_per_sqm ?? 0) * (contract.charged_area ?? 0);
-    const baseIndex = contract.index_base_value;
-
-    const newRows: PaymentRow[] = [];
-    for (let m = 1; m <= 12; m++) {
-      const { year: idxY, month: idxM } = getKnownIndexMonth(calcYear, m);
-      const { data: idxData } = await supabase
-        .from("cpi_records")
-        .select("value")
-        .eq("year", idxY)
-        .eq("month", idxM)
-        .limit(1);
-
-      const idxVal = idxData?.[0]?.value ?? null;
-      const ratio = idxVal && baseIndex ? idxVal / baseIndex : 1;
-      const indexedRent = baseRent * ratio;
-      const totalBeforeVat = indexedRent + mgmtMonthly;
-      const totalWithVat = totalBeforeVat * vatMult;
-      const paidKey = `${calcYear}-${m}`;
-      const paid = paidOverrides[paidKey] ?? 0;
-
-      newRows.push({
-        payMonth: m, payYear: calcYear,
-        indexMonth: idxM, indexYear: idxY,
-        indexValue: idxVal,
-        baseRent, ratio,
-        indexedRent, mgmt: mgmtMonthly,
-        totalBeforeVat, totalWithVat,
-        paid, diff: totalWithVat - paid,
-      });
-    }
-    setRows(newRows);
-    setLoading(false);
-  }, [contract, calcYear, paidOverrides]);
-
-  const nextYear = calcYear + 1;
-
-  const annexA = contract && latestIndex ? (() => {
-    const baseRent = (contract.rent_per_sqm ?? 0) * (contract.charged_area ?? 0);
-    const mgmtMonthly = (contract.mgmt_fee_per_sqm ?? 0) * (contract.charged_area ?? 0);
-    const vatMult = (contract.vat_type === "taxable" || contract.vat_type === "חייב")
-      ? (1 + (contract.vat_pct ?? 18) / 100) : 1;
-    const ratio = latestIndex.value / contract.index_base_value;
-    const indexedRent = baseRent * ratio;
-    const totalBeforeVat = indexedRent + mgmtMonthly;
-    const totalWithVat = totalBeforeVat * vatMult;
-    return { baseRent, mgmtMonthly, ratio, indexedRent, totalBeforeVat, totalWithVat, vatMult };
-  })() : null;
-
-  const totalDiff = rows.reduce((s, r) => s + r.diff, 0);
-  const totalIndexed = rows.reduce((s, r) => s + r.totalWithVat, 0);
-  const totalPaid = rows.reduce((s, r) => s + r.paid, 0);
-  const hasPaid = rows.some(r => r.paid > 0);
-
-  const handlePrint = () => window.print();
-
-  const handleEmail = async () => {
-    if (!contract?.tenants?.contact_email) {
-      alert("אין כתובת מייל לשוכר זה");
-      return;
-    }
-    setEmailSending(true);
-    await new Promise(r => setTimeout(r, 1500));
-    alert(`מייל נשלח ל: ${contract.tenants.contact_email}`);
-    setEmailSending(false);
-  };
-
-  return (
-    <div dir="rtl" className="min-h-screen bg-slate-50">
-      <style>{`
-        @media print {
-          .no-print { display: none !important; }
-          body { background: white; }
-          .print-page { box-shadow: none !important; margin: 0 !important; }
-        }
-      `}</style>
-
-      <div className="max-w-5xl mx-auto px-4 py-8">
-
-        {/* Header */}
-        <div className="no-print mb-8">
-          <h1 className="text-2xl font-bold text-slate-800 mb-1">חישוב הצמדות למדד</h1>
-          <p className="text-slate-500 text-sm">נספח א׳ — המחאות לשנה הבאה | נספח ב׳ — הפרשי הצמדה לשנה שעברה</p>
-        </div>
-
-        {/* Controls */}
-        <div className="no-print bg-white rounded-2xl border border-slate-200 p-5 mb-6 shadow-sm">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div>
-              <label className="block text-xs font-semibold text-slate-600 mb-1.5">בחר חוזה</label>
-              <select
-                value={selectedId}
-                onChange={e => selectContract(e.target.value)}
-                className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="">— בחר שוכר —</option>
-                {contracts.map(c => (
-                  <option key={c.id} value={c.id}>
-                    {c.tenant_name} — {c.property_name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-slate-600 mb-1.5">שנת חישוב (נספח ב׳)</label>
-              <select
-                value={calcYear}
-                onChange={e => { setCalcYear(Number(e.target.value)); setRows([]); }}
-                className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                {[2022,2023,2024,2025,2026].map(y => <option key={y} value={y}>{y}</option>)}
-              </select>
-            </div>
-            <div className="flex items-end gap-2">
-              <button
-                onClick={calculateAnnexB}
-                disabled={!contract || loading}
-                className="flex-1 bg-blue-600 text-white rounded-lg px-4 py-2 text-sm font-semibold hover:bg-blue-700 disabled:opacity-50 transition-colors"
-              >
-                {loading ? "מחשב..." : "⚡ חשב הפרשים"}
-              </button>
-              <button onClick={handlePrint} disabled={!contract}
-                className="bg-slate-100 text-slate-700 rounded-lg px-3 py-2 text-sm font-semibold hover:bg-slate-200 disabled:opacity-40"
-                title="הדפס">🖨️
-              </button>
-              <button onClick={handleEmail} disabled={!contract || emailSending}
-                className="bg-green-100 text-green-700 rounded-lg px-3 py-2 text-sm font-semibold hover:bg-green-200 disabled:opacity-40"
-                title="שלח במייל">
-                {emailSending ? "⏳" : "✉️"}
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {contract && (
-          <div className="print-page space-y-6">
-
-            {/* Contract summary */}
-            <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
-              <div className="flex items-start justify-between flex-wrap gap-4">
-                <div>
-                  <h2 className="text-xl font-bold text-slate-800">{contract.tenant_name}</h2>
-                  <p className="text-slate-500 text-sm">{contract.property_name}{contract.property_address ? ` — ${contract.property_address}` : ""}</p>
-                </div>
-                <div className="flex gap-6 text-sm">
-                  <div className="text-center">
-                    <div className="text-xs text-slate-400">שטח מושכר</div>
-                    <div className="font-bold text-slate-700">{fmtInt(contract.charged_area)} מ"ר</div>
-                  </div>
-                  <div className="text-center">
-                    <div className="text-xs text-slate-400">שכ"ד בסיסי/מ"ר</div>
-                    <div className="font-bold text-slate-700">₪{fmt(contract.rent_per_sqm)}</div>
-                  </div>
-                  {contract.mgmt_fee_per_sqm ? (
-                    <div className="text-center">
-                      <div className="text-xs text-slate-400">ד"נ/מ"ר</div>
-                      <div className="font-bold text-slate-700">₪{fmt(contract.mgmt_fee_per_sqm)}</div>
-                    </div>
-                  ) : null}
-                  <div className="text-center">
-                    <div className="text-xs text-slate-400">מדד בסיס</div>
-                    <div className="font-bold text-blue-700">
-                      {MONTHS_SHORT[contract.index_base_month]}-{contract.index_base_year} = {fmt(contract.index_base_value)}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Tabs */}
-            <div className="no-print flex gap-1 bg-slate-100 rounded-xl p-1 w-fit">
-              {(["a","b"] as const).map(tab => (
-                <button key={tab} onClick={() => setActiveTab(tab)}
-                  className={`px-5 py-2 rounded-lg text-sm font-semibold transition-all ${
-                    activeTab === tab ? "bg-white text-blue-700 shadow-sm" : "text-slate-500 hover:text-slate-700"
-                  }`}>
-                  {tab === "a" ? `📄 נספח א׳ — המחאות ${nextYear}` : `📊 נספח ב׳ — הפרשים ${calcYear}`}
-                </button>
-              ))}
-            </div>
-
-            {/* ══════════════════ ANNEX A ══════════════════ */}
-            {activeTab === "a" && annexA && (
-              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-                <div className="bg-blue-700 text-white px-6 py-4">
-                  <h3 className="font-bold text-lg">נספח א׳ — תחשיב המחאות לשנת שכירות {nextYear}</h3>
-                  <p className="text-blue-200 text-sm mt-0.5">
-                    צמוד למדד {MONTHS_SHORT[latestIndex!.month]}-{latestIndex!.year} = {fmt(latestIndex!.value)}
-                  </p>
-                </div>
-                <div className="p-6">
-                  <table className="w-full text-sm max-w-2xl">
-                    <tbody className="divide-y divide-slate-100">
-                      <tr>
-                        <td className="py-2.5 text-slate-600">שטח מושכר</td>
-                        <td className="py-2.5 text-left font-semibold">{fmtInt(contract.charged_area)} מ"ר</td>
-                      </tr>
-                      <tr>
-                        <td className="py-2.5 text-slate-600">שכ"ד בסיסי לחודש (לפני הצמדה ומע"מ)</td>
-                        <td className="py-2.5 text-left font-semibold">₪{fmtInt(annexA.baseRent)}</td>
-                      </tr>
-                      {contract.mgmt_fee_per_sqm ? (
-                        <tr>
-                          <td className="py-2.5 text-slate-600">מקדמת דמי ניהול לחודש (הערכה, לפני מע"מ)</td>
-                          <td className="py-2.5 text-left font-semibold">₪{fmtInt(annexA.mgmtMonthly)}</td>
-                        </tr>
-                      ) : null}
-                      <tr className="bg-slate-50">
-                        <td className="py-2.5 px-2 text-slate-500 text-xs">מדד בסיס ({MONTHS_SHORT[contract.index_base_month]}-{contract.index_base_year})</td>
-                        <td className="py-2.5 text-left text-slate-600">{fmt(contract.index_base_value)}</td>
-                      </tr>
-                      <tr className="bg-slate-50">
-                        <td className="py-2.5 px-2 text-slate-500 text-xs">מדד אחרון ידוע ({MONTHS_SHORT[latestIndex!.month]}-{latestIndex!.year})</td>
-                        <td className="py-2.5 text-left font-semibold text-blue-600">{fmt(latestIndex!.value)}</td>
-                      </tr>
-                      <tr>
-                        <td className="py-2.5 text-slate-600">יחס הצמדה</td>
-                        <td className="py-2.5 text-left text-slate-700">{annexA.ratio.toFixed(6)}</td>
-                      </tr>
-                      <tr>
-                        <td className="py-2.5 text-slate-600">שכ"ד צמוד לחודש (לפני מע"מ)</td>
-                        <td className="py-2.5 text-left font-semibold">₪{fmtInt(annexA.indexedRent)}</td>
-                      </tr>
-                      {contract.mgmt_fee_per_sqm ? (
-                        <tr>
-                          <td className="py-2.5 text-slate-600">סה"כ שכ"ד + ד"נ לפני מע"מ</td>
-                          <td className="py-2.5 text-left font-semibold">₪{fmtInt(annexA.totalBeforeVat)}</td>
-                        </tr>
-                      ) : null}
-                      {annexA.vatMult > 1 && (
-                        <tr>
-                          <td className="py-2.5 text-slate-600">מע"מ {contract.vat_pct ?? 18}%</td>
-                          <td className="py-2.5 text-left font-semibold">₪{fmtInt(annexA.totalBeforeVat * (annexA.vatMult - 1))}</td>
-                        </tr>
-                      )}
-                      <tr className="bg-blue-50 border-t-2 border-blue-300">
-                        <td className="py-3.5 px-2 font-bold text-blue-900 text-base">סכום כל המחאה לשנת {nextYear} (כולל מע"מ)</td>
-                        <td className="py-3.5 text-left font-bold text-2xl text-blue-800">₪{fmtInt(annexA.totalWithVat)}</td>
-                      </tr>
-                    </tbody>
-                  </table>
-
-                  {/* 12 checks grid */}
-                  <div className="mt-8">
-                    <h4 className="font-semibold text-slate-700 mb-3 text-sm">12 המחאות לשנת {nextYear}</h4>
-                    <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2">
-                      {Array.from({length: 12}, (_,i) => i+1).map(m => (
-                        <div key={m} className="bg-slate-50 rounded-xl p-3 text-center border border-slate-200 hover:border-blue-300 transition-colors">
-                          <div className="text-xs text-slate-400 mb-1">1.{m}.{nextYear}</div>
-                          <div className="font-bold text-slate-800">₪{fmtInt(annexA.totalWithVat)}</div>
-                          <div className="text-xs text-slate-500 mt-0.5">{MONTHS_HE[m]}</div>
-                        </div>
-                      ))}
-                    </div>
-                    <div className="mt-4 bg-blue-50 rounded-xl p-4 text-center border border-blue-200">
-                      <span className="text-sm text-blue-700 font-medium">סה"כ שנתי: </span>
-                      <span className="text-xl font-bold text-blue-900">₪{fmtInt(annexA.totalWithVat * 12)}</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* ══════════════════ ANNEX B ══════════════════ */}
-            {activeTab === "b" && (
-              <div>
-                {rows.length === 0 && !loading && (
-                  <div className="bg-white rounded-2xl border border-dashed border-slate-300 p-16 text-center">
-                    <div className="text-3xl mb-3">📊</div>
-                    <p className="text-slate-500 text-sm">לחץ על "חשב הפרשים" למעלה</p>
-                    <p className="text-slate-400 text-xs mt-1">ניתן להזין בטבלה מה שולם בפועל לחישוב הפרש</p>
-                  </div>
-                )}
-                {loading && (
-                  <div className="bg-white rounded-2xl border border-slate-200 p-16 text-center">
-                    <div className="text-3xl mb-3 animate-spin">⏳</div>
-                    <p className="text-slate-400 text-sm">טוען נתוני מדד מהמסד...</p>
-                  </div>
-                )}
-                {rows.length > 0 && (
-                  <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-                    <div className="bg-slate-800 text-white px-6 py-4">
-                      <h3 className="font-bold text-lg">נספח ב׳ — הפרשי הצמדה לשנת {calcYear}</h3>
-                      <p className="text-slate-300 text-sm mt-0.5">
-                        מדד בסיס: {MONTHS_SHORT[contract.index_base_month]}-{contract.index_base_year} = {fmt(contract.index_base_value)} | תנאי תשלום: {contract.payment_frequency ?? "חודשי"}
-                      </p>
-                    </div>
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-xs">
-                        <thead>
-                          <tr className="bg-slate-100 border-b border-slate-200">
-                            <th className="py-3 px-3 text-right font-semibold text-slate-600 whitespace-nowrap">חודש תשלום</th>
-                            <th className="py-3 px-3 text-right font-semibold text-slate-600 whitespace-nowrap">מדד ידוע<br/><span className="text-slate-400 font-normal">(חודש)</span></th>
-                            <th className="py-3 px-3 text-left font-semibold text-slate-600">מדד בסיס</th>
-                            <th className="py-3 px-3 text-left font-semibold text-slate-600">מדד ידוע<br/><span className="text-slate-400 font-normal">(ערך)</span></th>
-                            <th className="py-3 px-3 text-left font-semibold text-slate-600">יחס</th>
-                            <th className="py-3 px-3 text-left font-semibold text-slate-600">שכ"ד צמוד</th>
-                            {contract.mgmt_fee_per_sqm ? <th className="py-3 px-3 text-left font-semibold text-slate-600">ד"נ</th> : null}
-                            <th className="py-3 px-3 text-left font-semibold text-slate-600 whitespace-nowrap">סה"כ לשלם<br/><span className="text-slate-400 font-normal">(כולל מע"מ)</span></th>
-                            <th className="py-3 px-3 text-left font-semibold text-slate-600">ששולם</th>
-                            <th className="py-3 px-3 text-left font-semibold text-slate-600">הפרש</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100">
-                          {rows.map((r, i) => (
-                            <tr key={i} className={`hover:bg-slate-50 transition-colors ${
-                              r.paid > 0 && r.diff > 100 ? "bg-orange-50" :
-                              r.paid > 0 && r.diff < -100 ? "bg-green-50" : ""
-                            }`}>
-                              <td className="py-2.5 px-3 font-medium text-slate-700 whitespace-nowrap">
-                                {MONTHS_HE[r.payMonth]} {r.payYear}
-                              </td>
-                              <td className="py-2.5 px-3 text-slate-500 whitespace-nowrap">
-                                {MONTHS_SHORT[r.indexMonth]}-{r.indexYear}
-                              </td>
-                              <td className="py-2.5 px-3 text-left text-slate-500">{fmt(contract.index_base_value)}</td>
-                              <td className="py-2.5 px-3 text-left font-semibold text-blue-700">
-                                {r.indexValue !== null ? fmt(r.indexValue) : <span className="text-red-400 font-normal">חסר</span>}
-                              </td>
-                              <td className="py-2.5 px-3 text-left text-slate-500">{r.ratio.toFixed(5)}</td>
-                              <td className="py-2.5 px-3 text-left font-medium text-slate-700">₪{fmtInt(r.indexedRent)}</td>
-                              {contract.mgmt_fee_per_sqm ? (
-                                <td className="py-2.5 px-3 text-left text-slate-500">₪{fmtInt(r.mgmt)}</td>
-                              ) : null}
-                              <td className="py-2.5 px-3 text-left font-bold text-slate-800">₪{fmtInt(r.totalWithVat)}</td>
-                              <td className="py-2.5 px-3 text-left">
-                                <input
-                                  type="number"
-                                  value={paidOverrides[`${r.payYear}-${r.payMonth}`] ?? ""}
-                                  onChange={e => {
-                                    const val = parseFloat(e.target.value) || 0;
-                                    setPaidOverrides(prev => ({ ...prev, [`${r.payYear}-${r.payMonth}`]: val }));
-                                  }}
-                                  placeholder="0"
-                                  className="w-24 border border-slate-200 rounded px-2 py-1 text-xs text-left focus:outline-none focus:ring-1 focus:ring-blue-400 bg-white"
-                                />
-                              </td>
-                              <td className={`py-2.5 px-3 text-left font-bold ${
-                                r.paid > 0 && r.diff > 100 ? "text-orange-600" :
-                                r.paid > 0 && r.diff < -100 ? "text-green-600" : "text-slate-300"
-                              }`}>
-                                {r.paid > 0 ? `${r.diff > 0 ? "+" : ""}${fmtInt(r.diff)}` : "—"}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                        <tfoot>
-                          <tr className="bg-slate-800 text-white">
-                            <td colSpan={contract.mgmt_fee_per_sqm ? 7 : 6} className="py-3 px-3 font-bold text-sm">סה"כ שנתי</td>
-                            <td className="py-3 px-3 text-left font-bold">₪{fmtInt(totalIndexed)}</td>
-                            <td className="py-3 px-3 text-left font-bold">₪{fmtInt(totalPaid)}</td>
-                            <td className={`py-3 px-3 text-left font-bold text-base ${
-                              hasPaid ? (totalDiff > 0 ? "text-orange-300" : "text-green-300") : "text-slate-400"
-                            }`}>
-                              {hasPaid ? `${totalDiff > 0 ? "+" : ""}${fmtInt(totalDiff)}` : "—"}
-                            </td>
-                          </tr>
-                        </tfoot>
-                      </table>
-                    </div>
-
-                    {/* Recalc after editing paid amounts */}
-                    <div className="px-6 py-3 bg-slate-50 border-t border-slate-200 no-print">
-                      <button
-                        onClick={calculateAnnexB}
-                        className="text-xs text-blue-600 hover:text-blue-800 font-semibold"
-                      >
-                        ↺ עדכן חישוב לאחר שינוי תשלומים
-                      </button>
-                    </div>
-
-                    {/* Summary */}
-                    {hasPaid && (
-                      <div className="p-6 border-t border-slate-200">
-                        <div className={`rounded-2xl p-5 flex items-center justify-between ${
-                          totalDiff > 0
-                            ? "bg-orange-50 border border-orange-200"
-                            : "bg-green-50 border border-green-200"
-                        }`}>
-                          <div>
-                            <p className={`font-bold text-base ${totalDiff > 0 ? "text-orange-800" : "text-green-800"}`}>
-                              {totalDiff > 0 ? `השוכר חייב הפרשי הצמדה — ${calcYear}` : `השוכר שילם יתר — ${calcYear}`}
-                            </p>
-                            <p className="text-xs text-slate-500 mt-1">
-                              מדד בסיס: {MONTHS_SHORT[contract.index_base_month]}-{contract.index_base_year} = {fmt(contract.index_base_value)}
-                            </p>
-                          </div>
-                          <div className={`text-4xl font-black ${totalDiff > 0 ? "text-orange-700" : "text-green-700"}`}>
-                            ₪{fmtInt(Math.abs(totalDiff))}
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-
-          </div>
-        )}
-
-        {/* Empty state */}
-        {!contract && (
-          <div className="bg-white rounded-2xl border border-dashed border-slate-300 p-20 text-center">
-            <div className="text-5xl mb-4">📋</div>
-            <h3 className="text-lg font-semibold text-slate-600 mb-2">בחר חוזה להתחיל</h3>
-            <p className="text-slate-400 text-sm">בחר שוכר מהרשימה למעלה כדי לחשב הצמדות</p>
-          </div>
-        )}
-      </div>
-    </div>
   );
 }
