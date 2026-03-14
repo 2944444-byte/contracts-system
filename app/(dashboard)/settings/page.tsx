@@ -12,7 +12,7 @@ const TABS = [
 ];
 
 export default function SettingsPage() {
-  const [tab, setTab] = useState<"company"|"vat"|"cpi"|"users">("company");
+  const [tab, setTab] = useState<string>("company");
 
   // חברה
   const [companyName, setCompanyName]   = useState("");
