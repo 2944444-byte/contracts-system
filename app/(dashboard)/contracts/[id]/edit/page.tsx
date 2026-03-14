@@ -3,7 +3,7 @@ import { useState, useEffect, Suspense } from "react";
 import { useRouter, useParams, useSearchParams } from "next/navigation";
 import { supabase } from "../../../../../lib/supabase";
 import { ContractSpacesSelector, SpaceCharge } from "../../../../../components/ContractSpacesSelector";
-import { TIManager } from "../../../../../components/TIManager";
+// import { TIManager } from "../../../../../components/TIManager"; // TODO: uncomment after TIManager.tsx is uploaded
 import { logAudit } from "../../../../../lib/audit-log";
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
@@ -619,14 +619,20 @@ function EditInner() {
       {/* טאב TI */}
       {tab === "ti" && !isExtension && (
         <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <TIManager contractId={id as string} contractEndDate={endDate} />
+          <div className="text-center py-8 text-slate-400">
+            <div className="text-3xl mb-2">🔨</div>
+            <div className="text-sm">מודול השקעות משכיר — בקרוב</div>
+          </div>
         </div>
       )}
 
       {/* טאב TI */}
       {tab === "ti" && !isExtension && (
         <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <TIManager contractId={id as string} contractEndDate={endDate} />
+          <div className="text-center py-8 text-slate-400">
+            <div className="text-3xl mb-2">🔨</div>
+            <div className="text-sm">מודול השקעות משכיר — בקרוב</div>
+          </div>
         </div>
       )}
 
