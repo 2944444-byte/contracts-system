@@ -3,8 +3,8 @@ import { useState, useEffect, Suspense } from "react";
 import { useRouter, useParams, useSearchParams } from "next/navigation";
 import { supabase } from "../../../../../lib/supabase";
 import { ContractSpacesSelector, SpaceCharge } from "../../../../../components/ContractSpacesSelector";
-// import { TIManager }
-import { PriceTiersManager } from "../../../../../components/PriceTiersManager"; from "../../../../../components/TIManager"; // TODO: uncomment after TIManager.tsx is uploaded
+// import { TIManager } from "../../../../../components/TIManager"; // TODO: uncomment after TIManager.tsx is uploaded
+import { PriceTiersManager } from "../../../../../components/PriceTiersManager";
 import { logAudit } from "../../../../../lib/audit-log";
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
