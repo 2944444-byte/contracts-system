@@ -23,7 +23,7 @@ const TENANT_TYPES: Record<string,string> = {
 };
 
 export default function InsurancesPage() {
-  const [tab, setTab] = useState<"building"|"tenant">("building");
+  const [tab, setTab] = useState<string>("building");
 
   // ביטוח מבנה
   const [buildingIns, setBuildingIns] = useState<any[]>([]);
@@ -35,7 +35,7 @@ export default function InsurancesPage() {
   const [contracts, setContracts] = useState<any[]>([]);
 
   // מודל
-  const [editingId, setEditingId] = useState<string|null>(null);
+  const [editingId, setEditingId] = useState("");
   const [isNew,     setIsNew]     = useState(false);
   const [saving,    setSaving]    = useState(false);
 
@@ -108,7 +108,7 @@ export default function InsurancesPage() {
       } else {
         await supabase.from("insurances_building").update(payload).eq("id", editingId);
       }
-      setEditingId(null);
+      setEditingId("");
       await loadAll();
     } catch(e: any) { alert("שגיאה: " + e?.message); }
     finally { setSaving(false); }
@@ -131,7 +131,7 @@ export default function InsurancesPage() {
       } else {
         await supabase.from("insurances_tenant").update(payload).eq("id", editingId);
       }
-      setEditingId(null);
+      setEditingId("");
       await loadAll();
     } catch(e: any) { alert("שגיאה: " + e?.message); }
     finally { setSaving(false); }
@@ -323,11 +323,11 @@ export default function InsurancesPage() {
 
       {/* מודל ביטוח מבנה */}
       {editingId?.startsWith("building") && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setEditingId(null)}>
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setEditingId("")}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()} dir="rtl">
             <div className="sticky top-0 bg-white border-b border-slate-100 px-6 py-4 flex items-center justify-between">
               <h2 className="font-bold text-slate-800">{isNew ? "ביטוח מבנה חדש" : "עריכת ביטוח מבנה"}</h2>
-              <button onClick={() => setEditingId(null)} className="text-2xl text-slate-400">×</button>
+              <button onClick={() => setEditingId("")} className="text-2xl text-slate-400">×</button>
             </div>
             <div className="p-6 space-y-3">
               <div>
@@ -382,7 +382,7 @@ export default function InsurancesPage() {
                 <input type="text" value={bNotes} onChange={e => setBNotes(e.target.value)} className={ic} />
               </div>
               <div className="flex gap-3 pt-2">
-                <button onClick={() => setEditingId(null)} className="flex-1 rounded-lg border border-slate-200 py-2.5 text-sm font-medium text-slate-600">ביטול</button>
+                <button onClick={() => setEditingId("")} className="flex-1 rounded-lg border border-slate-200 py-2.5 text-sm font-medium text-slate-600">ביטול</button>
                 <button onClick={saveBuildingIns} disabled={saving} className="flex-1 rounded-lg bg-blue-700 py-2.5 text-sm font-bold text-white disabled:opacity-50">
                   {saving ? "שומר..." : "שמור"}
                 </button>
@@ -394,11 +394,11 @@ export default function InsurancesPage() {
 
       {/* מודל ביטוח שוכר */}
       {editingId?.startsWith("tenant") && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setEditingId(null)}>
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setEditingId("")}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()} dir="rtl">
             <div className="sticky top-0 bg-white border-b border-slate-100 px-6 py-4 flex items-center justify-between">
               <h2 className="font-bold text-slate-800">{isNew ? "ביטוח שוכר חדש" : "עריכת ביטוח שוכר"}</h2>
-              <button onClick={() => setEditingId(null)} className="text-2xl text-slate-400">×</button>
+              <button onClick={() => setEditingId("")} className="text-2xl text-slate-400">×</button>
             </div>
             <div className="p-6 space-y-3">
               <div>
@@ -458,7 +458,7 @@ export default function InsurancesPage() {
                 <input type="text" value={tNotes} onChange={e => setTNotes(e.target.value)} className={ic} />
               </div>
               <div className="flex gap-3 pt-2">
-                <button onClick={() => setEditingId(null)} className="flex-1 rounded-lg border border-slate-200 py-2.5 text-sm font-medium text-slate-600">ביטול</button>
+                <button onClick={() => setEditingId("")} className="flex-1 rounded-lg border border-slate-200 py-2.5 text-sm font-medium text-slate-600">ביטול</button>
                 <button onClick={saveTenantIns} disabled={saving} className="flex-1 rounded-lg bg-blue-700 py-2.5 text-sm font-bold text-white disabled:opacity-50">
                   {saving ? "שומר..." : "שמור"}
                 </button>

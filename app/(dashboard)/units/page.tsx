@@ -26,7 +26,7 @@ function UnitsInner() {
   const [selectedProp, setSelectedProp] = useState("");
   const [spaces, setSpaces]   = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
-  const [editingId, setEditingId] = useState<string|null>(null);
+  const [editingId, setEditingId] = useState("");
   const [isNew, setIsNew] = useState(false);
 
   // שדות עריכה
@@ -101,7 +101,7 @@ function UnitsInner() {
         const { error } = await supabase.from("spaces").update(payload).eq("id", editingId);
         if (error) throw error;
       }
-      setEditingId(null);
+      setEditingId("");
       await loadSpaces();
     } catch(e: any) {
       alert("שגיאה: " + e?.message);
@@ -245,11 +245,11 @@ function UnitsInner() {
       {/* מודל עריכה */}
       {editingId && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
-          onClick={() => setEditingId(null)}>
+          onClick={() => setEditingId("")}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md" onClick={e => e.stopPropagation()} dir="rtl">
             <div className="border-b border-slate-100 px-6 py-4 flex items-center justify-between">
               <h2 className="font-bold text-slate-800 text-lg">{isNew ? "יחידה חדשה" : "עריכת יחידה"}</h2>
-              <button onClick={() => setEditingId(null)} className="text-2xl text-slate-400">×</button>
+              <button onClick={() => setEditingId("")} className="text-2xl text-slate-400">×</button>
             </div>
             <div className="p-6 space-y-3">
               <div>
@@ -291,7 +291,7 @@ function UnitsInner() {
                   className={ic} />
               </div>
               <div className="flex gap-3 pt-2">
-                <button onClick={() => setEditingId(null)}
+                <button onClick={() => setEditingId("")}
                   className="flex-1 rounded-lg border border-slate-200 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50">ביטול</button>
                 <button onClick={handleSave} disabled={saving}
                   className="flex-1 rounded-lg bg-blue-700 py-2.5 text-sm font-bold text-white hover:bg-blue-800 disabled:opacity-50">
