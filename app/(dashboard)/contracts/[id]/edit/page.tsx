@@ -63,6 +63,7 @@ function EditContractInner() {
   // אופציות
   const [contractOptions, setContractOptions] = useState<any[]>([]);
   const [savingOpt, setSavingOpt] = useState(false);
+  const [migrating, setMigrating] = useState(false);
   const [newOpt, setNewOpt] = useState({
     duration_months: "12",
     notice_type: "non_renewal",
@@ -221,6 +222,41 @@ function EditContractInner() {
     if (!confirm("למחוק אופציה זו?")) return;
     await supabase.from("contract_options").delete().eq("id", optId);
     await loadOptions();
+  }
+
+  async function handleMigrateOptions() {
+    if (!contract?.option_months || !endDate) return;
+    const count = Number(prompt("כמה אופציות יש בחוזה? (1 או 2)", "2"));
+    if (!count || count < 1 || count > 5) { alert("מספר לא תקין"); return; }
+    if (!confirm(`ליצור ${count} אופציות של ${contract.option_months} חודשים כל אחת?`)) return;
+    setMigrating(true);
+    try {
+      let prevEnd = endDate;
+      for (let i = 1; i <= count; i++) {
+        const optStart = (() => {
+          const d = new Date(prevEnd); d.setDate(d.getDate() + 1);
+          return d.toISOString().split("T")[0];
+        })();
+        const optEnd = addMonths(optStart, contract.option_months);
+        const { error } = await supabase.from("contract_options").insert({
+          contract_id: id,
+          option_number: i,
+          duration_months: contract.option_months,
+          start_date: optStart,
+          end_date: optEnd,
+          notice_type: "non_renewal",
+          notice_days_before_end: 90,
+          rent_mechanism: "no_change",
+          status: "pending",
+        });
+        if (error) throw error;
+        prevEnd = optEnd;
+      }
+      await loadOptions();
+      alert(`✅ ${count} אופציות נוצרו בהצלחה!`);
+    } catch(e: any) {
+      alert("שגיאה: " + e?.message);
+    } finally { setMigrating(false); }
   }
 
   if (loading) return <div dir="rtl" className="p-8 text-center text-slate-400">טוען...</div>;
@@ -482,6 +518,26 @@ function EditContractInner() {
       {/* טאב אופציות */}
       {tab === "options" && !isExtension && (
         <div className="space-y-4">
+          {/* המרת option_months ישן לאופציות חדשות */}
+          {contractOptions.length === 0 && contract?.option_months && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+              <div className="flex items-start gap-3">
+                <div className="text-2xl">⚠️</div>
+                <div className="flex-1">
+                  <div className="font-bold text-amber-800 mb-1">אופציה ישנה זוהתה</div>
+                  <div className="text-sm text-amber-700 mb-3">
+                    החוזה מוגדר עם <strong>{contract.option_months} חודשי אופציה</strong> בשדה ישן.
+                    המר לאופציות מפורטות כדי שהמערכת תחשב את תאריך הסיום הנכון ותשלח התראות.
+                  </div>
+                  <button onClick={handleMigrateOptions} disabled={migrating}
+                    className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-bold text-white hover:bg-amber-700 disabled:opacity-50">
+                    {migrating ? "ממיר..." : "🔄 המר לאופציות מפורטות"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* אופציות קיימות */}
           {contractOptions.length > 0 && (
             <div className="space-y-3">
