@@ -1,265 +1,475 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useState, useEffect } from "react";
 import { supabase } from "../../../lib/supabase";
 
-const MONTHS = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
-function fmt(n: number) { return n.toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
-function fmtDate(s: string) { if (!s) return "—"; const [y,m] = s.split("-"); return `${m}/${y}`; }
+function fmtDate(d: string) {
+  if (!d) return "—";
+  const [y,m,day] = d.split("-");
+  return `${day}/${m}/${y}`;
+}
+function daysLeft(d: string) {
+  return Math.ceil((new Date(d).getTime() - Date.now()) / 86400000);
+}
 
-const MonthSelector = ({ value, onChange, label }: any) => (
-  <div>
-    <label className="mb-1 block text-xs font-semibold text-slate-700">{label}</label>
-    <div className="flex gap-2">
-      <select value={value.month} onChange={e => onChange({...value, month: e.target.value})
-} className="flex-1 rounded-lg border border-slate-300 px-2 py-2 text-sm text-slate-800 bg-white focus:outline-none">
-        <option value="">חודש</option>
-        {MONTHS.map((m,i) => <option key={i+1} value={i+1}>{m}</option>)}
-      </select>
-      <input type="number" value={value.year} onChange={e => onChange({...value, year: e.target.value})} placeholder="שנה" className="w-24 rounded-lg border border-slate-300 px-2 py-2 text-sm bg-white focus:outline-none" min="2000" max="2099" />
-    </div>
-  </div>
-);
+type ReportType = "occupancy"|"contracts"|"revenue"|"expiring"|"options"|"guarantees";
 
 export default function ReportsPage() {
-  const [tab, setTab] = useState<"indexation"|"current_rent"|"billing">("indexation");
-  const [properties, setProperties] = useState<any[]>([]);
-  const [contracts, setContracts] = useState<any[]>([]);
-  const [cpiRecords, setCpiRecords] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [selectedProp, setSelectedProp] = useState("all");
-  const [baseMonth, setBaseMonth] = useState({ year: "", month: "" });
-  const [startMonth, setStartMonth] = useState({ year: "", month: "" });
-  const [endMonth, setEndMonth] = useState({ year: "", month: "" });
-  const [results, setResults] = useState<any[]>([]);
-  const [calculating, setCalculating] = useState(false);
-  const [error, setError] = useState("");
-  const [billingProp, setBillingProp] = useState("");
-  const [billingYear, setBillingYear] = useState(new Date().getFullYear().toString());
-  const [billingResults, setBillingResults] = useState<any[]>([]);
-  const [billingTotal, setBillingTotal] = useState<any>(null);
-  const [billingCalc, setBillingCalc] = useState(false);
+  const [reportType, setReportType] = useState<ReportType>("occupancy");
+  const [loading, setLoading]       = useState(false);
+  const [data, setData]             = useState<any[]>([]);
+  const [fromDate, setFromDate]     = useState("");
+  const [toDate, setToDate]         = useState("");
 
-  useEffect(() => {
-    Promise.all([
-      supabase.from("properties").select("id, name, total_rentable_area, annual_insurance_cost, annual_management_budget, annual_waste_cost"),
-      supabase.from("contracts").select("*, tenants(name, legal_name), properties(name), units(unit_name, area_m2)").in("status",["active","expiring"]),
-      supabase.from("cpi_records").select("*").order("year").order("month"),
-    ]).then(([{data:p},{data:c},{data:cpi}]) => {
-      setProperties(p??[]); setContracts(c??[]); setCpiRecords(cpi??[]); setLoading(false);
-    });
-  }, []);
+  const reports: { key: ReportType; label: string; icon: string; desc: string }[] = [
+    { key: "occupancy",  label: "תפוסת נכסים",        icon: "🏢", desc: "שטח מושכר vs. פנוי לכל נכס" },
+    { key: "contracts",  label: "חוזים פעילים",        icon: "📄", desc: "כל החוזים הפעילים עם פרטים" },
+    { key: "revenue",    label: "הכנסות לפי נכס",      icon: "💰", desc: "הכנסה חודשית ושנתית לכל נכס" },
+    { key: "expiring",   label: "חוזים לפקיעה",        icon: "⏰", desc: "חוזים שפגים ב-12 החודשים הקרובים" },
+    { key: "options",    label: "אופציות וסטטוס",      icon: "📋", desc: "כל האופציות עם מועדי הודעה" },
+    { key: "guarantees", label: "ערבויות ובטחונות",    icon: "🛡️", desc: "סטטוס ערבויות לפי שוכר" },
+  ];
 
-  function getCpiByStr(s: string) {
-    if (!s) return null;
-    const [y,m] = s.split("-");
-    return cpiRecords.find(c => c.year===Number(y) && c.month===Number(m))?.value ?? null;
+  useEffect(() => { loadReport(); }, [reportType]);
+
+  async function loadReport() {
+    setLoading(true);
+    setData([]);
+    try {
+      if (reportType === "occupancy") {
+        const { data: props } = await supabase
+          .from("properties")
+          .select("*, contracts(id, status, charged_area, rent_per_sqm, investment_addition, tenants(name))")
+          .order("name");
+        const rows = (props ?? []).map((p: any) => {
+          const active = (p.contracts ?? []).filter((c: any) =>
+            ["active","expiring","extended"].includes(c.status));
+          const rentedArea = active.reduce((s: number, c: any) => s + (c.charged_area ?? 0), 0);
+          const revenue    = active.reduce((s: number, c: any) =>
+            s + (c.rent_per_sqm ?? 0) * (c.charged_area ?? 0) + (c.investment_addition ?? 0), 0);
+          const total = p.total_rentable_area ?? 0;
+          return {
+            name: p.name,
+            type: p.property_type ?? "—",
+            total_area: total,
+            rented_area: rentedArea,
+            vacant_area: total - rentedArea,
+            occupancy_pct: total > 0 ? Math.round(rentedArea / total * 100) : 0,
+            active_contracts: active.length,
+            monthly_revenue: revenue,
+          };
+        });
+        setData(rows);
+
+      } else if (reportType === "contracts") {
+        const { data: contracts } = await supabase
+          .from("contracts")
+          .select("*, tenants(name), properties(name)")
+          .in("status", ["active","expiring","extended","upcoming"])
+          .order("end_date");
+        setData((contracts ?? []).map((c: any) => ({
+          tenant: c.tenants?.name,
+          property: c.properties?.name,
+          start: c.start_date,
+          end: c.end_date,
+          status: c.status,
+          rent_per_sqm: c.rent_per_sqm,
+          area: c.charged_area,
+          monthly: (c.rent_per_sqm ?? 0) * (c.charged_area ?? 0) + (c.investment_addition ?? 0),
+          days_left: c.end_date ? daysLeft(c.end_date) : null,
+        })));
+
+      } else if (reportType === "revenue") {
+        const { data: props } = await supabase
+          .from("properties")
+          .select("*, contracts(id, status, rent_per_sqm, charged_area, investment_addition, tenants(name))")
+          .order("name");
+        setData((props ?? []).map((p: any) => {
+          const active = (p.contracts ?? []).filter((c: any) =>
+            ["active","expiring","extended"].includes(c.status));
+          const monthly = active.reduce((s: number, c: any) =>
+            s + (c.rent_per_sqm ?? 0) * (c.charged_area ?? 0) + (c.investment_addition ?? 0), 0);
+          return {
+            property: p.name,
+            active_contracts: active.length,
+            monthly_revenue: monthly,
+            annual_revenue: monthly * 12,
+            tenants: active.map((c: any) => c.tenants?.name).join(", "),
+          };
+        }));
+
+      } else if (reportType === "expiring") {
+        const in365 = new Date();
+        in365.setDate(in365.getDate() + 365);
+        const { data: contracts } = await supabase
+          .from("contracts")
+          .select("*, tenants(name), properties(name)")
+          .in("status", ["active","expiring","extended"])
+          .lte("end_date", in365.toISOString().split("T")[0])
+          .order("end_date");
+        setData((contracts ?? []).map((c: any) => ({
+          tenant: c.tenants?.name,
+          property: c.properties?.name,
+          end_date: c.end_date,
+          days_left: daysLeft(c.end_date),
+          option_months: c.option_months,
+          monthly: (c.rent_per_sqm ?? 0) * (c.charged_area ?? 0) + (c.investment_addition ?? 0),
+        })));
+
+      } else if (reportType === "options") {
+        const { data: opts } = await supabase
+          .from("contract_options")
+          .select("*, contracts(tenant_id, property_id, tenants(name), properties(name))")
+          .order("notice_deadline");
+        setData((opts ?? []).map((o: any) => ({
+          tenant: o.contracts?.tenants?.name,
+          property: o.contracts?.properties?.name,
+          option_number: o.option_number,
+          duration_months: o.duration_months,
+          start_date: o.start_date,
+          end_date: o.end_date,
+          notice_deadline: o.notice_deadline,
+          days_to_deadline: o.notice_deadline ? daysLeft(o.notice_deadline) : null,
+          status: o.status,
+          notice_type: o.notice_type,
+        })));
+
+      } else if (reportType === "guarantees") {
+        const { data: g } = await supabase
+          .from("guarantees")
+          .select("*, contracts(tenant_id, property_id, tenants(name), properties(name))")
+          .order("end_date");
+        setData((g ?? []).map((gg: any) => ({
+          tenant: gg.contracts?.tenants?.name,
+          property: gg.contracts?.properties?.name,
+          type: gg.guarantee_type,
+          amount_required: gg.amount_required,
+          amount_actual: gg.amount_actual,
+          end_date: gg.end_date,
+          days_left: gg.end_date ? daysLeft(gg.end_date) : null,
+          status: gg.status,
+        })));
+      }
+    } finally { setLoading(false); }
   }
 
-  function generatePeriods(s: string, e: string, quarterly: boolean) {
-    const periods: string[] = []; const d = new Date(s+"-01"); const end = new Date(e+"-01");
-    while (d <= end) { periods.push(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`); d.setMonth(d.getMonth()+(quarterly?3:1)); }
-    return periods;
+  function exportCSV() {
+    if (!data.length) return;
+    const headers = Object.keys(data[0]);
+    const csv = [
+      headers.join(","),
+      ...data.map(row =>
+        headers.map(h => {
+          const v = row[h];
+          return typeof v === "string" && v.includes(",") ? `"${v}"` : v ?? "";
+        }).join(",")
+      )
+    ].join("\n");
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement("a");
+    a.href = url; a.download = `${reportType}_${new Date().toISOString().split("T")[0]}.csv`;
+    a.click(); URL.revokeObjectURL(url);
   }
 
-  async function calculate() {
-    setError(""); setResults([]);
-    const startStr = startMonth.year&&startMonth.month ? `${startMonth.year}-${String(startMonth.month).padStart(2,"0")}` : "";
-    const endStr = endMonth.year&&endMonth.month ? `${endMonth.year}-${String(endMonth.month).padStart(2,"0")}` : "";
-    const baseStr = baseMonth.year&&baseMonth.month ? `${baseMonth.year}-${String(baseMonth.month).padStart(2,"0")}` : "";
-    if (!startStr||!endStr||!baseStr) { setError("יש למלא חודש בסיס + טווח"); return; }
-    const baseIndexValue = getCpiByStr(baseStr);
-    if (!baseIndexValue) { setError(`חסר מדד לחודש ${fmtDate(baseStr)}`); return; }
-    setCalculating(true);
-    const filtered = contracts.filter(c => (selectedProp==="all"||c.property_id===selectedProp) && c.index_base_value && c.charged_area);
-    const allResults = [];
-    for (const c of filtered) {
-      const periods = generatePeriods(startStr, endStr, c.payment_frequency==="quarterly");
-      const vatMult = c.vat_type==="taxable" ? (1+(c.vat_pct??18)/100) : 1;
-      const rows = periods.map(p => {
-        const actualCpi = getCpiByStr(p);
-        if (!actualCpi) return { period:p, missing:true };
-        const indexedRent = c.rent_per_sqm*(actualCpi/c.index_base_value)*c.charged_area;
-        const originalRent = c.rent_per_sqm*(baseIndexValue/c.index_base_value)*c.charged_area;
-        const diff = (indexedRent-originalRent)*vatMult;
-        return { period:p, actualCpi, originalRent:originalRent*vatMult, indexedRent:(indexedRent+(c.mgmt_fee_per_sqm??0)*c.charged_area)*vatMult, diff, missing:false };
-      });
-      allResults.push({ tenantName:c.tenants?.legal_name??c.tenants?.name, propertyName:c.properties?.name, baseIndexValue:c.index_base_value, baseIndexMonth:c.index_base_month, rows, total:rows.filter((r:any)=>!r.missing).reduce((s:number,r:any)=>s+r.diff,0) });
+  const currentReport = reports.find(r => r.key === reportType)!;
+
+  // סיכומים לפי סוג דוח
+  const summaries = (() => {
+    if (!data.length) return null;
+    if (reportType === "occupancy") {
+      const totalArea    = data.reduce((s, r) => s + r.total_area, 0);
+      const rentedArea   = data.reduce((s, r) => s + r.rented_area, 0);
+      const totalRev     = data.reduce((s, r) => s + r.monthly_revenue, 0);
+      return [
+        { label: "שטח כולל",     value: `${totalArea.toLocaleString()} מ"ר` },
+        { label: "מושכר",         value: `${rentedArea.toLocaleString()} מ"ר (${totalArea > 0 ? Math.round(rentedArea/totalArea*100) : 0}%)` },
+        { label: "הכנסה חודשית", value: `₪${totalRev.toLocaleString()}` },
+        { label: "שנתי",          value: `₪${(totalRev*12).toLocaleString()}` },
+      ];
     }
-    setResults(allResults); setCalculating(false);
-    if (!allResults.length) setError("לא נמצאו חוזים עם נתוני מדד");
-  }
-
-  async function calcBilling() {
-    if (!billingProp) { alert("בחר נכס"); return; }
-    setBillingCalc(true);
-    const prop = properties.find(p => p.id===billingProp);
-    if (!prop) { setBillingCalc(false); return; }
-    const totalArea = prop.total_rentable_area||0;
-    const annualInsurance = prop.annual_insurance_cost||0;
-    const annualMgmt = prop.annual_management_budget||0;
-    const annualWaste = prop.annual_waste_cost||0;
-    const propContracts = contracts.filter(c => c.property_id===billingProp);
-    const rows = propContracts.map(c => {
-      const area = c.charged_area||c.units?.area_m2||0;
-      const ratio = totalArea>0 ? area/totalArea : 0;
-      return {
-        tenant: c.tenants?.legal_name??c.tenants?.name??"—",
-        unit: c.units?.unit_name??"—",
-        area, ratio:(ratio*100).toFixed(1),
-        insuranceMonthly:(annualInsurance*ratio)/12,
-        mgmtMonthly:(annualMgmt*ratio)/12,
-        wasteMonthly:(annualWaste*ratio)/12,
-        monthlyShare:((annualInsurance+annualMgmt+annualWaste)*ratio)/12,
-        annualShare:(annualInsurance+annualMgmt+annualWaste)*ratio,
-      };
-    });
-    setBillingResults(rows);
-    setBillingTotal({ totalArea, annualInsurance, annualMgmt, annualWaste, totalMonthly:rows.reduce((s,r)=>s+r.monthlyShare,0) });
-    setBillingCalc(false);
-  }
+    if (reportType === "revenue") {
+      const total = data.reduce((s, r) => s + r.monthly_revenue, 0);
+      return [
+        { label: "סה\"כ חודשי",  value: `₪${total.toLocaleString()}` },
+        { label: "סה\"כ שנתי",   value: `₪${(total*12).toLocaleString()}` },
+        { label: "נכסים פעילים", value: data.filter(r => r.monthly_revenue > 0).length },
+      ];
+    }
+    if (reportType === "contracts") {
+      const total = data.reduce((s, r) => s + r.monthly, 0);
+      return [
+        { label: "חוזים",          value: data.length },
+        { label: "הכנסה חודשית",  value: `₪${total.toLocaleString()}` },
+      ];
+    }
+    return null;
+  })();
 
   return (
-    <div dir="rtl" className="p-6 max-w-7xl mx-auto">
-      <div className="mb-6">
-        <h1 className="text-3xl font-bold text-slate-800">📊 דוחות</h1>
-        <p className="text-sm text-slate-500 mt-1">הצמדות, שכ&quot;ד עדכני וחיובי נכס</p>
+    <div dir="rtl">
+      <div className="mb-6 flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold text-slate-800">דוחות</h1>
+          <p className="text-sm text-slate-500 mt-1">ניתוח וסיכום נתוני המערכת</p>
+        </div>
+        {data.length > 0 && (
+          <button onClick={exportCSV}
+            className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 shadow-sm flex items-center gap-2">
+            📥 ייצוא CSV
+          </button>
+        )}
       </div>
-      <div className="flex gap-1 mb-6 rounded-lg bg-slate-100 p-1 w-fit">
-        {([["indexation","הפרשי הצמדה 📈"],["current_rent","שכ\"ד עדכני 💰"],["billing","חיובי נכס 🏢"]] as const).map(([t,l]) => (
-          <button key={t} onClick={() => setTab(t)} className={`rounded-md px-5 py-2 text-sm font-bold transition-colors ${tab===t?"bg-white shadow text-slate-800":"text-slate-500"}`}>{l}</button>
+
+      {/* בחירת דוח */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
+        {reports.map(r => (
+          <button key={r.key} onClick={() => setReportType(r.key)}
+            className={`rounded-xl border p-3 text-right transition-colors shadow-sm ${reportType === r.key ? "border-blue-500 bg-blue-50" : "border-slate-200 bg-white hover:bg-slate-50"}`}>
+            <div className="text-2xl mb-1">{r.icon}</div>
+            <div className={`text-xs font-bold ${reportType === r.key ? "text-blue-700" : "text-slate-700"}`}>{r.label}</div>
+            <div className="text-xs text-slate-400 mt-0.5 leading-tight">{r.desc}</div>
+          </button>
         ))}
       </div>
 
-      {tab==="indexation" && (
-        <div className="space-y-5">
-          <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-            <h2 className="font-bold text-slate-700 mb-4">הגדרות חישוב</h2>
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-              <div>
-                <label className="mb-1 block text-xs font-semibold text-slate-700">נכס</label>
-                <select value={selectedProp} onChange={e => setSelectedProp(e.target.value)} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white focus:outline-none">
-                  <option value="all">כל הנכסים</option>
-                  {properties.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                </select>
-              </div>
-              <MonthSelector value={baseMonth} onChange={setBaseMonth} label="חודש בסיס לחיוב" />
-              <MonthSelector value={startMonth} onChange={setStartMonth} label="תחילת טווח" />
-              <MonthSelector value={endMonth} onChange={setEndMonth} label="סוף טווח" />
-            </div>
-            <div className="mt-4 flex gap-3">
-              <button onClick={calculate} disabled={calculating} className="rounded-lg bg-blue-700 px-6 py-2.5 font-bold text-white hover:bg-blue-800 disabled:opacity-50">{calculating?"מחשב...":"🧮 חשב הפרשי הצמדה"}</button>
-            </div>
-            {error && <div className="mt-3 text-sm text-red-700 bg-red-50 rounded-lg px-3 py-2">{error}</div>}
-          </div>
-          {results.map((r,i) => (
-            <div key={i} className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-              <div className="px-5 py-4 border-b bg-slate-50 flex justify-between">
-                <div><span className="font-bold">{r.tenantName}</span><span className="text-slate-500 text-sm mr-2">— {r.propertyName}</span></div>
-                <span className={`font-bold text-lg ${r.total>0?"text-green-700":"text-red-600"}`}>₪{fmt(r.total)}</span>
-              </div>
-              <table className="w-full text-right text-xs">
-                <thead className="bg-slate-50 border-b"><tr><th className="px-4 py-2">תקופה</th><th className="px-4 py-2">מדד</th><th className="px-4 py-2">שכ&quot;ד ששולם</th><th className="px-4 py-2">שכ&quot;ד מוצמד</th><th className="px-4 py-2">הפרש</th></tr></thead>
-                <tbody>
-                  {r.rows.map((row:any,j:number) => (
-                    <tr key={j} className={`border-t ${row.missing?"bg-yellow-50":"hover:bg-slate-50"}`}>
-                      <td className="px-4 py-2 font-medium">{fmtDate(row.period)}</td>
-                      <td className="px-4 py-2">{row.missing?<span className="text-yellow-600">⚠️ חסר</span>:row.actualCpi}</td>
-                      <td className="px-4 py-2">{row.missing?"—":`₪${fmt(row.originalRent)}`}</td>
-                      <td className="px-4 py-2 font-medium">{row.missing?"—":`₪${fmt(row.indexedRent)}`}</td>
-                      <td className={`px-4 py-2 font-bold ${!row.missing&&row.diff>0?"text-green-700":"text-slate-500"}`}>{row.missing?"—":`₪${fmt(row.diff)}`}</td>
-                    </tr>
-                  ))}
-                  <tr className="bg-slate-50 border-t-2 font-bold"><td colSpan={4} className="px-4 py-2">סה&quot;כ</td><td className={`px-4 py-2 text-lg ${r.total>0?"text-green-700":"text-red-600"}`}>₪{fmt(r.total)}</td></tr>
-                </tbody>
-              </table>
+      {/* סיכומים */}
+      {summaries && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+          {summaries.map((s: any, i: number) => (
+            <div key={i} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm text-center">
+              <div className="text-xl font-bold text-slate-900">{s.value}</div>
+              <div className="text-xs text-slate-500 mt-1">{s.label}</div>
             </div>
           ))}
         </div>
       )}
 
-      {tab==="current_rent" && (
-        <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-          <div className="px-5 py-4 border-b"><h2 className="font-bold text-slate-700">שכ&quot;ד עדכני לכל חוזה</h2></div>
-          <table className="w-full text-right text-sm">
-            <thead className="bg-slate-50 border-b"><tr><th className="px-4 py-3">שוכר</th><th className="px-4 py-3">נכס</th><th className="px-4 py-3">מדד בסיס</th><th className="px-4 py-3">מדד עדכני</th><th className="px-4 py-3">שכ&quot;ד חוזה</th><th className="px-4 py-3">שכ&quot;ד מוצמד</th><th className="px-4 py-3">שינוי</th></tr></thead>
-            <tbody>
-              {loading?<tr><td colSpan={7} className="py-8 text-center text-slate-400">טוען...</td></tr>
-              :contracts.filter(c=>c.index_base_value&&c.charged_area).map(c=>{
-                const latestCpi=cpiRecords[cpiRecords.length-1];
-                const indexed=latestCpi?c.rent_per_sqm*(latestCpi.value/c.index_base_value)*c.charged_area:null;
-                const base=c.rent_per_sqm*c.charged_area;
-                const pct=indexed?((indexed/base-1)*100):null;
-                return(<tr key={c.id} className="border-t hover:bg-slate-50">
-                  <td className="px-4 py-3 font-medium">{c.tenants?.legal_name??c.tenants?.name}</td>
-                  <td className="px-4 py-3 text-slate-600">{c.properties?.name}</td>
-                  <td className="px-4 py-3">{c.index_base_value} <span className="text-xs text-slate-400">({fmtDate(c.index_base_month)})</span></td>
-                  <td className="px-4 py-3">{latestCpi?latestCpi.value:<span className="text-orange-500 text-xs">חסר</span>}</td>
-                  <td className="px-4 py-3">₪{fmt(base)}</td>
-                  <td className="px-4 py-3 font-bold text-green-700">{indexed?`₪${fmt(indexed)}`:"—"}</td>
-                  <td className="px-4 py-3">{pct!==null&&<span className={`text-xs font-bold ${pct>0?"text-red-500":"text-green-600"}`}>{pct>0?"▲":"▼"}{Math.abs(pct).toFixed(1)}%</span>}</td>
-                </tr>);
-              })}
-            </tbody>
-          </table>
+      {/* טבלת דוח */}
+      {loading ? (
+        <div className="text-center py-12 text-slate-400">טוען...</div>
+      ) : data.length === 0 ? (
+        <div className="rounded-xl border border-slate-200 bg-white p-12 text-center text-slate-400 shadow-sm">
+          <div className="text-5xl mb-3">{currentReport.icon}</div>
+          <div>אין נתונים להצגה</div>
         </div>
+      ) : reportType === "occupancy" ? (
+        <OccupancyTable data={data} />
+      ) : reportType === "revenue" ? (
+        <RevenueTable data={data} />
+      ) : reportType === "contracts" || reportType === "expiring" ? (
+        <ContractsTable data={data} />
+      ) : reportType === "options" ? (
+        <OptionsTable data={data} />
+      ) : (
+        <GuaranteesTable data={data} />
       )}
+    </div>
+  );
+}
 
-      {tab==="billing" && (
-        <div className="space-y-5">
-          <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-            <h2 className="font-bold text-slate-700 mb-2">חיובי נכס לפי יחס שטח</h2>
-            <p className="text-sm text-slate-500 mb-4">חלוקת עלויות ביטוח, ניהול ואשפה בין שוכרים לפי שטח</p>
-            <div className="flex gap-4 items-end flex-wrap">
-              <div className="flex-1 min-w-48">
-                <label className="mb-1 block text-xs font-semibold text-slate-700">נכס *</label>
-                <select value={billingProp} onChange={e => setBillingProp(e.target.value)} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white focus:outline-none">
-                  <option value="">בחר נכס</option>
-                  {properties.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="mb-1 block text-xs font-semibold text-slate-700">שנה</label>
-                <input type="number" value={billingYear} onChange={e => setBillingYear(e.target.value)} className="w-28 rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white focus:outline-none" />
-              </div>
-              <button onClick={calcBilling} disabled={billingCalc} className="rounded-lg bg-blue-700 px-5 py-2 font-bold text-white hover:bg-blue-800 disabled:opacity-50">{billingCalc?"מחשב...":"🧮 חשב חיובים"}</button>
-            </div>
-          </div>
-          {billingTotal && (<>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              {[{l:"שטח כולל",v:`${billingTotal.totalArea?.toLocaleString()} מ"ר`,c:"bg-slate-50"},{l:"ביטוח שנתי",v:`₪${fmt(billingTotal.annualInsurance)}`,c:"bg-blue-50"},{l:"ניהול שנתי",v:`₪${fmt(billingTotal.annualMgmt)}`,c:"bg-purple-50"},{l:"אשפה שנתי",v:`₪${fmt(billingTotal.annualWaste)}`,c:"bg-green-50"}].map((s,i)=>(
-                <div key={i} className={`rounded-xl border border-slate-200 ${s.c} p-4`}><div className="text-xs text-slate-500 mb-1">{s.l}</div><div className="font-bold text-slate-800">{s.v}</div></div>
-              ))}
-            </div>
-            <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-              <div className="px-5 py-3 border-b bg-slate-50 flex justify-between">
-                <h3 className="font-bold text-slate-700">פירוט לפי שוכר</h3>
-                <span className="text-sm text-slate-500">סה&quot;כ חודשי: <strong>₪{fmt(billingTotal.totalMonthly)}</strong></span>
-              </div>
-              <table className="w-full text-right text-sm">
-                <thead className="bg-slate-50 text-xs text-slate-500 border-b">
-                  <tr><th className="px-4 py-2">שוכר</th><th className="px-4 py-2">יחידה</th><th className="px-4 py-2">שטח</th><th className="px-4 py-2">%</th><th className="px-4 py-2">ביטוח/חודש</th><th className="px-4 py-2">ניהול/חודש</th><th className="px-4 py-2">אשפה/חודש</th><th className="px-4 py-2 font-bold">סה&quot;כ/חודש</th><th className="px-4 py-2">סה&quot;כ/שנה</th></tr>
-                </thead>
-                <tbody>
-                  {billingResults.map((r,i)=>(
-                    <tr key={i} className="border-t hover:bg-slate-50">
-                      <td className="px-4 py-3 font-semibold">{r.tenant}</td>
-                      <td className="px-4 py-3 text-slate-500">{r.unit}</td>
-                      <td className="px-4 py-3">{r.area?.toLocaleString()}</td>
-                      <td className="px-4 py-3"><span className="rounded-full bg-blue-100 text-blue-700 px-2 py-0.5 text-xs font-bold">{r.ratio}%</span></td>
-                      <td className="px-4 py-3 text-blue-700">₪{fmt(r.insuranceMonthly)}</td>
-                      <td className="px-4 py-3 text-purple-700">₪{fmt(r.mgmtMonthly)}</td>
-                      <td className="px-4 py-3 text-green-700">₪{fmt(r.wasteMonthly)}</td>
-                      <td className="px-4 py-3 font-bold">₪{fmt(r.monthlyShare)}</td>
-                      <td className="px-4 py-3 text-slate-600">₪{fmt(r.annualShare)}</td>
-                    </tr>
-                  ))}
-                  <tr className="border-t-2 bg-slate-50 font-bold"><td colSpan={7} className="px-4 py-3">סה&quot;כ</td><td className="px-4 py-3 text-lg">₪{fmt(billingTotal.totalMonthly)}</td><td className="px-4 py-3">₪{fmt(billingTotal.totalMonthly*12)}</td></tr>
-                </tbody>
-              </table>
-            </div>
-          </>)}
-        </div>
-      )}
+function OccupancyTable({ data }: { data: any[] }) {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+      <table className="w-full text-right text-sm">
+        <thead className="bg-slate-50 text-slate-700 border-b border-slate-200">
+          <tr>
+            <th className="px-4 py-3 font-semibold">נכס</th>
+            <th className="px-4 py-3 font-semibold">סוג</th>
+            <th className="px-4 py-3 font-semibold">שטח כולל</th>
+            <th className="px-4 py-3 font-semibold">מושכר</th>
+            <th className="px-4 py-3 font-semibold">פנוי</th>
+            <th className="px-4 py-3 font-semibold">תפוסה</th>
+            <th className="px-4 py-3 font-semibold">חוזים</th>
+            <th className="px-4 py-3 font-semibold">הכנסה חודשית</th>
+          </tr>
+        </thead>
+        <tbody>
+          {data.map((r, i) => (
+            <tr key={i} className="border-t border-slate-100 hover:bg-slate-50">
+              <td className="px-4 py-3 font-semibold text-slate-900">{r.name}</td>
+              <td className="px-4 py-3 text-slate-500 text-xs">{r.type}</td>
+              <td className="px-4 py-3 text-slate-700">{r.total_area.toLocaleString()} מ"ר</td>
+              <td className="px-4 py-3 text-green-700 font-medium">{r.rented_area.toLocaleString()} מ"ר</td>
+              <td className="px-4 py-3 text-orange-600">{r.vacant_area.toLocaleString()} מ"ר</td>
+              <td className="px-4 py-3">
+                <div className="flex items-center gap-2">
+                  <div className="w-16 bg-slate-200 rounded-full h-1.5">
+                    <div className={`h-1.5 rounded-full ${r.occupancy_pct >= 80 ? "bg-green-500" : r.occupancy_pct >= 50 ? "bg-yellow-500" : "bg-red-400"}`}
+                      style={{ width: `${r.occupancy_pct}%` }} />
+                  </div>
+                  <span className="text-xs font-semibold">{r.occupancy_pct}%</span>
+                </div>
+              </td>
+              <td className="px-4 py-3 text-slate-700">{r.active_contracts}</td>
+              <td className="px-4 py-3 font-bold text-slate-900">₪{r.monthly_revenue.toLocaleString()}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function ContractsTable({ data }: { data: any[] }) {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+      <table className="w-full text-right text-sm">
+        <thead className="bg-slate-50 text-slate-700 border-b border-slate-200">
+          <tr>
+            <th className="px-4 py-3 font-semibold">שוכר</th>
+            <th className="px-4 py-3 font-semibold">נכס</th>
+            <th className="px-4 py-3 font-semibold">התחלה</th>
+            <th className="px-4 py-3 font-semibold">סיום</th>
+            <th className="px-4 py-3 font-semibold">ימים לסיום</th>
+            <th className="px-4 py-3 font-semibold">שטח</th>
+            <th className="px-4 py-3 font-semibold">הכנסה חודשית</th>
+          </tr>
+        </thead>
+        <tbody>
+          {data.map((r, i) => (
+            <tr key={i} className="border-t border-slate-100 hover:bg-slate-50">
+              <td className="px-4 py-3 font-semibold text-slate-900">{r.tenant}</td>
+              <td className="px-4 py-3 text-slate-600">{r.property}</td>
+              <td className="px-4 py-3 text-slate-500">{fmtDate(r.start)}</td>
+              <td className="px-4 py-3 text-slate-500">{fmtDate(r.end ?? r.end_date)}</td>
+              <td className="px-4 py-3">
+                {r.days_left != null && (
+                  <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${r.days_left <= 30 ? "bg-red-100 text-red-700" : r.days_left <= 90 ? "bg-yellow-100 text-yellow-700" : "bg-green-100 text-green-700"}`}>
+                    {r.days_left < 0 ? `פג לפני ${Math.abs(r.days_left)}י` : `${r.days_left} ימים`}
+                  </span>
+                )}
+              </td>
+              <td className="px-4 py-3 text-slate-600">{r.area ? `${r.area} מ"ר` : "—"}</td>
+              <td className="px-4 py-3 font-bold text-slate-900">₪{(r.monthly ?? 0).toLocaleString()}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function RevenueTable({ data }: { data: any[] }) {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+      <table className="w-full text-right text-sm">
+        <thead className="bg-slate-50 text-slate-700 border-b border-slate-200">
+          <tr>
+            <th className="px-4 py-3 font-semibold">נכס</th>
+            <th className="px-4 py-3 font-semibold">שוכרים</th>
+            <th className="px-4 py-3 font-semibold">חוזים פעילים</th>
+            <th className="px-4 py-3 font-semibold">הכנסה חודשית</th>
+            <th className="px-4 py-3 font-semibold">הכנסה שנתית</th>
+          </tr>
+        </thead>
+        <tbody>
+          {data.map((r, i) => (
+            <tr key={i} className="border-t border-slate-100 hover:bg-slate-50">
+              <td className="px-4 py-3 font-semibold text-slate-900">{r.property}</td>
+              <td className="px-4 py-3 text-slate-500 text-xs">{r.tenants || "—"}</td>
+              <td className="px-4 py-3 text-slate-700">{r.active_contracts}</td>
+              <td className="px-4 py-3 font-bold text-green-700">₪{r.monthly_revenue.toLocaleString()}</td>
+              <td className="px-4 py-3 font-bold text-slate-800">₪{r.annual_revenue.toLocaleString()}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function OptionsTable({ data }: { data: any[] }) {
+  const statusLabels: Record<string, string> = {
+    pending: "ממתין", exercised: "מומש", not_exercised: "לא מומש", auto_extended: "הוארך אוטו׳"
+  };
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+      <table className="w-full text-right text-sm">
+        <thead className="bg-slate-50 text-slate-700 border-b border-slate-200">
+          <tr>
+            <th className="px-4 py-3 font-semibold">שוכר</th>
+            <th className="px-4 py-3 font-semibold">נכס</th>
+            <th className="px-4 py-3 font-semibold">אופציה</th>
+            <th className="px-4 py-3 font-semibold">תקופה</th>
+            <th className="px-4 py-3 font-semibold">מועד הודעה</th>
+            <th className="px-4 py-3 font-semibold">ימים להודעה</th>
+            <th className="px-4 py-3 font-semibold">סטטוס</th>
+          </tr>
+        </thead>
+        <tbody>
+          {data.map((r, i) => (
+            <tr key={i} className={`border-t border-slate-100 hover:bg-slate-50 ${r.days_to_deadline != null && r.days_to_deadline <= 30 && r.status === "pending" ? "bg-red-50" : ""}`}>
+              <td className="px-4 py-3 font-semibold text-slate-900">{r.tenant}</td>
+              <td className="px-4 py-3 text-slate-600">{r.property}</td>
+              <td className="px-4 py-3 text-slate-700">{r.option_number} ({r.duration_months} חו׳)</td>
+              <td className="px-4 py-3 text-slate-500 text-xs">{fmtDate(r.start_date)} — {fmtDate(r.end_date)}</td>
+              <td className="px-4 py-3 text-slate-600">{fmtDate(r.notice_deadline)}</td>
+              <td className="px-4 py-3">
+                {r.days_to_deadline != null && r.status === "pending" && (
+                  <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${r.days_to_deadline <= 0 ? "bg-red-100 text-red-700" : r.days_to_deadline <= 30 ? "bg-orange-100 text-orange-700" : "bg-yellow-100 text-yellow-700"}`}>
+                    {r.days_to_deadline < 0 ? `עבר לפני ${Math.abs(r.days_to_deadline)}י` : `${r.days_to_deadline} ימים`}
+                  </span>
+                )}
+              </td>
+              <td className="px-4 py-3">
+                <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${r.status === "pending" ? "bg-yellow-100 text-yellow-700" : r.status === "exercised" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>
+                  {statusLabels[r.status] ?? r.status}
+                </span>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function GuaranteesTable({ data }: { data: any[] }) {
+  const typeLabels: Record<string, string> = {
+    bank: "בנקאית", check: "שיק", cash: "מזומן", personal: "אישית"
+  };
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+      <table className="w-full text-right text-sm">
+        <thead className="bg-slate-50 text-slate-700 border-b border-slate-200">
+          <tr>
+            <th className="px-4 py-3 font-semibold">שוכר</th>
+            <th className="px-4 py-3 font-semibold">נכס</th>
+            <th className="px-4 py-3 font-semibold">סוג</th>
+            <th className="px-4 py-3 font-semibold">נדרש</th>
+            <th className="px-4 py-3 font-semibold">בפועל</th>
+            <th className="px-4 py-3 font-semibold">תוקף</th>
+            <th className="px-4 py-3 font-semibold">סטטוס</th>
+          </tr>
+        </thead>
+        <tbody>
+          {data.map((r, i) => (
+            <tr key={i} className="border-t border-slate-100 hover:bg-slate-50">
+              <td className="px-4 py-3 font-semibold text-slate-900">{r.tenant}</td>
+              <td className="px-4 py-3 text-slate-600">{r.property}</td>
+              <td className="px-4 py-3 text-slate-600">{typeLabels[r.type] ?? r.type}</td>
+              <td className="px-4 py-3 text-slate-700">{r.amount_required ? `₪${r.amount_required.toLocaleString()}` : "—"}</td>
+              <td className="px-4 py-3">
+                {r.amount_actual && r.amount_required && r.amount_actual < r.amount_required
+                  ? <span className="text-red-600 font-semibold">₪{r.amount_actual.toLocaleString()} ⚠️</span>
+                  : <span className="text-slate-700">{r.amount_actual ? `₪${r.amount_actual.toLocaleString()}` : "—"}</span>}
+              </td>
+              <td className="px-4 py-3">
+                {r.end_date && (
+                  <span className={r.days_left != null && r.days_left <= 30 ? "text-red-600 font-semibold" : "text-slate-500"}>
+                    {fmtDate(r.end_date)}
+                  </span>
+                )}
+              </td>
+              <td className="px-4 py-3">
+                <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${r.status === "active" ? "bg-green-100 text-green-700" : r.status === "expired" ? "bg-red-100 text-red-700" : "bg-slate-100 text-slate-600"}`}>
+                  {r.status === "active" ? "פעילה" : r.status === "expired" ? "פגה" : r.status === "forfeited" ? "חולטה" : "הוחזרה"}
+                </span>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
