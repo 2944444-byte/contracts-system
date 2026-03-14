@@ -1,4 +1,5 @@
 "use client";
+import { sendEmail, buildLetterEmail } from "../../../lib/email-utils";
 import { useState, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { supabase } from "../../../lib/supabase";
@@ -163,6 +164,34 @@ function LettersInner() {
   const totalIndexed = rows.reduce((s, r) => s + r.indexedRent, 0);
   const totalMgmt    = rows.reduce((s, r) => s + r.mgmtFee, 0);
   const totalVat     = rows.reduce((s, r) => s + r.totalWithVat, 0);
+
+  async function handleSendEmail(letterType: string) {
+    if (!contract) return;
+    const tenantEmail = contract.tenants?.contact_email ?? contract.tenants?.contacts?.[0]?.email;
+    if (!tenantEmail) {
+      alert("לא נמצא כתובת מייל לשוכר — הוסף בכרטיס השוכר");
+      return;
+    }
+    const printEl = document.getElementById("letter-print-area");
+    if (!printEl) { alert("אין תוכן להדפסה"); return; }
+    setEmailSending(true);
+    try {
+      const payload = buildLetterEmail({
+        tenantName:   contract.tenants?.name ?? "",
+        tenantEmail,
+        propertyName: contract.properties?.name ?? "",
+        letterType,
+        htmlContent:  printEl.innerHTML,
+      });
+      const result = await sendEmail(payload);
+      if (result.ok) {
+        setEmailStatus("✅ המכתב נשלח ל-" + tenantEmail);
+        setTimeout(function() { setEmailStatus(""); }, 5000);
+      } else {
+        alert("שגיאה בשליחה: " + result.error);
+      }
+    } finally { setEmailSending(false); }
+  }
 
   return (
     <div dir="rtl">
@@ -356,6 +385,12 @@ export default function LettersPage() {
   return (
     <Suspense fallback={<div dir="rtl" className="p-8 text-center text-slate-400">טוען...</div>}>
       <LettersInner />
+              <button onClick={function() { handleSendEmail("annual_start"); }}
+                disabled={!contract || emailSending}
+                className="bg-green-100 text-green-700 rounded-lg px-3 py-2 text-sm font-semibold hover:bg-green-200 disabled:opacity-40 no-print"
+                title="שלח במייל לשוכר">
+                {emailSending ? "⏳" : "📧 מייל"}
+              </button>
     </Suspense>
   );
 }
