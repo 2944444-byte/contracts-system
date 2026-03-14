@@ -26,6 +26,27 @@ export async function createProperty(p: {
 }) {
   const { data, error } = await supabase.from("properties").insert(p).select().single();
   if (error) throw error;
+  // 3. שמור שיוך שטחים אם יש
+  if (spaces && spaces.length > 0 && data?.id) {
+    for (const sp of spaces) {
+      const { error: spErr } = await supabase.from("contract_spaces").insert({
+        contract_id:   data.id,
+        space_id:      sp.space_id,
+        charge_method: sp.charge_method,
+        price_per_sqm: sp.price_per_sqm ?? null,
+        fixed_amount:  sp.fixed_amount ?? null,
+        quantity:      sp.quantity ?? null,
+        price_per_unit: sp.price_per_unit ?? null,
+        revenue_pct:   sp.revenue_pct ?? null,
+        min_rent:      sp.min_rent ?? null,
+        revenue_type:  sp.revenue_type ?? null,
+        included_in_main_rent: sp.included_in_main_rent ?? true,
+        notes:         sp.notes ?? null,
+      });
+      if (spErr) console.error("Space insert error:", spErr);
+    }
+  }
+
   return data;
 }
 
@@ -34,6 +55,27 @@ export async function createUnit(u: {
 }) {
   const { data, error } = await supabase.from("units").insert(u).select().single();
   if (error) throw error;
+  // 3. שמור שיוך שטחים אם יש
+  if (spaces && spaces.length > 0 && data?.id) {
+    for (const sp of spaces) {
+      const { error: spErr } = await supabase.from("contract_spaces").insert({
+        contract_id:   data.id,
+        space_id:      sp.space_id,
+        charge_method: sp.charge_method,
+        price_per_sqm: sp.price_per_sqm ?? null,
+        fixed_amount:  sp.fixed_amount ?? null,
+        quantity:      sp.quantity ?? null,
+        price_per_unit: sp.price_per_unit ?? null,
+        revenue_pct:   sp.revenue_pct ?? null,
+        min_rent:      sp.min_rent ?? null,
+        revenue_type:  sp.revenue_type ?? null,
+        included_in_main_rent: sp.included_in_main_rent ?? true,
+        notes:         sp.notes ?? null,
+      });
+      if (spErr) console.error("Space insert error:", spErr);
+    }
+  }
+
   return data;
 }
 
@@ -43,6 +85,27 @@ export async function createTenant(t: {
 }) {
   const { data, error } = await supabase.from("tenants").insert(t).select().single();
   if (error) throw error;
+  // 3. שמור שיוך שטחים אם יש
+  if (spaces && spaces.length > 0 && data?.id) {
+    for (const sp of spaces) {
+      const { error: spErr } = await supabase.from("contract_spaces").insert({
+        contract_id:   data.id,
+        space_id:      sp.space_id,
+        charge_method: sp.charge_method,
+        price_per_sqm: sp.price_per_sqm ?? null,
+        fixed_amount:  sp.fixed_amount ?? null,
+        quantity:      sp.quantity ?? null,
+        price_per_unit: sp.price_per_unit ?? null,
+        revenue_pct:   sp.revenue_pct ?? null,
+        min_rent:      sp.min_rent ?? null,
+        revenue_type:  sp.revenue_type ?? null,
+        included_in_main_rent: sp.included_in_main_rent ?? true,
+        notes:         sp.notes ?? null,
+      });
+      if (spErr) console.error("Space insert error:", spErr);
+    }
+  }
+
   return data;
 }
 
@@ -71,7 +134,22 @@ export interface OptionInput {
 }
 
 // createContract — שומר חוזה + אופציות ב-contract_options
-export async function createContract(c: any, options?: OptionInput[]) {
+export interface SpaceChargeInput {
+  space_id:       string;
+  charge_method:  string;
+  price_per_sqm?: number;
+  fixed_amount?:  number;
+  quantity?:      number;
+  price_per_unit?: number;
+  revenue_pct?:   number;
+  min_rent?:      number;
+  revenue_type?:  string;
+  monthly_reported_revenue?: number;
+  included_in_main_rent?: boolean;
+  notes?:         string;
+}
+
+export async function createContract(c: any, options?: OptionInput[], spaces?: SpaceChargeInput[]) {
   // 1. שמור חוזה
   const { data, error } = await supabase
     .from("contracts")
@@ -103,6 +181,27 @@ export async function createContract(c: any, options?: OptionInput[]) {
       });
       if (optErr) console.error("Option insert error:", optErr);
       prevEnd = optEnd;
+    }
+  }
+
+  // 3. שמור שיוך שטחים אם יש
+  if (spaces && spaces.length > 0 && data?.id) {
+    for (const sp of spaces) {
+      const { error: spErr } = await supabase.from("contract_spaces").insert({
+        contract_id:   data.id,
+        space_id:      sp.space_id,
+        charge_method: sp.charge_method,
+        price_per_sqm: sp.price_per_sqm ?? null,
+        fixed_amount:  sp.fixed_amount ?? null,
+        quantity:      sp.quantity ?? null,
+        price_per_unit: sp.price_per_unit ?? null,
+        revenue_pct:   sp.revenue_pct ?? null,
+        min_rent:      sp.min_rent ?? null,
+        revenue_type:  sp.revenue_type ?? null,
+        included_in_main_rent: sp.included_in_main_rent ?? true,
+        notes:         sp.notes ?? null,
+      });
+      if (spErr) console.error("Space insert error:", spErr);
     }
   }
 

@@ -598,7 +598,7 @@ export default function NewContractPage() {
                     </select>
                   </div>
                   <div>
-                    <label className="mb-1 block text-xs font-semibold text-slate-700">{increaseType === "percent" ? "אחוז עלייה" : "סכום (₪)"}</label>
+                    <label className="mb-1 block text-xs font-semibold text-slate-700">{increaseType === "percent" ? "אחוז עלייה" : "סכום עלייה למ\"ר (₪)"}</label>
                     <input type="number" value={increaseValue} onChange={function(e) { setIncreaseValue(e.target.value); }} className={ic} />
                   </div>
                 </div>
@@ -606,9 +606,11 @@ export default function NewContractPage() {
                   <div>
                     <label className="mb-1 block text-xs font-semibold text-slate-700">תדירות</label>
                     <select value={increaseFreqMonths} onChange={function(e) { setIncreaseFreqMonths(e.target.value); }} className={ic}>
-                      <option value="12">כל שנה</option>
-                      <option value="24">כל שנתיים</option>
-                      <option value="36">כל 3 שנים</option>
+                      <option value="12">כל שנה (12 חודשים)</option>
+                      <option value="24">כל שנתיים (24 חודשים)</option>
+                      <option value="36">כל 3 שנים (36 חודשים)</option>
+                      <option value="48">כל 4 שנים (48 חודשים)</option>
+                      <option value="60">כל 5 שנים (60 חודשים)</option>
                     </select>
                   </div>
                   <div>
@@ -799,6 +801,17 @@ export default function NewContractPage() {
             }} className="mt-2 text-xs text-blue-600 hover:underline">
               ← חשב אוטומטי (3 חודשים אחרי סיום)
             </button>
+          )}
+        </div>
+
+        {/* קישור מסמך */}
+        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <h2 className="mb-3 text-sm font-bold text-slate-500">קישור מסמך חוזה</h2>
+          <input type="url" value={documentUrl} onChange={function(e) { setDocumentUrl(e.target.value); }}
+            placeholder="https://www.dropbox.com/..." className={ic} />
+          {documentUrl && (
+            <a href={documentUrl} target="_blank" rel="noopener noreferrer"
+              className="mt-2 inline-block text-xs text-blue-600 hover:underline">פתח קישור ↗</a>
           )}
         </div>
 
