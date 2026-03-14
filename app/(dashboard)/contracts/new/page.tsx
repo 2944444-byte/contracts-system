@@ -3,6 +3,7 @@ import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "../../../../lib/supabase";
 import { createContract } from "../../../../lib/db";
+import { ContractSpacesSelector, SpaceCharge } from "../../../../components/ContractSpacesSelector";
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 
@@ -46,7 +47,7 @@ export default function NewContractPage() {
   const [dbTenants, setDbTenants]       = useState<any[]>([]);
 
   useEffect(() => {
-    supabase.from("properties").select("id, name, address, units(*)").then(function({ data }) { setDbProperties(data ?? []); });
+    supabase.from("properties").select("id, name, address, spaces(*), units(*)").then(function({ data }) { setDbProperties(data ?? []); });
     supabase.from("tenants").select("id, name").then(function({ data }) { setDbTenants(data ?? []); });
     try {
       const draft = sessionStorage.getItem("contract_draft");
@@ -116,13 +117,16 @@ export default function NewContractPage() {
   const [guaranteeInitialExpiry, setGuaranteeInitialExpiry] = useState("");
   const [guaranteeIncludesMgmt, setGuaranteeIncludesMgmt] = useState(false);
   const [documentUrl, setDocumentUrl] = useState("");
+  const [selectedSpaces, setSelectedSpaces] = useState<SpaceCharge[]>([]);
   const [extracting, setExtracting] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const selectedProperty = dbProperties.find(function(p: any) { return p.id === propertyId; });
-  const availableUnits   = selectedProperty?.units ?? [];
+  const availableUnits   = (selectedProperty?.spaces ?? selectedProperty?.units ?? []);
   const selectedUnits    = availableUnits.filter(function(u: any) { return unitIds.includes(u.id); });
   const totalArea        = selectedUnits.reduce(function(s: number, u: any) { return s + (u.area ?? 0); }, 0);
+  const spacesArea       = selectedSpaces.filter(function(s) { return s.charge_method === "per_sqm" && s.area; })
+                            .reduce(function(acc, s) { return acc + (s.area ?? 0); }, 0);
   const mgmtMonthly      = mgmtFeePerSqm && totalArea ? Number(mgmtFeePerSqm) * totalArea : 0;
   const rentMonthly      = rentPerSqm && totalArea ? Number(rentPerSqm) * totalArea + Number(investmentAddition) : 0;
   const vatMultiplier    = vatType === "taxable" ? (1 + Number(vatPct)/100) : 1;
@@ -247,6 +251,23 @@ export default function NewContractPage() {
       return;
     }
     try {
+      // בנה spaceInputs מהשטחים שנבחרו
+      const spaceInputs = selectedSpaces.map(function(sc) {
+        return {
+          space_id:       sc.space_id,
+          charge_method:  sc.charge_method,
+          price_per_sqm:  sc.price_per_sqm ? Number(sc.price_per_sqm) : undefined,
+          fixed_amount:   sc.fixed_amount ? Number(sc.fixed_amount) : undefined,
+          quantity:       sc.quantity ?? undefined,
+          price_per_unit: sc.price_per_unit ? Number(sc.price_per_unit) : undefined,
+          revenue_pct:    sc.revenue_pct ? Number(sc.revenue_pct) : undefined,
+          min_rent:       sc.min_rent ? Number(sc.min_rent) : undefined,
+          revenue_type:   (sc as any).revenue_type,
+          included_in_main_rent: sc.included_in_main_rent,
+          notes:          sc.notes,
+        };
+      });
+
       // בנה optionInputs מהסטייט — המר חודשים לימים
       const optionInputs = hasOptions
         ? options
@@ -288,7 +309,7 @@ export default function NewContractPage() {
         guarantee_amount: guaranteeAmount ? Number(guaranteeAmount) : (calcGuaranteeAmount ?? null),
         guarantee_expiry: guaranteeExpiry || null,
         status: "active",
-      }, optionInputs);
+      }, optionInputs, spaceInputs);
 
       try { sessionStorage.removeItem("contract_draft"); } catch {}
       alert("חוזה נשמר!" + (optionInputs.length > 0 ? "\n" + optionInputs.length + " אופציות נשמרו." : ""));
@@ -344,27 +365,12 @@ export default function NewContractPage() {
           </div>
           {selectedProperty && (
             <div>
-              <label className="mb-1 block text-xs font-semibold text-slate-700">יחידות *</label>
-              <div className="space-y-1.5 rounded-lg border border-slate-200 p-3 bg-slate-50">
-                {availableUnits.map(function(u: any) {
-                  return (
-                    <label key={u.id} className="flex items-center gap-3 cursor-pointer hover:bg-white rounded-lg p-2">
-                      <input type="checkbox" checked={unitIds.includes(u.id)}
-                        onChange={function() {
-                          setUnitIds(function(prev) {
-                            return prev.includes(u.id) ? prev.filter(function(id) { return id !== u.id; }) : [...prev, u.id];
-                          });
-                        }} className="w-4 h-4" />
-                      <span className="text-sm font-medium text-slate-800">{u.name}</span>
-                      <span className="text-xs text-slate-400">{u.area} מ&quot;ר</span>
-                      <span className={"mr-auto text-xs font-bold px-2 py-0.5 rounded-full " + (u.status === "vacant" ? "bg-yellow-100 text-yellow-700" : "bg-green-100 text-green-700")}>
-                        {u.status === "vacant" ? "פנוי" : "מושכר"}
-                      </span>
-                    </label>
-                  );
-                })}
-              </div>
-              {unitIds.length > 0 && <div className="mt-2 text-xs font-medium text-blue-600">סה&quot;כ שטח: {totalArea} מ&quot;ר</div>}
+              <label className="mb-2 block text-xs font-semibold text-slate-700">שטחים ויחידות *</label>
+              <ContractSpacesSelector
+                availableSpaces={availableUnits}
+                selectedSpaces={selectedSpaces}
+                onChange={setSelectedSpaces}
+              />
             </div>
           )}
         </div>

@@ -2,6 +2,7 @@
 import { useState, useEffect, Suspense } from "react";
 import { useRouter, useParams, useSearchParams } from "next/navigation";
 import { supabase } from "../../../../../lib/supabase";
+import { ContractSpacesSelector, SpaceCharge } from "../../../../../components/ContractSpacesSelector";
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 
@@ -84,6 +85,8 @@ function EditInner() {
 
   // אופציות
   const [contractOptions, setContractOptions] = useState<OptionRow[]>([]);
+  const [contractSpaces, setContractSpaces]   = useState<SpaceCharge[]>([]);
+  const [availableSpaces, setAvailableSpaces] = useState<any[]>([]);
   const [savingOpt, setSavingOpt] = useState(false);
   const [newOpt, setNewOpt] = useState({
     duration_months: "24",
@@ -94,6 +97,35 @@ function EditInner() {
     new_rent_value: "",
     notes: "",
   });
+
+  async function loadContractSpaces() {
+    const { data } = await supabase
+      .from("contract_spaces")
+      .select("*, spaces(space_name, space_type, area, quantity, is_commercial, status)")
+      .eq("contract_id", id);
+    if (data && data.length > 0) {
+      const mapped: SpaceCharge[] = data.map(function(cs: any) {
+        return {
+          space_id:      cs.space_id,
+          space_name:    cs.spaces?.space_name ?? "",
+          space_type:    cs.spaces?.space_type ?? "unit",
+          area:          cs.spaces?.area ?? null,
+          quantity:      cs.spaces?.quantity ?? null,
+          is_commercial: cs.spaces?.is_commercial ?? false,
+          charge_method: cs.charge_method ?? "per_sqm",
+          price_per_sqm: cs.price_per_sqm?.toString() ?? "",
+          fixed_amount:  cs.fixed_amount?.toString() ?? "",
+          price_per_unit: cs.price_per_unit?.toString() ?? "",
+          revenue_pct:   cs.revenue_pct?.toString() ?? "",
+          min_rent:      cs.min_rent?.toString() ?? "",
+          revenue_type:  cs.revenue_type ?? "revenue_only",
+          included_in_main_rent: cs.included_in_main_rent ?? true,
+          notes:         cs.notes ?? "",
+        };
+      });
+      setContractSpaces(mapped);
+    }
+  }
 
   async function loadOptions() {
     const { data } = await supabase
@@ -147,9 +179,15 @@ function EditInner() {
         setStatus(isExtension ? "active" : (data.status ?? "active"));
         setNotes(isExtension ? "" : (data.notes ?? ""));
         setDocumentUrl(data.document_url ?? "");
+        // טען שטחים זמינים לנכס
+        if (data.property_id) {
+          supabase.from("spaces").select("*").eq("property_id", data.property_id)
+            .then(function({ data: sp }) { setAvailableSpaces(sp ?? []); });
+        }
         setLoading(false);
       });
     loadOptions();
+    loadContractSpaces();
   }, [id, isExtension]);
 
   function updateExtendEnd(val: string, unit: string) {
@@ -298,6 +336,7 @@ function EditInner() {
         <div className="flex gap-1 mb-5 border-b border-slate-200">
           {[
             { key: "details", label: "פרטי חוזה" },
+            { key: "spaces", label: "שטחים (" + contractSpaces.length + ")" },
             { key: "options", label: "אופציות (" + contractOptions.length + ")" },
           ].map(function(t) {
             return (
@@ -571,6 +610,24 @@ function EditInner() {
               {saving ? "שומר..." : isExtension ? "צור חוזה הארכה" : "שמור שינויים"}
             </button>
           </div>
+        </div>
+      )}
+
+      {/* טאב שטחים */}
+      {tab === "spaces" && !isExtension && (
+        <div className="space-y-4">
+          {availableSpaces.length === 0 ? (
+            <div className="rounded-xl bg-amber-50 border border-amber-200 p-4 text-sm text-amber-800">
+              <div className="font-bold mb-1">⚠️ לנכס זה אין שטחים מוגדרים</div>
+              <div>הגדר שטחים ב<a href="/units" className="underline">מסך יחידות</a> ולאחר מכן חזור לשייך אותם לחוזה.</div>
+            </div>
+          ) : (
+            <ContractSpacesSelector
+              availableSpaces={availableSpaces}
+              selectedSpaces={contractSpaces}
+              onChange={setContractSpaces}
+            />
+          )}
         </div>
       )}
 
