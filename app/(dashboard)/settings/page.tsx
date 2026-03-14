@@ -4,6 +4,13 @@ import { supabase } from "../../../lib/supabase";
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 
+const TABS = [
+  { key: "company" as const, label: "🏢 פרטי חברה" },
+  { key: "vat"     as const, label: "💰 מע''מ" },
+  { key: "cpi"     as const, label: "📈 מדד מחירים" },
+  { key: "users"   as const, label: "👤 משתמשים" },
+];
+
 export default function SettingsPage() {
   const [tab, setTab] = useState<"company"|"vat"|"cpi"|"users">("company");
 
@@ -93,13 +100,6 @@ export default function SettingsPage() {
 
   const MONTHS_HE = ["ינו","פבר","מרץ","אפר","מאי","יוני","יולי","אוג","ספט","אוק","נוב","דצמ"];
 
-  const tabs: { key: "company"|"vat"|"cpi"|"users"; label: string }[] = [
-    { key: "company", label: "🏢 פרטי חברה" },
-    { key: "vat",     label: '💰 מע"מ' },
-    { key: "cpi",     label: "📈 מדד מחירים" },
-    { key: "users",   label: "👤 משתמשים" },
-  ];
-
   return (
     <div dir="rtl" className="max-w-2xl mx-auto">
       <div className="mb-6">
@@ -108,7 +108,7 @@ export default function SettingsPage() {
 
       {/* טאבים */}
       <div className="flex gap-1 mb-6 border-b border-slate-200">
-        {tabs.map(t => (
+        {TABS.map(t => (
           <button key={t.key} onClick={() => setTab(t.key)}
             className={`px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors ${tab === t.key ? "border-blue-600 text-blue-700" : "border-transparent text-slate-500 hover:text-slate-700"}`}>
             {t.label}
