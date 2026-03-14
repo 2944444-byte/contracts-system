@@ -17,6 +17,7 @@ const navItems = [
   { href: "/alerts",      label: "התראות",          icon: "🔔", badge: true },
   { href: "/indexation",  label: "חישוב הצמדות",   icon: "🔢" },
   { href: "/insurances",  label: "ביטוחים",         icon: "🛡️" },
+  { href: "/guarantees",  label: "ערבויות",          icon: "🏦" },
   { href: "/safety",      label: "בדיקות בטיחות",   icon: "🔒" },
   { href: "/documents",   label: "מסמכים",          icon: "🗂" },
   { href: "/settings",    label: "הגדרות",          icon: "⚙"  },
