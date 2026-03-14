@@ -115,6 +115,7 @@ export default function NewContractPage() {
   const [guaranteeExpiry, setGuaranteeExpiry]   = useState("");
   const [guaranteeInitialExpiry, setGuaranteeInitialExpiry] = useState("");
   const [guaranteeIncludesMgmt, setGuaranteeIncludesMgmt] = useState(false);
+  const [documentUrl, setDocumentUrl] = useState("");
   const [extracting, setExtracting] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
