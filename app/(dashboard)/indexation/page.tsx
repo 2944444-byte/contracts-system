@@ -67,7 +67,7 @@ export default function IndexationPage() {
   }
 
   async function fetchCPI(year: number, month: number): Promise<number | null> {
-    // קריאה חיה ל-API של הלמ"ס
+    // קריאה חיה ל-API של הלמס
     try {
       const url = `https://api.cbs.gov.il/index/data/price?id=120010&startPeriod=${year}-${String(month).padStart(2,"0")}&endPeriod=${year}-${String(month).padStart(2,"0")}&format=json`;
       const resp = await fetch(url);
@@ -95,7 +95,7 @@ export default function IndexationPage() {
       const currentIndex = await fetchCPI(t2.year, t2.month);
 
       if (!currentIndex) {
-        setCpiError("לא הצלחנו לקבל מדד מהלמ"ס ל-" + t2.label + ". נסה מדד ידני.");
+        setCpiError("לא הצלחנו לקבל מדד מהלמס ל-" + t2.label + ". נסה מדד ידני.");
         setCalcLoading(false);
         return;
       }
@@ -149,7 +149,7 @@ export default function IndexationPage() {
     <div dir="rtl">
       <div className="mb-6">
         <h1 className="text-3xl font-bold text-slate-800">הצמדה למדד</h1>
-        <p className="text-sm text-slate-500 mt-1">חישוב שכ"ד מוצמד — מדד חי מ-API הלמ"ס | כלל t-2</p>
+        <p className="text-sm text-slate-500 mt-1">חישוב שכ"ד מוצמד — מדד חי מ-API הלמס | כלל t-2</p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
@@ -213,7 +213,7 @@ export default function IndexationPage() {
 
             <button onClick={handleCalc} disabled={calcLoading}
               className="w-full rounded-xl bg-blue-700 py-3 font-bold text-white text-sm hover:bg-blue-800 disabled:opacity-50 transition-colors">
-              {calcLoading ? "מחשב — מקבל מדד מלמ\"ס..." : "🧮 חשב הצמדה"}
+              {calcLoading ? "מחשב..." : "🧮 חשב הצמדה"}
             </button>
 
             {cpiError && (
