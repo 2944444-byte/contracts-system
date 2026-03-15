@@ -16,6 +16,7 @@ const NAV = [
   { href: "/payments",    label: "חיובים",        icon: "₪"  },
   { href: "/management",  label: "דמי ניהול",     icon: "🔧" },
   { href: "/indexation",  label: "הצמדה למדד",    icon: "📈" },
+  { href: "/revenue",      label: "שכ\"ד פידיון",   icon: "📊" },
   { section: "תפעול" },
   { href: "/guarantees",  label: "ערבויות",       icon: "🏦" },
   { href: "/insurances",  label: "ביטוחים",       icon: "🛡️" },
