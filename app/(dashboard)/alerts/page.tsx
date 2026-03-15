@@ -1,80 +1,110 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "../../../lib/supabase";
 
-function formatDate(d: string) {
+const PRIORITY_CONFIG: Record<string,{label:string;bg:string;color:string;border:string}> = {
+  low:      { label: "נמוכה",   bg: "bg-blue-50",   color: "text-blue-700",   border: "border-blue-100"   },
+  medium:   { label: "בינונית", bg: "bg-yellow-50",  color: "text-yellow-700", border: "border-yellow-100" },
+  high:     { label: "גבוהה",   bg: "bg-orange-50",  color: "text-orange-700", border: "border-orange-100" },
+  critical: { label: "קריטי",   bg: "bg-red-50",     color: "text-red-700",    border: "border-red-200"    },
+};
+
+const TYPE_ICONS: Record<string,string> = {
+  contract_expiry:    "📄",
+  option_deadline:    "⏰",
+  guarantee_expiry:   "🏦",
+  insurance_expiry:   "🛡️",
+  safety_inspection:  "🔒",
+  payment_pending:    "💰",
+  system:             "⚙️",
+  other:              "🔔",
+};
+
+function fmtDate(d: string) {
   if (!d) return "—";
-  const [y,m,day] = d.split("-");
-  return `${day}/${m}/${y}`;
+  return new Date(d).toLocaleDateString("he-IL");
 }
-function daysLeft(dateStr: string) {
-  return Math.ceil((new Date(dateStr).getTime() - new Date().getTime()) / (1000*60*60*24));
-}
-
-const severityConfig: Record<string, { label: string; icon: string; bg: string; color: string; border: string }> = {
-  info:     { label: "מידע",       icon: "🔵", bg: "bg-blue-50",   color: "text-blue-700",   border: "border-blue-200"  },
-  warning:  { label: "תשומת לב",  icon: "🟡", bg: "bg-yellow-50", color: "text-yellow-700", border: "border-yellow-200"},
-  high:     { label: "גבוה",       icon: "🟠", bg: "bg-orange-50", color: "text-orange-700", border: "border-orange-200"},
-  critical: { label: "קריטי",      icon: "🔴", bg: "bg-red-50",    color: "text-red-700",    border: "border-red-200"   },
-};
-
-const typeLabels: Record<string, string> = {
-  contract_end:      "סיום חוזה",
-  option_notice:     "מועד הודעת אופציה",
-  insurance_expiry:  "פקיעת ביטוח",
-  guarantee_expiry:  "פקיעת ערבות",
-  safety_due:        "בדיקת בטיחות",
-  charge_pending:    "חיוב ממתין",
-};
 
 export default function AlertsPage() {
   const router = useRouter();
-  const [alerts, setAlerts]         = useState<any[]>([]);
-  const [loading, setLoading]       = useState(true);
-  const [filter, setFilter]         = useState<"all"|"open"|"handled">("open");
-  const [typeFilter, setTypeFilter] = useState("all");
-  const [handling, setHandling]     = useState<string | null>(null);
+  const [alerts,      setAlerts]      = useState<any[]>([]);
+  const [loading,     setLoading]     = useState(true);
+  const [filterP,     setFilterP]     = useState("all");
+  const [filterType,  setFilterType]  = useState("all");
+  const [filterHandled, setFilterHandled] = useState(false);
+  const [selected,    setSelected]    = useState<Set<string>>(new Set());
+  const [bulkLoading, setBulkLoading] = useState(false);
+
+  useEffect(function() { load(); }, [filterHandled]);
 
   async function load() {
-    const { data } = await supabase
-      .from("alerts")
-      .select("*")
-      .order("due_date", { ascending: true })
-      .order("severity", { ascending: false });
+    setLoading(true);
+    let q = supabase.from("alerts").select("*").order("created_at", { ascending: false });
+    if (!filterHandled) q = q.eq("is_handled", false);
+    const { data } = await q;
     setAlerts(data ?? []);
     setLoading(false);
   }
 
-  useEffect(() => { load(); }, []);
-
-  async function handleMark(id: string, handled: boolean) {
-    setHandling(id);
+  async function markHandled(id: string, handled: boolean) {
     await supabase.from("alerts").update({
       is_handled: handled,
       handled_at: handled ? new Date().toISOString() : null,
     }).eq("id", id);
     await load();
-    setHandling(null);
   }
 
-  async function handleMarkAllRead() {
-    if (!confirm("לסמן את כל ההתראות הפתוחות כטופלו?")) return;
-    await supabase.from("alerts")
-      .update({ is_handled: true, handled_at: new Date().toISOString() })
-      .eq("is_handled", false);
+  async function bulkHandle() {
+    if (selected.size === 0) return;
+    setBulkLoading(true);
+    await supabase.from("alerts").update({
+      is_handled: true, handled_at: new Date().toISOString(),
+    }).in("id", Array.from(selected));
+    setSelected(new Set());
+    setBulkLoading(false);
     await load();
   }
 
-  const filtered = alerts.filter(a => {
-    const matchStatus = filter === "all" || (filter === "open" ? !a.is_handled : a.is_handled);
-    const matchType   = typeFilter === "all" || a.alert_type === typeFilter;
-    return matchStatus && matchType;
+  async function deleteAlert(id: string) {
+    if (!confirm("למחוק התראה?")) return;
+    await supabase.from("alerts").delete().eq("id", id);
+    await load();
+  }
+
+  function toggleSelect(id: string) {
+    setSelected(function(prev) {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  function navigateToEntity(alert: any) {
+    const routes: Record<string,string> = {
+      contract:   "/contracts",
+      guarantee:  "/guarantees",
+      insurance:  "/insurances",
+      safety:     "/safety",
+      charge:     "/payments",
+    };
+    const route = routes[alert.related_entity_type ?? ""] ?? "/dashboard";
+    router.push(route);
+  }
+
+  const filtered = alerts.filter(function(a) {
+    const mp = filterP    === "all" || a.priority     === filterP;
+    const mt = filterType === "all" || a.alert_type   === filterType;
+    return mp && mt;
   });
 
-  const openCount     = alerts.filter(a => !a.is_handled).length;
-  const criticalCount = alerts.filter(a => !a.is_handled && a.severity === "critical").length;
-  const types         = [...new Set(alerts.map(a => a.alert_type))];
+  const counts = {
+    critical: alerts.filter(function(a) { return a.priority === "critical" && !a.is_handled; }).length,
+    high:     alerts.filter(function(a) { return a.priority === "high"     && !a.is_handled; }).length,
+    open:     alerts.filter(function(a) { return !a.is_handled; }).length,
+  };
+
+  const allTypes = [...new Set(alerts.map(function(a) { return a.alert_type; }).filter(Boolean))];
 
   return (
     <div dir="rtl">
@@ -82,109 +112,126 @@ export default function AlertsPage() {
         <div>
           <h1 className="text-3xl font-bold text-slate-800">התראות</h1>
           <p className="text-sm text-slate-500 mt-1">
-            {openCount > 0
-              ? <span>{openCount} התראות פתוחות{criticalCount > 0 ? ` — ${criticalCount} קריטיות` : ""}</span>
-              : "אין התראות פתוחות ✓"}
+            {counts.critical > 0 && <span className="text-red-600 font-semibold">{counts.critical} קריטי | </span>}
+            {counts.high > 0     && <span className="text-orange-600 font-semibold">{counts.high} גבוה | </span>}
+            {counts.open} פתוחות
           </p>
         </div>
-        {openCount > 0 && (
-          <button onClick={handleMarkAllRead}
-            className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50">
-            ✓ סמן הכל כטופל
-          </button>
-        )}
+        <div className="flex gap-2">
+          {selected.size > 0 && (
+            <button onClick={bulkHandle} disabled={bulkLoading}
+              className="rounded-lg bg-green-600 px-4 py-2 text-sm font-bold text-white hover:bg-green-700 disabled:opacity-50">
+              {bulkLoading ? "..." : "✓ טפל ב-" + selected.size + " נבחרות"}
+            </button>
+          )}
+        </div>
       </div>
 
-      {/* סיכום */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
-        {Object.entries(severityConfig).map(([key, cfg]) => {
-          const count = alerts.filter(a => !a.is_handled && a.severity === key).length;
+      {/* KPI */}
+      <div className="grid grid-cols-4 gap-3 mb-5">
+        {Object.entries(PRIORITY_CONFIG).map(function([k, v]) {
+          const cnt = alerts.filter(function(a) { return a.priority === k && !a.is_handled; }).length;
           return (
-            <button key={key} onClick={() => setFilter("open")}
-              className={`rounded-xl border p-4 text-center ${cfg.bg} ${cfg.border} shadow-sm`}>
-              <div className={`text-2xl font-bold ${cfg.color}`}>{count}</div>
-              <div className={`text-xs mt-1 font-medium ${cfg.color}`}>{cfg.icon} {cfg.label}</div>
+            <button key={k}
+              onClick={function() { setFilterP(filterP === k ? "all" : k); }}
+              className={"rounded-xl border p-3 text-center shadow-sm transition-all " + v.bg + " " + v.border +
+                (filterP === k ? " ring-2 ring-blue-400" : "")}>
+              <div className={"text-xl font-black " + v.color}>{cnt}</div>
+              <div className={"text-xs font-semibold " + v.color}>{v.label}</div>
             </button>
           );
         })}
       </div>
 
       {/* פילטרים */}
-      <div className="mb-4 flex flex-wrap gap-3">
-        <div className="flex rounded-xl border border-slate-200 bg-white overflow-hidden shadow-sm">
-          {(["open","all","handled"] as const).map(f => (
-            <button key={f} onClick={() => setFilter(f)}
-              className={`px-4 py-2.5 text-sm font-medium transition-colors ${filter === f ? "bg-blue-700 text-white" : "text-slate-600 hover:bg-slate-50"}`}>
-              {f === "open" ? "פתוחות" : f === "all" ? "הכל" : "טופלו"}
-            </button>
-          ))}
-        </div>
-        <select value={typeFilter} onChange={e => setTypeFilter(e.target.value)}
+      <div className="mb-4 flex flex-wrap gap-3 items-center">
+        <select value={filterType} onChange={function(e) { setFilterType(e.target.value); }}
           className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-800 shadow-sm">
           <option value="all">כל הסוגים</option>
-          {types.map(t => <option key={t} value={t}>{typeLabels[t] ?? t}</option>)}
+          {allTypes.map(function(t) {
+            return <option key={t} value={t}>{TYPE_ICONS[t] ?? "🔔"} {t}</option>;
+          })}
         </select>
+        <label className="flex items-center gap-2 text-sm text-slate-600 cursor-pointer">
+          <input type="checkbox" checked={filterHandled}
+            onChange={function(e) { setFilterHandled(e.target.checked); }}
+            className="w-4 h-4" />
+          הצג מטופלות
+        </label>
+        {filtered.length > 0 && !filterHandled && (
+          <button onClick={function() { setSelected(new Set(filtered.map(function(a) { return a.id; }))); }}
+            className="text-xs text-blue-600 hover:underline">
+            בחר הכל ({filtered.length})
+          </button>
+        )}
       </div>
 
-      {/* רשימת התראות */}
+      {/* רשימה */}
       {loading ? (
         <div className="text-center py-12 text-slate-400">טוען...</div>
       ) : filtered.length === 0 ? (
         <div className="rounded-xl border border-slate-200 bg-white p-12 text-center text-slate-400 shadow-sm">
           <div className="text-5xl mb-3">🔔</div>
-          <div className="font-medium">אין התראות להצגה</div>
+          <div>{filterHandled ? "אין התראות" : "אין התראות פתוחות"}</div>
         </div>
       ) : (
         <div className="space-y-2">
-          {filtered.map(a => {
-            const cfg = severityConfig[a.severity ?? "info"] ?? severityConfig.info;
-            const days = a.due_date ? daysLeft(a.due_date) : null;
+          {filtered.map(function(a) {
+            const pc = PRIORITY_CONFIG[a.priority] ?? PRIORITY_CONFIG.medium;
+            const icon = TYPE_ICONS[a.alert_type ?? ""] ?? "🔔";
+            const isSel = selected.has(a.id);
             return (
               <div key={a.id}
-                className={`rounded-xl border p-4 shadow-sm transition-opacity ${a.is_handled ? "opacity-50" : ""} ${cfg.bg} ${cfg.border}`}>
+                className={"rounded-xl border p-4 shadow-sm transition-all " + pc.bg + " " + pc.border +
+                  (a.is_handled ? " opacity-50" : "") +
+                  (isSel ? " ring-2 ring-blue-400" : "")}>
                 <div className="flex items-start gap-3">
-                  <div className="text-xl mt-0.5 shrink-0">{cfg.icon}</div>
+                  {!a.is_handled && (
+                    <input type="checkbox" checked={isSel}
+                      onChange={function() { toggleSelect(a.id); }}
+                      className="w-4 h-4 mt-1 shrink-0" />
+                  )}
+                  <div className="text-xl shrink-0">{icon}</div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1 flex-wrap">
-                      <span className={`font-bold text-sm ${cfg.color}`}>{a.title}</span>
-                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium bg-white/60 ${cfg.color}`}>
-                        {typeLabels[a.alert_type] ?? a.alert_type}
+                      <span className={"text-sm font-bold " + pc.color}>{a.title}</span>
+                      <span className={"text-xs px-2 py-0.5 rounded-full font-semibold " + pc.bg + " " + pc.color + " border " + pc.border}>
+                        {pc.label}
                       </span>
                       {a.is_handled && (
                         <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">✓ טופל</span>
                       )}
                     </div>
                     {a.message && (
-                      <div className="text-sm text-slate-700 mb-1">{a.message}</div>
+                      <div className="text-xs text-slate-600 mb-1">{a.message}</div>
                     )}
-                    <div className="flex items-center gap-3 text-xs text-slate-500">
-                      {a.due_date && (
-                        <span className={days !== null && days <= 0 ? "text-red-600 font-semibold" : ""}>
-                          📅 {formatDate(a.due_date)}
-                          {days !== null && (
-                            <span className="mr-1">
-                              ({days < 0 ? `עבר לפני ${Math.abs(days)} ימים` : days === 0 ? "היום" : `עוד ${days} ימים`})
-                            </span>
-                          )}
-                        </span>
-                      )}
-                      {a.handled_at && (
-                        <span>טופל: {formatDate(a.handled_at.split("T")[0])}</span>
-                      )}
+                    <div className="text-xs text-slate-400">
+                      {fmtDate(a.created_at)}
+                      {a.handled_at && " | טופל: " + fmtDate(a.handled_at)}
                     </div>
                   </div>
-                  <div className="shrink-0">
-                    {!a.is_handled ? (
-                      <button onClick={() => handleMark(a.id, true)} disabled={handling === a.id}
-                        className={`text-xs font-semibold px-3 py-1.5 rounded-lg bg-white/80 border ${cfg.border} ${cfg.color} hover:bg-white disabled:opacity-50`}>
-                        {handling === a.id ? "..." : "✓ טפלתי"}
-                      </button>
-                    ) : (
-                      <button onClick={() => handleMark(a.id, false)} disabled={handling === a.id}
-                        className="text-xs text-slate-400 hover:text-slate-600 px-3 py-1.5 rounded-lg border border-slate-200 bg-white/80 disabled:opacity-50">
-                        {handling === a.id ? "..." : "↩ פתח מחדש"}
+                  <div className="flex gap-1 shrink-0">
+                    {a.related_entity_type && a.related_entity_type !== "system" && (
+                      <button onClick={function() { navigateToEntity(a); }}
+                        className="text-xs border border-blue-200 rounded px-2 py-1 text-blue-700 hover:bg-blue-50 font-semibold">
+                        עבור ←
                       </button>
                     )}
+                    {!a.is_handled ? (
+                      <button onClick={function() { markHandled(a.id, true); }}
+                        className="text-xs bg-green-600 text-white px-2 py-1 rounded-lg hover:bg-green-700 font-semibold">
+                        ✓ טפל
+                      </button>
+                    ) : (
+                      <button onClick={function() { markHandled(a.id, false); }}
+                        className="text-xs border border-slate-200 rounded px-2 py-1 text-slate-500 hover:bg-slate-50">
+                        פתח מחדש
+                      </button>
+                    )}
+                    <button onClick={function() { deleteAlert(a.id); }}
+                      className="text-xs border border-red-100 rounded px-2 py-1 text-red-400 hover:bg-red-50">
+                      🗑
+                    </button>
                   </div>
                 </div>
               </div>
