@@ -340,7 +340,7 @@ export default function ContractsPage() {
                                             <div key={i} className="flex justify-between text-xs bg-slate-50 rounded px-2 py-1">
                                               <span className="font-medium text-slate-700">{cs.spaces?.space_name ?? "—"}</span>
                                               <span className="text-slate-500">
-                                                {cs.charge_method === "per_sqm" ? "₪" + cs.price_per_sqm + "/מ"ר" :
+                                                {cs.charge_method === "per_sqm" ? "₪" + cs.price_per_sqm + "/מ\"ר" :
                                                  cs.charge_method === "fixed" ? "₪" + cs.fixed_amount + " קבוע" :
                                                  cs.charge_method === "per_unit" ? cs.quantity + " × ₪" + cs.price_per_unit :
                                                  cs.charge_method === "included" ? "כלול" : cs.charge_method}
@@ -366,7 +366,7 @@ export default function ContractsPage() {
                                                 {isActive2 ? "● " : ""}{t.start_date?.substring(0,7)} — {t.end_date?.substring(0,7) ?? "..."}
                                               </span>
                                               <span className="text-green-700">
-                                                {t.price_per_sqm ? "₪" + t.price_per_sqm + "/מ"ר" : "₪" + t.fixed_amount}
+                                                {t.price_per_sqm ? "₪" + t.price_per_sqm + "/מ\"ר" : "₪" + t.fixed_amount}
                                               </span>
                                             </div>
                                           );
