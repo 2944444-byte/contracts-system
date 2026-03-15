@@ -1,405 +1,311 @@
 "use client";
 import { useState, useEffect } from "react";
 import { supabase } from "../../../lib/supabase";
+import { logAudit } from "../../../lib/audit-log";
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 
-const MONTHS_HE = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
+type MgmtRecord = {
+  id: string;
+  contract_id: string;
+  month: string;
+  base_amount: number;
+  final_amount: number;
+  method: string;
+  status: string;
+  grace_applied: boolean;
+  notes: string | null;
+  contracts?: any;
+};
 
-export default function ManagementFeePage() {
-  const [contracts, setContracts] = useState<any[]>([]);
-  const [selectedId, setSelectedId] = useState("");
-  const [contract, setContract] = useState<any>(null);
-  const [year, setYear] = useState(new Date().getFullYear());
-  const [tab, setTab] = useState("advance");
+export default function ManagementPage() {
+  const [contracts,  setContracts]  = useState<any[]>([]);
+  const [records,    setRecords]    = useState<MgmtRecord[]>([]);
+  const [loading,    setLoading]    = useState(true);
+  const [generating, setGenerating] = useState(false);
+  const [selMonth,   setSelMonth]   = useState(new Date().toISOString().slice(0,7));
+  const [editingId,  setEditingId]  = useState("");
+  const [saving,     setSaving]     = useState(false);
 
-  // דמי ניהול Cost Plus
-  const [actualCost,    setActualCost]    = useState("");
-  const [plusPct,       setPlusPct]       = useState("15");
-  const [plusFixed,     setPlusFixed]     = useState("");
-  const [capPerSqm,     setCapPerSqm]     = useState("");
-  const [capMonthly,    setCapMonthly]    = useState("");
-  const [advancePerSqm, setAdvancePerSqm] = useState("");
+  const [fContractId, setFContractId] = useState("");
+  const [fMethod,     setFMethod]     = useState("cost_plus");
+  const [fBasePct,    setFBasePct]    = useState("10");
+  const [fFixedAmt,   setFFixedAmt]   = useState("");
+  const [fGrace,      setFGrace]      = useState(false);
+  const [fGracePct,   setFGracePct]   = useState("0");
+  const [fNotes,      setFNotes]      = useState("");
 
-  // חישוב
-  const [result, setResult] = useState<any>(null);
-  const [saving, setSaving]  = useState(false);
+  useEffect(function() { loadAll(); }, [selMonth]);
 
-  useEffect(function() {
-    supabase.from("contracts")
-      .select("*, tenants(name), properties(name, total_rentable_area)")
-      .in("status", ["active","expiring","extended"])
-      .then(function({ data }) { setContracts(data ?? []); });
-  }, []);
-
-  useEffect(function() {
-    if (!selectedId) { setContract(null); return; }
-    const c = contracts.find(function(x) { return x.id === selectedId; });
-    setContract(c ?? null);
-    if (c?.mgmt_fee_per_sqm) setAdvancePerSqm(c.mgmt_fee_per_sqm.toString());
-  }, [selectedId, contracts]);
-
-  function calculate() {
-    if (!contract || !actualCost) return;
-    const area     = contract.charged_area ?? contract.properties?.total_rentable_area ?? 0;
-    const cost     = Number(actualCost);
-    const plus     = plusFixed ? Number(plusFixed) : cost * Number(plusPct) / 100;
-    const subtotal = cost + plus;
-    const capM     = capMonthly ? Number(capMonthly) : null;
-    const capS     = capPerSqm  ? Number(capPerSqm) * area : null;
-    const cap      = capM ?? capS ?? null;
-    const actual   = cap ? Math.min(subtotal, cap) : subtotal;
-    const advance  = advancePerSqm ? Number(advancePerSqm) * area : 0;
-    const diff     = actual - advance;
-
-    setResult({
-      area, cost, plus, subtotal, cap, actual,
-      advance, diff,
-      isPlusPct: !plusFixed,
-      plusRate: plusFixed ? null : Number(plusPct),
-    });
+  async function loadAll() {
+    setLoading(true);
+    const [{ data: c }, { data: r }] = await Promise.all([
+      supabase.from("contracts")
+        .select("id, tenants(name), properties(name, mgmt_fee_per_sqm), charged_area, rent_per_sqm, investment_addition, management_method, grace_pct")
+        .in("status", ["active","expiring","extended"]),
+      supabase.from("management_fees")
+        .select("*, contracts(tenants(name), properties(name))")
+        .eq("month", selMonth + "-01")
+        .order("created_at", { ascending: false }),
+    ]);
+    setContracts(c ?? []);
+    setRecords((r ?? []) as MgmtRecord[]);
+    setLoading(false);
   }
 
-  async function handleCreateCharge() {
-    if (!result || !contract) return;
+  function calcMgmt(c: any): { base: number; final: number } {
+    const area    = c.charged_area ?? 0;
+    const feeRate = c.properties?.mgmt_fee_per_sqm ?? 0;
+    const base    = feeRate * area;
+    const grace   = c.grace_pct ?? 0;
+    const final   = base * (1 - grace / 100);
+    return { base, final };
+  }
+
+  async function generateAll() {
+    if (!confirm("לייצר חיובי ניהול לחודש " + selMonth + " לכל החוזים הפעילים?")) return;
+    setGenerating(true);
+    try {
+      for (const c of contracts) {
+        const { base, final } = calcMgmt(c);
+        if (base <= 0) continue;
+        // בדוק אם כבר קיים
+        const { data: existing } = await supabase.from("management_fees")
+          .select("id").eq("contract_id", c.id).eq("month", selMonth + "-01").limit(1);
+        if (existing?.length) continue;
+
+        const { data } = await supabase.from("management_fees").insert({
+          contract_id:   c.id,
+          month:         selMonth + "-01",
+          base_amount:   base,
+          final_amount:  final,
+          method:        c.management_method ?? "cost_plus",
+          grace_applied: (c.grace_pct ?? 0) > 0,
+          grace_pct:     c.grace_pct ?? 0,
+          status:        "pending",
+        }).select().single();
+        if (data) {
+          await logAudit({ entity_type: "management_fee", entity_id: data.id, action: "generate" });
+        }
+      }
+      await loadAll();
+    } catch(e: any) { alert("שגיאה: " + e?.message); }
+    finally { setGenerating(false); }
+  }
+
+  async function updateStatus(id: string, status: string) {
+    await supabase.from("management_fees").update({ status }).eq("id", id);
+    await logAudit({ entity_type: "management_fee", entity_id: id, action: "status_" + status });
+    await loadAll();
+  }
+
+  function openEdit(r: MgmtRecord) {
+    setEditingId(r.id);
+    setFContractId(r.contract_id); setFMethod(r.method ?? "cost_plus");
+    setFFixedAmt(r.final_amount?.toString() ?? ""); setFNotes(r.notes ?? "");
+    setFGrace(r.grace_applied ?? false);
+  }
+
+  async function handleSave() {
     setSaving(true);
     try {
-      const vat = Math.round(result.diff * 0.18 * 100) / 100;
-      const total = result.diff + vat;
-      const { error } = await supabase.from("charges").insert({
-        contract_id:  contract.id,
-        charge_type:  "management",
-        period_start: year + "-01-01",
-        period_end:   year + "-12-31",
-        base_amount:  result.diff,
-        vat_amount:   vat,
-        total_amount: total,
-        status:       "draft",
-        notes:        "השלמת דמי ניהול " + year + " — Cost Plus " +
-          (result.isPlusPct ? result.plusRate + "%" : "₪" + result.plus.toLocaleString()),
-      });
-      if (error) throw error;
-      alert("חיוב נוצר — עבור לדף חיובים לאישור");
-    } catch(e: any) { alert("שגיאה: " + (e?.message || e)); }
+      await supabase.from("management_fees").update({
+        final_amount:  Number(fFixedAmt),
+        grace_applied: fGrace,
+        notes:         fNotes || null,
+      }).eq("id", editingId);
+      setEditingId("");
+      await loadAll();
+    } catch(e: any) { alert("שגיאה: " + e?.message); }
     finally { setSaving(false); }
   }
 
-  const currentYear = new Date().getFullYear();
+  const totalBase  = records.reduce(function(s, r) { return s + (r.base_amount ?? 0); }, 0);
+  const totalFinal = records.reduce(function(s, r) { return s + (r.final_amount ?? 0); }, 0);
+  const pending    = records.filter(function(r) { return r.status === "pending"; });
+  const approved   = records.filter(function(r) { return r.status === "approved"; });
+
+  const contractsWithoutRecord = contracts.filter(function(c) {
+    return !records.find(function(r) { return r.contract_id === c.id; })
+      && (c.properties?.mgmt_fee_per_sqm ?? 0) > 0;
+  });
 
   return (
-    <div dir="rtl" className="max-w-3xl mx-auto">
-      <div className="mb-6">
-        <h1 className="text-3xl font-bold text-slate-800">דמי ניהול — Cost Plus</h1>
-        <p className="text-sm text-slate-500 mt-1">חישוב השלמת דמי ניהול שנתית לפי הוצאות בפועל</p>
-      </div>
-
-      {/* בחירה */}
-      <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm mb-5">
-        <div className="grid grid-cols-2 gap-4 mb-4">
-          <div>
-            <label className="mb-1 block text-xs font-semibold text-slate-700">חוזה</label>
-            <select value={selectedId} onChange={function(e) { setSelectedId(e.target.value); setResult(null); }} className={ic}>
-              <option value="">-- בחר חוזה --</option>
-              {contracts.map(function(c) {
-                return <option key={c.id} value={c.id}>{c.tenants?.name} — {c.properties?.name}</option>;
-              })}
-            </select>
-          </div>
-          <div>
-            <label className="mb-1 block text-xs font-semibold text-slate-700">שנה</label>
-            <select value={year} onChange={function(e) { setYear(Number(e.target.value)); setResult(null); }} className={ic}>
-              {[currentYear-1, currentYear, currentYear+1].map(function(y) {
-                return <option key={y} value={y}>{y}</option>;
-              })}
-            </select>
-          </div>
+    <div dir="rtl">
+      <div className="mb-6 flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold text-slate-800">דמי ניהול</h1>
+          <p className="text-sm text-slate-500 mt-1">
+            {records.length} רשומות | ₪{Math.round(totalFinal).toLocaleString()} לגבייה
+            {totalBase !== totalFinal && (
+              <span className="text-green-600"> (הנחה ₪{Math.round(totalBase - totalFinal).toLocaleString()})</span>
+            )}
+          </p>
         </div>
-
-        {contract && (
-          <div className="rounded-lg bg-blue-50 border border-blue-100 p-3 text-xs text-slate-700 grid grid-cols-3 gap-2">
-            <div><span className="text-blue-600">שוכר</span><div className="font-bold">{contract.tenants?.name}</div></div>
-            <div><span className="text-blue-600">שטח מחויב</span><div className="font-bold">{contract.charged_area ?? "—"} מ"ר</div></div>
-            <div><span className="text-blue-600">מקדמה למ"ר</span><div className="font-bold">₪{contract.mgmt_fee_per_sqm ?? "—"}</div></div>
-          </div>
-        )}
+        <div className="flex gap-2 items-center">
+          <input type="month" value={selMonth} onChange={function(e) { setSelMonth(e.target.value); }}
+            className="rounded-lg border border-slate-200 px-3 py-2 text-sm bg-white" />
+          <button onClick={generateAll} disabled={generating || contractsWithoutRecord.length === 0}
+            className="rounded-lg bg-blue-700 px-4 py-2.5 text-sm font-bold text-white hover:bg-blue-800 disabled:opacity-50">
+            {generating ? "מייצר..." : "⚡ ייצר לכולם (" + contractsWithoutRecord.length + ")"}
+          </button>
+        </div>
       </div>
 
-      {/* טאבים */}
-      {contract && (
-        <>
-          <div className="flex gap-1 mb-5 border-b border-slate-200">
-            {[
-              { key: "advance",  label: "מקדמות חודשיות" },
-              { key: "annual",   label: "חישוב שנתי" },
-              { key: "grace",    label: "גרייס" },
-            ].map(function(t) {
+      {/* KPI */}
+      <div className="grid grid-cols-4 gap-3 mb-5">
+        {[
+          { label: "ממתין",    value: pending.length,   color: "text-yellow-700", bg: "bg-yellow-50",  border: "border-yellow-100", amt: pending.reduce(function(s,r){return s+r.final_amount;},0)  },
+          { label: "אושר",     value: approved.length,  color: "text-green-700",  bg: "bg-green-50",   border: "border-green-100",  amt: approved.reduce(function(s,r){return s+r.final_amount;},0) },
+          { label: "סה\"כ חיוב",value: "",              color: "text-slate-800",  bg: "bg-white",      border: "border-slate-200",  amt: totalFinal },
+          { label: "חוזים פעילים", value: contracts.length, color: "text-blue-700", bg: "bg-blue-50", border: "border-blue-100", amt: null },
+        ].map(function(k) {
+          return (
+            <div key={k.label} className={"rounded-xl border p-4 " + k.bg + " " + k.border}>
+              <div className={"text-2xl font-black " + k.color}>
+                {k.value !== "" ? k.value : k.amt != null ? "₪" + Math.round(k.amt).toLocaleString() : ""}
+              </div>
+              {k.amt != null && k.value !== "" && (
+                <div className="text-xs text-slate-500">₪{Math.round(k.amt).toLocaleString()}</div>
+              )}
+              <div className="text-xs text-slate-500 mt-0.5">{k.label}</div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* טבלה */}
+      {loading ? (
+        <div className="text-center py-12 text-slate-400">טוען...</div>
+      ) : records.length === 0 ? (
+        <div className="rounded-xl border-2 border-dashed border-slate-200 bg-white p-12 text-center text-slate-400">
+          <div className="text-5xl mb-3">🏦</div>
+          <div>אין רשומות לחודש זה</div>
+          {contractsWithoutRecord.length > 0 && (
+            <button onClick={generateAll}
+              className="mt-3 text-blue-600 hover:underline text-sm">
+              ⚡ ייצר ל-{contractsWithoutRecord.length} חוזים
+            </button>
+          )}
+        </div>
+      ) : (
+        <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+          <table className="w-full text-right text-sm">
+            <thead className="bg-slate-50 text-slate-700 border-b">
+              <tr>
+                <th className="px-4 py-3 font-semibold">שוכר / נכס</th>
+                <th className="px-4 py-3 font-semibold">בסיס</th>
+                <th className="px-4 py-3 font-semibold">לאחר הנחה</th>
+                <th className="px-4 py-3 font-semibold">סטטוס</th>
+                <th className="px-4 py-3 font-semibold">פעולות</th>
+              </tr>
+            </thead>
+            <tbody>
+              {records.map(function(r) {
+                const discount = r.base_amount - r.final_amount;
+                return (
+                  <tr key={r.id} className={"border-t border-slate-100 " +
+                    (r.status === "approved" ? "bg-green-50" : "hover:bg-slate-50")}>
+                    <td className="px-4 py-3">
+                      <div className="font-semibold text-slate-800">{r.contracts?.tenants?.name}</div>
+                      <div className="text-xs text-slate-400">{r.contracts?.properties?.name}</div>
+                    </td>
+                    <td className="px-4 py-3 text-slate-600">₪{Math.round(r.base_amount).toLocaleString()}</td>
+                    <td className="px-4 py-3">
+                      <div className="font-bold text-slate-800">₪{Math.round(r.final_amount).toLocaleString()}</div>
+                      {discount > 0 && (
+                        <div className="text-xs text-green-600">הנחה ₪{Math.round(discount).toLocaleString()}</div>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className={"text-xs px-2 py-0.5 rounded-full font-semibold " +
+                        (r.status === "approved" ? "bg-green-100 text-green-700" :
+                          r.status === "invoiced" ? "bg-blue-100 text-blue-700" :
+                          "bg-yellow-100 text-yellow-700")}>
+                        {r.status === "approved" ? "✓ אושר" : r.status === "invoiced" ? "חויב" : "ממתין"}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex gap-1">
+                        {r.status === "pending" && (
+                          <button onClick={function() { updateStatus(r.id, "approved"); }}
+                            className="text-xs bg-green-600 text-white px-2 py-1 rounded-lg hover:bg-green-700 font-semibold">
+                            ✓ אשר
+                          </button>
+                        )}
+                        {r.status === "approved" && (
+                          <button onClick={function() { updateStatus(r.id, "invoiced"); }}
+                            className="text-xs bg-blue-600 text-white px-2 py-1 rounded-lg hover:bg-blue-700 font-semibold">
+                            📄 חייב
+                          </button>
+                        )}
+                        <button onClick={function() { openEdit(r); }}
+                          className="text-xs border border-slate-200 rounded px-2 py-1 text-slate-600 hover:bg-slate-50">
+                          עריכה
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* חוזים ללא רשומה */}
+      {contractsWithoutRecord.length > 0 && records.length > 0 && (
+        <div className="mt-4 rounded-xl border border-yellow-200 bg-yellow-50 p-4">
+          <div className="text-sm font-semibold text-yellow-800 mb-2">
+            ⚠️ {contractsWithoutRecord.length} חוזים ללא רשומת ניהול לחודש זה:
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {contractsWithoutRecord.map(function(c) {
               return (
-                <button key={t.key} onClick={function() { setTab(t.key); }}
-                  className={"px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors " +
-                    (tab === t.key ? "border-blue-600 text-blue-700" : "border-transparent text-slate-500 hover:text-slate-700")}>
-                  {t.label}
-                </button>
+                <span key={c.id} className="text-xs bg-white border border-yellow-200 rounded-lg px-2 py-1 text-slate-600">
+                  {c.tenants?.name} — {c.properties?.name}
+                </span>
               );
             })}
           </div>
+        </div>
+      )}
 
-          {/* מקדמות */}
-          {tab === "advance" && (
-            <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm space-y-4">
-              <h2 className="font-bold text-slate-700">מקדמת דמי ניהול חודשית</h2>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-700">מקדמה למ"ר לחודש (₪)</label>
-                  <input type="number" step="0.01" value={advancePerSqm}
-                    onChange={function(e) { setAdvancePerSqm(e.target.value); }} className={ic} placeholder="5" />
-                </div>
-                {advancePerSqm && contract.charged_area && (
-                  <div className="flex items-end pb-2">
-                    <div>
-                      <div className="text-xs text-slate-500">מקדמה חודשית</div>
-                      <div className="text-xl font-bold text-slate-800">
-                        ₪{Math.round(Number(advancePerSqm) * contract.charged_area).toLocaleString()}
-                      </div>
-                      <div className="text-xs text-slate-400">שנתי: ₪{Math.round(Number(advancePerSqm) * contract.charged_area * 12).toLocaleString()}</div>
-                    </div>
-                  </div>
-                )}
-              </div>
-              <div className="rounded-lg bg-blue-50 border border-blue-100 p-3 text-xs text-blue-800">
-                💡 המקדמה נגבית מדי חודש. בסוף השנה מחושב ההפרש בין המקדמות לבין הוצאות בפועל.
-              </div>
+      {/* מודל עריכה */}
+      {editingId && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+          onClick={function() { setEditingId(""); }}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6"
+            onClick={function(e) { e.stopPropagation(); }} dir="rtl">
+            <div className="flex items-center justify-between mb-5">
+              <h2 className="font-bold text-slate-800 text-lg">עריכת דמי ניהול</h2>
+              <button onClick={function() { setEditingId(""); }} className="text-2xl text-slate-400">×</button>
             </div>
-          )}
-
-          {/* חישוב שנתי */}
-          {tab === "annual" && (
             <div className="space-y-4">
-              <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm space-y-4">
-                <h2 className="font-bold text-slate-700">הוצאות בפועל + Plus</h2>
-                <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-700">הוצאות ניהול בפועל לשנת {year} (₪)</label>
-                  <input type="number" value={actualCost}
-                    onChange={function(e) { setActualCost(e.target.value); setResult(null); }} className={ic} placeholder="0" />
-                </div>
-
-                <div>
-                  <label className="mb-2 block text-xs font-semibold text-slate-700">רכיב Plus</label>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="mb-1 block text-xs text-slate-600">אחוז Plus (%)</label>
-                      <input type="number" value={plusPct}
-                        onChange={function(e) { setPlusPct(e.target.value); setPlusFixed(""); setResult(null); }}
-                        className={ic} placeholder="15" />
-                    </div>
-                    <div>
-                      <label className="mb-1 block text-xs text-slate-600">או: Plus קבוע (₪)</label>
-                      <input type="number" value={plusFixed}
-                        onChange={function(e) { setPlusFixed(e.target.value); setPlusPct(""); setResult(null); }}
-                        className={ic} placeholder="0" />
-                    </div>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="mb-1 block text-xs font-semibold text-slate-700">תקרה חודשית (₪) — אופציונלי</label>
-                    <input type="number" value={capMonthly}
-                      onChange={function(e) { setCapMonthly(e.target.value); setResult(null); }} className={ic} placeholder="לא מוגבל" />
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-xs font-semibold text-slate-700">או: תקרה למ"ר (₪)</label>
-                    <input type="number" value={capPerSqm}
-                      onChange={function(e) { setCapPerSqm(e.target.value); setResult(null); }} className={ic} placeholder="לא מוגבל" />
-                  </div>
-                </div>
-
-                <button onClick={calculate} disabled={!actualCost}
-                  className="w-full rounded-lg bg-blue-700 py-2.5 font-bold text-white hover:bg-blue-800 disabled:opacity-50">
-                  חשב השלמה
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">סכום סופי (₪)</label>
+                <input type="number" value={fFixedAmt} onChange={function(e) { setFFixedAmt(e.target.value); }} className={ic} />
+              </div>
+              <label className="flex items-center gap-2 text-sm cursor-pointer">
+                <input type="checkbox" checked={fGrace} onChange={function(e) { setFGrace(e.target.checked); }} className="w-4 h-4" />
+                <span>הוחלה הנחת grace period</span>
+              </label>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">הערות</label>
+                <input type="text" value={fNotes} onChange={function(e) { setFNotes(e.target.value); }} className={ic} />
+              </div>
+              <div className="flex gap-3 pt-1">
+                <button onClick={function() { setEditingId(""); }}
+                  className="flex-1 rounded-lg border border-slate-200 py-2.5 text-sm text-slate-600">ביטול</button>
+                <button onClick={handleSave} disabled={saving}
+                  className="flex-1 rounded-lg bg-blue-700 py-2.5 text-sm font-bold text-white disabled:opacity-50">
+                  {saving ? "שומר..." : "שמור"}
                 </button>
               </div>
-
-              {/* תוצאה */}
-              {result && (
-                <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-                  <h3 className="font-bold text-slate-700 mb-4">📊 תוצאת חישוב שנת {year}</h3>
-                  <div className="space-y-2 text-sm">
-                    <div className="flex justify-between py-1.5 border-b border-slate-100">
-                      <span className="text-slate-500">הוצאות בפועל</span>
-                      <span className="font-medium">₪{result.cost.toLocaleString()}</span>
-                    </div>
-                    <div className="flex justify-between py-1.5 border-b border-slate-100">
-                      <span className="text-slate-500">
-                        רכיב Plus {result.isPlusPct ? "(" + result.plusRate + "%)" : "(קבוע)"}
-                      </span>
-                      <span className="font-medium">₪{Math.round(result.plus).toLocaleString()}</span>
-                    </div>
-                    <div className="flex justify-between py-1.5 border-b border-slate-100">
-                      <span className="text-slate-500">סה"כ לפני תקרה</span>
-                      <span className="font-medium">₪{Math.round(result.subtotal).toLocaleString()}</span>
-                    </div>
-                    {result.cap && (
-                      <div className="flex justify-between py-1.5 border-b border-slate-100">
-                        <span className="text-slate-500">תקרה מוסכמת</span>
-                        <span className="font-medium text-orange-600">₪{Math.round(result.cap).toLocaleString()}</span>
-                      </div>
-                    )}
-                    <div className="flex justify-between py-1.5 border-b border-slate-100">
-                      <span className="text-slate-500">דמי ניהול בפועל</span>
-                      <span className="font-bold">₪{Math.round(result.actual).toLocaleString()}</span>
-                    </div>
-                    <div className="flex justify-between py-1.5 border-b border-slate-100">
-                      <span className="text-slate-500">מקדמות ששולמו ({year})</span>
-                      <span className="font-medium text-blue-600">₪{Math.round(result.advance).toLocaleString()}</span>
-                    </div>
-                    <div className={"flex justify-between py-2 rounded-lg px-3 mt-2 " +
-                      (result.diff >= 0 ? "bg-orange-50" : "bg-green-50")}>
-                      <span className={"font-bold " + (result.diff >= 0 ? "text-orange-700" : "text-green-700")}>
-                        {result.diff >= 0 ? "השלמה לחיוב" : "זיכוי לשוכר"}
-                      </span>
-                      <span className={"text-xl font-black " + (result.diff >= 0 ? "text-orange-700" : "text-green-700")}>
-                        ₪{Math.abs(Math.round(result.diff)).toLocaleString()}
-                      </span>
-                    </div>
-                  </div>
-
-                  {result.diff !== 0 && (
-                    <button onClick={handleCreateCharge} disabled={saving}
-                      className={"w-full mt-4 rounded-lg py-2.5 font-bold text-white disabled:opacity-50 " +
-                        (result.diff >= 0 ? "bg-orange-600 hover:bg-orange-700" : "bg-green-600 hover:bg-green-700")}>
-                      {saving ? "יוצר..." : result.diff >= 0 ? "צור חיוב השלמה" : "צור זיכוי"}
-                    </button>
-                  )}
-                </div>
-              )}
             </div>
-          )}
-
-          {/* גרייס */}
-          {tab === "grace" && (
-            <GraceCalculator contract={contract} />
-          )}
-        </>
-      )}
-    </div>
-  );
-}
-
-function GraceCalculator({ contract }: { contract: any }) {
-  const ic2 = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white focus:outline-none focus:ring-2 focus:ring-blue-400";
-  const [graceType,    setGraceType]    = useState("full");
-  const [graceMonths,  setGraceMonths]  = useState("2");
-  const [gracePct,     setGracePct]     = useState("50");
-  const [graceStart,   setGraceStart]   = useState(contract?.start_date?.split("T")[0] ?? "");
-  const [saving,       setSaving]       = useState(false);
-
-  const monthly = (contract?.rent_per_sqm ?? 0) * (contract?.charged_area ?? 0) + (contract?.investment_addition ?? 0);
-  const discountPct  = graceType === "full" ? 100 : Number(gracePct);
-  const discountMonthly = Math.round(monthly * discountPct / 100);
-  const totalDiscount   = discountMonthly * Number(graceMonths);
-
-  async function handleCreateGrace() {
-    if (!graceStart || !graceMonths) { alert("חובה: תאריך התחלה ומספר חודשים"); return; }
-    setSaving(true);
-    try {
-      const d = new Date(graceStart);
-      d.setMonth(d.getMonth() + Number(graceMonths));
-      const graceEnd = d.toISOString().split("T")[0];
-
-      // חיוב גרייס = סכום שלילי (הנחה)
-      const { error } = await supabase.from("charges").insert({
-        contract_id:  contract.id,
-        charge_type:  "rent",
-        period_start: graceStart,
-        period_end:   graceEnd,
-        base_amount:  -discountMonthly * Number(graceMonths),
-        vat_amount:   0,
-        total_amount: -discountMonthly * Number(graceMonths),
-        status:       "draft",
-        notes:        "גרייס " + (graceType === "full" ? "מלא" : gracePct + "%") + " — " + graceMonths + " חודשים",
-      });
-      if (error) throw error;
-      alert("חיוב גרייס נוצר — עבור לדף חיובים");
-    } catch(e: any) { alert("שגיאה: " + (e as any)?.message); }
-    finally { setSaving(false); }
-  }
-
-  return (
-    <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm space-y-4">
-      <h2 className="font-bold text-slate-700">הגדרת תקופת גרייס</h2>
-
-      <div>
-        <label className="mb-2 block text-xs font-semibold text-slate-700">סוג גרייס</label>
-        <div className="grid grid-cols-3 gap-2">
-          {[
-            { value: "full",    label: "גרייס מלא",   desc: "שכ\"ד = 0" },
-            { value: "partial", label: "גרייס חלקי",  desc: "% הנחה" },
-            { value: "days",    label: "ימי רבעון",   desc: "שיק ראשון לפי ימים" },
-          ].map(function(t) {
-            return (
-              <button key={t.value} type="button"
-                onClick={function() { setGraceType(t.value); }}
-                className={"rounded-xl border p-3 text-center transition-all " +
-                  (graceType === t.value ? "border-blue-500 bg-blue-50" : "border-slate-200 hover:bg-slate-50")}>
-                <div className={"text-sm font-bold " + (graceType === t.value ? "text-blue-700" : "text-slate-700")}>
-                  {t.label}
-                </div>
-                <div className="text-xs text-slate-400 mt-0.5">{t.desc}</div>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 gap-4">
-        <div>
-          <label className="mb-1 block text-xs font-semibold text-slate-700">תאריך תחילת גרייס</label>
-          <input type="date" value={graceStart}
-            onChange={function(e) { setGraceStart(e.target.value); }} className={ic2} />
-        </div>
-        <div>
-          <label className="mb-1 block text-xs font-semibold text-slate-700">מספר חודשי גרייס</label>
-          <input type="number" value={graceMonths}
-            onChange={function(e) { setGraceMonths(e.target.value); }} className={ic2} placeholder="2" />
-        </div>
-      </div>
-
-      {graceType === "partial" && (
-        <div>
-          <label className="mb-1 block text-xs font-semibold text-slate-700">אחוז הנחה (%)</label>
-          <input type="number" value={gracePct}
-            onChange={function(e) { setGracePct(e.target.value); }} className={ic2} placeholder="50" />
-        </div>
-      )}
-
-      {graceType === "days" && (
-        <div className="rounded-lg bg-blue-50 border border-blue-100 p-3 text-xs text-blue-800">
-          💡 שיק ראשון = לפי ימי הרבעון הנותרים מתאריך הכניסה, בניכוי גרייס. לדוגמה: כניסה ב-10 בינואר = 21 ימים מתוך 90, פחות גרייס.
-        </div>
-      )}
-
-      {monthly > 0 && graceMonths && (
-        <div className="rounded-lg bg-orange-50 border border-orange-200 p-4">
-          <div className="text-sm text-slate-600 mb-1">סיכום גרייס:</div>
-          <div className="flex justify-between text-sm">
-            <span className="text-slate-500">שכ"ד חודשי</span>
-            <span className="font-medium">₪{monthly.toLocaleString()}</span>
-          </div>
-          <div className="flex justify-between text-sm">
-            <span className="text-slate-500">הנחה ({discountPct}%)</span>
-            <span className="font-medium text-orange-600">-₪{discountMonthly.toLocaleString()}/חודש</span>
-          </div>
-          <div className="flex justify-between font-bold text-base mt-2 pt-2 border-t border-orange-200">
-            <span className="text-slate-700">סה"כ הנחת גרייס ({graceMonths} חודשים)</span>
-            <span className="text-orange-700">-₪{totalDiscount.toLocaleString()}</span>
           </div>
         </div>
       )}
-
-      <button onClick={handleCreateGrace} disabled={saving}
-        className="w-full rounded-lg bg-blue-700 py-2.5 font-bold text-white hover:bg-blue-800 disabled:opacity-50">
-        {saving ? "יוצר..." : "צור חיוב גרייס"}
-      </button>
     </div>
   );
 }
