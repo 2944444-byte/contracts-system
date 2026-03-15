@@ -1,9 +1,8 @@
 "use client";
-import { useState, useRef, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "../../../../lib/supabase";
-import { createContract } from "../../../../lib/db";
-import { ContractSpacesSelector, SpaceCharge } from "../../../../components/ContractSpacesSelector";
+import { logAudit } from "../../../../lib/audit-log";
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 
@@ -20,817 +19,438 @@ function nextDay(dateStr: string): string {
   d.setDate(d.getDate() + 1);
   return d.toISOString().split("T")[0];
 }
-function monthsBetween(start: string, end: string): number {
-  if (!start || !end) return 0;
-  const s = new Date(start), e = new Date(end);
-  return (e.getFullYear() - s.getFullYear()) * 12 + (e.getMonth() - s.getMonth());
-}
-function formatDate(d: string) {
-  if (!d) return "";
-  const [y,m,day] = d.split("-");
-  return `${day}/${m}/${y}`;
-}
-
-interface Option {
-  id: number;
-  durationValue: string;
-  durationUnit: "months" | "years";
-  noticeType: string;
-  noticeMonths: string;
-  priceType: string;
-  priceValue: string;
-}
 
 export default function NewContractPage() {
   const router = useRouter();
-  const [dbProperties, setDbProperties] = useState<any[]>([]);
-  const [dbTenants, setDbTenants]       = useState<any[]>([]);
+  const [tenants,    setTenants]    = useState<any[]>([]);
+  const [properties, setProperties] = useState<any[]>([]);
+  const [spaces,     setSpaces]     = useState<any[]>([]);
+  const [saving,     setSaving]     = useState(false);
+  const [step,       setStep]       = useState(1);
 
-  useEffect(() => {
-    supabase.from("properties").select("id, name, address, spaces(*), units(*)").then(function({ data }) { setDbProperties(data ?? []); });
-    supabase.from("tenants").select("id, name").then(function({ data }) { setDbTenants(data ?? []); });
-    try {
-      const draft = sessionStorage.getItem("contract_draft");
-      if (draft) {
-        const d = JSON.parse(draft);
-        if (d.propertyId) setPropertyId(d.propertyId);
-        if (d.unitIds)    setUnitIds(d.unitIds);
-        if (d.tenantId)   setTenantId(d.tenantId);
-        if (d.startDate)  setStartDate(d.startDate);
-        if (d.endDate)    setEndDate(d.endDate);
-        if (d.durationValue) setDurationValue(d.durationValue);
-        if (d.durationUnit)  setDurationUnit(d.durationUnit);
-        if (d.rentPerSqm)    setRentPerSqm(d.rentPerSqm);
-        if (d.investmentAddition) setInvestmentAddition(d.investmentAddition);
-        if (d.paymentFrequency)   setPaymentFrequency(d.paymentFrequency);
-        if (d.indexBaseDate)  setIndexBaseDate(d.indexBaseDate);
-        if (d.indexBaseValue) setIndexBaseValue(d.indexBaseValue);
-        if (d.mgmtFeePerSqm)  setMgmtFeePerSqm(d.mgmtFeePerSqm);
-        if (d.vatType)   setVatType(d.vatType);
-        if (d.vatPct)    setVatPct(d.vatPct);
-        if (d.guaranteeType)   setGuaranteeType(d.guaranteeType);
-        if (d.guaranteeAmount) setGuaranteeAmount(d.guaranteeAmount);
-        if (d.guaranteeExpiry) setGuaranteeExpiry(d.guaranteeExpiry);
-        if (d.hasOptions !== undefined) setHasOptions(d.hasOptions);
-        if (d.options)   setOptions(d.options);
-        if (d.hasPriceIncrease !== undefined) setHasPriceIncrease(d.hasPriceIncrease);
-        if (d.increaseType)  setIncreaseType(d.increaseType);
-        if (d.increaseValue) setIncreaseValue(d.increaseValue);
-        if (d.increaseFreqMonths)  setIncreaseFreqMonths(d.increaseFreqMonths);
-        if (d.increaseUntilYear)   setIncreaseUntilYear(d.increaseUntilYear);
-      }
-    } catch {}
+  // שלב 1 — פרטי חוזה
+  const [tenantId,   setTenantId]   = useState("");
+  const [propertyId, setPropertyId] = useState("");
+  const [startDate,  setStartDate]  = useState("");
+  const [durationM,  setDurationM]  = useState("12");
+  const [endDate,    setEndDate]    = useState("");
+  const [rentPerSqm, setRentPerSqm] = useState("");
+  const [chargedArea,setChargedArea]= useState("");
+  const [investAdd,  setInvestAdd]  = useState("0");
+  const [vatType,    setVatType]    = useState("taxable");
+  const [baseCpiVal, setBaseCpiVal] = useState("");
+  const [baseCpiDate,setBaseCpiDate]= useState("");
+  const [notes,      setNotes]      = useState("");
+
+  // שלב 2 — יחידות
+  const [selectedSpaces, setSelectedSpaces] = useState<any[]>([]);
+
+  // שלב 3 — אופציות
+  const [options, setOptions] = useState<any[]>([]);
+
+  useEffect(function() {
+    supabase.from("tenants").select("id, name").order("name").then(function({ data }) { setTenants(data ?? []); });
+    supabase.from("properties").select("id, name").order("name").then(function({ data }) { setProperties(data ?? []); });
   }, []);
 
-  const [propertyId, setPropertyId]   = useState("");
-  const [unitIds, setUnitIds]         = useState<string[]>([]);
-  const [tenantId, setTenantId]       = useState("");
-  const [startDate, setStartDate]     = useState("");
-  const [durationValue, setDurationValue] = useState("");
-  const [durationUnit, setDurationUnit]   = useState("months");
-  const [endDate, setEndDate]         = useState("");
-  const [hasOptions, setHasOptions]   = useState(false);
-  const [options, setOptions]         = useState<Option[]>([{
-    id: 1, durationValue: "", durationUnit: "months",
-    noticeType: "non_renewal", noticeMonths: "3",
-    priceType: "none", priceValue: ""
-  }]);
-  const [rentPerSqm, setRentPerSqm]   = useState("");
-  const [investmentAddition, setInvestmentAddition] = useState("0");
-  const [paymentFrequency, setPaymentFrequency]     = useState("monthly");
-  const [hasPriceIncrease, setHasPriceIncrease]     = useState(false);
-  const [increaseType, setIncreaseType]   = useState("percent");
-  const [increaseValue, setIncreaseValue] = useState("");
-  const [increaseFreqMonths, setIncreaseFreqMonths] = useState("12");
-  const [increaseUntilYear, setIncreaseUntilYear]   = useState("");
-  const [indexBaseDate, setIndexBaseDate]   = useState("");
-  const [indexBaseValue, setIndexBaseValue] = useState("");
-  const [fetchingCpi, setFetchingCpi]       = useState(false);
-  const [mgmtFeePerSqm, setMgmtFeePerSqm]  = useState("");
-  const [vatType, setVatType]   = useState("taxable");
-  const [vatPct, setVatPct]     = useState("18");
-  const [guaranteeType, setGuaranteeType]       = useState("");
-  const [guaranteeCalcMethod, setGuaranteeCalcMethod] = useState("months");
-  const [guaranteeMonths, setGuaranteeMonths]   = useState("3");
-  const [guaranteeAmount, setGuaranteeAmount]   = useState("");
-  const [guaranteeExpiry, setGuaranteeExpiry]   = useState("");
-  const [guaranteeInitialExpiry, setGuaranteeInitialExpiry] = useState("");
-  const [guaranteeIncludesMgmt, setGuaranteeIncludesMgmt] = useState(false);
-  const [documentUrl, setDocumentUrl] = useState("");
-  const [selectedSpaces, setSelectedSpaces] = useState<SpaceCharge[]>([]);
-  const [extracting, setExtracting] = useState(false);
-  const fileRef = useRef<HTMLInputElement>(null);
+  useEffect(function() {
+    if (startDate && durationM) {
+      setEndDate(addMonths(startDate, Number(durationM)));
+    }
+  }, [startDate, durationM]);
 
-  const selectedProperty = dbProperties.find(function(p: any) { return p.id === propertyId; });
-  const availableUnits   = (selectedProperty?.spaces ?? selectedProperty?.units ?? []);
-  const selectedUnits    = availableUnits.filter(function(u: any) { return unitIds.includes(u.id); });
-  const totalArea        = selectedUnits.reduce(function(s: number, u: any) { return s + (u.area ?? 0); }, 0);
-  const spacesArea       = selectedSpaces.filter(function(s) { return s.charge_method === "per_sqm" && s.area; })
-                            .reduce(function(acc, s) { return acc + (s.area ?? 0); }, 0);
-  const mgmtMonthly      = mgmtFeePerSqm && totalArea ? Number(mgmtFeePerSqm) * totalArea : 0;
-  const rentMonthly      = rentPerSqm && totalArea ? Number(rentPerSqm) * totalArea + Number(investmentAddition) : 0;
-  const vatMultiplier    = vatType === "taxable" ? (1 + Number(vatPct)/100) : 1;
-  const calcGuaranteeAmount = guaranteeCalcMethod === "months" && guaranteeMonths && rentMonthly
-    ? Math.round((rentMonthly + (guaranteeIncludesMgmt ? mgmtMonthly : 0)) * Number(guaranteeMonths) * vatMultiplier)
-    : null;
-  const monthlyRent = rentPerSqm && totalArea
-    ? (Number(rentPerSqm) * totalArea + Number(investmentAddition))
-    : null;
+  useEffect(function() {
+    if (!propertyId) { setSpaces([]); return; }
+    supabase.from("spaces").select("id, name, area, space_type, status").eq("property_id", propertyId)
+      .then(function({ data }) { setSpaces(data ?? []); });
+  }, [propertyId]);
 
-  function calcEnd(start: string, val: string, unit: string) {
-    if (!start || !val) return;
-    const months = unit === "years" ? Number(val) * 12 : Number(val);
-    setEndDate(addMonths(start, months));
+  function toggleSpace(sp: any) {
+    const exists = selectedSpaces.find(function(s) { return s.space_id === sp.id; });
+    if (exists) {
+      setSelectedSpaces(selectedSpaces.filter(function(s) { return s.space_id !== sp.id; }));
+    } else {
+      setSelectedSpaces([...selectedSpaces, {
+        space_id: sp.id, name: sp.name, area: sp.area,
+        charge_method: "per_sqm", price_per_sqm: rentPerSqm || "", fixed_amount: "",
+      }]);
+    }
   }
 
-  function updateOption(id: number, field: string, value: string) {
-    setOptions(function(prev) { return prev.map(function(o) { return o.id === id ? { ...o, [field]: value } : o; }); });
+  function updateSpaceField(spaceId: string, field: string, value: string) {
+    setSelectedSpaces(selectedSpaces.map(function(s) {
+      return s.space_id === spaceId ? { ...s, [field]: value } : s;
+    }));
   }
 
   function addOption() {
-    setOptions(function(prev) {
-      return [...prev, { id: Date.now(), durationValue: "", durationUnit: "months", noticeType: "non_renewal", noticeMonths: "3", priceType: "none", priceValue: "" }];
-    });
+    setOptions([...options, {
+      durationMonths: 12, noticeDaysBefore: 90, noticeType: "exercise",
+      rentMechanism: "no_change", rentIncreasePct: 0,
+    }]);
   }
 
-  const optionStartDates: string[] = [];
-  const optionEndDates:   string[] = [];
-  options.forEach(function(o, i) {
-    const prevEnd  = i === 0 ? endDate : optionEndDates[i-1];
-    const optStart = prevEnd ? nextDay(prevEnd) : "";
-    optionStartDates.push(optStart);
-    const months = o.durationUnit === "years" ? Number(o.durationValue) * 12 : Number(o.durationValue);
-    optionEndDates.push(optStart && months ? addMonths(optStart, months) : "");
-  });
-
-  async function fetchCpiForBaseDate() {
-    if (!indexBaseDate) return;
-    setFetchingCpi(true);
-    try {
-      const [year, month] = indexBaseDate.split("-");
-      const res = await fetch("/api/cpi?year=" + year);
-      const data = await res.json();
-      const records = data.records ?? data ?? [];
-      const found = Array.isArray(records) && records.find(function(r: any) { return r.year === Number(year) && r.month === Number(month); });
-      if (found) {
-        setIndexBaseValue(found.value.toString());
-      } else {
-        const res2 = await fetch("/api/cpi?from_year=" + year + "&to_year=" + year + "&refresh=true");
-        const data2 = await res2.json();
-        const records2 = data2.records ?? data2 ?? [];
-        const found2 = Array.isArray(records2) && records2.find(function(r: any) { return r.year === Number(year) && r.month === Number(month); });
-        if (found2) {
-          setIndexBaseValue(found2.value.toString());
-        } else {
-          alert("לא נמצא מדד עבור " + month + "/" + year);
-        }
-      }
-    } catch { alert("שגיאה במשיכת המדד"); }
-    finally { setFetchingCpi(false); }
-  }
-
-  async function handlePdfUpload(file: File) {
-    if (file.size > 20 * 1024 * 1024) { alert("מקסימום 20MB"); return; }
-    setExtracting(true);
-    try {
-      const arrayBuffer = await file.arrayBuffer();
-      const pdfjsLib = await import("pdfjs-dist");
-      pdfjsLib.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.min.mjs", import.meta.url).toString();
-      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer, useWorkerFetch: false, isEvalSupported: false, useSystemFonts: true }).promise;
-      let text = "";
-      for (let i = 1; i <= Math.min(pdf.numPages, 30); i++) {
-        const page = await pdf.getPage(i);
-        const c = await page.getTextContent();
-        text += c.items.map(function(item: any) { return item.str; }).join(" ") + "\n";
-      }
-      const response = await fetch("/api/extract-contract", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text })
-      });
-      const data = await response.json();
-      if (data.error) { alert("שגיאה: " + data.error); return; }
-      let computedEnd = data.end_date ?? "";
-      if (!computedEnd && data.start_date && data.duration_months) computedEnd = addMonths(data.start_date, Number(data.duration_months));
-      if (data.start_date) setStartDate(data.start_date);
-      if (computedEnd)     setEndDate(computedEnd);
-      if (data.duration_months) { setDurationValue(data.duration_months.toString()); setDurationUnit("months"); }
-      if (data.rent_per_sqm)    setRentPerSqm(data.rent_per_sqm.toString());
-      if (data.investment_addition) setInvestmentAddition(data.investment_addition.toString());
-      if (data.option_months) {
-        setHasOptions(true);
-        setOptions([{ id: 1, durationValue: data.option_months.toString(), durationUnit: "months", noticeType: "non_renewal", noticeMonths: "3", priceType: "none", priceValue: "" }]);
-      }
-      if (data.guarantee_type)   setGuaranteeType(data.guarantee_type);
-      if (data.guarantee_amount) setGuaranteeAmount(data.guarantee_amount.toString());
-      if (data.guarantee_expiry) setGuaranteeExpiry(data.guarantee_expiry);
-      if (data.index_base_value) setIndexBaseValue(data.index_base_value.toString());
-      if (data.index_base_date)  setIndexBaseDate(data.index_base_date);
-      if (data.payment_frequency) setPaymentFrequency(data.payment_frequency);
-      if (data.tenant_name) {
-        const t = dbTenants.find(function(t: any) { return t.name === data.tenant_name; });
-        if (t) setTenantId(t.id);
-      }
-      const ex = [];
-      if (data.start_date)     ex.push("התחלה: " + data.start_date);
-      if (computedEnd)         ex.push("סיום: " + computedEnd);
-      if (data.duration_months) ex.push("תקופה: " + data.duration_months + " חודשים");
-      if (data.tenant_name)    ex.push("שוכר: " + data.tenant_name);
-      if (data.rent_per_sqm)   ex.push("מחיר למ\"ר: ₪" + data.rent_per_sqm);
-      if (data.option_months)  ex.push("אופציה: " + data.option_months + " חודשים");
-      if (data.guarantee_amount) ex.push("ערבות: ₪" + data.guarantee_amount);
-      if (data.index_base_value) ex.push("מדד בסיס: " + data.index_base_value);
-      alert("חולץ בהצלחה:\n" + (ex.length ? ex.join("\n") : "לא נמצאו נתונים"));
-    } catch(e) { alert("שגיאה: " + e); }
-    finally { setExtracting(false); }
+  function updateOption(i: number, field: string, value: string) {
+    const updated = [...options];
+    (updated[i] as any)[field] = field === "durationMonths" || field === "noticeDaysBefore" || field === "rentIncreasePct"
+      ? Number(value) : value;
+    setOptions(updated);
   }
 
   async function handleSave() {
-    if (!propertyId || !tenantId || !startDate || !endDate) {
-      alert("חובה: נכס, שוכר, תאריכים");
-      return;
+    if (!tenantId || !propertyId || !startDate || !endDate) {
+      alert("חובה: שוכר, נכס, תאריך תחילה וסיום"); return;
     }
+    setSaving(true);
     try {
-      // בנה spaceInputs מהשטחים שנבחרו
-      const spaceInputs = selectedSpaces.map(function(sc) {
-        return {
-          space_id:       sc.space_id,
-          charge_method:  sc.charge_method,
-          price_per_sqm:  sc.price_per_sqm ? Number(sc.price_per_sqm) : undefined,
-          fixed_amount:   sc.fixed_amount ? Number(sc.fixed_amount) : undefined,
-          quantity:       sc.quantity ?? undefined,
-          price_per_unit: sc.price_per_unit ? Number(sc.price_per_unit) : undefined,
-          revenue_pct:    sc.revenue_pct ? Number(sc.revenue_pct) : undefined,
-          min_rent:       sc.min_rent ? Number(sc.min_rent) : undefined,
-          revenue_type:   (sc as any).revenue_type,
-          included_in_main_rent: sc.included_in_main_rent,
-          notes:          sc.notes,
-        };
-      });
-
-      // בנה optionInputs מהסטייט — המר חודשים לימים
-      const optionInputs = hasOptions
-        ? options
-            .filter(function(o) { return o.durationValue && Number(o.durationValue) > 0; })
-            .map(function(o) {
-              return {
-                durationMonths: o.durationUnit === "years" ? Number(o.durationValue) * 12 : Number(o.durationValue),
-                noticeDaysBefore: Number(o.noticeMonths) * 30,
-                noticeType: o.noticeType,
-                rentMechanism: o.priceType === "none" ? "no_change" : o.priceType === "percent" ? "pct_increase" : "fixed",
-                rentIncreasePct: o.priceType === "percent" && o.priceValue ? Number(o.priceValue) : undefined,
-                newRentValue: o.priceType === "fixed" && o.priceValue ? Number(o.priceValue) : undefined,
-              };
-            })
-        : [];
-
-      await createContract({
-        property_id:   propertyId,
-        tenant_id:     tenantId,
-        unit_ids:      unitIds,
-        start_date:    startDate,
-        end_date:      endDate,
-        rent_per_sqm:  Number(rentPerSqm),
-        charged_area:  totalArea,
-        investment_addition: Number(investmentAddition),
-        payment_frequency: paymentFrequency,
-        price_increase_type:        hasPriceIncrease ? increaseType : null,
-        price_increase_value:       hasPriceIncrease && increaseValue ? Number(increaseValue) : null,
-        price_increase_freq_months: hasPriceIncrease ? Number(increaseFreqMonths) : null,
-        price_increase_until_year:  hasPriceIncrease && increaseUntilYear ? Number(increaseUntilYear) : null,
-        index_base_date:  indexBaseDate ? indexBaseDate + "-01" : null,
-        index_base_value: indexBaseValue ? Number(indexBaseValue) : null,
-        index_base_month: indexBaseDate ? Number(indexBaseDate.split("-")[1]) : null,
-        index_base_year:  indexBaseDate ? Number(indexBaseDate.split("-")[0]) : null,
-        mgmt_fee_per_sqm: mgmtFeePerSqm ? Number(mgmtFeePerSqm) : null,
+      // צור חוזה
+      const { data: contract, error } = await supabase.from("contracts").insert({
+        tenant_id:        tenantId,
+        property_id:      propertyId,
+        start_date:       startDate,
+        end_date:         endDate,
+        rent_per_sqm:     rentPerSqm ? Number(rentPerSqm) : null,
+        charged_area:     chargedArea ? Number(chargedArea) : null,
+        investment_addition: Number(investAdd),
         vat_type:         vatType,
-        vat_pct:          Number(vatPct),
-        guarantee_type:   guaranteeType || null,
-        guarantee_amount: guaranteeAmount ? Number(guaranteeAmount) : (calcGuaranteeAmount ?? null),
-        guarantee_expiry: guaranteeExpiry || null,
-        status: "active",
-      }, optionInputs, spaceInputs);
+        base_cpi_value:   baseCpiVal ? Number(baseCpiVal) : null,
+        base_cpi_date:    baseCpiDate || null,
+        notes:            notes || null,
+        status:           "upcoming",
+      }).select().single();
+      if (error) throw error;
 
-      try { sessionStorage.removeItem("contract_draft"); } catch {}
-      alert("חוזה נשמר!" + (optionInputs.length > 0 ? "\n" + optionInputs.length + " אופציות נשמרו." : ""));
+      // צור יחידות M2M
+      for (const sp of selectedSpaces) {
+        await supabase.from("contract_spaces").insert({
+          contract_id:   contract.id,
+          space_id:      sp.space_id,
+          charge_method: sp.charge_method,
+          price_per_sqm: sp.charge_method === "per_sqm" && sp.price_per_sqm ? Number(sp.price_per_sqm) : null,
+          fixed_amount:  sp.charge_method === "fixed"   && sp.fixed_amount  ? Number(sp.fixed_amount)  : null,
+        });
+        // עדכן סטטוס יחידה
+        await supabase.from("spaces").update({ status: "rented" }).eq("id", sp.space_id);
+      }
+
+      // צור אופציות
+      let prevEnd = endDate;
+      for (let i = 0; i < options.length; i++) {
+        const opt = options[i];
+        const optStart = nextDay(prevEnd);
+        const optEnd   = addMonths(optStart, opt.durationMonths);
+        await supabase.from("contract_options").insert({
+          contract_id:            contract.id,
+          option_number:          i + 1,
+          duration_months:        opt.durationMonths,
+          start_date:             optStart,
+          end_date:               optEnd,
+          notice_type:            opt.noticeType,
+          notice_days_before_end: opt.noticeDaysBefore,
+          rent_mechanism:         opt.rentMechanism,
+          rent_increase_pct:      opt.rentIncreasePct || null,
+          status:                 "pending",
+        });
+        prevEnd = optEnd;
+      }
+
+      await logAudit({ entity_type: "contract", entity_id: contract.id, action: "create" });
       router.push("/contracts");
-    } catch(e: any) {
-      try {
-        sessionStorage.setItem("contract_draft", JSON.stringify({
-          propertyId, unitIds, tenantId, startDate, endDate, durationValue, durationUnit,
-          rentPerSqm, investmentAddition, paymentFrequency, indexBaseDate, indexBaseValue,
-          mgmtFeePerSqm, vatType, vatPct, guaranteeType, guaranteeAmount, guaranteeExpiry,
-          hasOptions, options, hasPriceIncrease, increaseType, increaseValue, increaseFreqMonths, increaseUntilYear
-        }));
-      } catch {}
-      const msg = e?.message || e?.details || e?.hint || JSON.stringify(e) || "שגיאה לא ידועה";
-      alert("שגיאה: " + msg + "\n\nהנתונים נשמרו כטיוטה.");
-    }
+    } catch(e: any) { alert("שגיאה: " + e?.message); }
+    finally { setSaving(false); }
   }
 
+  const steps = ["פרטי חוזה", "יחידות", "אופציות", "סיכום"];
+
   return (
-    <div dir="rtl" className="max-w-2xl mx-auto pb-12">
-      <div className="mb-6 flex items-center gap-3">
-        <button onClick={function() { router.back(); }} className="text-slate-400 hover:text-slate-700 text-2xl">&larr;</button>
-        <h1 className="text-2xl font-bold text-slate-800">חוזה חדש</h1>
+    <div dir="rtl" className="max-w-3xl mx-auto">
+      <div className="mb-6 flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-800">חוזה חדש</h1>
+          <p className="text-sm text-slate-500 mt-0.5">שלב {step} מתוך {steps.length}: {steps[step - 1]}</p>
+        </div>
+        <button onClick={function() { router.push("/contracts"); }}
+          className="rounded-lg border border-slate-200 px-4 py-2 text-sm text-slate-600 hover:bg-slate-50">
+          ← ביטול
+        </button>
       </div>
 
-      <div className="space-y-5">
-        {/* PDF */}
-        <div className="rounded-xl border-2 border-dashed border-blue-200 bg-blue-50 p-4 flex items-center gap-4">
-          <div className="text-3xl">📄</div>
-          <div className="flex-1">
-            <div className="font-bold text-slate-800 mb-0.5">חילוץ נתונים מחוזה קיים</div>
-            <div className="text-xs text-slate-500">העלה PDF — ה-AI יחלץ את הנתונים אוטומטית</div>
-          </div>
-          <input ref={fileRef} type="file" accept=".pdf" className="hidden"
-            onChange={function(e) { const f = e.target.files?.[0]; if (f) handlePdfUpload(f); }} />
-          <button onClick={function() { fileRef.current?.click(); }} disabled={extracting}
-            className="rounded-lg bg-blue-700 px-4 py-2 font-bold text-white hover:bg-blue-800 disabled:opacity-50 whitespace-nowrap">
-            {extracting ? "⏳ מחלץ..." : "העלה PDF"}
-          </button>
-        </div>
-
-        {/* נכס */}
-        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h2 className="mb-4 text-sm font-bold text-slate-500">נכס ויחידות</h2>
-          <div className="mb-3">
-            <label className="mb-1 block text-xs font-semibold text-slate-700">נכס *</label>
-            <select value={propertyId}
-              onChange={function(e) { setPropertyId(e.target.value); setUnitIds([]); }}
-              className={ic}>
-              <option value="">-- בחר נכס --</option>
-              {dbProperties.map(function(p: any) { return <option key={p.id} value={p.id}>{p.name}</option>; })}
-            </select>
-          </div>
-          {selectedProperty && (
-            <div>
-              <label className="mb-2 block text-xs font-semibold text-slate-700">שטחים ויחידות *</label>
-              <ContractSpacesSelector
-                availableSpaces={availableUnits}
-                selectedSpaces={selectedSpaces}
-                onChange={setSelectedSpaces}
-              />
+      {/* Progress */}
+      <div className="flex gap-2 mb-6">
+        {steps.map(function(s, i) {
+          return (
+            <div key={i} className="flex-1">
+              <div className={"h-1.5 rounded-full " + (i + 1 <= step ? "bg-blue-600" : "bg-slate-200")} />
+              <div className={"text-xs mt-1 " + (i + 1 === step ? "text-blue-700 font-semibold" : "text-slate-400")}>{s}</div>
             </div>
-          )}
-        </div>
+          );
+        })}
+      </div>
 
-        {/* שוכר */}
-        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h2 className="mb-4 text-sm font-bold text-slate-500">שוכר</h2>
-          <select value={tenantId} onChange={function(e) { setTenantId(e.target.value); }} className={ic}>
-            <option value="">-- בחר שוכר --</option>
-            {dbTenants.map(function(t: any) { return <option key={t.id} value={t.id}>{t.name}</option>; })}
-          </select>
-          <button onClick={function() { router.push("/tenants/new"); }} className="mt-2 text-xs text-blue-600 hover:underline">
-            + צור שוכר חדש
-          </button>
-        </div>
+      <div className="rounded-xl border border-slate-200 bg-white shadow-sm p-6">
 
-        {/* תקופה */}
-        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h2 className="mb-4 text-sm font-bold text-slate-500">תקופת חוזה</h2>
-          <div className="grid grid-cols-2 gap-4 mb-3">
-            <div>
-              <label className="mb-1 block text-xs font-semibold text-slate-700">תאריך התחלה *</label>
-              <input type="date" value={startDate}
-                onChange={function(e) { setStartDate(e.target.value); calcEnd(e.target.value, durationValue, durationUnit); }}
-                className={ic} />
-            </div>
-            <div>
-              <label className="mb-1 block text-xs font-semibold text-slate-700">משך תקופה</label>
-              <div className="flex gap-2">
-                <input type="number" value={durationValue}
-                  onChange={function(e) { setDurationValue(e.target.value); calcEnd(startDate, e.target.value, durationUnit); }}
-                  placeholder="36" className={ic} />
-                <select value={durationUnit}
-                  onChange={function(e) { setDurationUnit(e.target.value); calcEnd(startDate, durationValue, e.target.value); }}
-                  className="rounded-lg border border-slate-300 px-2 py-2 text-sm text-slate-800 bg-white">
-                  <option value="months">חודשים</option>
-                  <option value="years">שנים</option>
+        {/* שלב 1 */}
+        {step === 1 && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">שוכר *</label>
+                <select value={tenantId} onChange={function(e) { setTenantId(e.target.value); }} className={ic}>
+                  <option value="">-- בחר שוכר --</option>
+                  {tenants.map(function(t) { return <option key={t.id} value={t.id}>{t.name}</option>; })}
+                </select>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">נכס *</label>
+                <select value={propertyId} onChange={function(e) { setPropertyId(e.target.value); }} className={ic}>
+                  <option value="">-- בחר נכס --</option>
+                  {properties.map(function(p) { return <option key={p.id} value={p.id}>{p.name}</option>; })}
                 </select>
               </div>
             </div>
-          </div>
-          <div>
-            <label className="mb-1 block text-xs font-semibold text-slate-700">תאריך סיום *</label>
-            <input type="date" value={endDate} onChange={function(e) { setEndDate(e.target.value); }} className={ic} />
-          </div>
-        </div>
-
-        {/* אופציות */}
-        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-sm font-bold text-slate-700">אופציות הארכה</h2>
-            <div className="flex gap-3">
-              <label className="flex items-center gap-1.5 text-sm cursor-pointer">
-                <input type="radio" checked={!hasOptions} onChange={function() { setHasOptions(false); }} /> לא
-              </label>
-              <label className="flex items-center gap-1.5 text-sm cursor-pointer">
-                <input type="radio" checked={hasOptions} onChange={function() { setHasOptions(true); }} /> כן
-              </label>
-            </div>
-          </div>
-          {hasOptions && (
-            <div className="space-y-4">
-              {options.map(function(o, i) {
-                const optStart = optionStartDates[i];
-                const optEnd   = optionEndDates[i];
-                return (
-                  <div key={o.id} className="rounded-xl border border-blue-100 bg-blue-50 p-4">
-                    <div className="flex items-center justify-between mb-3">
-                      <span className="text-sm font-bold text-blue-700">אופציה {i+1}</span>
-                      {optStart && optEnd && <span className="text-xs text-slate-500">{formatDate(optStart)} — {formatDate(optEnd)}</span>}
-                      {options.length > 1 && (
-                        <button onClick={function() { setOptions(function(prev) { return prev.filter(function(x) { return x.id !== o.id; }); }); }}
-                          className="text-red-400 text-xs hover:text-red-600">הסר</button>
-                      )}
-                    </div>
-                    <div className="grid grid-cols-2 gap-3 mb-3">
-                      <div>
-                        <label className="mb-1 block text-xs font-semibold text-slate-700">משך האופציה</label>
-                        <div className="flex gap-2">
-                          <input type="number" value={o.durationValue}
-                            onChange={function(e) { updateOption(o.id, "durationValue", e.target.value); }}
-                            placeholder="24" className={ic} />
-                          <select value={o.durationUnit}
-                            onChange={function(e) { updateOption(o.id, "durationUnit", e.target.value); }}
-                            className="rounded-lg border border-slate-300 px-2 py-2 text-sm text-slate-800 bg-white">
-                            <option value="months">חודשים</option>
-                            <option value="years">שנים</option>
-                          </select>
-                        </div>
-                      </div>
-                      <div>
-                        <label className="mb-1 block text-xs font-semibold text-slate-700">הודעה מוקדמת (חודשים)</label>
-                        <input type="number" value={o.noticeMonths}
-                          onChange={function(e) { updateOption(o.id, "noticeMonths", e.target.value); }}
-                          placeholder="3" className={ic} />
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-2 gap-3 mb-2">
-                      <div>
-                        <label className="mb-1 block text-xs font-semibold text-slate-700">סוג הודעה</label>
-                        <select value={o.noticeType}
-                          onChange={function(e) { updateOption(o.id, "noticeType", e.target.value); }}
-                          className={ic}>
-                          <option value="non_renewal">הודעה על אי חידוש</option>
-                          <option value="exercise">הודעה על מימוש</option>
-                        </select>
-                      </div>
-                      <div>
-                        <label className="mb-1 block text-xs font-semibold text-slate-700">מנגנון מחיר</label>
-                        <select value={o.priceType}
-                          onChange={function(e) { updateOption(o.id, "priceType", e.target.value); }}
-                          className={ic}>
-                          <option value="none">ללא שינוי מחיר</option>
-                          <option value="percent">עלייה באחוזים</option>
-                          <option value="fixed">מחיר קבוע חדש</option>
-                        </select>
-                      </div>
-                    </div>
-                    {o.priceType !== "none" && (
-                      <div>
-                        <label className="mb-1 block text-xs font-semibold text-slate-700">
-                          {o.priceType === "percent" ? "אחוז עלייה" : "מחיר חדש למ\"ר (₪)"}
-                        </label>
-                        <input type="number" value={o.priceValue}
-                          onChange={function(e) { updateOption(o.id, "priceValue", e.target.value); }}
-                          placeholder={o.priceType === "percent" ? "5" : "0"} className={ic} />
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-              <button onClick={addOption}
-                className="w-full rounded-lg border border-dashed border-blue-300 py-2 text-sm text-blue-600 hover:bg-blue-50">
-                + הוסף אופציה נוספת
-              </button>
-            </div>
-          )}
-        </div>
-
-        {/* ציר זמן */}
-        {startDate && endDate && (
-          <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-            <h2 className="mb-3 text-sm font-bold text-slate-500">📅 ציר זמן החוזה</h2>
-            <div className="space-y-2">
-              <div className="flex items-center gap-3">
-                <div className="w-3 h-3 rounded-full bg-blue-500 shrink-0"></div>
-                <div className="flex-1 text-sm">
-                  <span className="font-medium text-slate-700">תקופה ראשית</span>
-                  <span className="text-slate-400 mr-2">{formatDate(startDate)} — {formatDate(endDate)}</span>
-                  {durationValue && <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">{durationValue} {durationUnit === "years" ? "שנים" : "חודשים"}</span>}
-                </div>
+            <div className="grid grid-cols-3 gap-4">
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">תחילה *</label>
+                <input type="date" value={startDate} onChange={function(e) { setStartDate(e.target.value); }} className={ic} />
               </div>
-              {hasOptions && options.map(function(o, i) {
-                return optionEndDates[i] ? (
-                  <div key={o.id} className="flex items-center gap-3 mr-1.5 border-r-2 border-dashed border-slate-200 pr-4">
-                    <div className="w-2.5 h-2.5 rounded-full bg-green-400 shrink-0 -mr-5"></div>
-                    <div className="flex-1 text-sm mr-2">
-                      <span className="font-medium text-slate-600">אופציה {i+1}</span>
-                      <span className="text-slate-400 mr-2">{formatDate(optionStartDates[i])} — {formatDate(optionEndDates[i])}</span>
-                      {o.durationValue && <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">{o.durationValue} {o.durationUnit === "years" ? "שנים" : "חודשים"}</span>}
-                    </div>
-                  </div>
-                ) : null;
-              })}
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">משך (חודשים)</label>
+                <input type="number" value={durationM} onChange={function(e) { setDurationM(e.target.value); }} className={ic} min="1" />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">סיום *</label>
+                <input type="date" value={endDate} onChange={function(e) { setEndDate(e.target.value); }} className={ic} />
+              </div>
+            </div>
+            <div className="grid grid-cols-3 gap-4">
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">שכ"ד (₪/מ"ר)</label>
+                <input type="number" value={rentPerSqm} onChange={function(e) { setRentPerSqm(e.target.value); }} className={ic} />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">שטח (מ"ר)</label>
+                <input type="number" value={chargedArea} onChange={function(e) { setChargedArea(e.target.value); }} className={ic} />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">תוספת השקעה</label>
+                <input type="number" value={investAdd} onChange={function(e) { setInvestAdd(e.target.value); }} className={ic} />
+              </div>
+            </div>
+            <div className="grid grid-cols-3 gap-4">
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">מע"מ</label>
+                <select value={vatType} onChange={function(e) { setVatType(e.target.value); }} className={ic}>
+                  <option value="taxable">חייב במע"מ</option>
+                  <option value="exempt">פטור ממע"מ</option>
+                </select>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">מדד בסיס</label>
+                <input type="number" value={baseCpiVal} onChange={function(e) { setBaseCpiVal(e.target.value); }} className={ic} step="0.01" />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">תאריך מדד</label>
+                <input type="date" value={baseCpiDate} onChange={function(e) { setBaseCpiDate(e.target.value); }} className={ic} />
+              </div>
+            </div>
+            {rentPerSqm && chargedArea && (
+              <div className="rounded-xl bg-green-50 border border-green-200 p-3 text-sm">
+                <span className="text-green-700 font-bold">
+                  הכנסה חודשית: ₪{Math.round(Number(rentPerSqm) * Number(chargedArea) + Number(investAdd)).toLocaleString()}
+                </span>
+                {vatType === "taxable" && (
+                  <span className="text-green-600 mr-2">
+                    (כולל מע"מ: ₪{Math.round((Number(rentPerSqm) * Number(chargedArea) + Number(investAdd)) * 1.18).toLocaleString()})
+                  </span>
+                )}
+              </div>
+            )}
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-slate-700">הערות</label>
+              <textarea value={notes} onChange={function(e) { setNotes(e.target.value); }} rows={2} className={ic} />
             </div>
           </div>
         )}
 
-        {/* תנאי תשלום */}
-        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h2 className="mb-4 text-sm font-bold text-slate-500">תנאי תשלום</h2>
-          <div className="grid grid-cols-2 gap-4 mb-3">
-            <div>
-              <label className="mb-1 block text-xs font-semibold text-slate-700">תעריף למ&quot;ר (₪) *</label>
-              <input type="number" value={rentPerSqm} onChange={function(e) { setRentPerSqm(e.target.value); }} placeholder="0" className={ic} />
+        {/* שלב 2 */}
+        {step === 2 && (
+          <div className="space-y-4">
+            <div className="text-sm text-slate-600 bg-blue-50 border border-blue-200 rounded-xl p-3">
+              בחר יחידות להוספה לחוזה. יחידות שנבחרו יוסמנו כמושכרות.
             </div>
-            <div>
-              <label className="mb-1 block text-xs font-semibold text-slate-700">תוספת השקעות (₪)</label>
-              <input type="number" value={investmentAddition} onChange={function(e) { setInvestmentAddition(e.target.value); }} placeholder="0" className={ic} />
-            </div>
-          </div>
-          <div className="mb-3">
-            <label className="mb-1 block text-xs font-semibold text-slate-700">תדירות תשלום</label>
-            <select value={paymentFrequency} onChange={function(e) { setPaymentFrequency(e.target.value); }} className={ic}>
-              <option value="monthly">חודשי</option>
-              <option value="quarterly">רבעוני</option>
-              <option value="other">אחר</option>
-            </select>
-          </div>
-          {monthlyRent != null && monthlyRent > 0 && (
-            <div className="rounded-lg bg-green-50 border border-green-100 px-4 py-3">
-              <div className="flex justify-between items-center">
-                <span className="text-sm text-slate-600">שכ&quot;ד חודשי לפני מע&quot;מ</span>
-                <span className="text-xl font-bold text-green-700">₪{monthlyRent.toLocaleString()}</span>
+            {spaces.length === 0 ? (
+              <div className="text-center py-8 text-slate-400">
+                {propertyId ? "אין יחידות לנכס זה" : "בחר נכס בשלב 1"}
               </div>
-              {vatType === "taxable" && (
-                <div className="flex justify-between items-center mt-1.5 pt-1.5 border-t border-green-200">
-                  <span className="text-sm text-green-600">כולל מע&quot;מ {vatPct}%</span>
-                  <span className="text-lg font-bold text-green-800">₪{Math.round(monthlyRent * (1 + Number(vatPct)/100)).toLocaleString()}</span>
-                </div>
-              )}
-              {paymentFrequency === "quarterly" && (
-                <div className="flex justify-between items-center mt-1.5 pt-1.5 border-t border-green-200">
-                  <span className="text-sm text-green-600">תשלום רבעוני</span>
-                  <span className="text-lg font-bold text-green-800">₪{Math.round(monthlyRent * (vatType === "taxable" ? (1 + Number(vatPct)/100) : 1) * 3).toLocaleString()}</span>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* עליית מחיר */}
-          <div className="mt-4 pt-4 border-t border-slate-100">
-            <div className="flex items-center justify-between mb-3">
-              <label className="text-xs font-medium text-slate-600">מנגנון עליית מחיר</label>
-              <div className="flex gap-3">
-                <label className="flex items-center gap-1.5 text-sm cursor-pointer">
-                  <input type="radio" checked={!hasPriceIncrease} onChange={function() { setHasPriceIncrease(false); }} /> לא
-                </label>
-                <label className="flex items-center gap-1.5 text-sm cursor-pointer">
-                  <input type="radio" checked={hasPriceIncrease} onChange={function() { setHasPriceIncrease(true); }} /> כן
-                </label>
-              </div>
-            </div>
-            {hasPriceIncrease && (
-              <div className="rounded-xl bg-slate-50 p-4 space-y-3">
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="mb-1 block text-xs font-semibold text-slate-700">סוג עלייה</label>
-                    <select value={increaseType} onChange={function(e) { setIncreaseType(e.target.value); }} className={ic}>
-                      <option value="percent">אחוז מהמחיר הקודם</option>
-                      <option value="fixed">סכום קבוע (₪)</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-xs font-semibold text-slate-700">{increaseType === "percent" ? "אחוז עלייה" : "סכום עלייה למ\"ר (₪)"}</label>
-                    <input type="number" value={increaseValue} onChange={function(e) { setIncreaseValue(e.target.value); }} className={ic} />
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="mb-1 block text-xs font-semibold text-slate-700">תדירות</label>
-                    <select value={increaseFreqMonths} onChange={function(e) { setIncreaseFreqMonths(e.target.value); }} className={ic}>
-                      <option value="12">כל שנה (12 חודשים)</option>
-                      <option value="24">כל שנתיים (24 חודשים)</option>
-                      <option value="36">כל 3 שנים (36 חודשים)</option>
-                      <option value="48">כל 4 שנים (48 חודשים)</option>
-                      <option value="60">כל 5 שנים (60 חודשים)</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-xs font-semibold text-slate-700">עד שנה (ריק=עד סוף)</label>
-                    <input type="number" value={increaseUntilYear} onChange={function(e) { setIncreaseUntilYear(e.target.value); }} className={ic} />
-                  </div>
-                </div>
-                {rentPerSqm && totalArea > 0 && increaseValue && startDate && endDate && (
-                  <div>
-                    <div className="text-xs font-medium text-slate-500 mb-2">סימולציית מחיר</div>
-                    <div className="space-y-1">
-                      {(function() {
-                        const rows: any[] = [];
-                        let current = Number(rentPerSqm);
-                        const freq = Number(increaseFreqMonths);
-                        const totalMonths2 = monthsBetween(startDate, endDate);
-                        const untilYear = increaseUntilYear ? Number(increaseUntilYear) : null;
-                        for (let m = 0; m <= totalMonths2; m += freq) {
-                          const d = addMonths(startDate, m);
-                          const yr = new Date(d).getFullYear();
-                          const frozen = untilYear !== null && yr > untilYear;
-                          rows.push({ date: d, rent: current, frozen });
-                          if (!frozen) {
-                            if (increaseType === "percent") current = current * (1 + Number(increaseValue)/100);
-                            else current = current + Number(increaseValue);
-                          }
-                        }
-                        return rows.slice(0,6).map(function(r, idx) {
-                          return (
-                            <div key={idx} className={"flex justify-between text-xs rounded px-3 py-1.5 " + (r.frozen ? "bg-orange-50" : "bg-white")}>
-                              <span className="text-slate-500">{formatDate(r.date)}</span>
-                              <span className={"font-medium " + (r.frozen ? "text-orange-600" : "text-slate-700")}>
-                                ₪{r.rent.toFixed(2)} למ&quot;ר ({totalArea > 0 ? "₪" + Math.round(r.rent * totalArea).toLocaleString() : ""}/ חודש)
-                                {r.frozen && " ❄️"}
-                              </span>
-                            </div>
-                          );
-                        });
-                      })()}
+            ) : (
+              <div className="grid grid-cols-2 gap-3">
+                {spaces.map(function(sp) {
+                  const sel = selectedSpaces.find(function(s) { return s.space_id === sp.id; });
+                  return (
+                    <div key={sp.id}
+                      onClick={function() { toggleSpace(sp); }}
+                      className={"rounded-xl border-2 p-3 cursor-pointer transition-all " +
+                        (sel ? "border-blue-500 bg-blue-50" : "border-slate-200 hover:border-slate-300")}>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="font-semibold text-sm text-slate-800">{sp.name}</span>
+                        <span className={"text-xs px-1.5 py-0.5 rounded-full " +
+                          (sp.status === "rented" ? "bg-blue-100 text-blue-700" : "bg-green-100 text-green-700")}>
+                          {sp.status === "rented" ? "מושכר" : "פנוי"}
+                        </span>
+                      </div>
+                      {sp.area && <div className="text-xs text-slate-400">{sp.area} מ"ר</div>}
+                      {sel && (
+                        <div className="mt-2 space-y-1" onClick={function(e) { e.stopPropagation(); }}>
+                          <select value={sel.charge_method}
+                            onChange={function(e) { updateSpaceField(sp.id, "charge_method", e.target.value); }}
+                            className="w-full rounded-lg border border-slate-300 px-2 py-1 text-xs">
+                            <option value="per_sqm">₪/מ"ר</option>
+                            <option value="fixed">סכום קבוע</option>
+                            <option value="included">כלול בשכ"ד</option>
+                          </select>
+                          {sel.charge_method === "per_sqm" && (
+                            <input type="number" value={sel.price_per_sqm}
+                              onChange={function(e) { updateSpaceField(sp.id, "price_per_sqm", e.target.value); }}
+                              placeholder="₪/מ&quot;ר" className="w-full rounded-lg border border-slate-300 px-2 py-1 text-xs" />
+                          )}
+                          {sel.charge_method === "fixed" && (
+                            <input type="number" value={sel.fixed_amount}
+                              onChange={function(e) { updateSpaceField(sp.id, "fixed_amount", e.target.value); }}
+                              placeholder="סכום קבוע" className="w-full rounded-lg border border-slate-300 px-2 py-1 text-xs" />
+                          )}
+                        </div>
+                      )}
                     </div>
-                  </div>
-                )}
+                  );
+                })}
               </div>
             )}
+            {selectedSpaces.length > 0 && (
+              <div className="text-sm text-blue-700 font-semibold">{selectedSpaces.length} יחידות נבחרו</div>
+            )}
           </div>
-        </div>
+        )}
 
-        {/* מדד */}
-        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h2 className="mb-4 text-sm font-bold text-slate-700">מדד הצמדה</h2>
-          <div className="grid grid-cols-3 gap-3">
-            <div>
-              <label className="mb-1 block text-xs font-semibold text-slate-700">חודש בסיס</label>
-              <select value={indexBaseDate ? indexBaseDate.split("-")[1] : ""}
-                onChange={function(e) {
-                  const y = indexBaseDate ? indexBaseDate.split("-")[0] : new Date().getFullYear().toString();
-                  setIndexBaseDate(y + "-" + e.target.value.padStart(2,"0"));
-                }} className={ic}>
-                <option value="">חודש</option>
-                {["01","02","03","04","05","06","07","08","09","10","11","12"].map(function(m,i) {
-                  return <option key={m} value={m}>{["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"][i]}</option>;
-                })}
-              </select>
-            </div>
-            <div>
-              <label className="mb-1 block text-xs font-semibold text-slate-700">שנת בסיס</label>
-              <input type="number" value={indexBaseDate ? indexBaseDate.split("-")[0] : ""}
-                onChange={function(e) {
-                  const m = indexBaseDate ? indexBaseDate.split("-")[1] : "01";
-                  setIndexBaseDate(e.target.value + "-" + m);
-                }} placeholder="2021" className={ic} />
-            </div>
-            <div>
-              <label className="mb-1 block text-xs font-semibold text-slate-700">ערך מדד בסיס</label>
-              <div className="flex gap-1">
-                <input type="number" step="0.01" value={indexBaseValue}
-                  onChange={function(e) { setIndexBaseValue(e.target.value); }} placeholder="102.3" className={ic} />
-                {indexBaseDate && (
-                  <button onClick={fetchCpiForBaseDate} disabled={fetchingCpi}
-                    className="rounded-lg border border-blue-300 bg-blue-50 px-2 text-blue-600 hover:bg-blue-100 disabled:opacity-50 text-xs">
-                    {fetchingCpi ? "⏳" : "🔄"}
-                  </button>
-                )}
+        {/* שלב 3 — אופציות */}
+        {step === 3 && (
+          <div className="space-y-4">
+            {options.length === 0 ? (
+              <div className="text-center py-8 text-slate-400">
+                <div className="text-4xl mb-2">📋</div>
+                <div className="text-sm">לחוזה זה אין אופציות. ניתן להוסיף.</div>
+              </div>
+            ) : (
+              options.map(function(opt, i) {
+                const prevEnd = i === 0 ? endDate : addMonths(nextDay(i === 0 ? endDate : ""), options[i-1].durationMonths);
+                const optStart = nextDay(i === 0 ? endDate : addMonths(nextDay(endDate), options.slice(0,i).reduce(function(s,o){return s+o.durationMonths;},0)));
+                return (
+                  <div key={i} className="rounded-xl border border-slate-200 p-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <span className="font-semibold text-slate-800">אופציה {i + 1}</span>
+                      <button onClick={function() { setOptions(options.filter(function(_, j) { return j !== i; })); }}
+                        className="text-red-400 hover:text-red-600 text-lg">×</button>
+                    </div>
+                    <div className="grid grid-cols-3 gap-3">
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold text-slate-600">משך (חודשים)</label>
+                        <input type="number" value={opt.durationMonths} min="1"
+                          onChange={function(e) { updateOption(i, "durationMonths", e.target.value); }}
+                          className={ic} />
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold text-slate-600">הודעה (ימים)</label>
+                        <input type="number" value={opt.noticeDaysBefore}
+                          onChange={function(e) { updateOption(i, "noticeDaysBefore", e.target.value); }}
+                          className={ic} />
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold text-slate-600">סוג הפעלה</label>
+                        <select value={opt.noticeType}
+                          onChange={function(e) { updateOption(i, "noticeType", e.target.value); }}
+                          className={ic}>
+                          <option value="exercise">הפעלה פוזיטיבית</option>
+                          <option value="non_renewal">אי-חידוש</option>
+                          <option value="auto_extend">הארכה אוטומטית</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold text-slate-600">מנגנון שכ"ד</label>
+                        <select value={opt.rentMechanism}
+                          onChange={function(e) { updateOption(i, "rentMechanism", e.target.value); }}
+                          className={ic}>
+                          <option value="no_change">ללא שינוי</option>
+                          <option value="pct_increase">% עלייה</option>
+                          <option value="fixed">סכום קבוע</option>
+                        </select>
+                      </div>
+                      {opt.rentMechanism === "pct_increase" && (
+                        <div>
+                          <label className="mb-1 block text-xs font-semibold text-slate-600">% עלייה</label>
+                          <input type="number" value={opt.rentIncreasePct}
+                            onChange={function(e) { updateOption(i, "rentIncreasePct", e.target.value); }}
+                            className={ic} />
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })
+            )}
+            <button onClick={addOption}
+              className="w-full rounded-xl border-2 border-dashed border-blue-200 py-3 text-sm font-semibold text-blue-600 hover:bg-blue-50">
+              + הוסף אופציה
+            </button>
+          </div>
+        )}
+
+        {/* שלב 4 — סיכום */}
+        {step === 4 && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-4 text-sm">
+              <div className="rounded-xl bg-slate-50 p-4 space-y-2">
+                <div className="font-bold text-slate-700 mb-2">פרטי חוזה</div>
+                <div className="flex justify-between"><span className="text-slate-500">שוכר</span><span>{tenants.find(function(t){return t.id===tenantId;})?.name}</span></div>
+                <div className="flex justify-between"><span className="text-slate-500">נכס</span><span>{properties.find(function(p){return p.id===propertyId;})?.name}</span></div>
+                <div className="flex justify-between"><span className="text-slate-500">תקופה</span><span>{startDate} — {endDate}</span></div>
+                <div className="flex justify-between"><span className="text-slate-500">שכ"ד</span><span>₪{rentPerSqm}/מ"ר × {chargedArea} מ"ר</span></div>
+                <div className="flex justify-between font-bold"><span>הכנסה חודשית</span><span className="text-green-700">₪{Math.round(Number(rentPerSqm||0)*Number(chargedArea||0)+Number(investAdd||0)).toLocaleString()}</span></div>
+              </div>
+              <div className="space-y-3">
+                <div className="rounded-xl bg-slate-50 p-4">
+                  <div className="font-bold text-slate-700 mb-2">יחידות ({selectedSpaces.length})</div>
+                  {selectedSpaces.length === 0 ? <div className="text-xs text-slate-400">לא נבחרו</div> :
+                    selectedSpaces.map(function(s) { return <div key={s.space_id} className="text-xs text-slate-600">{s.name}</div>; })}
+                </div>
+                <div className="rounded-xl bg-slate-50 p-4">
+                  <div className="font-bold text-slate-700 mb-2">אופציות ({options.length})</div>
+                  {options.length === 0 ? <div className="text-xs text-slate-400">ללא אופציות</div> :
+                    options.map(function(o, i) { return <div key={i} className="text-xs text-slate-600">אופציה {i+1}: {o.durationMonths} חודשים</div>; })}
+                </div>
               </div>
             </div>
           </div>
-          {indexBaseDate && indexBaseValue && (
-            <div className="mt-2 text-xs text-slate-500 bg-slate-50 rounded-lg px-3 py-2">
-              מדד בסיס: <span className="font-bold text-slate-700">{indexBaseValue}</span> — {indexBaseDate.split("-")[1]}/{indexBaseDate.split("-")[0]}
-            </div>
-          )}
-        </div>
+        )}
 
-        {/* דמי ניהול */}
-        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-sm font-bold text-slate-700">דמי ניהול</h2>
-            <div className="flex gap-3 text-sm">
-              <label className="flex items-center gap-1.5 cursor-pointer">
-                <input type="radio" checked={vatType === "taxable"} onChange={function() { setVatType("taxable"); }} className="w-3.5 h-3.5" />
-                <span>חייב מע&quot;מ ({vatPct}%)</span>
-              </label>
-              <label className="flex items-center gap-1.5 cursor-pointer">
-                <input type="radio" checked={vatType === "exempt"} onChange={function() { setVatType("exempt"); }} className="w-3.5 h-3.5" />
-                <span>פטור ממע&quot;מ</span>
-              </label>
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="mb-1 block text-xs font-semibold text-slate-700">דמי ניהול למ&quot;ר (₪)</label>
-              <input type="number" step="0.01" value={mgmtFeePerSqm} onChange={function(e) { setMgmtFeePerSqm(e.target.value); }} placeholder="0.00" className={ic} />
-            </div>
-            <div>
-              <label className="mb-1 block text-xs font-semibold text-slate-700">אחוז מע&quot;מ</label>
-              <select value={vatPct} onChange={function(e) { setVatPct(e.target.value); }} className={ic}>
-                <option value="0">0%</option>
-                <option value="17">17%</option>
-                <option value="18">18%</option>
-              </select>
-            </div>
-          </div>
-        </div>
-
-        {/* ערבות */}
-        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h2 className="mb-4 text-sm font-bold text-slate-700">ערבות</h2>
-          <div className="grid grid-cols-2 gap-4 mb-4">
-            <div>
-              <label className="mb-1 block text-xs font-semibold text-slate-700">סוג ערבות</label>
-              <select value={guaranteeType} onChange={function(e) { setGuaranteeType(e.target.value); }} className={ic}>
-                <option value="">-- בחר --</option>
-                <option value="bank">ערבות בנקאית</option>
-                <option value="check">שיק ביטחון</option>
-                <option value="cash">פיקדון מזומן</option>
-                <option value="other">אחר</option>
-              </select>
-            </div>
-            <div>
-              <label className="mb-1 block text-xs font-semibold text-slate-700">שיטת חישוב</label>
-              <select value={guaranteeCalcMethod} onChange={function(e) { setGuaranteeCalcMethod(e.target.value); }} className={ic}>
-                <option value="months">לפי חודשי שכירות</option>
-                <option value="fixed">סכום קבוע</option>
-              </select>
-            </div>
-          </div>
-          {guaranteeCalcMethod === "months" ? (
-            <div className="space-y-3">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-700">מספר חודשים</label>
-                  <input type="number" value={guaranteeMonths} onChange={function(e) { setGuaranteeMonths(e.target.value); }} placeholder="3" className={ic} />
-                </div>
-                <div className="flex items-end pb-2">
-                  <label className="flex items-center gap-2 cursor-pointer text-sm text-slate-700">
-                    <input type="checkbox" checked={guaranteeIncludesMgmt} onChange={function(e) { setGuaranteeIncludesMgmt(e.target.checked); }} className="w-4 h-4" />
-                    כולל דמי ניהול
-                  </label>
-                </div>
-              </div>
-              {calcGuaranteeAmount != null && calcGuaranteeAmount > 0 && (
-                <div className="rounded-lg bg-green-50 border border-green-100 px-4 py-3 flex justify-between items-center">
-                  <span className="text-sm text-slate-600">סכום ערבות מחושב ({guaranteeMonths} חודשים)</span>
-                  <span className="text-xl font-bold text-green-700">₪{calcGuaranteeAmount.toLocaleString()}</span>
-                </div>
-              )}
-            </div>
-          ) : (
-            <div>
-              <label className="mb-1 block text-xs font-semibold text-slate-700">סכום קבוע (₪)</label>
-              <input type="number" value={guaranteeAmount} onChange={function(e) { setGuaranteeAmount(e.target.value); }} placeholder="0" className={ic} />
-            </div>
-          )}
-          <div className="mt-4 pt-4 border-t border-slate-100 grid grid-cols-2 gap-4">
-            <div>
-              <label className="mb-1 block text-xs font-semibold text-slate-700">תוקף ערבות קיימת</label>
-              <input type="date" value={guaranteeInitialExpiry} onChange={function(e) { setGuaranteeInitialExpiry(e.target.value); }} className={ic} />
-            </div>
-            <div>
-              <label className="mb-1 block text-xs font-semibold text-slate-700">תוקף מחויב לפי הסכם</label>
-              <input type="date" value={guaranteeExpiry} onChange={function(e) { setGuaranteeExpiry(e.target.value); }} className={ic} />
-            </div>
-          </div>
-          {endDate && !guaranteeExpiry && (
-            <button onClick={function() {
-              const d = new Date(endDate); d.setMonth(d.getMonth()+3);
-              setGuaranteeExpiry(d.toISOString().split("T")[0]);
-            }} className="mt-2 text-xs text-blue-600 hover:underline">
-              ← חשב אוטומטי (3 חודשים אחרי סיום)
+        {/* ניווט */}
+        <div className="flex gap-3 mt-6 pt-4 border-t border-slate-100">
+          {step > 1 && (
+            <button onClick={function() { setStep(step - 1); }}
+              className="rounded-lg border border-slate-200 px-5 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50">
+              ← הקודם
             </button>
           )}
-        </div>
-
-        {/* קישור מסמך */}
-        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h2 className="mb-3 text-sm font-bold text-slate-500">קישור מסמך חוזה</h2>
-          <input type="url" value={documentUrl} onChange={function(e) { setDocumentUrl(e.target.value); }}
-            placeholder="https://www.dropbox.com/..." className={ic} />
-          {documentUrl && (
-            <a href={documentUrl} target="_blank" rel="noopener noreferrer"
-              className="mt-2 inline-block text-xs text-blue-600 hover:underline">פתח קישור ↗</a>
+          <div className="flex-1" />
+          {step < 4 ? (
+            <button onClick={function() { setStep(step + 1); }}
+              className="rounded-lg bg-blue-700 px-6 py-2.5 text-sm font-bold text-white hover:bg-blue-800">
+              הבא →
+            </button>
+          ) : (
+            <button onClick={handleSave} disabled={saving}
+              className="rounded-lg bg-green-700 px-6 py-2.5 text-sm font-bold text-white hover:bg-green-800 disabled:opacity-50">
+              {saving ? "שומר..." : "✅ צור חוזה"}
+            </button>
           )}
-        </div>
-
-        <div className="flex gap-3 pt-2">
-          <button onClick={function() { router.back(); }}
-            className="flex-1 rounded-lg border border-slate-200 py-2.5 font-medium text-slate-600 hover:bg-slate-50">
-            ביטול
-          </button>
-          <button onClick={handleSave}
-            className="flex-1 rounded-lg bg-blue-700 py-2.5 font-bold text-white hover:bg-blue-800">
-            שמור חוזה
-          </button>
         </div>
       </div>
     </div>
