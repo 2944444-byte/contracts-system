@@ -7,7 +7,7 @@ const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-
 
 const G_TYPES = [
   { value: "bank",       label: "ערבות בנקאית",    icon: "🏦" },
-  { value: "check",      label: "צ׳ק ביטחון",      icon: "📝" },
+  { value: "check",      label: "צ'ק ביטחון",      icon: "📝" },
   { value: "cash",       label: "מזומן",            icon: "💵" },
   { value: "personal",   label: "ערב אישי",         icon: "👤" },
   { value: "other",      label: "אחר",             icon: "📋" },
