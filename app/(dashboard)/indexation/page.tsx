@@ -1,356 +1,317 @@
 "use client";
-import { useState, useEffect, Suspense } from "react";
-import { useSearchParams } from "next/navigation";
+import { useState, useEffect } from "react";
 import { supabase } from "../../../lib/supabase";
 
-const MONTHS_HE = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני",
-                   "יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
+const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 
-function pad2(n: number) { return String(n).padStart(2,"0"); }
 function fmtDate(d: string) {
   if (!d) return "—";
-  const [y,m,day] = d.split("-");
-  return `${day}/${m}/${y}`;
+  return new Date(d).toLocaleDateString("he-IL");
 }
-// t-2: מדד קובע = 2 חודשים לפני תאריך תשלום
-function getT2Month(paymentDate: string): string {
+
+function getT2Month(paymentDate: string): { year: number; month: number; label: string } {
+  // כלל t-2: מדד קובע = 2 חודשים לפני תאריך התשלום
   const d = new Date(paymentDate);
   d.setMonth(d.getMonth() - 2);
-  return `${pad2(d.getMonth()+1)}-${d.getFullYear()}`;
-}
-function addMonths(dateStr: string, n: number): string {
-  const d = new Date(dateStr);
-  d.setMonth(d.getMonth() + n);
-  return d.toISOString().split("T")[0];
-}
-
-interface CalcResult {
-  paymentDate: string;
-  periodLabel: string;
-  baseRent: number;
-  indexedRent: number | null;
-  changePercent: number | null;
-  determinativeMonth: string;
-  baseMonth: string;
-  error?: string;
-  verificationUrl?: string;
-}
-
-function IndexationInner() {
-  const searchParams = useSearchParams();
-  const [contracts, setContracts] = useState<any[]>([]);
-  const [selectedContract, setSelectedContract] = useState("");
-  const [contract, setContract] = useState<any>(null);
-  const [year, setYear] = useState(new Date().getFullYear());
-  const [mode, setMode] = useState<"annex_a"|"annex_b">("annex_a");
-  const [results, setResults] = useState<CalcResult[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    supabase.from("contracts")
-      .select("id, tenants(name), properties(name), start_date, end_date, rent_per_sqm, charged_area, investment_addition, index_base_date, index_base_value, index_base_month, index_base_year, payment_frequency")
-      .in("status", ["active","expiring","extended"])
-      .order("start_date", { ascending: false })
-      .then(({ data }) => setContracts(data ?? []));
-
-    const preselect = searchParams?.get("contract");
-    if (preselect) setSelectedContract(preselect);
-  }, []);
-
-  useEffect(() => {
-    if (!selectedContract) { setContract(null); return; }
-    const c = contracts.find(x => x.id === selectedContract);
-    setContract(c ?? null);
-  }, [selectedContract, contracts]);
-
-  const baseRent = contract
-    ? (contract.rent_per_sqm ?? 0) * (contract.charged_area ?? 0) + (contract.investment_addition ?? 0)
-    : 0;
-
-  async function calcSingle(value: number, fromMM: string, toMM: string): Promise<{
-    to_value: number; change_percent: number; verification_url: string; error?: string;
-  }> {
-    const res = await fetch(`/api/cpi-calc?value=${value}&from=${fromMM}&to=${toMM}`);
-    const data = await res.json();
-    if (data.error) throw new Error(data.error);
-    return data;
-  }
-
-  async function handleCalculate() {
-    if (!contract) { setError("בחר חוזה"); return; }
-    if (!contract.index_base_month || !contract.index_base_year) {
-      setError("החוזה לא מוגדר עם מדד בסיס"); return;
-    }
-    setLoading(true);
-    setError("");
-    setResults([]);
-
-    const baseMonthStr = `${pad2(contract.index_base_month)}-${contract.index_base_year}`;
-    const freq = contract.payment_frequency;
-    const stepMonths = freq === "quarterly" ? 3 : freq === "annual" ? 12 : 1;
-
-    try {
-      if (mode === "annex_a") {
-        // נספח א' — שיקים לשנה הקרובה
-        const payments: CalcResult[] = [];
-        const startDate = new Date(year, 0, 1); // 1.1.YEAR
-
-        for (let i = 0; i < 12 / stepMonths; i++) {
-          const payDate = addMonths(startDate.toISOString().split("T")[0], i * stepMonths);
-          const determinativeMonth = getT2Month(payDate);
-          const periodLabel = stepMonths === 1
-            ? MONTHS_HE[new Date(payDate).getMonth()] + " " + year
-            : `רבעון ${i+1} ${year}`;
-
-          try {
-            const calc = await calcSingle(baseRent, baseMonthStr, determinativeMonth);
-            payments.push({
-              paymentDate: payDate,
-              periodLabel,
-              baseRent,
-              indexedRent: Math.round(calc.to_value * 100) / 100,
-              changePercent: calc.change_percent,
-              determinativeMonth,
-              baseMonth: baseMonthStr,
-              verificationUrl: calc.verification_url,
-            });
-          } catch(e: any) {
-            payments.push({
-              paymentDate: payDate, periodLabel, baseRent,
-              indexedRent: null, changePercent: null,
-              determinativeMonth, baseMonth: baseMonthStr,
-              error: e.message,
-            });
-          }
-        }
-        setResults(payments);
-
-      } else {
-        // נספח ב' — הפרשי הצמדה על שיקים ששולמו בשנה שעברה
-        const payments: CalcResult[] = [];
-        const prevYear = year - 1;
-        const startDate = new Date(prevYear, 0, 1);
-
-        for (let i = 0; i < 12 / stepMonths; i++) {
-          const payDate = addMonths(startDate.toISOString().split("T")[0], i * stepMonths);
-          // מדד ידוע ביום כתיבת השיק (t-2 מתחילת הרבעון הקודם)
-          const writtenMonth = getT2Month(payDate);
-          // מדד קובע ביום פירעון (t-2 מתאריך הפירעון בפועל)
-          const paidMonth = getT2Month(payDate);
-          const periodLabel = stepMonths === 1
-            ? MONTHS_HE[new Date(payDate).getMonth()] + " " + prevYear
-            : `רבעון ${i+1} ${prevYear}`;
-
-          try {
-            // חישוב מה היה צריך להיות (מבסיס לפירעון)
-            const shouldBe = await calcSingle(baseRent, baseMonthStr, paidMonth);
-            // חישוב מה שולם בפועל (מבסיס לכתיבה)
-            const wasPaid  = await calcSingle(baseRent, baseMonthStr, writtenMonth);
-            const diff = (shouldBe.to_value - wasPaid.to_value);
-
-            payments.push({
-              paymentDate: payDate, periodLabel, baseRent,
-              indexedRent: Math.round(diff * 100) / 100,
-              changePercent: shouldBe.change_percent,
-              determinativeMonth: paidMonth,
-              baseMonth: baseMonthStr,
-              verificationUrl: shouldBe.verification_url,
-            });
-          } catch(e: any) {
-            payments.push({
-              paymentDate: payDate, periodLabel, baseRent,
-              indexedRent: null, changePercent: null,
-              determinativeMonth: paidMonth, baseMonth: baseMonthStr,
-              error: e.message,
-            });
-          }
-        }
-        setResults(payments);
-      }
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  const totalIndexed  = results.reduce((s, r) => s + (r.indexedRent ?? 0), 0);
-  const totalBase     = results.reduce((s, r) => s + r.baseRent, 0);
-  const totalDiff     = totalIndexed - (mode === "annex_b" ? 0 : totalBase);
-
-  return (
-    <div dir="rtl" className="max-w-4xl mx-auto">
-      <div className="mb-6">
-        <h1 className="text-3xl font-bold text-slate-800">חישוב הצמדה למדד</h1>
-        <p className="text-sm text-slate-500 mt-1">חישוב חי מול API הלמ"ס — מחשבון רשמי</p>
-      </div>
-
-      {/* הגדרות חישוב */}
-      <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm mb-5">
-        <h2 className="text-sm font-bold text-slate-700 mb-4">הגדרות חישוב</h2>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-          <div>
-            <label className="mb-1 block text-xs font-semibold text-slate-700">חוזה</label>
-            <select value={selectedContract}
-              onChange={e => setSelectedContract(e.target.value)}
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-400">
-              <option value="">-- בחר חוזה --</option>
-              {contracts.map(c => (
-                <option key={c.id} value={c.id}>
-                  {c.tenants?.name} — {c.properties?.name}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="mb-1 block text-xs font-semibold text-slate-700">שנה</label>
-            <select value={year} onChange={e => setYear(Number(e.target.value))}
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-400">
-              {[2023,2024,2025,2026,2027].map(y => <option key={y} value={y}>{y}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="mb-1 block text-xs font-semibold text-slate-700">סוג חישוב</label>
-            <div className="flex rounded-lg border border-slate-300 overflow-hidden">
-              <button onClick={() => setMode("annex_a")}
-                className={`flex-1 py-2 text-xs font-semibold transition-colors ${mode === "annex_a" ? "bg-blue-700 text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}>
-                נספח א׳ — שיקים לשנה
-              </button>
-              <button onClick={() => setMode("annex_b")}
-                className={`flex-1 py-2 text-xs font-semibold transition-colors ${mode === "annex_b" ? "bg-blue-700 text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}>
-                נספח ב׳ — הפרשים
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {/* פרטי חוזה נבחר */}
-        {contract && (
-          <div className="rounded-lg bg-blue-50 border border-blue-100 p-3 text-sm mb-4">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              <div><span className="text-blue-600 text-xs">שכ"ד בסיס</span><div className="font-bold text-slate-800">₪{baseRent.toLocaleString()}</div></div>
-              <div><span className="text-blue-600 text-xs">מדד בסיס</span><div className="font-bold text-slate-800">{MONTHS_HE[(contract.index_base_month ?? 1)-1]} {contract.index_base_year}</div></div>
-              <div><span className="text-blue-600 text-xs">תדירות</span><div className="font-bold text-slate-800">
-                {contract.payment_frequency === "monthly" ? "חודשי" : contract.payment_frequency === "quarterly" ? "רבעוני" : "שנתי"}
-              </div></div>
-              <div><span className="text-blue-600 text-xs">תקופה</span><div className="font-bold text-slate-800">{fmtDate(contract.start_date)} — {fmtDate(contract.end_date)}</div></div>
-            </div>
-          </div>
-        )}
-
-        {error && <div className="mb-3 rounded-lg bg-red-50 border border-red-200 px-4 py-2 text-sm text-red-700">{error}</div>}
-
-        <button onClick={handleCalculate} disabled={loading || !contract}
-          className="w-full rounded-lg bg-blue-700 py-3 font-bold text-white hover:bg-blue-800 disabled:opacity-50 flex items-center justify-center gap-2">
-          {loading ? (
-            <><span className="animate-spin">⟳</span> מחשב מול API הלמ"ס...</>
-          ) : (
-            <>🔢 חשב {mode === "annex_a" ? "נספח א׳" : "נספח ב׳"}</>
-          )}
-        </button>
-      </div>
-
-      {/* תוצאות */}
-      {results.length > 0 && (
-        <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-          <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
-            <div>
-              <h2 className="font-bold text-slate-800">
-                {mode === "annex_a" ? `📋 נספח א׳ — שיקים לשנת ${year}` : `📋 נספח ב׳ — הפרשי הצמדה ${year-1}`}
-              </h2>
-              <p className="text-xs text-slate-500 mt-0.5">
-                {contract?.tenants?.name} | {contract?.properties?.name} | מדד בסיס: {MONTHS_HE[(contract?.index_base_month ?? 1)-1]} {contract?.index_base_year}
-              </p>
-            </div>
-            <div className="text-left">
-              <div className="text-xs text-slate-500">{mode === "annex_a" ? "סה״כ לשנה" : "סה״כ הפרשים"}</div>
-              <div className={`text-lg font-bold ${mode === "annex_b" ? (totalIndexed >= 0 ? "text-red-700" : "text-green-700") : "text-green-700"}`}>
-                ₪{Math.abs(totalIndexed).toLocaleString()}
-                {mode === "annex_b" && <span className="text-sm mr-1">{totalIndexed >= 0 ? "(לחיוב)" : "(לזיכוי)"}</span>}
-              </div>
-            </div>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="w-full text-right text-sm">
-              <thead className="bg-slate-50 text-slate-600 text-xs border-b border-slate-100">
-                <tr>
-                  <th className="px-4 py-3 font-semibold">תקופה</th>
-                  <th className="px-4 py-3 font-semibold">תאריך תשלום</th>
-                  <th className="px-4 py-3 font-semibold">מדד בסיס</th>
-                  <th className="px-4 py-3 font-semibold">מדד קובע (t-2)</th>
-                  <th className="px-4 py-3 font-semibold">שינוי מדד</th>
-                  <th className="px-4 py-3 font-semibold">
-                    {mode === "annex_a" ? "שכ״ד מוצמד" : "הפרש"}
-                  </th>
-                  <th className="px-4 py-3 font-semibold">אימות</th>
-                </tr>
-              </thead>
-              <tbody>
-                {results.map((r, i) => (
-                  <tr key={i} className={`border-t border-slate-50 ${r.error ? "bg-red-50" : "hover:bg-slate-50"}`}>
-                    <td className="px-4 py-3 font-medium text-slate-800">{r.periodLabel}</td>
-                    <td className="px-4 py-3 text-slate-600">{fmtDate(r.paymentDate)}</td>
-                    <td className="px-4 py-3 text-slate-600">{r.baseMonth}</td>
-                    <td className="px-4 py-3 text-slate-600">{r.determinativeMonth}</td>
-                    <td className="px-4 py-3">
-                      {r.changePercent != null ? (
-                        <span className={`font-semibold ${r.changePercent >= 0 ? "text-red-600" : "text-green-600"}`}>
-                          {r.changePercent >= 0 ? "+" : ""}{r.changePercent.toFixed(2)}%
-                        </span>
-                      ) : <span className="text-red-400 text-xs">{r.error ?? "—"}</span>}
-                    </td>
-                    <td className="px-4 py-3">
-                      {r.indexedRent != null ? (
-                        <span className={`font-bold ${mode === "annex_b" ? (r.indexedRent >= 0 ? "text-red-700" : "text-green-700") : "text-slate-900"}`}>
-                          ₪{Math.abs(r.indexedRent).toLocaleString()}
-                          {mode === "annex_b" && r.indexedRent !== 0 && (
-                            <span className="text-xs font-normal mr-1">{r.indexedRent > 0 ? "לחיוב" : "לזיכוי"}</span>
-                          )}
-                        </span>
-                      ) : "—"}
-                    </td>
-                    <td className="px-4 py-3">
-                      {r.verificationUrl && (
-                        <a href={r.verificationUrl} target="_blank" rel="noopener noreferrer"
-                          className="text-xs text-blue-600 hover:underline">
-                          אמת ↗
-                        </a>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-              <tfoot className="bg-slate-50 border-t-2 border-slate-200">
-                <tr>
-                  <td colSpan={5} className="px-4 py-3 font-bold text-slate-700 text-left">
-                    {mode === "annex_a" ? "סה״כ לשנה" : "סה״כ הפרשים"}
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className={`font-bold text-base ${mode === "annex_b" ? (totalIndexed >= 0 ? "text-red-700" : "text-green-700") : "text-green-700"}`}>
-                      ₪{Math.abs(totalIndexed).toLocaleString()}
-                    </span>
-                  </td>
-                  <td></td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
-
-          {/* הסבר */}
-          <div className="px-5 py-3 bg-slate-50 border-t border-slate-100 text-xs text-slate-500">
-            <strong>כלל t-2:</strong> המדד הקובע לתשלום בתאריך X הוא המדד המפורסם 2 חודשים לפני — כי הלמ"ס מפרסם ב-15 לחודש את מדד החודש הקודם.
-            כל חישוב מבוסס על <strong>API הלמ"ס הרשמי</strong> (מחשבון 120010). לחץ "אמת" לאימות ישיר.
-          </div>
-        </div>
-      )}
-    </div>
-  );
+  return {
+    year:  d.getFullYear(),
+    month: d.getMonth() + 1,
+    label: d.toLocaleDateString("he-IL", { year: "numeric", month: "long" }),
+  };
 }
 
 export default function IndexationPage() {
+  const [contracts,    setContracts]    = useState<any[]>([]);
+  const [loading,      setLoading]      = useState(true);
+  const [calcLoading,  setCalcLoading]  = useState(false);
+  const [result,       setResult]       = useState<any>(null);
+  const [cpiError,     setCpiError]     = useState("");
+
+  // טופס חישוב
+  const [contractId,   setContractId]   = useState("");
+  const [baseRent,     setBaseRent]     = useState("");
+  const [area,         setArea]         = useState("");
+  const [baseIndex,    setBaseIndex]    = useState("");
+  const [baseIndexDate,setBaseIndexDate]= useState("");
+  const [paymentDate,  setPaymentDate]  = useState(new Date().toISOString().split("T")[0]);
+  const [vatPct,       setVatPct]       = useState("18");
+  const [mgmtFee,      setMgmtFee]      = useState("0");
+
+  // היסטוריה
+  const [history,      setHistory]      = useState<any[]>([]);
+
+  useEffect(function() { loadContracts(); loadHistory(); }, []);
+
+  async function loadContracts() {
+    const { data } = await supabase.from("contracts")
+      .select("id, tenants(name), properties(name), rent_per_sqm, charged_area, base_cpi_value, base_cpi_date, investment_addition")
+      .in("status", ["active","expiring","extended"])
+      .order("created_at", { ascending: false });
+    setContracts(data ?? []);
+    setLoading(false);
+  }
+
+  async function loadHistory() {
+    const { data } = await supabase.from("cpi_records")
+      .select("*").order("created_at", { ascending: false }).limit(20);
+    setHistory(data ?? []);
+  }
+
+  function fillFromContract(id: string) {
+    const c = contracts.find(function(x) { return x.id === id; });
+    if (!c) return;
+    setBaseRent(c.rent_per_sqm?.toString() ?? "");
+    setArea(c.charged_area?.toString() ?? "");
+    setBaseIndex(c.base_cpi_value?.toString() ?? "");
+    setBaseIndexDate(c.base_cpi_date?.split("T")[0] ?? "");
+  }
+
+  async function fetchCPI(year: number, month: number): Promise<number | null> {
+    // קריאה חיה ל-API של הלמ"ס
+    try {
+      const url = `https://api.cbs.gov.il/index/data/price?id=120010&startPeriod=${year}-${String(month).padStart(2,"0")}&endPeriod=${year}-${String(month).padStart(2,"0")}&format=json`;
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error("API error " + resp.status);
+      const json = await resp.json();
+      // מבנה: json.DataSet.Series[0].obs[0].obsValue
+      const val = json?.DataSet?.Series?.[0]?.obs?.[0]?.obsValue;
+      if (!val) return null;
+      return Number(val);
+    } catch {
+      return null;
+    }
+  }
+
+  async function handleCalc() {
+    if (!baseRent || !area || !baseIndex || !paymentDate) {
+      alert("נא למלא: שכר דירה בסיסי, שטח, מדד בסיס, ותאריך תשלום");
+      return;
+    }
+    setCalcLoading(true);
+    setCpiError("");
+    setResult(null);
+    try {
+      const t2 = getT2Month(paymentDate);
+      const currentIndex = await fetchCPI(t2.year, t2.month);
+
+      if (!currentIndex) {
+        setCpiError("לא הצלחנו לקבל מדד מהלמ"ס ל-" + t2.label + ". נסה מדד ידני.");
+        setCalcLoading(false);
+        return;
+      }
+
+      const base     = Number(baseIndex);
+      const ratio    = currentIndex / base;
+      const baseAmt  = Number(baseRent) * Number(area);
+      const indexed  = baseAmt * ratio;
+      const mgmt     = Number(mgmtFee) * Number(area);
+      const vat      = (indexed + mgmt) * (Number(vatPct) / 100);
+      const total    = indexed + mgmt + vat;
+
+      const res = {
+        baseAmount:    baseAmt,
+        indexedAmount: indexed,
+        mgmtAmount:    mgmt,
+        vatAmount:     vat,
+        total:         total,
+        ratio:         ratio,
+        increase:      (ratio - 1) * 100,
+        currentIndex:  currentIndex,
+        baseIndex:     base,
+        t2Month:       t2.label,
+        paymentDate:   paymentDate,
+        vatPct:        Number(vatPct),
+      };
+      setResult(res);
+
+      // שמור ב-cpi_records אם יש חוזה
+      if (contractId) {
+        await supabase.from("cpi_records").insert({
+          contract_id:      contractId,
+          base_index_value: base,
+          current_index_value: currentIndex,
+          index_ratio:      ratio,
+          base_rent_amount: baseAmt,
+          indexed_amount:   indexed,
+          billing_date:     paymentDate,
+          t2_month:         t2.year + "-" + String(t2.month).padStart(2,"0"),
+        });
+        loadHistory();
+      }
+    } catch(e: any) {
+      setCpiError("שגיאה בחישוב: " + e?.message);
+    } finally {
+      setCalcLoading(false);
+    }
+  }
+
   return (
-    <Suspense fallback={<div dir="rtl" className="p-8 text-center text-slate-400">טוען...</div>}>
-      <IndexationInner />
-    </Suspense>
+    <div dir="rtl">
+      <div className="mb-6">
+        <h1 className="text-3xl font-bold text-slate-800">הצמדה למדד</h1>
+        <p className="text-sm text-slate-500 mt-1">חישוב שכ"ד מוצמד — מדד חי מ-API הלמ"ס | כלל t-2</p>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        {/* טופס חישוב */}
+        <div className="rounded-xl border border-slate-200 bg-white shadow-sm p-6">
+          <h2 className="font-bold text-slate-800 mb-4 text-lg">🧮 מחשבון הצמדה</h2>
+
+          <div className="space-y-3">
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-slate-700">חוזה (אופציונלי — ימלא אוטומטית)</label>
+              <select value={contractId} onChange={function(e) { setContractId(e.target.value); fillFromContract(e.target.value); }} className={ic}>
+                <option value="">-- חישוב ידני --</option>
+                {contracts.map(function(c) { return <option key={c.id} value={c.id}>{c.tenants?.name} — {c.properties?.name}</option>; })}
+              </select>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">שכ"ד בסיס (₪/מ"ר)</label>
+                <input type="number" value={baseRent} onChange={function(e) { setBaseRent(e.target.value); }} className={ic} placeholder="120" />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">שטח (מ"ר)</label>
+                <input type="number" value={area} onChange={function(e) { setArea(e.target.value); }} className={ic} placeholder="500" />
+              </div>
+            </div>
+
+            <div className="rounded-xl bg-blue-50 border border-blue-200 p-3 space-y-3">
+              <div className="text-xs font-bold text-blue-800">📊 נתוני מדד</div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">מדד בסיס (נקודות)</label>
+                  <input type="number" value={baseIndex} onChange={function(e) { setBaseIndex(e.target.value); }} className={ic} placeholder="100.5" step="0.1" />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">תאריך מדד בסיס</label>
+                  <input type="date" value={baseIndexDate} onChange={function(e) { setBaseIndexDate(e.target.value); }} className={ic} />
+                </div>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">תאריך תשלום</label>
+                <input type="date" value={paymentDate} onChange={function(e) { setPaymentDate(e.target.value); }} className={ic} />
+                {paymentDate && (
+                  <div className="text-xs text-blue-600 mt-1">
+                    📅 מדד קובע (t-2): {getT2Month(paymentDate).label}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">מע"מ %</label>
+                <input type="number" value={vatPct} onChange={function(e) { setVatPct(e.target.value); }} className={ic} />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">דמי ניהול (₪/מ"ר)</label>
+                <input type="number" value={mgmtFee} onChange={function(e) { setMgmtFee(e.target.value); }} className={ic} placeholder="0" />
+              </div>
+            </div>
+
+            <button onClick={handleCalc} disabled={calcLoading}
+              className="w-full rounded-xl bg-blue-700 py-3 font-bold text-white text-sm hover:bg-blue-800 disabled:opacity-50 transition-colors">
+              {calcLoading ? "מחשב — מקבל מדד מלמ\"ס..." : "🧮 חשב הצמדה"}
+            </button>
+
+            {cpiError && (
+              <div className="rounded-xl bg-red-50 border border-red-200 p-3 text-sm text-red-700">
+                ⚠️ {cpiError}
+              </div>
+            )}
+          </div>
+
+          {/* תוצאה */}
+          {result && (
+            <div className="mt-5 rounded-xl bg-green-50 border border-green-200 p-5">
+              <div className="font-bold text-green-800 text-base mb-3">✅ תוצאת חישוב</div>
+              <div className="space-y-2 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-slate-600">מדד בסיס</span>
+                  <span className="font-mono">{result.baseIndex.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-600">מדד נוכחי ({result.t2Month})</span>
+                  <span className="font-mono font-bold">{result.currentIndex.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-600">שינוי מדד</span>
+                  <span className={"font-bold " + (result.increase >= 0 ? "text-red-600" : "text-green-600")}>
+                    {result.increase >= 0 ? "+" : ""}{result.increase.toFixed(2)}%
+                  </span>
+                </div>
+                <hr className="border-green-200 my-2" />
+                <div className="flex justify-between">
+                  <span className="text-slate-600">שכ"ד בסיס</span>
+                  <span>₪{Math.round(result.baseAmount).toLocaleString()}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-600">שכ"ד מוצמד</span>
+                  <span className="font-bold">₪{Math.round(result.indexedAmount).toLocaleString()}</span>
+                </div>
+                {result.mgmtAmount > 0 && (
+                  <div className="flex justify-between">
+                    <span className="text-slate-600">דמי ניהול</span>
+                    <span>₪{Math.round(result.mgmtAmount).toLocaleString()}</span>
+                  </div>
+                )}
+                <div className="flex justify-between">
+                  <span className="text-slate-600">מע"מ ({result.vatPct}%)</span>
+                  <span>₪{Math.round(result.vatAmount).toLocaleString()}</span>
+                </div>
+                <hr className="border-green-200 my-2" />
+                <div className="flex justify-between text-base font-black text-green-800">
+                  <span>סה"כ לתשלום</span>
+                  <span>₪{Math.round(result.total).toLocaleString()}</span>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* היסטוריה */}
+        <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+          <div className="px-5 py-4 border-b border-slate-100">
+            <h2 className="font-bold text-slate-800">📋 היסטוריית חישובים</h2>
+          </div>
+          {history.length === 0 ? (
+            <div className="p-8 text-center text-slate-400 text-sm">
+              חישובים שמורים יופיעו כאן
+            </div>
+          ) : (
+            <div className="divide-y divide-slate-100">
+              {history.map(function(h) {
+                const increase = ((h.index_ratio - 1) * 100).toFixed(2);
+                return (
+                  <div key={h.id} className="px-5 py-3 hover:bg-slate-50">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <div className="text-sm font-semibold text-slate-800">
+                          {h.contracts?.tenants?.name ?? "חישוב ידני"}
+                        </div>
+                        <div className="text-xs text-slate-400">{fmtDate(h.billing_date)}</div>
+                      </div>
+                      <div className="text-left">
+                        <div className="text-sm font-bold text-slate-800">
+                          ₪{Math.round(h.indexed_amount ?? 0).toLocaleString()}
+                        </div>
+                        <div className={"text-xs font-semibold " + (Number(increase) >= 0 ? "text-red-500" : "text-green-500")}>
+                          {Number(increase) >= 0 ? "+" : ""}{increase}%
+                        </div>
+                      </div>
+                    </div>
+                    <div className="text-xs text-slate-400 mt-1">
+                      מדד: {h.base_index_value?.toFixed(2)} → {h.current_index_value?.toFixed(2)}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
