@@ -1,266 +1,267 @@
 "use client";
 import { useState, useEffect } from "react";
 import { supabase } from "../../../lib/supabase";
+import { logAudit } from "../../../lib/audit-log";
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 
-const CHARGE_TYPES: Record<string, { label: string; icon: string }> = {
-  rent:             { label: "שכ\"ד",              icon: "🏠" },
-  management:       { label: "דמי ניהול",          icon: "🔧" },
-  insurance:        { label: "ביטוח",              icon: "🛡️" },
-  garbage:          { label: "פינוי אשפה",         icon: "🗑️" },
-  electricity:      { label: "חשמל",               icon: "⚡" },
-  parking:          { label: "חניה",               icon: "🅿️" },
-  indexation_diff:  { label: "הפרשי הצמדה",       icon: "📊" },
-  ti:               { label: "השקעות משכיר (TI)",  icon: "🔨" },
-  other:            { label: "אחר",                icon: "📋" },
-};
-
-const STATUS_CONFIG: Record<string, { label: string; bg: string; color: string; next?: string; nextLabel?: string }> = {
-  draft:    { label: "טיוטה",           bg: "bg-slate-100",  color: "text-slate-600", next: "pending",  nextLabel: "שלח לאישור" },
-  pending:  { label: "ממתין לאישור",   bg: "bg-yellow-100", color: "text-yellow-700", next: "approved", nextLabel: "אשר" },
-  approved: { label: "מאושר",          bg: "bg-blue-100",   color: "text-blue-700",  next: "issued",   nextLabel: "הפק מסמך" },
-  issued:   { label: "הופק",           bg: "bg-purple-100", color: "text-purple-700", next: "paid",    nextLabel: "סמן כשולם" },
-  paid:     { label: "שולם ✓",         bg: "bg-green-100",  color: "text-green-700" },
-  cancelled:{ label: "בוטל",           bg: "bg-red-100",    color: "text-red-600" },
-};
+const CHARGE_TYPES = [
+  { value: "rent",       label: "שכר דירה",      icon: "🏢" },
+  { value: "management", label: "דמי ניהול",     icon: "🔧" },
+  { value: "indexation", label: "הצמדה",          icon: "📈" },
+  { value: "utilities",  label: "חשמל / מים",    icon: "💡" },
+  { value: "other",      label: "אחר",           icon: "📋" },
+];
 
 function fmtDate(d: string) {
   if (!d) return "—";
-  const [y,m,day] = d.split("-");
-  return `${day}/${m}/${y}`;
-}
-function fmtMonth(d: string) {
-  if (!d) return "—";
-  const months = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
-  const [y,m] = d.split("-");
-  return months[Number(m)-1] + " " + y;
+  return new Date(d).toLocaleDateString("he-IL");
 }
 
 export default function PaymentsPage() {
   const [charges,   setCharges]   = useState<any[]>([]);
   const [contracts, setContracts] = useState<any[]>([]);
   const [loading,   setLoading]   = useState(true);
-  const [saving,    setSaving]    = useState("");
+  const [editingId, setEditingId] = useState("");
+  const [isNew,     setIsNew]     = useState(false);
+  const [saving,    setSaving]    = useState(false);
+  const [filterSt,  setFilterSt]  = useState("all");
+  const [filterType,setFilterType]= useState("all");
 
-  // פילטרים
-  const [filterStatus,   setFilterStatus]   = useState("all");
-  const [filterContract, setFilterContract] = useState("all");
-  const [filterType,     setFilterType]     = useState("all");
-
-  // מודל יצירה
-  const [showNew,     setShowNew]     = useState(false);
-  const [newContract, setNewContract] = useState("");
-  const [newType,     setNewType]     = useState("rent");
-  const [newPeriodStart, setNewPeriodStart] = useState("");
-  const [newPeriodEnd,   setNewPeriodEnd]   = useState("");
-  const [newBase,     setNewBase]     = useState("");
-  const [newVatPct,   setNewVatPct]   = useState("18");
-  const [newNotes,    setNewNotes]    = useState("");
-  const [savingNew,   setSavingNew]   = useState(false);
+  const [fContractId, setFContractId] = useState("");
+  const [fType,       setFType]       = useState("rent");
+  const [fAmount,     setFAmount]     = useState("");
+  const [fVatPct,     setFVatPct]     = useState("18");
+  const [fPeriodFrom, setFPeriodFrom] = useState("");
+  const [fPeriodTo,   setFPeriodTo]   = useState("");
+  const [fDueDate,    setFDueDate]    = useState("");
+  const [fNotes,      setFNotes]      = useState("");
 
   useEffect(function() { loadAll(); }, []);
 
   async function loadAll() {
-    const [{ data: ch }, { data: co }] = await Promise.all([
+    const [{ data: ch }, { data: c }] = await Promise.all([
       supabase.from("charges")
         .select("*, contracts(tenant_id, property_id, tenants(name), properties(name))")
-        .order("period_start", { ascending: false }),
+        .order("created_at", { ascending: false }),
       supabase.from("contracts")
         .select("id, tenants(name), properties(name)")
         .in("status", ["active","expiring","extended"]),
     ]);
     setCharges(ch ?? []);
-    setContracts(co ?? []);
+    setContracts(c ?? []);
     setLoading(false);
   }
 
-  async function handleStatusChange(chargeId: string, newStatus: string) {
-    setSaving(chargeId);
-    const update: any = { status: newStatus };
-    if (newStatus === "approved") {
-      update.approved_at = new Date().toISOString();
-    }
-    await supabase.from("charges").update(update).eq("id", chargeId);
-    await loadAll();
-    setSaving("");
+  function openNew() {
+    setIsNew(true); setEditingId("new");
+    setFContractId(""); setFType("rent"); setFAmount(""); setFVatPct("18");
+    setFPeriodFrom(""); setFPeriodTo(""); setFDueDate(""); setFNotes("");
   }
 
-  async function handleCancel(chargeId: string) {
-    if (!confirm("לבטל חיוב זה?")) return;
-    await supabase.from("charges").update({ status: "cancelled" }).eq("id", chargeId);
-    await loadAll();
+  function openEdit(ch: any) {
+    setIsNew(false); setEditingId(ch.id);
+    setFContractId(ch.contract_id ?? ""); setFType(ch.charge_type ?? "rent");
+    setFAmount(ch.base_amount?.toString() ?? ""); setFVatPct(ch.vat_pct?.toString() ?? "18");
+    setFPeriodFrom(ch.billing_period_start?.split("T")[0] ?? "");
+    setFPeriodTo(ch.billing_period_end?.split("T")[0] ?? "");
+    setFDueDate(ch.due_date?.split("T")[0] ?? ""); setFNotes(ch.notes ?? "");
   }
 
-  async function handleCreateCharge() {
-    if (!newContract || !newPeriodStart || !newPeriodEnd || !newBase) {
-      alert("חובה: חוזה, תקופה, סכום");
-      return;
-    }
-    setSavingNew(true);
+  async function handleSave() {
+    if (!fContractId) { alert("חובה: חוזה"); return; }
+    if (!fAmount) { alert("חובה: סכום"); return; }
+    setSaving(true);
     try {
-      const base  = Number(newBase);
-      const vat   = newVatPct === "0" ? 0 : Math.round(base * Number(newVatPct) / 100 * 100) / 100;
-      const total = Math.round((base + vat) * 100) / 100;
-      const { error } = await supabase.from("charges").insert({
-        contract_id:  newContract,
-        charge_type:  newType,
-        period_start: newPeriodStart,
-        period_end:   newPeriodEnd,
-        base_amount:  base,
-        vat_amount:   vat,
-        total_amount: total,
-        status:       "draft",
-        notes:        newNotes || null,
-      });
-      if (error) throw error;
-      setShowNew(false);
-      setNewContract(""); setNewType("rent"); setNewPeriodStart(""); setNewPeriodEnd("");
-      setNewBase(""); setNewVatPct("18"); setNewNotes("");
+      const base  = Number(fAmount);
+      const vat   = base * (Number(fVatPct) / 100);
+      const total = base + vat;
+      const payload = {
+        contract_id:           fContractId,
+        charge_type:           fType,
+        base_amount:           base,
+        vat_pct:               Number(fVatPct),
+        vat_amount:            vat,
+        total_amount:          total,
+        billing_period_start:  fPeriodFrom || null,
+        billing_period_end:    fPeriodTo || null,
+        due_date:              fDueDate || null,
+        notes:                 fNotes || null,
+        status:                "pending",
+      };
+      if (isNew) {
+        const { data } = await supabase.from("charges").insert(payload).select().single();
+        await logAudit({ entity_type: "charge", entity_id: data.id, action: "create" });
+      } else {
+        await supabase.from("charges").update(payload).eq("id", editingId);
+        await logAudit({ entity_type: "charge", entity_id: editingId, action: "update" });
+      }
+      setEditingId("");
       await loadAll();
     } catch(e: any) { alert("שגיאה: " + e?.message); }
-    finally { setSavingNew(false); }
+    finally { setSaving(false); }
   }
 
-  // סיכומים
-  const totals = {
-    pending:  charges.filter(function(c) { return c.status === "pending"; }).length,
-    approved: charges.filter(function(c) { return c.status === "approved"; }).length,
-    issued:   charges.filter(function(c) { return c.status === "issued"; }).length,
-    total_pending_amount: charges
-      .filter(function(c) { return c.status === "pending" || c.status === "approved" || c.status === "issued"; })
-      .reduce(function(s, c) { return s + (c.total_amount ?? 0); }, 0),
-  };
+  async function updateStatus(id: string, status: string) {
+    const update: any = { status };
+    if (status === "paid") update.paid_at = new Date().toISOString();
+    await supabase.from("charges").update(update).eq("id", id);
+    await logAudit({ entity_type: "charge", entity_id: id, action: "status_" + status });
+    await loadAll();
+  }
+
+  async function handleDelete(id: string) {
+    if (!confirm("למחוק חיוב?")) return;
+    await supabase.from("charges").delete().eq("id", id);
+    await loadAll();
+  }
 
   const filtered = charges.filter(function(c) {
-    const ms = filterStatus   === "all" || c.status      === filterStatus;
-    const mc = filterContract === "all" || c.contract_id === filterContract;
-    const mt = filterType     === "all" || c.charge_type === filterType;
-    return ms && mc && mt;
+    const ms = filterSt   === "all" || c.status      === filterSt;
+    const mt = filterType === "all" || c.charge_type === filterType;
+    return ms && mt;
   });
+
+  const totalPending  = charges.filter(function(c) { return c.status === "pending"; })
+    .reduce(function(s, c) { return s + (c.total_amount ?? 0); }, 0);
+  const totalApproved = charges.filter(function(c) { return c.status === "approved"; })
+    .reduce(function(s, c) { return s + (c.total_amount ?? 0); }, 0);
+  const totalPaid     = charges.filter(function(c) { return c.status === "paid"; })
+    .reduce(function(s, c) { return s + (c.total_amount ?? 0); }, 0);
+
+  const typeInfo = function(v: string) {
+    return CHARGE_TYPES.find(function(t) { return t.value === v; }) ?? CHARGE_TYPES[4];
+  };
 
   return (
     <div dir="rtl">
       <div className="mb-6 flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-slate-800">חיובים</h1>
-          <p className="text-sm text-slate-500 mt-1">ניהול וביצוע חיובים לשוכרים</p>
+          <h1 className="text-3xl font-bold text-slate-800">חיובים ותשלומים</h1>
+          <p className="text-sm text-slate-500 mt-1">{charges.length} חיובים</p>
         </div>
-        <button onClick={function() { setShowNew(true); }}
+        <button onClick={openNew}
           className="rounded-lg bg-blue-700 px-5 py-2.5 font-bold text-white hover:bg-blue-800">
           + חיוב חדש
         </button>
       </div>
 
       {/* KPI */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
-        <div className="rounded-xl border border-yellow-100 bg-yellow-50 p-4 text-center shadow-sm">
-          <div className="text-2xl font-bold text-yellow-700">{totals.pending}</div>
-          <div className="text-xs text-yellow-600 mt-1">ממתינים לאישור</div>
-        </div>
-        <div className="rounded-xl border border-blue-100 bg-blue-50 p-4 text-center shadow-sm">
-          <div className="text-2xl font-bold text-blue-700">{totals.approved}</div>
-          <div className="text-xs text-blue-600 mt-1">מאושרים להפקה</div>
-        </div>
-        <div className="rounded-xl border border-purple-100 bg-purple-50 p-4 text-center shadow-sm">
-          <div className="text-2xl font-bold text-purple-700">{totals.issued}</div>
-          <div className="text-xs text-purple-600 mt-1">הופקו — ממתין לתשלום</div>
-        </div>
-        <div className="rounded-xl border border-slate-200 bg-white p-4 text-center shadow-sm">
-          <div className="text-xl font-bold text-slate-900">₪{totals.total_pending_amount.toLocaleString()}</div>
-          <div className="text-xs text-slate-500 mt-1">סה&quot;כ פתוח</div>
-        </div>
+      <div className="grid grid-cols-3 gap-3 mb-5">
+        {[
+          { label: "ממתין לאישור",  amount: totalPending,  count: charges.filter(function(c){return c.status==="pending";}).length,  bg: "bg-yellow-50",  border: "border-yellow-100", color: "text-yellow-700" },
+          { label: "אושר - לגבייה", amount: totalApproved, count: charges.filter(function(c){return c.status==="approved";}).length, bg: "bg-blue-50",    border: "border-blue-100",   color: "text-blue-700"   },
+          { label: "שולם",          amount: totalPaid,     count: charges.filter(function(c){return c.status==="paid";}).length,     bg: "bg-green-50",   border: "border-green-100",  color: "text-green-700"  },
+        ].map(function(k) {
+          return (
+            <div key={k.label} className={"rounded-xl border p-4 " + k.bg + " " + k.border}>
+              <div className={"text-xl font-black " + k.color}>₪{Math.round(k.amount).toLocaleString()}</div>
+              <div className="text-xs text-slate-500 mt-0.5">{k.label} ({k.count})</div>
+            </div>
+          );
+        })}
       </div>
 
       {/* פילטרים */}
-      <div className="mb-4 flex flex-wrap gap-3">
-        <select value={filterStatus} onChange={function(e) { setFilterStatus(e.target.value); }}
-          className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-800 shadow-sm">
-          <option value="all">כל הסטטוסים</option>
-          {Object.entries(STATUS_CONFIG).map(function([k,v]) { return <option key={k} value={k}>{v.label}</option>; })}
-        </select>
-        <select value={filterType} onChange={function(e) { setFilterType(e.target.value); }}
-          className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-800 shadow-sm">
-          <option value="all">כל סוגי החיובים</option>
-          {Object.entries(CHARGE_TYPES).map(function([k,v]) { return <option key={k} value={k}>{v.icon} {v.label}</option>; })}
-        </select>
-        <select value={filterContract} onChange={function(e) { setFilterContract(e.target.value); }}
-          className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-800 shadow-sm">
-          <option value="all">כל החוזים</option>
-          {contracts.map(function(c) {
-            return <option key={c.id} value={c.id}>{c.tenants?.name} — {c.properties?.name}</option>;
-          })}
-        </select>
+      <div className="mb-4 flex gap-2 flex-wrap">
+        {[
+          { v: "all", l: "הכל" }, { v: "pending", l: "ממתין" },
+          { v: "approved", l: "אושר" }, { v: "paid", l: "שולם" },
+        ].map(function(t) {
+          return (
+            <button key={t.v} onClick={function() { setFilterSt(t.v); }}
+              className={"rounded-xl border px-3 py-1.5 text-xs font-semibold " +
+                (filterSt === t.v ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-200 text-slate-600")}>
+              {t.l}
+            </button>
+          );
+        })}
+        <div className="w-px bg-slate-200 mx-1" />
+        {CHARGE_TYPES.map(function(t) {
+          const cnt = charges.filter(function(c) { return c.charge_type === t.value; }).length;
+          if (!cnt) return null;
+          return (
+            <button key={t.value} onClick={function() { setFilterType(filterType === t.value ? "all" : t.value); }}
+              className={"rounded-xl border px-3 py-1.5 text-xs font-semibold " +
+                (filterType === t.value ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-200 text-slate-600")}>
+              {t.icon} {t.label}
+            </button>
+          );
+        })}
       </div>
 
       {/* טבלה */}
       {loading ? (
         <div className="text-center py-12 text-slate-400">טוען...</div>
       ) : filtered.length === 0 ? (
-        <div className="rounded-xl border border-slate-200 bg-white p-12 text-center text-slate-400 shadow-sm">
-          <div className="text-5xl mb-3">₪</div>
+        <div className="rounded-xl border-2 border-dashed border-slate-200 bg-white p-12 text-center text-slate-400">
+          <div className="text-5xl mb-3">💰</div>
           <div>אין חיובים</div>
         </div>
       ) : (
         <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
           <table className="w-full text-right text-sm">
-            <thead className="bg-slate-50 text-slate-700 border-b border-slate-200">
+            <thead className="bg-slate-50 text-slate-700 border-b">
               <tr>
-                <th className="px-4 py-3 font-semibold">סטטוס</th>
+                <th className="px-4 py-3 font-semibold">שוכר / נכס</th>
                 <th className="px-4 py-3 font-semibold">סוג</th>
-                <th className="px-4 py-3 font-semibold">שוכר</th>
-                <th className="px-4 py-3 font-semibold">נכס</th>
+                <th className="px-4 py-3 font-semibold">סכום</th>
                 <th className="px-4 py-3 font-semibold">תקופה</th>
-                <th className="px-4 py-3 font-semibold">בסיס</th>
-                <th className="px-4 py-3 font-semibold">מע&quot;מ</th>
-                <th className="px-4 py-3 font-semibold">סה&quot;כ</th>
+                <th className="px-4 py-3 font-semibold">לתשלום</th>
+                <th className="px-4 py-3 font-semibold">סטטוס</th>
                 <th className="px-4 py-3 font-semibold">פעולות</th>
               </tr>
             </thead>
             <tbody>
-              {filtered.map(function(c) {
-                const sc  = STATUS_CONFIG[c.status] ?? STATUS_CONFIG.draft;
-                const ct  = CHARGE_TYPES[c.charge_type] ?? CHARGE_TYPES.other;
-                const isSaving = saving === c.id;
+              {filtered.map(function(ch) {
+                const ti = typeInfo(ch.charge_type);
                 return (
-                  <tr key={c.id} className="border-t border-slate-100 hover:bg-slate-50">
+                  <tr key={ch.id} className={"border-t border-slate-100 " +
+                    (ch.status === "paid" ? "opacity-60" : "hover:bg-slate-50")}>
                     <td className="px-4 py-3">
-                      <span className={"text-xs px-2 py-0.5 rounded-full font-semibold " + sc.bg + " " + sc.color}>
-                        {sc.label}
+                      <div className="font-semibold text-slate-800">{ch.contracts?.tenants?.name}</div>
+                      <div className="text-xs text-slate-400">{ch.contracts?.properties?.name}</div>
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className="text-base ml-1">{ti.icon}</span>
+                      <span className="text-xs text-slate-600">{ti.label}</span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="font-bold text-slate-800">₪{Math.round(ch.total_amount ?? 0).toLocaleString()}</div>
+                      {ch.vat_amount > 0 && (
+                        <div className="text-xs text-slate-400">כולל מע"מ ₪{Math.round(ch.vat_amount).toLocaleString()}</div>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-xs text-slate-500">
+                      {ch.billing_period_start ? fmtDate(ch.billing_period_start) + " — " + fmtDate(ch.billing_period_end) : "—"}
+                    </td>
+                    <td className="px-4 py-3 text-xs text-slate-500">{fmtDate(ch.due_date)}</td>
+                    <td className="px-4 py-3">
+                      <span className={"text-xs px-2 py-0.5 rounded-full font-semibold " +
+                        (ch.status === "paid"     ? "bg-green-100 text-green-700" :
+                          ch.status === "approved" ? "bg-blue-100 text-blue-700"  :
+                          "bg-yellow-100 text-yellow-700")}>
+                        {ch.status === "paid" ? "✓ שולם" : ch.status === "approved" ? "אושר" : "ממתין"}
                       </span>
                     </td>
                     <td className="px-4 py-3">
-                      <span className="text-sm">{ct.icon} {ct.label}</span>
-                    </td>
-                    <td className="px-4 py-3 font-semibold text-slate-900">
-                      {c.contracts?.tenants?.name ?? "—"}
-                    </td>
-                    <td className="px-4 py-3 text-slate-600">
-                      {c.contracts?.properties?.name ?? "—"}
-                    </td>
-                    <td className="px-4 py-3 text-slate-600 text-xs">
-                      {fmtDate(c.period_start)} — {fmtDate(c.period_end)}
-                    </td>
-                    <td className="px-4 py-3 text-slate-700">₪{(c.base_amount ?? 0).toLocaleString()}</td>
-                    <td className="px-4 py-3 text-slate-500 text-xs">₪{(c.vat_amount ?? 0).toLocaleString()}</td>
-                    <td className="px-4 py-3 font-bold text-slate-900">₪{(c.total_amount ?? 0).toLocaleString()}</td>
-                    <td className="px-4 py-3">
                       <div className="flex gap-1 flex-wrap">
-                        {sc.next && (
-                          <button
-                            onClick={function() { handleStatusChange(c.id, sc.next!); }}
-                            disabled={isSaving}
-                            className="text-xs bg-blue-700 text-white px-2.5 py-1 rounded-lg hover:bg-blue-800 disabled:opacity-50 font-semibold whitespace-nowrap">
-                            {isSaving ? "..." : sc.nextLabel}
+                        {ch.status === "pending" && (
+                          <button onClick={function() { updateStatus(ch.id, "approved"); }}
+                            className="text-xs bg-blue-600 text-white px-2 py-1 rounded-lg hover:bg-blue-700 font-semibold">
+                            ✓ אשר
                           </button>
                         )}
-                        {c.status !== "paid" && c.status !== "cancelled" && (
-                          <button
-                            onClick={function() { handleCancel(c.id); }}
-                            className="text-xs border border-red-100 rounded px-2 py-1 text-red-500 hover:bg-red-50">
-                            ביטול
+                        {ch.status === "approved" && (
+                          <button onClick={function() { updateStatus(ch.id, "paid"); }}
+                            className="text-xs bg-green-600 text-white px-2 py-1 rounded-lg hover:bg-green-700 font-semibold">
+                            💰 שולם
                           </button>
                         )}
+                        <button onClick={function() { openEdit(ch); }}
+                          className="text-xs border border-slate-200 rounded px-2 py-1 text-slate-600 hover:bg-slate-50">עריכה</button>
+                        <button onClick={function() { handleDelete(ch.id); }}
+                          className="text-xs border border-red-100 rounded px-2 py-1 text-red-400 hover:bg-red-50">🗑</button>
                       </div>
                     </td>
                   </tr>
@@ -271,55 +272,34 @@ export default function PaymentsPage() {
         </div>
       )}
 
-      {/* זרימת סטטוסים */}
-      <div className="mt-6 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="text-xs font-bold text-slate-500 mb-3">זרימת אישור חיוב:</div>
-        <div className="flex items-center gap-2 flex-wrap text-xs">
-          {["draft","pending","approved","issued","paid"].map(function(s, i, arr) {
-            const sc = STATUS_CONFIG[s];
-            return (
-              <div key={s} className="flex items-center gap-2">
-                <span className={"px-3 py-1.5 rounded-full font-semibold " + sc.bg + " " + sc.color}>
-                  {sc.label}
-                </span>
-                {i < arr.length - 1 && <span className="text-slate-300">→</span>}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* מודל יצירת חיוב */}
-      {showNew && (
+      {/* מודל עריכה */}
+      {editingId && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
-          onClick={function() { setShowNew(false); }}>
+          onClick={function() { setEditingId(""); }}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto"
             onClick={function(e) { e.stopPropagation(); }} dir="rtl">
             <div className="sticky top-0 bg-white border-b border-slate-100 px-6 py-4 flex items-center justify-between">
-              <h2 className="font-bold text-slate-800 text-lg">חיוב חדש</h2>
-              <button onClick={function() { setShowNew(false); }} className="text-2xl text-slate-400">×</button>
+              <h2 className="font-bold text-slate-800 text-lg">{isNew ? "חיוב חדש" : "עריכת חיוב"}</h2>
+              <button onClick={function() { setEditingId(""); }} className="text-2xl text-slate-400">×</button>
             </div>
             <div className="p-6 space-y-4">
               <div>
                 <label className="mb-1 block text-xs font-semibold text-slate-700">חוזה *</label>
-                <select value={newContract} onChange={function(e) { setNewContract(e.target.value); }} className={ic}>
+                <select value={fContractId} onChange={function(e) { setFContractId(e.target.value); }} className={ic}>
                   <option value="">-- בחר חוזה --</option>
-                  {contracts.map(function(c) {
-                    return <option key={c.id} value={c.id}>{c.tenants?.name} — {c.properties?.name}</option>;
-                  })}
+                  {contracts.map(function(c) { return <option key={c.id} value={c.id}>{c.tenants?.name} — {c.properties?.name}</option>; })}
                 </select>
               </div>
               <div>
-                <label className="mb-1 block text-xs font-semibold text-slate-700">סוג חיוב</label>
-                <div className="grid grid-cols-3 gap-2">
-                  {Object.entries(CHARGE_TYPES).map(function([k,v]) {
+                <label className="mb-2 block text-xs font-semibold text-slate-700">סוג חיוב</label>
+                <div className="grid grid-cols-5 gap-2">
+                  {CHARGE_TYPES.map(function(t) {
                     return (
-                      <button key={k} type="button"
-                        onClick={function() { setNewType(k); }}
-                        className={"rounded-lg border p-2 text-center text-xs transition-all " +
-                          (newType === k ? "border-blue-500 bg-blue-50 font-bold text-blue-700" : "border-slate-200 hover:bg-slate-50 text-slate-600")}>
-                        <div className="text-lg">{v.icon}</div>
-                        <div>{v.label}</div>
+                      <button key={t.value} type="button" onClick={function() { setFType(t.value); }}
+                        className={"rounded-lg border p-2 text-center transition-all " +
+                          (fType === t.value ? "border-blue-500 bg-blue-50" : "border-slate-200 hover:bg-slate-50")}>
+                        <div>{t.icon}</div>
+                        <div className={"text-xs font-semibold " + (fType === t.value ? "text-blue-700" : "text-slate-600")}>{t.label}</div>
                       </button>
                     );
                   })}
@@ -327,52 +307,43 @@ export default function PaymentsPage() {
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-700">תחילת תקופה *</label>
-                  <input type="date" value={newPeriodStart}
-                    onChange={function(e) { setNewPeriodStart(e.target.value); }} className={ic} />
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">סכום לפני מע"מ (₪) *</label>
+                  <input type="number" value={fAmount} onChange={function(e) { setFAmount(e.target.value); }} className={ic} />
                 </div>
                 <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-700">סיום תקופה *</label>
-                  <input type="date" value={newPeriodEnd}
-                    onChange={function(e) { setNewPeriodEnd(e.target.value); }} className={ic} />
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">מע"מ %</label>
+                  <input type="number" value={fVatPct} onChange={function(e) { setFVatPct(e.target.value); }} className={ic} />
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-700">סכום לפני מע&quot;מ (₪) *</label>
-                  <input type="number" value={newBase}
-                    onChange={function(e) { setNewBase(e.target.value); }} className={ic} placeholder="0" />
-                </div>
-                <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-700">מע&quot;מ %</label>
-                  <select value={newVatPct} onChange={function(e) { setNewVatPct(e.target.value); }} className={ic}>
-                    <option value="0">0% — פטור</option>
-                    <option value="17">17%</option>
-                    <option value="18">18%</option>
-                  </select>
-                </div>
-              </div>
-              {newBase && (
-                <div className="rounded-lg bg-green-50 border border-green-100 px-4 py-3 text-sm flex justify-between">
-                  <span className="text-slate-600">סה&quot;כ כולל מע&quot;מ</span>
-                  <span className="font-bold text-green-700">
-                    ₪{Math.round(Number(newBase) * (1 + Number(newVatPct)/100)).toLocaleString()}
-                  </span>
+              {fAmount && (
+                <div className="rounded-xl bg-blue-50 border border-blue-200 p-3 text-sm text-blue-800">
+                  סה"כ כולל מע"מ: <strong>₪{Math.round(Number(fAmount) * (1 + Number(fVatPct)/100)).toLocaleString()}</strong>
                 </div>
               )}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">מ-תאריך</label>
+                  <input type="date" value={fPeriodFrom} onChange={function(e) { setFPeriodFrom(e.target.value); }} className={ic} />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">עד-תאריך</label>
+                  <input type="date" value={fPeriodTo} onChange={function(e) { setFPeriodTo(e.target.value); }} className={ic} />
+                </div>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">תאריך לתשלום</label>
+                <input type="date" value={fDueDate} onChange={function(e) { setFDueDate(e.target.value); }} className={ic} />
+              </div>
               <div>
                 <label className="mb-1 block text-xs font-semibold text-slate-700">הערות</label>
-                <input type="text" value={newNotes}
-                  onChange={function(e) { setNewNotes(e.target.value); }} className={ic} />
+                <input type="text" value={fNotes} onChange={function(e) { setFNotes(e.target.value); }} className={ic} />
               </div>
               <div className="flex gap-3 pt-2">
-                <button onClick={function() { setShowNew(false); }}
-                  className="flex-1 rounded-lg border border-slate-200 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50">
-                  ביטול
-                </button>
-                <button onClick={handleCreateCharge} disabled={savingNew}
-                  className="flex-1 rounded-lg bg-blue-700 py-2.5 text-sm font-bold text-white hover:bg-blue-800 disabled:opacity-50">
-                  {savingNew ? "שומר..." : "צור חיוב"}
+                <button onClick={function() { setEditingId(""); }}
+                  className="flex-1 rounded-lg border border-slate-200 py-2.5 text-sm text-slate-600">ביטול</button>
+                <button onClick={handleSave} disabled={saving}
+                  className="flex-1 rounded-lg bg-blue-700 py-2.5 text-sm font-bold text-white disabled:opacity-50">
+                  {saving ? "שומר..." : "שמור"}
                 </button>
               </div>
             </div>
