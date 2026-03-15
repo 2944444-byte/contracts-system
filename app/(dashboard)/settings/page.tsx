@@ -7,6 +7,111 @@ const MO = ["ינו","פבר","מרץ","אפר","מאי","יוני","יולי","
 
 
 
+
+function VatHistorySection() {
+  const ic3 = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white focus:outline-none focus:ring-2 focus:ring-blue-400";
+  const [rates,   setRates]   = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [adding,  setAdding]  = useState(false);
+  const [fRate,   setFRate]   = useState("");
+  const [fFrom,   setFFrom]   = useState("");
+  const [fTo,     setFTo]     = useState("");
+  const [fNotes,  setFNotes]  = useState("");
+
+  useEffect(function() {
+    supabase.from("vat_rates").select("*").order("effective_from", { ascending: false })
+      .then(function({ data }) { setRates(data ?? []); setLoading(false); });
+  }, []);
+
+  async function addRate() {
+    if (!fRate || !fFrom) { alert("חובה: שיעור ותאריך התחלה"); return; }
+    const { error } = await supabase.from("vat_rates").insert({
+      rate_pct: Number(fRate), effective_from: fFrom, effective_to: fTo || null, notes: fNotes || null,
+    });
+    if (error) { alert("שגיאה: " + error.message); return; }
+    const { data } = await supabase.from("vat_rates").select("*").order("effective_from", { ascending: false });
+    setRates(data ?? []);
+    setFRate(""); setFFrom(""); setFTo(""); setFNotes(""); setAdding(false);
+  }
+
+  function fmtD(d: string) {
+    if (!d) return "—";
+    const [y,m,day] = d.split("-");
+    return `${day}/${m}/${y}`;
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="rounded-xl border border-slate-200 overflow-hidden">
+        <table className="w-full text-right text-sm">
+          <thead className="bg-slate-50 text-slate-600 text-xs border-b">
+            <tr>
+              <th className="px-4 py-2.5 font-semibold">שיעור מע"מ</th>
+              <th className="px-4 py-2.5 font-semibold">מתאריך</th>
+              <th className="px-4 py-2.5 font-semibold">עד תאריך</th>
+              <th className="px-4 py-2.5 font-semibold">הערות</th>
+              <th className="px-4 py-2.5 font-semibold">סטטוס</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              <tr><td colSpan={5} className="py-6 text-center text-slate-400 text-xs">טוען...</td></tr>
+            ) : rates.map(function(r) {
+              const isActive = !r.effective_to || new Date(r.effective_to) >= new Date();
+              return (
+                <tr key={r.id} className={"border-t " + (isActive ? "bg-green-50" : "hover:bg-slate-50")}>
+                  <td className="px-4 py-2.5 font-bold text-lg text-slate-800">{r.rate_pct}%</td>
+                  <td className="px-4 py-2.5 text-slate-600">{fmtD(r.effective_from)}</td>
+                  <td className="px-4 py-2.5 text-slate-500">{fmtD(r.effective_to)}</td>
+                  <td className="px-4 py-2.5 text-slate-400 text-xs">{r.notes}</td>
+                  <td className="px-4 py-2.5">
+                    {isActive && (
+                      <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-semibold">
+                        פעיל כעת
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      {adding ? (
+        <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-slate-700">שיעור (%)</label>
+              <input type="number" value={fRate} onChange={function(e) { setFRate(e.target.value); }} className={ic3} placeholder="18" />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-slate-700">מתאריך</label>
+              <input type="date" value={fFrom} onChange={function(e) { setFFrom(e.target.value); }} className={ic3} />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-slate-700">עד תאריך (ריק = עד היום)</label>
+              <input type="date" value={fTo} onChange={function(e) { setFTo(e.target.value); }} className={ic3} />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-slate-700">הערות</label>
+              <input type="text" value={fNotes} onChange={function(e) { setFNotes(e.target.value); }} className={ic3} />
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={function() { setAdding(false); }}
+              className="flex-1 rounded-lg border border-slate-200 py-2 text-sm text-slate-600">ביטול</button>
+            <button onClick={addRate}
+              className="flex-1 rounded-lg bg-blue-700 py-2 text-sm font-bold text-white hover:bg-blue-800">שמור</button>
+          </div>
+        </div>
+      ) : (
+        <button onClick={function() { setAdding(true); }}
+          className="text-xs text-blue-600 hover:underline">+ הוסף שיעור מע"מ חדש</button>
+      )}
+    </div>
+  );
+}
+
 function TemplatesSection() {
   const ic2 = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white focus:outline-none focus:ring-2 focus:ring-blue-400";
   const [selectedType, setSelectedType] = useState("annual_start");
@@ -204,7 +309,7 @@ export default function SettingsPage() {
 
       <div className="flex gap-1 mb-6 border-b border-slate-200">
         {["company","vat","cpi","users"].map(function(k) {
-          const labels: Record<string,string> = { company: "פרטי חברה", vat: "מע\"מ", cpi: "מדד מחירים", users: "משתמשים", templates: "📝 תבניות" };
+          const labels: Record<string,string> = { company: "פרטי חברה", vat: "מע\"מ", cpi: "מדד מחירים", users: "משתמשים", templates: "📝 תבניות", vat_history: "📅 היסטוריית מע\"מ" };
           return (
             <button key={k} onClick={function() { setTab(k); }}
               className={"px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors " + (tab === k ? "border-blue-600 text-blue-700" : "border-transparent text-slate-500 hover:text-slate-700")}>
@@ -343,6 +448,13 @@ export default function SettingsPage() {
         </div>
       )}
 
+      {tab === "vat_history" && (
+        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="text-sm font-bold text-slate-700 mb-1">היסטוריית שיעורי מע"מ</div>
+          <div className="text-xs text-slate-400 mb-4">שיעורי מע"מ היסטוריים — חשוב לחישוב תקופות עבר</div>
+          <VatHistorySection />
+        </div>
+      )}
       {tab === "templates" && (
         <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm space-y-5">
           <TemplatesSection />

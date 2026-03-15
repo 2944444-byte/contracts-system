@@ -272,8 +272,11 @@ function EditInner() {
         start_date: optStart,
         end_date: optEnd,
         notice_type: newOpt.notice_type,
-        notice_days_before_end: Number(newOpt.notice_days_before_end) * 30, // המרה מחודשים לימים
+        notice_days_before_end: Number(newOpt.notice_days_before_end) * 30,
         rent_mechanism: newOpt.rent_mechanism,
+        alternative_group: (newOpt as any).alternative_group ?? 1,
+        condition_text: (newOpt as any).condition_text || null,
+        auto_extend: (newOpt as any).auto_extend ?? false,
         rent_increase_pct: newOpt.rent_increase_pct ? Number(newOpt.rent_increase_pct) : null,
         new_rent_value: newOpt.new_rent_value ? Number(newOpt.new_rent_value) : null,
         notes: newOpt.notes || null,
@@ -696,6 +699,19 @@ function EditInner() {
                     </div>
                     <div className="text-sm text-slate-600 space-y-0.5">
                       <div>{opt.duration_months} חודשים | {formatDate(opt.start_date)} — {formatDate(opt.end_date)}</div>
+                      {(opt.alternative_group && opt.alternative_group > 1) && (
+                        <div className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full inline-block mt-1">
+                          אלטרנטיבה {opt.alternative_group}
+                        </div>
+                      )}
+                      {opt.auto_extend && (
+                        <div className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full inline-block mt-1">
+                          ⟳ הארכה אוטומטית
+                        </div>
+                      )}
+                      {opt.condition_text && (
+                        <div className="text-xs text-slate-400 mt-1">תנאי: {opt.condition_text}</div>
+                      )}
                       {opt.notice_deadline && (
                         <div>מועד הודעה: <span className="font-medium">{formatDate(opt.notice_deadline)}</span> ({Math.round((opt.notice_days_before_end || 0) / 30)} חודשים לפני סיום)</div>
                       )}
