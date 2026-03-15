@@ -1,5 +1,6 @@
 "use client";
 import { sendEmail, buildLetterEmail } from "../../../lib/email-utils";
+import { printLetter, downloadLetterAsHtml } from "../../../lib/pdf-export-utils";
 import { useState, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { supabase } from "../../../lib/supabase";
@@ -295,7 +296,7 @@ function LettersInner() {
                     <p className="text-sm text-slate-500">{contract?.tenants?.name} | {contract?.properties?.name}</p>
                   </div>
                   <div className="flex gap-2">
-                    <button onClick={handlePrint}
+                    <button onClick={function() { printLetter("letter-content", "מכתב-" + (contract?.tenants?.name ?? "")); }}
                       className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50">
                       🖨️ הדפס
                     </button>
