@@ -9,6 +9,7 @@ const NAV = [
   { href: "/properties",  label: "נכסים",         icon: "🏢" },
   { href: "/groups",      label: "קבוצות נכסים",  icon: "🏗️" },
   { href: "/units",       label: "יחידות",        icon: "🚪" },
+  { href: "/parking",     label: "חניה",          icon: "🅿️" },
   { href: "/tenants",     label: "שוכרים",        icon: "👥" },
   { href: "/contracts",   label: "חוזים",         icon: "📄" },
   { section: "כספים" },
