@@ -1,29 +1,28 @@
 import { supabase } from "./supabase";
 
-export async function logAudit(params: {
-  entity_type: string;   // contract | property | tenant | charge | option | ti | guarantee
+interface AuditParams {
+  entity_type: string;
   entity_id:   string;
-  action:      string;   // create | update | delete | approve | issue | pay | exercise | cancel
-  field_name?: string;
-  old_value?:  string;
-  new_value?:  string;
+  action:      string;
   notes?:      string;
-}) {
+  old_values?: Record<string, any>;
+  new_values?: Record<string, any>;
+}
+
+export async function logAudit(params: AuditParams): Promise<void> {
   try {
     const { data: { user } } = await supabase.auth.getUser();
     await supabase.from("audit_log").insert({
-      entity_type: params.entity_type,
-      entity_id:   params.entity_id,
-      action:      params.action,
-      field_name:  params.field_name ?? null,
-      old_value:   params.old_value ?? null,
-      new_value:   params.new_value ?? null,
-      notes:       params.notes ?? null,
+      entity_type:  params.entity_type,
+      entity_id:    params.entity_id,
+      action:       params.action,
+      notes:        params.notes ?? null,
+      old_values:   params.old_values ?? null,
+      new_values:   params.new_values ?? null,
       performed_by: user?.id ?? null,
       performed_at: new Date().toISOString(),
     });
-  } catch(e) {
-    // לא נכשל שקט — audit log לא חוסם פעולות
-    console.error("audit log error:", e);
+  } catch {
+    // שגיאת audit לא עוצרת את הפעולה
   }
 }
