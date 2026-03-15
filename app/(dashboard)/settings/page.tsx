@@ -21,7 +21,7 @@ function TemplatesSection() {
     { v: "management",    l: "🔧 השלמת ניהול" },
     { v: "demand",        l: "📬 דרישת תשלום" },
     { v: "insurance",     l: "🛡️ דמי ביטוח" },
-    { v: "rent_update",   l: "📈 עדכון שכ"ד" },
+    { v: "rent_update",   l: "📈 עדכון שכ\"ד" },
   ];
 
   const DEFAULTS: Record<string,string> = {
