@@ -5,6 +5,118 @@ import { supabase } from "../../../lib/supabase";
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 const MO = ["ינו","פבר","מרץ","אפר","מאי","יוני","יולי","אוג","ספט","אוק","נוב","דצמ"];
 
+
+
+function TemplatesSection() {
+  const ic2 = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white focus:outline-none focus:ring-2 focus:ring-blue-400";
+  const [selectedType, setSelectedType] = useState("annual_start");
+  const [tmplContent, setTmplContent]   = useState("");
+  const [savedAt,     setSavedAt]       = useState("");
+  const [saving,      setSaving2]       = useState(false);
+  const [loadingT,    setLoadingT]      = useState(false);
+
+  const TTYPES = [
+    { v: "annual_start",  l: "📋 תחילת שנה" },
+    { v: "indexation",    l: "📊 הפרשי הצמדה" },
+    { v: "management",    l: "🔧 השלמת ניהול" },
+    { v: "demand",        l: "📬 דרישת תשלום" },
+    { v: "insurance",     l: "🛡️ דמי ביטוח" },
+    { v: "rent_update",   l: "📈 עדכון שכ"ד" },
+  ];
+
+  const DEFAULTS: Record<string,string> = {
+    annual_start: "לכבוד: {{tenant_name}}\nהנדון: שיקי שכ\"ד לשנת {{year}}\n\n{{payment_table}}\n\nבברכה,\n{{company_name}}",
+    indexation:   "לכבוד: {{tenant_name}}\nהנדון: הפרשי הצמדה {{year}}\n\n{{indexation_table}}\n\nסה\"כ: ₪{{total_diff}}\n\nבברכה,\n{{company_name}}",
+    management:   "לכבוד: {{tenant_name}}\nהנדון: השלמת דמי ניהול {{year}}\n\nהוצאות בפועל: ₪{{actual_cost}}\nPlus: ₪{{plus_amount}}\nיתרה: ₪{{balance}}\n\nבברכה,\n{{company_name}}",
+    demand:       "לכבוד: {{tenant_name}}\nהנדון: דרישת תשלום\n\nסכום: ₪{{amount}}\nעבור: {{description}}\nתאריך: {{due_date}}\n\nבברכה,\n{{company_name}}",
+    insurance:    "לכבוד: {{tenant_name}}\nהנדון: דמי ביטוח {{year}}\n\nחלקכם בפרמיה: ₪{{amount}}\n\nבברכה,\n{{company_name}}",
+    rent_update:  "לכבוד: {{tenant_name}}\nהנדון: עדכון שכר דירה\n\nשכ\"ד חדש: ₪{{new_rent}} מתאריך {{effective_date}}\n\nבברכה,\n{{company_name}}",
+  };
+
+  const VARS = ["{{tenant_name}}","{{company_name}}","{{year}}","{{payment_table}}",
+    "{{indexation_table}}","{{total_diff}}","{{actual_cost}}","{{plus_amount}}",
+    "{{balance}}","{{amount}}","{{description}}","{{due_date}}","{{new_rent}}",
+    "{{effective_date}}","{{property_name}}","{{base_index_value}}","{{index_ratio}}"];
+
+  useEffect(function() {
+    setLoadingT(true);
+    supabase.from("document_templates").select("content,updated_at")
+      .eq("template_type", selectedType).single()
+      .then(function({ data }) {
+        if (data) { setTmplContent(data.content); setSavedAt(data.updated_at ? new Date(data.updated_at).toLocaleDateString("he-IL") : ""); }
+        else       { setTmplContent(DEFAULTS[selectedType] ?? ""); setSavedAt(""); }
+        setLoadingT(false);
+      });
+  }, [selectedType]);
+
+  async function saveTemplate() {
+    setSaving2(true);
+    try {
+      const { error } = await supabase.from("document_templates").upsert(
+        { template_type: selectedType, content: tmplContent, updated_at: new Date().toISOString() },
+        { onConflict: "template_type" }
+      );
+      if (error) throw error;
+      setSavedAt(new Date().toLocaleDateString("he-IL"));
+      alert("תבנית נשמרה!");
+    } catch(e: any) { alert("שגיאה: " + (e as any)?.message); }
+    finally { setSaving2(false); }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <div className="text-sm font-bold text-slate-700 mb-1">תבניות מסמכים</div>
+        <div className="text-xs text-slate-400">ערוך את הטקסט — השדות בין סוגריים כפולות יוחלפו אוטומטית</div>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {TTYPES.map(function(t) {
+          return (
+            <button key={t.v} onClick={function() { setSelectedType(t.v); }}
+              className={"rounded-lg border px-3 py-1.5 text-xs font-semibold transition-all " +
+                (selectedType === t.v ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-200 text-slate-600 hover:bg-slate-50")}>
+              {t.l}
+            </button>
+          );
+        })}
+      </div>
+      <div className="rounded-xl border border-slate-200 p-4 bg-slate-50">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-xs font-bold text-slate-600">
+            {TTYPES.find(function(t) { return t.v === selectedType; })?.l}
+            {savedAt && <span className="text-slate-400 mr-2 font-normal">— עודכן {savedAt}</span>}
+          </span>
+          <button onClick={function() { setTmplContent(DEFAULTS[selectedType] ?? ""); }}
+            className="text-xs text-slate-400 hover:text-slate-600 hover:underline">אפס</button>
+        </div>
+        {loadingT ? (
+          <div className="text-center py-6 text-slate-400 text-xs">טוען...</div>
+        ) : (
+          <textarea value={tmplContent} onChange={function(e) { setTmplContent(e.target.value); }}
+            rows={12} dir="rtl"
+            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-xs text-slate-800 bg-white font-mono leading-relaxed focus:outline-none focus:ring-2 focus:ring-blue-400" />
+        )}
+        <div className="flex justify-between items-center mt-3">
+          <div className="flex flex-wrap gap-1">
+            {VARS.slice(0,8).map(function(v) {
+              return (
+                <button key={v} onClick={function() { setTmplContent(function(p) { return p + v; }); }}
+                  className="text-xs bg-white border border-blue-100 text-blue-600 px-1.5 py-0.5 rounded font-mono hover:bg-blue-50">
+                  {v}
+                </button>
+              );
+            })}
+          </div>
+          <button onClick={saveTemplate} disabled={saving || loadingT}
+            className="rounded-lg bg-blue-700 px-4 py-2 text-xs font-bold text-white hover:bg-blue-800 disabled:opacity-50">
+            {saving ? "שומר..." : "💾 שמור"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function SettingsPage() {
   const [tab,          setTab]          = useState("company");
   const [companyName,  setCompanyName]  = useState("");
@@ -92,7 +204,7 @@ export default function SettingsPage() {
 
       <div className="flex gap-1 mb-6 border-b border-slate-200">
         {["company","vat","cpi","users"].map(function(k) {
-          const labels: Record<string,string> = { company: "פרטי חברה", vat: "מע\"מ", cpi: "מדד מחירים", users: "משתמשים" };
+          const labels: Record<string,string> = { company: "פרטי חברה", vat: "מע\"מ", cpi: "מדד מחירים", users: "משתמשים", templates: "📝 תבניות" };
           return (
             <button key={k} onClick={function() { setTab(k); }}
               className={"px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors " + (tab === k ? "border-blue-600 text-blue-700" : "border-transparent text-slate-500 hover:text-slate-700")}>
@@ -228,6 +340,12 @@ export default function SettingsPage() {
             className="inline-block rounded-lg bg-blue-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-blue-800">
             פתח Supabase Auth
           </a>
+        </div>
+      )}
+
+      {tab === "templates" && (
+        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm space-y-5">
+          <TemplatesSection />
         </div>
       )}
     </div>

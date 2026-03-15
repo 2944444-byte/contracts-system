@@ -3,7 +3,7 @@ import { useState, useEffect, Suspense } from "react";
 import { useRouter, useParams, useSearchParams } from "next/navigation";
 import { supabase } from "../../../../../lib/supabase";
 import { ContractSpacesSelector, SpaceCharge } from "../../../../../components/ContractSpacesSelector";
-// import { TIManager } from "../../../../../components/TIManager"; // TODO: uncomment after TIManager.tsx is uploaded
+import { TIManager } from "../../../../../components/TIManager";
 import { PriceTiersManager } from "../../../../../components/PriceTiersManager";
 import { logAudit } from "../../../../../lib/audit-log";
 
@@ -633,10 +633,7 @@ function EditInner() {
       {/* טאב TI */}
       {tab === "ti" && !isExtension && (
         <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="text-center py-8 text-slate-400">
-            <div className="text-3xl mb-2">🔨</div>
-            <div className="text-sm">מודול השקעות משכיר — בקרוב</div>
-          </div>
+          <TIManager contractId={id as string} contractEndDate={endDate} />
         </div>
       )}
 
@@ -655,10 +652,7 @@ function EditInner() {
       {/* טאב TI */}
       {tab === "ti" && !isExtension && (
         <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="text-center py-8 text-slate-400">
-            <div className="text-3xl mb-2">🔨</div>
-            <div className="text-sm">מודול השקעות משכיר — בקרוב</div>
-          </div>
+          <TIManager contractId={id as string} contractEndDate={endDate} />
         </div>
       )}
 
