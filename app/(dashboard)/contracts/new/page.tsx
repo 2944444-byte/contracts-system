@@ -38,6 +38,9 @@ export default function NewContractPage() {
   const [chargedArea,setChargedArea]= useState("");
   const [investAdd,  setInvestAdd]  = useState("0");
   const [vatType,    setVatType]    = useState("taxable");
+  const [rentType,   setRentType]   = useState("fixed");
+  const [revenuePct, setRevenuePct] = useState("");
+  const [minRentSqm, setMinRentSqm] = useState("");
   const [baseCpiVal, setBaseCpiVal] = useState("");
   const [baseCpiDate,setBaseCpiDate]= useState("");
   const [notes,      setNotes]      = useState("");
@@ -113,6 +116,9 @@ export default function NewContractPage() {
         charged_area:     chargedArea ? Number(chargedArea) : null,
         investment_addition: Number(investAdd),
         vat_type:         vatType,
+        rent_type:        rentType,
+        revenue_pct:      revenuePct ? Number(revenuePct) : null,
+        min_rent_per_sqm: minRentSqm ? Number(minRentSqm) : null,
         base_cpi_value:   baseCpiVal ? Number(baseCpiVal) : null,
         base_cpi_date:    baseCpiDate || null,
         notes:            notes || null,
@@ -244,6 +250,26 @@ export default function NewContractPage() {
                   <option value="exempt">פטור ממע"מ</option>
                 </select>
               </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">סוג שכ"ד</label>
+                <select value={rentType} onChange={function(e) { setRentType(e.target.value); }} className={ic}>
+                  <option value="fixed">קבוע</option>
+                  <option value="revenue_based">פידיון (%)</option>
+                  <option value="indexed">מוצמד בלבד</option>
+                </select>
+              </div>
+              {rentType === "revenue_based" && (
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-slate-700">% מהמחזור</label>
+                    <input type="number" value={revenuePct} onChange={function(e) { setRevenuePct(e.target.value); }} className={ic} placeholder="8" />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-slate-700">מינימום (₪/מ"ר)</label>
+                    <input type="number" value={minRentSqm} onChange={function(e) { setMinRentSqm(e.target.value); }} className={ic} placeholder="80" />
+                  </div>
+                </div>
+              )}
               <div>
                 <label className="mb-1 block text-xs font-semibold text-slate-700">מדד בסיס</label>
                 <input type="number" value={baseCpiVal} onChange={function(e) { setBaseCpiVal(e.target.value); }} className={ic} step="0.01" />
