@@ -1,369 +1,422 @@
 "use client";
-import { useEffect, useState, Fragment } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "../../../lib/supabase";
+import { logAudit } from "../../../lib/audit-log";
 
-function formatDate(d: string) {
-  if (!d) return "—";
-  const [y,m,day] = d.split("-");
-  return `${day}/${m}/${y}`;
-}
+const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 
 export default function TenantsPage() {
   const router = useRouter();
-  const [tenants, setTenants]   = useState<any[]>([]);
-  const [loading, setLoading]   = useState(true);
-  const [search, setSearch]     = useState("");
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [tenants,   setTenants]   = useState<any[]>([]);
+  const [loading,   setLoading]   = useState(true);
+  const [search,    setSearch]    = useState("");
+  const [selected,  setSelected]  = useState<any>(null);
+  const [selContracts, setSelContracts] = useState<any[]>([]);
+  const [editingId, setEditingId] = useState("");
+  const [isNew,     setIsNew]     = useState(false);
+  const [saving,    setSaving]    = useState(false);
+  const [tab,       setTab]       = useState("details");
 
-  // מודל עריכת שוכר
-  const [editingId, setEditingId]       = useState<string | null>(null);
-  const [editName, setEditName]         = useState("");
-  const [editCompanyNum, setEditCompanyNum] = useState("");
-  const [editAddress, setEditAddress]   = useState("");
-  const [editPhone, setEditPhone]       = useState("");
-  const [editEmail, setEditEmail]       = useState("");
-  const [editContacts, setEditContacts] = useState<any[]>([]);
-  const [editNotes, setEditNotes]       = useState("");
-  const [saving, setSaving]             = useState(false);
+  const [fName,    setFName]    = useState("");
+  const [fCompNum, setFCompNum] = useState("");
+  const [fAddress, setFAddress] = useState("");
+  const [fNotes,   setFNotes]   = useState("");
+  const [fContacts, setFContacts] = useState<{name:string;role:string;phone:string;email:string}[]>([
+    { name:"", role:"", phone:"", email:"" }
+  ]);
+
+  useEffect(function() { load(); }, []);
 
   async function load() {
-    const { data } = await supabase
-      .from("tenants")
-      .select(`
-        *,
-        contracts(id, status, start_date, end_date, rent_per_sqm, charged_area,
-          investment_addition, properties(name))
-      `)
+    const { data } = await supabase.from("tenants")
+      .select("*, contracts(id, status, end_date, properties(name), rent_per_sqm, charged_area, investment_addition)")
       .order("name");
     setTenants(data ?? []);
     setLoading(false);
   }
 
-  useEffect(() => { load(); }, []);
+  async function selectTenant(t: any) {
+    setSelected(t);
+    setTab("details");
+    const { data } = await supabase.from("contracts")
+      .select("*, properties(name), contract_options(*)")
+      .eq("tenant_id", t.id)
+      .order("start_date", { ascending: false });
+    setSelContracts(data ?? []);
+  }
 
-  const filtered = tenants.filter(t =>
-    !search ||
-    t.name?.includes(search) ||
-    t.company_number?.includes(search) ||
-    t.contact_phone?.includes(search)
-  );
+  function openNew() {
+    setIsNew(true); setEditingId("new");
+    setFName(""); setFCompNum(""); setFAddress(""); setFNotes("");
+    setFContacts([{ name:"", role:"", phone:"", email:"" }]);
+  }
 
   function openEdit(t: any) {
-    setEditingId(t.id);
-    setEditName(t.name ?? "");
-    setEditCompanyNum(t.company_number ?? "");
-    setEditAddress(t.address ?? "");
-    setEditPhone(t.contact_phone ?? "");
-    setEditEmail(t.contact_email ?? "");
-    setEditNotes(t.notes ?? "");
-    // contacts — JSONB או fallback מהשדות הישנים
-    const contacts = Array.isArray(t.contacts) && t.contacts.length > 0
+    setIsNew(false); setEditingId(t.id);
+    setFName(t.name ?? ""); setFCompNum(t.company_number ?? "");
+    setFAddress(t.address ?? ""); setFNotes(t.notes ?? "");
+    const c = Array.isArray(t.contacts) && t.contacts.length > 0
       ? t.contacts
-      : (t.contact_phone || t.contact_email)
-        ? [{ name: "", role: "", phone: t.contact_phone ?? "", email: t.contact_email ?? "" }]
-        : [{ name: "", role: "", phone: "", email: "" }];
-    setEditContacts(contacts);
-  }
-
-  function addContact() {
-    setEditContacts(p => [...p, { name: "", role: "", phone: "", email: "" }]);
-  }
-  function removeContact(i: number) {
-    setEditContacts(p => p.filter((_, idx) => idx !== i));
-  }
-  function updateContact(i: number, field: string, val: string) {
-    setEditContacts(p => p.map((c, idx) => idx === i ? { ...c, [field]: val } : c));
+      : [{ name: t.contact_name ?? "", role: t.contact_role ?? "", phone: t.contact_phone ?? "", email: t.contact_email ?? "" }];
+    setFContacts(c);
   }
 
   async function handleSave() {
-    if (!editName.trim()) { alert("חובה: שם שוכר"); return; }
+    if (!fName.trim()) { alert("חובה: שם שוכר"); return; }
     setSaving(true);
     try {
-      const cleanContacts = editContacts.filter(c => c.name || c.phone || c.email);
-      const { error } = await supabase.from("tenants").update({
-        name:           editName.trim(),
-        company_number: editCompanyNum || null,
-        address:        editAddress || null,
-        contact_phone:  editContacts[0]?.phone || null,
-        contact_email:  editContacts[0]?.email || null,
-        contacts:       cleanContacts,
-        notes:          editNotes || null,
-      }).eq("id", editingId);
-      if (error) throw error;
-      setEditingId(null);
+      const payload = {
+        name:           fName.trim(),
+        company_number: fCompNum || null,
+        address:        fAddress || null,
+        notes:          fNotes || null,
+        contacts:       fContacts.filter(function(c) { return c.name || c.email || c.phone; }),
+        contact_name:   fContacts[0]?.name || null,
+        contact_phone:  fContacts[0]?.phone || null,
+        contact_email:  fContacts[0]?.email || null,
+        contact_role:   fContacts[0]?.role || null,
+      };
+      if (isNew) {
+        const { data } = await supabase.from("tenants").insert(payload).select().single();
+        await logAudit({ entity_type: "tenant", entity_id: data.id, action: "create" });
+      } else {
+        await supabase.from("tenants").update(payload).eq("id", editingId);
+        await logAudit({ entity_type: "tenant", entity_id: editingId, action: "update" });
+      }
+      setEditingId("");
       await load();
-    } catch(e: any) {
-      alert("שגיאה: " + e?.message);
-    } finally { setSaving(false); }
+    } catch(e: any) { alert("שגיאה: " + e?.message); }
+    finally { setSaving(false); }
   }
 
   async function handleDelete(id: string, name: string) {
-    if (!confirm(`למחוק את השוכר "${name}"?\n⚠️ לא ניתן למחוק שוכר עם חוזים פעילים.`)) return;
-    const { error } = await supabase.from("tenants").delete().eq("id", id);
-    if (error) { alert("שגיאה: " + error.message); return; }
+    if (!confirm("למחוק שוכר \"" + name + "\"?")) return;
+    await supabase.from("tenants").delete().eq("id", id);
+    if (selected?.id === id) setSelected(null);
     await load();
   }
 
-  async function handleNew() {
-    const name = prompt("שם השוכר / חברה:");
-    if (!name?.trim()) return;
-    const { error } = await supabase.from("tenants").insert({ name: name.trim() });
-    if (error) { alert("שגיאה: " + error.message); return; }
-    await load();
+  function fmtDate(d: string) {
+    if (!d) return "—";
+    const [y,m,day] = d.split("-");
+    return `${day}/${m}/${y}`;
+  }
+  function daysLeft(d: string) {
+    return Math.ceil((new Date(d).getTime() - Date.now()) / 86400000);
   }
 
-  const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
+  const filtered = tenants.filter(function(t) {
+    return !search || t.name?.includes(search) ||
+      t.contact_phone?.includes(search) || t.contact_email?.includes(search);
+  });
+
+  const totalRevenue = (selected?.contracts ?? []).reduce(function(s: number, c: any) {
+    return s + ((c.rent_per_sqm ?? 0) * (c.charged_area ?? 0) + (c.investment_addition ?? 0));
+  }, 0);
 
   return (
-    <div dir="rtl">
-      <div className="mb-6 flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold text-slate-800">שוכרים</h1>
-          <p className="text-sm text-slate-500 mt-1">{tenants.length} שוכרים במערכת</p>
+    <div dir="rtl" className="flex gap-5 h-[calc(100vh-120px)]">
+      {/* רשימת שוכרים */}
+      <div className="w-80 shrink-0 flex flex-col rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+        <div className="p-4 border-b border-slate-100">
+          <div className="flex items-center justify-between mb-3">
+            <h1 className="text-lg font-bold text-slate-800">שוכרים</h1>
+            <button onClick={openNew}
+              className="text-xs bg-blue-700 text-white px-3 py-1.5 rounded-lg hover:bg-blue-800 font-bold">
+              + חדש
+            </button>
+          </div>
+          <input type="text" value={search} onChange={function(e) { setSearch(e.target.value); }}
+            placeholder="חיפוש שוכר..." className={ic} />
         </div>
-        <button onClick={handleNew}
-          className="rounded-lg bg-blue-700 px-5 py-2.5 font-bold text-white hover:bg-blue-800">
-          + שוכר חדש
-        </button>
+        <div className="flex-1 overflow-y-auto">
+          {loading ? (
+            <div className="py-8 text-center text-slate-400 text-sm">טוען...</div>
+          ) : filtered.length === 0 ? (
+            <div className="py-8 text-center text-slate-400 text-sm">לא נמצאו שוכרים</div>
+          ) : (
+            filtered.map(function(t) {
+              const activeContracts = (t.contracts ?? []).filter(function(c: any) {
+                return ["active","expiring","extended"].includes(c.status);
+              });
+              const isSelected = selected?.id === t.id;
+              return (
+                <div key={t.id}
+                  onClick={function() { selectTenant(t); }}
+                  className={"flex items-center gap-3 px-4 py-3 cursor-pointer border-b border-slate-50 transition-colors " +
+                    (isSelected ? "bg-blue-50 border-r-2 border-r-blue-600" : "hover:bg-slate-50")}>
+                  <div className={"w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold shrink-0 " +
+                    (isSelected ? "bg-blue-600 text-white" : "bg-slate-200 text-slate-600")}>
+                    {t.name?.[0]?.toUpperCase() ?? "?"}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className={"font-semibold text-sm truncate " + (isSelected ? "text-blue-800" : "text-slate-800")}>
+                      {t.name}
+                    </div>
+                    <div className="text-xs text-slate-400">
+                      {activeContracts.length > 0
+                        ? activeContracts.length + " חוזים פעילים"
+                        : "אין חוזים פעילים"}
+                    </div>
+                  </div>
+                  {activeContracts.length > 0 && (
+                    <div className="w-2 h-2 rounded-full bg-green-500 shrink-0" />
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
       </div>
 
-      {/* חיפוש */}
-      <div className="mb-4">
-        <input type="text" value={search} onChange={e => setSearch(e.target.value)}
-          placeholder="🔍 חיפוש לפי שם, ח.פ או טלפון..."
-          className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-800 placeholder-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
-      </div>
+      {/* פירוט שוכר */}
+      {selected ? (
+        <div className="flex-1 rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden flex flex-col">
+          {/* כותרת */}
+          <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 rounded-full bg-blue-600 flex items-center justify-center text-white text-lg font-black">
+                {selected.name?.[0]?.toUpperCase()}
+              </div>
+              <div>
+                <div className="font-bold text-slate-800 text-lg">{selected.name}</div>
+                {selected.company_number && (
+                  <div className="text-xs text-slate-400">ח.פ: {selected.company_number}</div>
+                )}
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={function() { openEdit(selected); }}
+                className="rounded-lg border border-blue-200 px-4 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-50">
+                ✏️ עריכה
+              </button>
+              <button onClick={function() { router.push("/contracts/new"); }}
+                className="rounded-lg bg-blue-700 px-4 py-2 text-sm font-bold text-white hover:bg-blue-800">
+                + חוזה חדש
+              </button>
+              <button onClick={function() { handleDelete(selected.id, selected.name); }}
+                className="rounded-lg border border-red-100 px-3 py-2 text-sm text-red-500 hover:bg-red-50">
+                🗑
+              </button>
+            </div>
+          </div>
 
-      {/* טבלה */}
-      {loading ? (
-        <div className="text-center py-12 text-slate-400">טוען...</div>
-      ) : (
-        <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-          <table className="w-full text-right text-sm">
-            <thead className="bg-slate-50 text-slate-700 border-b border-slate-200">
-              <tr>
-                <th className="px-3 py-3 w-6"></th>
-                <th className="px-4 py-3 font-semibold">שם שוכר</th>
-                <th className="px-4 py-3 font-semibold">ח.פ / ע.מ</th>
-                <th className="px-4 py-3 font-semibold">טלפון</th>
-                <th className="px-4 py-3 font-semibold">אימייל</th>
-                <th className="px-4 py-3 font-semibold">חוזים</th>
-                <th className="px-4 py-3 font-semibold">פעולות</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.length === 0 ? (
-                <tr><td colSpan={7} className="py-12 text-center text-slate-400">
-                  <div className="text-4xl mb-2">👥</div>
-                  <div>{search ? "לא נמצאו שוכרים" : "אין שוכרים עדיין"}</div>
-                </td></tr>
-              ) : filtered.map(t => {
-                const activeContracts = (t.contracts ?? []).filter(
-                  (c: any) => c.status === "active" || c.status === "extended"
-                );
-                const allContracts = t.contracts ?? [];
-                const isExpanded = expandedId === t.id;
-                const contacts: any[] = Array.isArray(t.contacts) && t.contacts.length > 0
-                  ? t.contacts
-                  : (t.contact_phone || t.contact_email)
-                    ? [{ phone: t.contact_phone, email: t.contact_email }]
-                    : [];
+          {/* KPI */}
+          {totalRevenue > 0 && (
+            <div className="px-6 py-3 border-b border-slate-100 flex gap-6 bg-slate-50">
+              <div>
+                <div className="text-xs text-slate-500">הכנסה חודשית</div>
+                <div className="font-bold text-green-700">₪{Math.round(totalRevenue).toLocaleString()}</div>
+              </div>
+              <div>
+                <div className="text-xs text-slate-500">חוזים</div>
+                <div className="font-bold text-slate-800">{selContracts.length}</div>
+              </div>
+            </div>
+          )}
 
-                return (
-                  <Fragment key={t.id}>
-                    <tr onClick={() => setExpandedId(p => p === t.id ? null : t.id)}
-                      className={`border-t border-slate-100 cursor-pointer transition-colors ${isExpanded ? "bg-blue-50" : "hover:bg-slate-50"}`}>
-                      <td className="px-3 py-3 text-slate-400 text-center text-xs">
-                        {isExpanded ? "▲" : "▼"}
-                      </td>
-                      <td className="px-4 py-3 font-semibold text-slate-900">{t.name}</td>
-                      <td className="px-4 py-3 text-slate-600">{t.company_number ?? "—"}</td>
-                      <td className="px-4 py-3">
-                        {t.contact_phone
-                          ? <a href={"tel:"+t.contact_phone} className="text-blue-700 hover:underline">{t.contact_phone}</a>
-                          : <span className="text-slate-300">—</span>}
-                      </td>
-                      <td className="px-4 py-3 text-slate-600 text-xs">{t.contact_email ?? "—"}</td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-1.5">
-                          {activeContracts.length > 0 && (
-                            <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-semibold">
-                              {activeContracts.length} פעיל
-                            </span>
-                          )}
-                          {allContracts.length > activeContracts.length && (
-                            <span className="text-xs text-slate-400">
-                              +{allContracts.length - activeContracts.length} היסטוריה
-                            </span>
-                          )}
-                          {allContracts.length === 0 && <span className="text-slate-300 text-xs">אין</span>}
+          {/* טאבים */}
+          <div className="flex border-b border-slate-100 px-6">
+            {[
+              { key: "details",   label: "פרטים" },
+              { key: "contacts",  label: "אנשי קשר" },
+              { key: "contracts", label: "חוזים (" + selContracts.length + ")" },
+            ].map(function(t) {
+              return (
+                <button key={t.key} onClick={function() { setTab(t.key); }}
+                  className={"px-4 py-3 text-sm font-semibold border-b-2 transition-colors " +
+                    (tab === t.key ? "border-blue-600 text-blue-700" : "border-transparent text-slate-500 hover:text-slate-700")}>
+                  {t.label}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* תוכן */}
+          <div className="flex-1 overflow-y-auto p-6">
+            {tab === "details" && (
+              <div className="space-y-4">
+                {[
+                  { label: "שם מלא", value: selected.name },
+                  { label: "ח.פ / ע.מ", value: selected.company_number },
+                  { label: "כתובת", value: selected.address },
+                  { label: "טלפון ראשי", value: selected.contact_phone },
+                  { label: "אימייל ראשי", value: selected.contact_email },
+                ].map(function(row) {
+                  if (!row.value) return null;
+                  return (
+                    <div key={row.label} className="flex justify-between items-center py-2 border-b border-slate-100">
+                      <span className="text-sm text-slate-500">{row.label}</span>
+                      <span className="font-medium text-slate-800">
+                        {row.label === "אימייל ראשי"
+                          ? <a href={"mailto:" + row.value} className="text-blue-600 hover:underline">{row.value}</a>
+                          : row.label === "טלפון ראשי"
+                            ? <a href={"tel:" + row.value} className="text-blue-600 hover:underline">{row.value}</a>
+                            : row.value}
+                      </span>
+                    </div>
+                  );
+                })}
+                {selected.notes && (
+                  <div className="mt-4 rounded-xl bg-slate-50 p-4 text-sm text-slate-600">{selected.notes}</div>
+                )}
+              </div>
+            )}
+
+            {tab === "contacts" && (
+              <div className="space-y-3">
+                {(Array.isArray(selected.contacts) && selected.contacts.length > 0
+                  ? selected.contacts
+                  : [{ name: selected.contact_name, role: selected.contact_role, phone: selected.contact_phone, email: selected.contact_email }]
+                ).filter(function(c: any) { return c.name || c.email || c.phone; }).map(function(c: any, i: number) {
+                  return (
+                    <div key={i} className="rounded-xl border border-slate-200 p-4 bg-slate-50">
+                      <div className="flex items-center gap-3 mb-2">
+                        <div className="w-8 h-8 rounded-full bg-slate-300 flex items-center justify-center text-xs font-bold text-slate-600">
+                          {c.name?.[0]?.toUpperCase() ?? "?"}
                         </div>
-                      </td>
-                      <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
-                        <div className="flex gap-1">
-                          <button onClick={() => openEdit(t)}
-                            className="text-xs border border-blue-200 rounded px-2 py-1 text-blue-700 hover:bg-blue-50 font-medium">עריכה</button>
-                          <button onClick={() => handleDelete(t.id, t.name)}
-                            className="text-xs border border-red-100 rounded px-2 py-1 text-red-500 hover:bg-red-50">מחיקה</button>
+                        <div>
+                          <div className="font-semibold text-slate-800 text-sm">{c.name}</div>
+                          {c.role && <div className="text-xs text-slate-400">{c.role}</div>}
                         </div>
-                      </td>
-                    </tr>
+                      </div>
+                      <div className="space-y-1 text-sm">
+                        {c.phone && <div><a href={"tel:"+c.phone} className="text-blue-600 hover:underline">📞 {c.phone}</a></div>}
+                        {c.email && <div><a href={"mailto:"+c.email} className="text-blue-600 hover:underline">✉ {c.email}</a></div>}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
 
-                    {/* פאנל פרטים */}
-                    {isExpanded && (
-                      <tr key={t.id+"-details"}>
-                        <td colSpan={7} className="p-0 border-t border-blue-100">
-                          <div className="bg-blue-50 px-6 py-5">
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-
-                              {/* אנשי קשר */}
-                              <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
-                                <div className="text-xs font-bold text-slate-500 mb-3 uppercase tracking-wide">👤 אנשי קשר</div>
-                                {contacts.length === 0 ? (
-                                  <div className="text-slate-400 text-xs">לא הוזנו אנשי קשר</div>
-                                ) : contacts.map((c: any, i: number) => (
-                                  <div key={i} className={`py-2 ${i > 0 ? "border-t border-slate-100 mt-2" : ""}`}>
-                                    {c.name && <div className="font-semibold text-slate-800 text-sm">{c.name}</div>}
-                                    {c.role && <div className="text-xs text-slate-400 mb-1">{c.role}</div>}
-                                    {c.phone && (
-                                      <a href={"tel:"+c.phone} className="block text-blue-700 text-sm hover:underline">📞 {c.phone}</a>
-                                    )}
-                                    {c.email && (
-                                      <a href={"mailto:"+c.email} className="block text-blue-700 text-xs hover:underline">✉️ {c.email}</a>
-                                    )}
-                                  </div>
-                                ))}
-                                {t.address && (
-                                  <div className="mt-2 pt-2 border-t border-slate-100 text-xs text-slate-500">
-                                    📍 {t.address}
-                                  </div>
-                                )}
-                              </div>
-
-                              {/* חוזים פעילים */}
-                              <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
-                                <div className="text-xs font-bold text-slate-500 mb-3 uppercase tracking-wide">📄 חוזים פעילים</div>
-                                {activeContracts.length === 0 ? (
-                                  <div className="text-slate-400 text-xs">אין חוזים פעילים</div>
-                                ) : activeContracts.map((c: any) => {
-                                  const monthly = (c.rent_per_sqm ?? 0) * (c.charged_area ?? 0) + (c.investment_addition ?? 0);
-                                  return (
-                                    <div key={c.id} className="py-2 border-b border-slate-100 last:border-0">
-                                      <div className="font-medium text-slate-800 text-sm">{c.properties?.name}</div>
-                                      <div className="text-xs text-slate-500">{formatDate(c.start_date)} — {formatDate(c.end_date)}</div>
-                                      {monthly > 0 && <div className="text-xs font-semibold text-green-700 mt-0.5">₪{monthly.toLocaleString()}/חודש</div>}
-                                    </div>
-                                  );
-                                })}
-                              </div>
-
-                              {/* היסטוריה + פעולות */}
-                              <div className="space-y-4">
-                                {allContracts.length > activeContracts.length && (
-                                  <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
-                                    <div className="text-xs font-bold text-slate-500 mb-3 uppercase tracking-wide">📋 היסטוריית חוזים</div>
-                                    {allContracts.filter((c: any) => c.status !== "active" && c.status !== "extended").map((c: any) => (
-                                      <div key={c.id} className="py-1.5 border-b border-slate-100 last:border-0 text-xs text-slate-500">
-                                        <span className="font-medium text-slate-600">{c.properties?.name}</span>
-                                        <span className="mr-2">{formatDate(c.start_date)} — {formatDate(c.end_date)}</span>
-                                      </div>
-                                    ))}
-                                  </div>
-                                )}
-                                <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm space-y-2">
-                                  <div className="text-xs font-bold text-slate-500 mb-2 uppercase tracking-wide">⚡ פעולות</div>
-                                  <button onClick={() => openEdit(t)}
-                                    className="w-full rounded-lg border border-blue-200 py-2 text-sm text-blue-800 hover:bg-blue-50 font-semibold">✏️ עריכת פרטים</button>
-                                  <button onClick={() => router.push(`/contracts/new?tenant=${t.id}`)}
-                                    className="w-full rounded-lg border border-green-200 py-2 text-sm text-green-700 hover:bg-green-50 font-semibold">+ חוזה חדש</button>
-                                </div>
-                                {t.notes && (
-                                  <div className="bg-yellow-50 border border-yellow-100 rounded-xl p-3 text-xs">
-                                    <span className="font-bold text-yellow-700">📝 </span>{t.notes}
-                                  </div>
-                                )}
-                              </div>
+            {tab === "contracts" && (
+              <div className="space-y-3">
+                {selContracts.length === 0 ? (
+                  <div className="text-center py-8 text-slate-400 text-sm">אין חוזים לשוכר זה</div>
+                ) : (
+                  selContracts.map(function(c) {
+                    const d = c.end_date ? daysLeft(c.end_date) : null;
+                    const monthly = (c.rent_per_sqm ?? 0) * (c.charged_area ?? 0) + (c.investment_addition ?? 0);
+                    const statusColors: Record<string,string> = {
+                      active: "bg-green-100 text-green-700",
+                      expiring: "bg-yellow-100 text-yellow-700",
+                      extended: "bg-blue-100 text-blue-700",
+                      expired: "bg-red-100 text-red-700",
+                      draft: "bg-slate-100 text-slate-500",
+                    };
+                    return (
+                      <div key={c.id}
+                        onClick={function() { router.push("/contracts"); }}
+                        className="rounded-xl border border-slate-200 p-4 hover:bg-blue-50 cursor-pointer transition-colors">
+                        <div className="flex items-start justify-between mb-2">
+                          <div>
+                            <div className="font-semibold text-slate-800">{c.properties?.name}</div>
+                            <div className="text-xs text-slate-400">
+                              {fmtDate(c.start_date)} — {fmtDate(c.end_date)}
                             </div>
                           </div>
-                        </td>
-                      </tr>
-                    )}
-                  </Fragment>
-                );
-              })}
-            </tbody>
-          </table>
+                          <span className={"text-xs px-2 py-0.5 rounded-full font-semibold " + (statusColors[c.status] ?? "bg-slate-100 text-slate-500")}>
+                            {c.status === "active" ? "פעיל" : c.status === "expiring" ? "פג בקרוב" : c.status === "extended" ? "הוארך" : c.status}
+                          </span>
+                        </div>
+                        <div className="flex justify-between items-center">
+                          <span className="font-bold text-green-700 text-sm">₪{Math.round(monthly).toLocaleString()}/חודש</span>
+                          {d !== null && d <= 90 && (
+                            <span className={"text-xs font-semibold " + (d <= 30 ? "text-red-600" : "text-yellow-600")}>
+                              {d} ימים לסיום
+                            </span>
+                          )}
+                        </div>
+                        {c.contract_options?.length > 0 && (
+                          <div className="mt-2 text-xs text-slate-400">
+                            {c.contract_options.length} אופציות | {c.contract_options.filter(function(o: any) { return o.status === "exercised"; }).length} מומשו
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      ) : (
+        <div className="flex-1 rounded-xl border-2 border-dashed border-slate-200 bg-white flex items-center justify-center">
+          <div className="text-center text-slate-400">
+            <div className="text-5xl mb-3">👥</div>
+            <div className="font-medium">בחר שוכר מהרשימה</div>
+            <div className="text-sm mt-1">או <button onClick={openNew} className="text-blue-600 hover:underline">הוסף שוכר חדש</button></div>
+          </div>
         </div>
       )}
 
       {/* מודל עריכה */}
       {editingId && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setEditingId(null)}>
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()} dir="rtl">
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+          onClick={function() { setEditingId(""); }}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto"
+            onClick={function(e) { e.stopPropagation(); }} dir="rtl">
             <div className="sticky top-0 bg-white border-b border-slate-100 px-6 py-4 flex items-center justify-between">
-              <h2 className="font-bold text-slate-800 text-lg">עריכת שוכר</h2>
-              <button onClick={() => setEditingId(null)} className="text-2xl text-slate-400">×</button>
+              <h2 className="font-bold text-slate-800 text-lg">{isNew ? "שוכר חדש" : "עריכת שוכר"}</h2>
+              <button onClick={function() { setEditingId(""); }} className="text-2xl text-slate-400">×</button>
             </div>
             <div className="p-6 space-y-4">
               <div>
                 <label className="mb-1 block text-xs font-semibold text-slate-700">שם שוכר / חברה *</label>
-                <input type="text" value={editName} onChange={e => setEditName(e.target.value)} className={ic} placeholder="שם מלא" />
+                <input type="text" value={fName} onChange={function(e) { setFName(e.target.value); }} className={ic} />
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="mb-1 block text-xs font-semibold text-slate-700">ח.פ / ע.מ</label>
-                  <input type="text" value={editCompanyNum} onChange={e => setEditCompanyNum(e.target.value)} className={ic} placeholder="515123456" />
+                  <input type="text" value={fCompNum} onChange={function(e) { setFCompNum(e.target.value); }} className={ic} />
                 </div>
                 <div>
                   <label className="mb-1 block text-xs font-semibold text-slate-700">כתובת</label>
-                  <input type="text" value={editAddress} onChange={e => setEditAddress(e.target.value)} className={ic} placeholder="רחוב, עיר" />
+                  <input type="text" value={fAddress} onChange={function(e) { setFAddress(e.target.value); }} className={ic} />
                 </div>
               </div>
-
-              {/* אנשי קשר */}
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <label className="text-xs font-semibold text-slate-700">אנשי קשר</label>
-                  <button onClick={addContact} className="text-xs text-blue-600 hover:underline">+ הוסף איש קשר</button>
+                  <button onClick={function() { setFContacts(function(p) { return [...p, {name:"",role:"",phone:"",email:""}]; }); }}
+                    className="text-xs text-blue-600 hover:underline">+ הוסף</button>
                 </div>
-                <div className="space-y-3">
-                  {editContacts.map((c, i) => (
-                    <div key={i} className="rounded-lg border border-slate-200 p-3 bg-slate-50">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-xs font-medium text-slate-500">איש קשר {i+1}</span>
-                        {editContacts.length > 1 && (
-                          <button onClick={() => removeContact(i)} className="text-xs text-red-400 hover:text-red-600">הסר</button>
+                {fContacts.map(function(c, i) {
+                  return (
+                    <div key={i} className="rounded-xl bg-slate-50 p-3 mb-2 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-semibold text-slate-500">איש קשר {i+1}</span>
+                        {fContacts.length > 1 && (
+                          <button onClick={function() { setFContacts(function(p) { return p.filter(function(_,j) { return j !== i; }); }); }}
+                            className="text-xs text-red-400">הסר</button>
                         )}
                       </div>
-                      <div className="grid grid-cols-2 gap-2 mb-2">
-                        <input type="text" value={c.name} onChange={e => updateContact(i, "name", e.target.value)}
-                          placeholder="שם" className={ic} />
-                        <input type="text" value={c.role} onChange={e => updateContact(i, "role", e.target.value)}
-                          placeholder="תפקיד" className={ic} />
-                      </div>
                       <div className="grid grid-cols-2 gap-2">
-                        <input type="tel" value={c.phone} onChange={e => updateContact(i, "phone", e.target.value)}
+                        <input type="text" value={c.name} onChange={function(e) { setFContacts(function(p) { const n=[...p]; n[i]={...n[i],name:e.target.value}; return n; }); }}
+                          placeholder="שם" className={ic} />
+                        <input type="text" value={c.role} onChange={function(e) { setFContacts(function(p) { const n=[...p]; n[i]={...n[i],role:e.target.value}; return n; }); }}
+                          placeholder="תפקיד" className={ic} />
+                        <input type="tel" value={c.phone} onChange={function(e) { setFContacts(function(p) { const n=[...p]; n[i]={...n[i],phone:e.target.value}; return n; }); }}
                           placeholder="טלפון" className={ic} />
-                        <input type="email" value={c.email} onChange={e => updateContact(i, "email", e.target.value)}
+                        <input type="email" value={c.email} onChange={function(e) { setFContacts(function(p) { const n=[...p]; n[i]={...n[i],email:e.target.value}; return n; }); }}
                           placeholder="אימייל" className={ic} />
                       </div>
                     </div>
-                  ))}
-                </div>
+                  );
+                })}
               </div>
-
               <div>
                 <label className="mb-1 block text-xs font-semibold text-slate-700">הערות</label>
-                <textarea value={editNotes} onChange={e => setEditNotes(e.target.value)}
-                  rows={2} className={ic + " resize-none"} placeholder="הערות..." />
+                <textarea value={fNotes} onChange={function(e) { setFNotes(e.target.value); }}
+                  rows={3} className={ic} />
               </div>
-
               <div className="flex gap-3 pt-2">
-                <button onClick={() => setEditingId(null)}
-                  className="flex-1 rounded-lg border border-slate-200 py-2.5 font-medium text-slate-600 hover:bg-slate-50">ביטול</button>
+                <button onClick={function() { setEditingId(""); }}
+                  className="flex-1 rounded-lg border border-slate-200 py-2.5 text-sm font-medium text-slate-600">ביטול</button>
                 <button onClick={handleSave} disabled={saving}
-                  className="flex-1 rounded-lg bg-blue-700 py-2.5 font-bold text-white hover:bg-blue-800 disabled:opacity-50">
+                  className="flex-1 rounded-lg bg-blue-700 py-2.5 text-sm font-bold text-white disabled:opacity-50">
                   {saving ? "שומר..." : "שמור"}
                 </button>
               </div>
