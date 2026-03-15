@@ -57,6 +57,26 @@ export default function ContractsPage() {
       .select("*")
       .order("option_number");
 
+    // טען שיוך שטחים
+    const { data: spacesData } = await supabase
+      .from("contract_spaces")
+      .select("*, spaces(space_name, space_type, area, quantity)");
+    const spacesByContract: Record<string, any[]> = {};
+    (spacesData ?? []).forEach(function(s: any) {
+      if (!spacesByContract[s.contract_id]) spacesByContract[s.contract_id] = [];
+      spacesByContract[s.contract_id].push(s);
+    });
+
+    // טען מדרגות מחיר
+    const { data: tiersData } = await supabase
+      .from("contract_price_tiers")
+      .select("*").order("tier_number");
+    const tiersByContract: Record<string, any[]> = {};
+    (tiersData ?? []).forEach(function(t: any) {
+      if (!tiersByContract[t.contract_id]) tiersByContract[t.contract_id] = [];
+      tiersByContract[t.contract_id].push(t);
+    });
+
     // קבץ אופציות לפי contract_id
     const optsByContract: Record<string, any[]> = {};
     (optionsData ?? []).forEach((o: any) => {
@@ -307,6 +327,53 @@ export default function ContractsPage() {
                                   )}
                                 </div>
                                 <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+                                  {/* שטחים מפורטים */}
+                                  {c.contract_spaces && c.contract_spaces.length > 0 && (
+                                    <div className="mb-4 pt-3 border-t border-slate-100">
+                                      <div className="text-xs font-bold text-slate-500 mb-2 uppercase tracking-wide">🏢 שטחים משויכים</div>
+                                      <div className="space-y-1">
+                                        {c.contract_spaces.map(function(cs: any, i: number) {
+                                          const m = cs.charge_method === "per_sqm" && cs.spaces?.area && cs.price_per_sqm
+                                            ? Math.round(cs.price_per_sqm * cs.spaces.area)
+                                            : cs.fixed_amount ?? cs.price_per_unit ?? null;
+                                          return (
+                                            <div key={i} className="flex justify-between text-xs bg-slate-50 rounded px-2 py-1">
+                                              <span className="font-medium text-slate-700">{cs.spaces?.space_name ?? "—"}</span>
+                                              <span className="text-slate-500">
+                                                {cs.charge_method === "per_sqm" ? "₪" + cs.price_per_sqm + "/מ"ר" :
+                                                 cs.charge_method === "fixed" ? "₪" + cs.fixed_amount + " קבוע" :
+                                                 cs.charge_method === "per_unit" ? cs.quantity + " × ₪" + cs.price_per_unit :
+                                                 cs.charge_method === "included" ? "כלול" : cs.charge_method}
+                                                {m ? <span className="text-green-700 font-semibold mr-1"> = ₪{m.toLocaleString()}</span> : null}
+                                              </span>
+                                            </div>
+                                          );
+                                        })}
+                                      </div>
+                                    </div>
+                                  )}
+                                  {/* מדרגות מחיר */}
+                                  {c.contract_price_tiers && c.contract_price_tiers.length > 0 && (
+                                    <div className="mb-4 pt-3 border-t border-slate-100">
+                                      <div className="text-xs font-bold text-slate-500 mb-2 uppercase tracking-wide">📊 מדרגות שכ"ד</div>
+                                      <div className="space-y-1">
+                                        {c.contract_price_tiers.map(function(t: any) {
+                                          const now2 = new Date();
+                                          const isActive2 = new Date(t.start_date) <= now2 && (!t.end_date || new Date(t.end_date) >= now2);
+                                          return (
+                                            <div key={t.id} className={"flex justify-between text-xs rounded px-2 py-1 " + (isActive2 ? "bg-blue-50 font-semibold" : "bg-slate-50")}>
+                                              <span className={"text-slate-600 " + (isActive2 ? "text-blue-700" : "")}>
+                                                {isActive2 ? "● " : ""}{t.start_date?.substring(0,7)} — {t.end_date?.substring(0,7) ?? "..."}
+                                              </span>
+                                              <span className="text-green-700">
+                                                {t.price_per_sqm ? "₪" + t.price_per_sqm + "/מ"ר" : "₪" + t.fixed_amount}
+                                              </span>
+                                            </div>
+                                          );
+                                        })}
+                                      </div>
+                                    </div>
+                                  )}
                                   <div className="text-xs font-bold text-slate-500 mb-2 uppercase tracking-wide">📎 מסמכים</div>
                                   {c.document_url
                                     ? <a href={c.document_url} target="_blank" rel="noopener noreferrer" className="text-blue-700 text-sm font-semibold">פתח חוזה ↗</a>
