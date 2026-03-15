@@ -1,261 +1,378 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "../../../lib/supabase";
 
-function formatDate(d: string) {
+function fmtDate(d: string) {
   if (!d) return "—";
   const [y,m,day] = d.split("-");
   return `${day}/${m}/${y}`;
 }
-function daysLeft(dateStr: string) {
-  return Math.ceil((new Date(dateStr).getTime() - new Date().getTime()) / (1000*60*60*24));
+function daysLeft(d: string) {
+  return Math.ceil((new Date(d).getTime() - Date.now()) / 86400000);
 }
 
 export default function DashboardPage() {
   const router = useRouter();
-  const [loading, setLoading] = useState(true);
-  const [stats, setStats] = useState({
-    totalRevenue: 0, activeContracts: 0, expiringContracts: 0,
-    totalProperties: 0, occupancyPct: 0, totalArea: 0, rentedArea: 0,
+  const [data, setData] = useState<any>({
+    contracts: [], alerts: [], properties: [], charges: [],
+    guarantees: [], safety: [], insurances: [],
   });
-  const [expiringContracts, setExpiringContracts]   = useState<any[]>([]);
-  const [pendingOptions, setPendingOptions]         = useState<any[]>([]);
-  const [unreadAlerts, setUnreadAlerts]             = useState<any[]>([]);
-  const [recentContracts, setRecentContracts]       = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  useEffect(() => { loadAll(); }, []);
+  useEffect(function() { loadAll(); }, []);
 
   async function loadAll() {
-    const today = new Date(); today.setHours(0,0,0,0);
-    const in90  = new Date(today); in90.setDate(in90.getDate() + 90);
-    const in90s = in90.toISOString().split("T")[0];
+    const [
+      { data: contracts },
+      { data: alerts },
+      { data: properties },
+      { data: charges },
+      { data: guarantees },
+      { data: safety },
+      { data: insurances },
+    ] = await Promise.all([
+      supabase.from("contracts")
+        .select("id, status, end_date, tenants(name), properties(name), charged_area, rent_per_sqm, investment_addition, contract_options(status)")
+        .in("status", ["active","expiring","extended"]),
+      supabase.from("alerts")
+        .select("*").eq("is_handled", false).order("created_at", { ascending: false }).limit(8),
+      supabase.from("properties")
+        .select("id, name, total_rentable_area, units(id, status), spaces(id, status)"),
+      supabase.from("charges")
+        .select("id, status, total_amount, charge_type, contracts(tenants(name), properties(name))")
+        .in("status", ["pending","approved"]).limit(10),
+      supabase.from("guarantees")
+        .select("id, end_date, guarantee_type, amount_actual, contracts(tenants(name))")
+        .eq("status", "active"),
+      supabase.from("safety_inspections")
+        .select("id, inspection_type, next_inspection_date, properties(name)"),
+      supabase.from("insurances_tenant")
+        .select("id, end_date, contracts(tenants(name))"),
+    ]);
 
-    // חוזים
-    const { data: contracts } = await supabase
-      .from("contracts")
-      .select("*, tenants(name), properties(name, total_rentable_area)");
-
-    // נכסים
-    const { data: properties } = await supabase
-      .from("properties")
-      .select("id, total_rentable_area");
-
-    // אופציות ממתינות עם מועד הודעה קרוב
-    const { data: options } = await supabase
-      .from("contract_options")
-      .select("*, contracts(tenant_id, property_id, tenants(name), properties(name))")
-      .eq("status", "pending")
-      .not("notice_deadline", "is", null)
-      .lte("notice_deadline", in90s)
-      .order("notice_deadline");
-
-    // התראות פתוחות
-    const { data: alerts } = await supabase
-      .from("alerts")
-      .select("*")
-      .eq("is_handled", false)
-      .order("due_date", { ascending: true })
-      .limit(5);
-
-    const now = new Date();
-    const allContracts = contracts ?? [];
-
-    // חישוב סטטיסטיקות
-    const active = allContracts.filter((c: any) => {
-      const s = new Date(c.start_date), e = new Date(c.end_date);
-      return now >= s && now <= e;
+    setData({
+      contracts:  contracts  ?? [],
+      alerts:     alerts     ?? [],
+      properties: properties ?? [],
+      charges:    charges    ?? [],
+      guarantees: guarantees ?? [],
+      safety:     safety     ?? [],
+      insurances: insurances ?? [],
     });
-    const expiring = active.filter((c: any) => daysLeft(c.end_date) <= 90);
-    const totalRev = active.reduce((s: number, c: any) =>
-      s + (c.rent_per_sqm ?? 0) * (c.charged_area ?? 0) + (c.investment_addition ?? 0), 0);
-    const totalArea = (properties ?? []).reduce((s: number, p: any) =>
-      s + (p.total_rentable_area ?? 0), 0);
-    const rentedArea = active.reduce((s: number, c: any) => s + (c.charged_area ?? 0), 0);
-
-    setStats({
-      totalRevenue:      totalRev,
-      activeContracts:   active.length,
-      expiringContracts: expiring.length,
-      totalProperties:   (properties ?? []).length,
-      occupancyPct:      totalArea > 0 ? Math.round((rentedArea / totalArea) * 100) : 0,
-      totalArea,
-      rentedArea,
-    });
-
-    setExpiringContracts(expiring.sort((a: any, b: any) =>
-      new Date(a.end_date).getTime() - new Date(b.end_date).getTime()).slice(0, 5));
-    setPendingOptions((options ?? []).slice(0, 5));
-    setUnreadAlerts((alerts ?? []).slice(0, 5));
-    setRecentContracts(allContracts
-      .sort((a: any, b: any) => new Date(b.created_at ?? 0).getTime() - new Date(a.created_at ?? 0).getTime())
-      .slice(0, 5));
     setLoading(false);
   }
 
-  if (loading) return (
-    <div dir="rtl" className="flex items-center justify-center py-20 text-slate-400">
-      <div className="text-center">
-        <div className="text-4xl mb-3">⏳</div>
-        <div>טוען נתונים...</div>
+  // חישובים
+  const totalRevenue = data.contracts.reduce(function(s: number, c: any) {
+    return s + ((c.rent_per_sqm ?? 0) * (c.charged_area ?? 0) + (c.investment_addition ?? 0));
+  }, 0);
+
+  const expiringContracts = data.contracts.filter(function(c: any) {
+    const d = daysLeft(c.end_date);
+    return d >= 0 && d <= 90;
+  });
+
+  const pendingCharges = data.charges.filter(function(c: any) { return c.status === "pending"; });
+  const approvedCharges = data.charges.filter(function(c: any) { return c.status === "approved"; });
+
+  const expiringGuarantees = data.guarantees.filter(function(g: any) {
+    const d = daysLeft(g.end_date);
+    return d >= 0 && d <= 60;
+  });
+
+  const urgentSafety = data.safety.filter(function(s: any) {
+    return daysLeft(s.next_inspection_date) <= 30;
+  });
+
+  const expiringInsurances = data.insurances.filter(function(i: any) {
+    const d = daysLeft(i.end_date);
+    return d >= 0 && d <= 60;
+  });
+
+  const totalUnits = data.properties.reduce(function(s: number, p: any) {
+    return s + (p.spaces?.length || p.units?.length || 0);
+  }, 0);
+  const occupiedUnits = data.properties.reduce(function(s: number, p: any) {
+    const items = p.spaces?.length ? p.spaces : p.units ?? [];
+    return s + items.filter(function(u: any) { return u.status === "rented"; }).length;
+  }, 0);
+  const occupancyPct = totalUnits > 0 ? Math.round(occupiedUnits / totalUnits * 100) : 0;
+
+  if (loading) {
+    return (
+      <div dir="rtl" className="flex items-center justify-center py-24">
+        <div className="text-slate-400 text-center">
+          <div className="text-4xl mb-3 animate-spin">⟳</div>
+          <div>טוען דשבורד...</div>
+        </div>
       </div>
-    </div>
-  );
+    );
+  }
 
   return (
-    <div dir="rtl" className="space-y-6">
-      <div>
+    <div dir="rtl">
+      <div className="mb-6">
         <h1 className="text-3xl font-bold text-slate-800">דשבורד</h1>
-        <p className="text-sm text-slate-500 mt-1">סקירה כללית של המערכת</p>
+        <p className="text-sm text-slate-500 mt-1">{new Date().toLocaleDateString("he-IL", { weekday:"long", year:"numeric", month:"long", day:"numeric" })}</p>
       </div>
 
-      {/* KPI Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="rounded-xl bg-white border border-slate-200 p-5 shadow-sm">
-          <div className="text-xs font-semibold text-slate-500 mb-1">הכנסה חודשית</div>
-          <div className="text-2xl font-bold text-slate-900">₪{stats.totalRevenue.toLocaleString()}</div>
-          <div className="text-xs text-slate-400 mt-1">שנתי: ₪{(stats.totalRevenue * 12).toLocaleString()}</div>
+      {/* KPI ראשיים */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+        <div className="rounded-xl border border-green-100 bg-green-50 p-4 shadow-sm">
+          <div className="text-xs text-green-600 font-semibold mb-1">הכנסה חודשית</div>
+          <div className="text-2xl font-black text-green-800">₪{Math.round(totalRevenue).toLocaleString()}</div>
+          <div className="text-xs text-green-500 mt-1">{data.contracts.length} חוזים פעילים</div>
         </div>
-        <div className="rounded-xl bg-white border border-slate-200 p-5 shadow-sm">
-          <div className="text-xs font-semibold text-slate-500 mb-1">חוזים פעילים</div>
-          <div className="text-2xl font-bold text-green-700">{stats.activeContracts}</div>
-          {stats.expiringContracts > 0 && (
-            <div className="text-xs text-yellow-600 mt-1">⚠️ {stats.expiringContracts} פגים ב-90 יום</div>
-          )}
+        <div className="rounded-xl border border-blue-100 bg-blue-50 p-4 shadow-sm cursor-pointer hover:bg-blue-100"
+          onClick={function() { router.push("/contracts"); }}>
+          <div className="text-xs text-blue-600 font-semibold mb-1">תפוסה</div>
+          <div className="text-2xl font-black text-blue-800">{occupancyPct}%</div>
+          <div className="text-xs text-blue-500 mt-1">{occupiedUnits}/{totalUnits} יחידות</div>
         </div>
-        <div className="rounded-xl bg-white border border-slate-200 p-5 shadow-sm">
-          <div className="text-xs font-semibold text-slate-500 mb-1">תפוסה</div>
-          <div className="text-2xl font-bold text-slate-900">{stats.occupancyPct}%</div>
-          <div className="mt-2 bg-slate-100 rounded-full h-1.5">
-            <div className={`h-1.5 rounded-full transition-all ${stats.occupancyPct >= 80 ? "bg-green-500" : stats.occupancyPct >= 50 ? "bg-yellow-500" : "bg-red-400"}`}
-              style={{ width: `${stats.occupancyPct}%` }} />
+        <div className={"rounded-xl border p-4 shadow-sm cursor-pointer " +
+          (pendingCharges.length > 0 ? "border-yellow-100 bg-yellow-50 hover:bg-yellow-100" : "border-slate-100 bg-white hover:bg-slate-50")}
+          onClick={function() { router.push("/payments"); }}>
+          <div className="text-xs text-yellow-700 font-semibold mb-1">ממתינים לאישור</div>
+          <div className={"text-2xl font-black " + (pendingCharges.length > 0 ? "text-yellow-800" : "text-slate-400")}>
+            {pendingCharges.length}
           </div>
-          <div className="text-xs text-slate-400 mt-1">{stats.rentedArea.toLocaleString()} / {stats.totalArea.toLocaleString()} מ"ר</div>
+          <div className="text-xs text-yellow-600 mt-1">חיובים לאישור</div>
         </div>
-        <div className="rounded-xl bg-white border border-slate-200 p-5 shadow-sm">
-          <div className="text-xs font-semibold text-slate-500 mb-1">נכסים</div>
-          <div className="text-2xl font-bold text-blue-700">{stats.totalProperties}</div>
-          <div className="text-xs text-slate-400 mt-1">{stats.totalArea.toLocaleString()} מ"ר סה"כ</div>
+        <div className={"rounded-xl border p-4 shadow-sm cursor-pointer " +
+          (data.alerts.length > 0 ? "border-red-100 bg-red-50 hover:bg-red-100" : "border-slate-100 bg-white hover:bg-slate-50")}
+          onClick={function() { router.push("/alerts"); }}>
+          <div className="text-xs text-red-600 font-semibold mb-1">התראות פתוחות</div>
+          <div className={"text-2xl font-black " + (data.alerts.length > 0 ? "text-red-800" : "text-slate-400")}>
+            {data.alerts.length}
+          </div>
+          <div className="text-xs text-red-500 mt-1">דורשות טיפול</div>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+        {/* טור שמאל */}
+        <div className="lg:col-span-2 space-y-5">
 
-        {/* חוזים פגים בקרוב */}
-        <div className="rounded-xl bg-white border border-slate-200 shadow-sm overflow-hidden">
-          <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
-            <h2 className="font-bold text-slate-800">⏰ חוזים פגים בקרוב</h2>
-            <button onClick={() => router.push("/contracts")}
-              className="text-xs text-blue-600 hover:underline">כל החוזים ←</button>
-          </div>
-          {expiringContracts.length === 0 ? (
-            <div className="px-5 py-8 text-center text-slate-400 text-sm">אין חוזים פגים ב-90 הימים הקרובים ✓</div>
-          ) : (
-            <div className="divide-y divide-slate-50">
-              {expiringContracts.map((c: any) => {
-                const days = daysLeft(c.end_date);
-                return (
-                  <div key={c.id} className="px-5 py-3 flex items-center justify-between hover:bg-slate-50 cursor-pointer"
-                    onClick={() => router.push("/contracts")}>
-                    <div>
-                      <div className="font-medium text-slate-800 text-sm">{c.tenants?.name}</div>
-                      <div className="text-xs text-slate-400">{c.properties?.name} | סיום: {formatDate(c.end_date)}</div>
+          {/* חוזים פגים בקרוב */}
+          {expiringContracts.length > 0 && (
+            <div className="rounded-xl border border-orange-200 bg-white shadow-sm overflow-hidden">
+              <div className="px-5 py-3 bg-orange-50 border-b border-orange-100 flex items-center justify-between">
+                <span className="text-sm font-bold text-orange-800">⏰ חוזים פגים ב-90 יום ({expiringContracts.length})</span>
+                <button onClick={function() { router.push("/contracts"); }}
+                  className="text-xs text-orange-600 hover:underline">כל החוזים ←</button>
+              </div>
+              <div className="divide-y divide-slate-100">
+                {expiringContracts.slice(0,5).map(function(c: any) {
+                  const d = daysLeft(c.end_date);
+                  const hasOption = c.contract_options?.some(function(o: any) { return o.status === "pending"; });
+                  return (
+                    <div key={c.id} onClick={function() { router.push("/contracts"); }}
+                      className="flex items-center gap-3 px-5 py-3 hover:bg-slate-50 cursor-pointer">
+                      <div className={"w-10 h-10 rounded-full flex items-center justify-center text-xs font-black shrink-0 " +
+                        (d <= 30 ? "bg-red-100 text-red-700" : "bg-orange-100 text-orange-700")}>
+                        {d}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="font-semibold text-slate-800 text-sm truncate">{c.tenants?.name}</div>
+                        <div className="text-xs text-slate-400">{c.properties?.name} | סיום: {fmtDate(c.end_date)}</div>
+                      </div>
+                      {hasOption && (
+                        <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-semibold shrink-0">
+                          יש אופציה
+                        </span>
+                      )}
                     </div>
-                    <span className={`text-xs font-bold px-2 py-1 rounded-full ${days <= 30 ? "bg-red-100 text-red-700" : days <= 60 ? "bg-orange-100 text-orange-700" : "bg-yellow-100 text-yellow-700"}`}>
-                      {days} ימים
-                    </span>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* חיובים ממתינים */}
+          {pendingCharges.length > 0 && (
+            <div className="rounded-xl border border-yellow-200 bg-white shadow-sm overflow-hidden">
+              <div className="px-5 py-3 bg-yellow-50 border-b border-yellow-100 flex items-center justify-between">
+                <span className="text-sm font-bold text-yellow-800">💰 חיובים ממתינים לאישור ({pendingCharges.length})</span>
+                <button onClick={function() { router.push("/payments"); }}
+                  className="text-xs text-yellow-600 hover:underline">לאישור ←</button>
+              </div>
+              <div className="divide-y divide-slate-100">
+                {pendingCharges.slice(0,4).map(function(c: any) {
+                  return (
+                    <div key={c.id} onClick={function() { router.push("/payments"); }}
+                      className="flex items-center justify-between px-5 py-3 hover:bg-slate-50 cursor-pointer">
+                      <div>
+                        <div className="font-semibold text-slate-800 text-sm">{c.contracts?.tenants?.name}</div>
+                        <div className="text-xs text-slate-400">{c.contracts?.properties?.name}</div>
+                      </div>
+                      <span className="font-bold text-slate-800">₪{(c.total_amount ?? 0).toLocaleString()}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* נכסים — תפוסה */}
+          <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+            <div className="px-5 py-3 border-b border-slate-100 flex items-center justify-between">
+              <span className="text-sm font-bold text-slate-700">🏢 תפוסת נכסים</span>
+              <button onClick={function() { router.push("/properties"); }}
+                className="text-xs text-blue-600 hover:underline">כל הנכסים ←</button>
+            </div>
+            <div className="divide-y divide-slate-100">
+              {data.properties.slice(0,5).map(function(p: any) {
+                const items = p.spaces?.length ? p.spaces : p.units ?? [];
+                const total    = items.length;
+                const occupied = items.filter(function(u: any) { return u.status === "rented"; }).length;
+                const pct      = total > 0 ? Math.round(occupied / total * 100) : 0;
+                return (
+                  <div key={p.id} className="px-5 py-3">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-sm font-medium text-slate-700">{p.name}</span>
+                      <span className={"text-xs font-bold " + (pct >= 80 ? "text-green-600" : pct >= 50 ? "text-yellow-600" : "text-red-600")}>
+                        {pct}%
+                      </span>
+                    </div>
+                    <div className="w-full bg-slate-100 rounded-full h-1.5">
+                      <div className={"h-1.5 rounded-full " + (pct >= 80 ? "bg-green-500" : pct >= 50 ? "bg-yellow-400" : "bg-red-400")}
+                        style={{ width: pct + "%" }} />
+                    </div>
+                    <div className="text-xs text-slate-400 mt-1">{occupied}/{total} יחידות</div>
                   </div>
                 );
               })}
             </div>
-          )}
+          </div>
         </div>
 
-        {/* אופציות ממתינות */}
-        <div className="rounded-xl bg-white border border-slate-200 shadow-sm overflow-hidden">
-          <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
-            <h2 className="font-bold text-slate-800">📋 מועדי הודעת אופציה</h2>
-            <button onClick={() => router.push("/contracts")}
-              className="text-xs text-blue-600 hover:underline">לחוזים ←</button>
-          </div>
-          {pendingOptions.length === 0 ? (
-            <div className="px-5 py-8 text-center text-slate-400 text-sm">אין מועדי הודעה קרובים ✓</div>
-          ) : (
-            <div className="divide-y divide-slate-50">
-              {pendingOptions.map((o: any) => {
-                const days = daysLeft(o.notice_deadline);
-                return (
-                  <div key={o.id} className="px-5 py-3 flex items-center justify-between hover:bg-slate-50">
-                    <div>
-                      <div className="font-medium text-slate-800 text-sm">
-                        {o.contracts?.tenants?.name} — אופציה {o.option_number}
+        {/* טור ימין */}
+        <div className="space-y-4">
+
+          {/* התראות */}
+          {data.alerts.length > 0 && (
+            <div className="rounded-xl border border-red-100 bg-white shadow-sm overflow-hidden">
+              <div className="px-4 py-3 bg-red-50 border-b border-red-100 flex items-center justify-between">
+                <span className="text-xs font-bold text-red-700">🔔 התראות ({data.alerts.length})</span>
+                <button onClick={function() { router.push("/alerts"); }}
+                  className="text-xs text-red-600 hover:underline">כולן ←</button>
+              </div>
+              <div className="divide-y divide-slate-100">
+                {data.alerts.slice(0,4).map(function(a: any) {
+                  const isHigh = a.priority === "high" || a.priority === "critical";
+                  return (
+                    <div key={a.id} className="px-4 py-2.5">
+                      <div className={"text-xs font-semibold " + (isHigh ? "text-red-700" : "text-slate-700")}>
+                        {isHigh ? "🔴" : "🟡"} {a.title}
                       </div>
-                      <div className="text-xs text-slate-400">
-                        {o.contracts?.properties?.name} | מועד הודעה: {formatDate(o.notice_deadline)}
-                      </div>
+                      {a.message && <div className="text-xs text-slate-400 mt-0.5 truncate">{a.message}</div>}
                     </div>
-                    <span className={`text-xs font-bold px-2 py-1 rounded-full ${days <= 0 ? "bg-red-100 text-red-700" : days <= 30 ? "bg-orange-100 text-orange-700" : "bg-yellow-100 text-yellow-700"}`}>
-                      {days < 0 ? `עבר לפני ${Math.abs(days)}י` : `${days} ימים`}
-                    </span>
-                  </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* ערבויות פוגות */}
+          {expiringGuarantees.length > 0 && (
+            <div className="rounded-xl border border-yellow-100 bg-white shadow-sm overflow-hidden">
+              <div className="px-4 py-3 bg-yellow-50 border-b border-yellow-100 flex items-center justify-between">
+                <span className="text-xs font-bold text-yellow-700">🏦 ערבויות פוגות ({expiringGuarantees.length})</span>
+                <button onClick={function() { router.push("/guarantees"); }}
+                  className="text-xs text-yellow-600 hover:underline">כולן ←</button>
+              </div>
+              <div className="divide-y divide-slate-100">
+                {expiringGuarantees.slice(0,3).map(function(g: any) {
+                  const d = daysLeft(g.end_date);
+                  return (
+                    <div key={g.id} className="px-4 py-2.5 flex justify-between items-center">
+                      <div>
+                        <div className="text-xs font-semibold text-slate-800">{g.contracts?.tenants?.name}</div>
+                        <div className="text-xs text-slate-400">{fmtDate(g.end_date)}</div>
+                      </div>
+                      <span className={"text-xs font-bold px-2 py-0.5 rounded-full " +
+                        (d <= 30 ? "bg-red-100 text-red-700" : "bg-yellow-100 text-yellow-700")}>
+                        {d} יום
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* בדיקות בטיחות דחופות */}
+          {urgentSafety.length > 0 && (
+            <div className="rounded-xl border border-orange-100 bg-white shadow-sm overflow-hidden">
+              <div className="px-4 py-3 bg-orange-50 border-b border-orange-100 flex items-center justify-between">
+                <span className="text-xs font-bold text-orange-700">🔒 בטיחות דחוף ({urgentSafety.length})</span>
+                <button onClick={function() { router.push("/safety"); }}
+                  className="text-xs text-orange-600 hover:underline">כולן ←</button>
+              </div>
+              <div className="divide-y divide-slate-100">
+                {urgentSafety.slice(0,3).map(function(s: any) {
+                  return (
+                    <div key={s.id} className="px-4 py-2.5 flex justify-between items-center">
+                      <div>
+                        <div className="text-xs font-semibold text-slate-800">{s.properties?.name}</div>
+                        <div className="text-xs text-slate-400">{s.inspection_type}</div>
+                      </div>
+                      <span className="text-xs font-bold bg-red-100 text-red-700 px-2 py-0.5 rounded-full">
+                        {daysLeft(s.next_inspection_date)} יום
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* ביטוחי שוכרים פוגים */}
+          {expiringInsurances.length > 0 && (
+            <div className="rounded-xl border border-blue-100 bg-white shadow-sm overflow-hidden">
+              <div className="px-4 py-3 bg-blue-50 border-b border-blue-100 flex items-center justify-between">
+                <span className="text-xs font-bold text-blue-700">🛡️ ביטוחים פוגים ({expiringInsurances.length})</span>
+                <button onClick={function() { router.push("/insurances"); }}
+                  className="text-xs text-blue-600 hover:underline">כולן ←</button>
+              </div>
+              <div className="divide-y divide-slate-100">
+                {expiringInsurances.slice(0,3).map(function(i: any) {
+                  return (
+                    <div key={i.id} className="px-4 py-2.5 flex justify-between items-center">
+                      <div className="text-xs font-semibold text-slate-800">
+                        {i.contracts?.tenants?.name}
+                      </div>
+                      <span className="text-xs text-slate-400">{fmtDate(i.end_date)}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* קישורי מהירות */}
+          <div className="rounded-xl border border-slate-200 bg-white shadow-sm p-4">
+            <div className="text-xs font-bold text-slate-500 mb-3">⚡ פעולות מהירות</div>
+            <div className="grid grid-cols-2 gap-2">
+              {[
+                { href: "/contracts/new", label: "חוזה חדש",    icon: "📄" },
+                { href: "/payments",     label: "חיוב חדש",    icon: "₪"  },
+                { href: "/letters",      label: "הפק מכתב",    icon: "✉"  },
+                { href: "/reports",      label: "דוחות",        icon: "📊" },
+              ].map(function(item) {
+                return (
+                  <button key={item.href}
+                    onClick={function() { router.push(item.href); }}
+                    className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-blue-50 hover:border-blue-200 hover:text-blue-700 transition-all">
+                    <span>{item.icon}</span>
+                    <span>{item.label}</span>
+                  </button>
                 );
               })}
             </div>
-          )}
-        </div>
-
-        {/* התראות פתוחות */}
-        <div className="rounded-xl bg-white border border-slate-200 shadow-sm overflow-hidden">
-          <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
-            <h2 className="font-bold text-slate-800">🔔 התראות פתוחות</h2>
-            <button onClick={() => router.push("/alerts")}
-              className="text-xs text-blue-600 hover:underline">כל ההתראות ←</button>
-          </div>
-          {unreadAlerts.length === 0 ? (
-            <div className="px-5 py-8 text-center text-slate-400 text-sm">אין התראות פתוחות ✓</div>
-          ) : (
-            <div className="divide-y divide-slate-50">
-              {unreadAlerts.map((a: any) => (
-                <div key={a.id} className="px-5 py-3 flex items-start gap-3 hover:bg-slate-50">
-                  <span className={`mt-0.5 text-sm ${a.severity === "critical" ? "text-red-500" : a.severity === "high" ? "text-orange-500" : "text-yellow-500"}`}>
-                    {a.severity === "critical" ? "🔴" : a.severity === "high" ? "🟠" : "🟡"}
-                  </span>
-                  <div className="flex-1 min-w-0">
-                    <div className="font-medium text-slate-800 text-sm truncate">{a.title}</div>
-                    {a.message && <div className="text-xs text-slate-400 truncate">{a.message}</div>}
-                    {a.due_date && <div className="text-xs text-slate-400">{formatDate(a.due_date)}</div>}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* פעולות מהירות */}
-        <div className="rounded-xl bg-white border border-slate-200 shadow-sm overflow-hidden">
-          <div className="px-5 py-4 border-b border-slate-100">
-            <h2 className="font-bold text-slate-800">⚡ פעולות מהירות</h2>
-          </div>
-          <div className="p-4 grid grid-cols-2 gap-3">
-            {[
-              { label: "+ חוזה חדש",    icon: "📄", path: "/contracts/new",  color: "bg-blue-700 text-white hover:bg-blue-800" },
-              { label: "חוזים",          icon: "📋", path: "/contracts",       color: "bg-slate-100 text-slate-700 hover:bg-slate-200" },
-              { label: "שוכרים",         icon: "👥", path: "/tenants",         color: "bg-slate-100 text-slate-700 hover:bg-slate-200" },
-              { label: "נכסים",          icon: "🏢", path: "/properties",      color: "bg-slate-100 text-slate-700 hover:bg-slate-200" },
-              { label: "מדד המחירים",    icon: "📈", path: "/cpi",             color: "bg-slate-100 text-slate-700 hover:bg-slate-200" },
-              { label: "חישוב הצמדה",   icon: "🔢", path: "/indexation",      color: "bg-slate-100 text-slate-700 hover:bg-slate-200" },
-              { label: "התראות",         icon: "🔔", path: "/alerts",          color: "bg-slate-100 text-slate-700 hover:bg-slate-200" },
-              { label: "דוחות",          icon: "📊", path: "/reports",         color: "bg-slate-100 text-slate-700 hover:bg-slate-200" },
-            ].map(item => (
-              <button key={item.path} onClick={() => router.push(item.path)}
-                className={`rounded-xl p-3 text-sm font-semibold text-right flex items-center gap-2 transition-colors ${item.color}`}>
-                <span>{item.icon}</span>
-                <span>{item.label}</span>
-              </button>
-            ))}
           </div>
         </div>
-
       </div>
     </div>
   );
