@@ -1,87 +1,107 @@
 // lib/cpi-utils.ts
-// Chain-linked CPI calculation utility
-// Supports contracts with different base years using linkage coefficients
+// כלים לחישוב הצמדה למדד
 
-// Linkage coefficients published by CBS (Israel Central Bureau of Statistics)
-// Updated when CBS changes the base year (every ~2 years)
-// from_base -> to_base: multiply by coefficient to convert to older base
-export const LINK_COEFFICIENTS: Record<string, number> = {
-  "2024->2022": 1.074,
-  "2022->2020": 1.059,
-  "2020->2018": 1.003,
-  "2018->2016": 1.010,
-  "2016->2014": 0.989,
-  "2014->2012": 1.020,
-  "2012->2010": 1.052,
-  "2010->2008": 1.051,
-  "2008->2006": 1.038,
-  "2006->2002": 1.068,
-  "2002->2000": 1.064,
-};
+const CBS_API = "https://api.cbs.gov.il/index/data/price?id=120010";
 
-// Base year periods — when each base was active
-const BASE_PERIODS: { baseYear: number; from: number; to: number }[] = [
-  { baseYear: 2024, from: 2024, to: 9999 },
-  { baseYear: 2022, from: 2022, to: 2023 },
-  { baseYear: 2020, from: 2018, to: 2021 },
-  { baseYear: 2018, from: 2016, to: 2017 },
-  { baseYear: 2016, from: 2014, to: 2015 },
-  { baseYear: 2014, from: 2012, to: 2013 },
-  { baseYear: 2012, from: 2010, to: 2011 },
-  { baseYear: 2010, from: 2008, to: 2009 },
-  { baseYear: 2008, from: 2006, to: 2007 },
-  { baseYear: 2006, from: 2002, to: 2005 },
-  { baseYear: 2002, from: 2000, to: 2001 },
-];
-
-// Convert any index value to base 2020=100 equivalent
-// This allows comparing indices from different base years
-export function normalizeToBase2020(value: number, fromBaseYear: number): number {
-  if (fromBaseYear === 2020) return value;
-
-  let result = value;
-  let currentBase = fromBaseYear;
-
-  // Chain up to 2020 if fromBaseYear is newer
-  while (currentBase > 2020) {
-    const bases = BASE_PERIODS.filter(b => b.baseYear === currentBase);
-    const prevBase = bases[0] ? currentBase - 2 : null;
-    if (!prevBase) break;
-    const key = `${currentBase}->${prevBase}`;
-    const coeff = LINK_COEFFICIENTS[key];
-    if (!coeff) break;
-    result = result * coeff;
-    currentBase = prevBase;
-  }
-
-  // Chain down to 2020 if fromBaseYear is older
-  while (currentBase < 2020) {
-    const nextBase = currentBase + 2;
-    const key = `${nextBase}->${currentBase}`;
-    const coeff = LINK_COEFFICIENTS[key];
-    if (!coeff) break;
-    result = result / coeff;
-    currentBase = nextBase;
-  }
-
-  return result;
+export async function fetchSingleCPI(year: number, month: number): Promise<number | null> {
+  try {
+    const from = `${year}-${String(month).padStart(2,"0")}`;
+    const url  = `${CBS_API}&startPeriod=${from}&endPeriod=${from}&format=json`;
+    const r    = await fetch(url);
+    if (!r.ok) return null;
+    const json = await r.json();
+    const val  = json?.DataSet?.Series?.[0]?.obs?.[0]?.obsValue;
+    return val ? Number(val) : null;
+  } catch { return null; }
 }
 
-// Calculate indexation ratio between two CPI values
-// Handles different base years using chain linking
-export function calcIndexRatio(
-  baseValue: number,
-  baseYear: number,
-  currentValue: number,
-  currentBaseYear: number = 2022
+export async function fetchCPIRange(
+  fromYear: number, fromMonth: number,
+  toYear:   number, toMonth:   number
+): Promise<{ year: number; month: number; value: number }[]> {
+  try {
+    const from = `${fromYear}-${String(fromMonth).padStart(2,"0")}`;
+    const to   = `${toYear}-${String(toMonth).padStart(2,"0")}`;
+    const url  = `${CBS_API}&startPeriod=${from}&endPeriod=${to}&format=json`;
+    const r    = await fetch(url);
+    if (!r.ok) return [];
+    const json = await r.json();
+    const obs  = json?.DataSet?.Series?.[0]?.obs ?? [];
+    return obs.map(function(o: any) {
+      const [y, m] = o.timePeriod.split("-").map(Number);
+      return { year: y, month: m, value: Number(o.obsValue) };
+    });
+  } catch { return []; }
+}
+
+// כלל t-2: מדד קובע = 2 חודשים לפני תאריך תשלום
+export function getT2Month(paymentDate: string): { year: number; month: number; label: string } {
+  const d = new Date(paymentDate);
+  d.setMonth(d.getMonth() - 2);
+  return {
+    year:  d.getFullYear(),
+    month: d.getMonth() + 1,
+    label: d.toLocaleDateString("he-IL", { year: "numeric", month: "long" }),
+  };
+}
+
+// מנגנון מדד גבוה ביותר בתקופה
+export async function fetchHighestCPI(
+  baseDateStr: string,
+  paymentDate: string
+): Promise<{ value: number; year: number; month: number; allCount: number } | null> {
+  const base = new Date(baseDateStr);
+  const t2   = getT2Month(paymentDate);
+  const all  = await fetchCPIRange(
+    base.getFullYear(), base.getMonth() + 1,
+    t2.year, t2.month
+  );
+  if (!all.length) return null;
+  const highest = all.reduce(function(max, curr) { return curr.value > max.value ? curr : max; });
+  return { ...highest, allCount: all.length };
+}
+
+// חישוב גרייס חלקי על ימים
+export function calcGraceAmount(
+  baseAmount:  number,
+  gracePct:    number,
+  periodFrom?: string,
+  periodTo?:   string
 ): number {
-  const normalizedBase = normalizeToBase2020(baseValue, baseYear);
-  const normalizedCurrent = normalizeToBase2020(currentValue, currentBaseYear);
-  return normalizedCurrent / normalizedBase;
+  if (!gracePct) return baseAmount;
+  return baseAmount * (1 - gracePct / 100);
 }
 
-// Get the active base year for a given date
-export function getBaseYearForDate(year: number): number {
-  const period = BASE_PERIODS.find(b => year >= b.from && year <= b.to);
-  return period?.baseYear ?? 2022;
+// חישוב הצמדה מלא
+export function calcIndexedRent(
+  baseRentPerSqm: number,
+  area:           number,
+  baseIndex:      number,
+  currentIndex:   number,
+  vatPct:         number,
+  mgmtFeePerSqm:  number = 0
+): {
+  baseAmount:    number;
+  indexedAmount: number;
+  mgmtAmount:    number;
+  vatAmount:     number;
+  total:         number;
+  ratio:         number;
+  increasePct:   number;
+} {
+  const ratio    = currentIndex / baseIndex;
+  const base     = baseRentPerSqm * area;
+  const indexed  = base * ratio;
+  const mgmt     = mgmtFeePerSqm * area;
+  const vat      = (indexed + mgmt) * (vatPct / 100);
+  const total    = indexed + mgmt + vat;
+  return {
+    baseAmount:    base,
+    indexedAmount: indexed,
+    mgmtAmount:    mgmt,
+    vatAmount:     vat,
+    total,
+    ratio,
+    increasePct:   (ratio - 1) * 100,
+  };
 }
