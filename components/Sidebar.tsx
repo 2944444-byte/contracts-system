@@ -26,6 +26,7 @@ const NAV = [
   { section: "ניהול" },
   { href: "/reports",     label: "דוחות",         icon: "📊" },
   { href: "/alerts",      label: "התראות",        icon: "🔔" },
+  { href: "/calendar",    label: "לוח שנה",       icon: "📅" },
   { href: "/companies",   label: "חברות",         icon: "🏛️" },
   { href: "/users",       label: "משתמשים",       icon: "👑" },
   { href: "/settings",    label: "הגדרות",        icon: "⚙️" },
