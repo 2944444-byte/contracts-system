@@ -116,6 +116,29 @@ export default function LettersPage() {
     await loadAll();
   }
 
+  async function handleExportPDF(l: any) {
+    const html = `
+      <div class="header">
+        <h1>${l.subject ?? 'מכתב'}</h1>
+        <div class="meta">תאריך: ${fmtDate(l.created_at)} | שוכר: ${l.contracts?.tenants?.name ?? ''} | נכס: ${l.contracts?.properties?.name ?? ''}</div>
+      </div>
+      <div class="content">${l.body}</div>
+      <div class="footer">PropManager v4 | הופק ב-${new Date().toLocaleDateString('he-IL')}</div>
+    `;
+    const res = await fetch('/api/export-pdf', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ html, filename: (l.subject ?? 'letter').replace(/[^a-zA-Z0-9]/g, '_') }),
+    });
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = (l.subject ?? 'letter') + '.html';
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   function handlePrint(l: any) {
     setPreview(l);
     setTimeout(function() {
@@ -204,6 +227,10 @@ export default function LettersPage() {
                         <button onClick={function() { handlePrint(l); }}
                           className="text-xs border border-slate-200 rounded px-2 py-1 text-slate-600 hover:bg-slate-50">
                           🖨 הדפס
+                        </button>
+                        <button onClick={function() { handleExportPDF(l); }}
+                          className="text-xs border border-blue-200 rounded px-2 py-1 text-blue-600 hover:bg-blue-50">
+                          📄 PDF
                         </button>
                         <button onClick={function() { openEdit(l); }}
                           className="text-xs border border-blue-200 rounded px-2 py-1 text-blue-700 hover:bg-blue-50">
