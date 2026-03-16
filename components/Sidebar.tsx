@@ -29,6 +29,7 @@ const NAV = [
   { href: "/companies",   label: "חברות",         icon: "🏛️" },
   { href: "/users",       label: "משתמשים",       icon: "👑" },
   { href: "/settings",    label: "הגדרות",        icon: "⚙️" },
+  { href: "/audit",       label: "יומן פעולות",   icon: "📋" },
 ];
 
 export default function Sidebar() {
