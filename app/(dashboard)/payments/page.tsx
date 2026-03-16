@@ -68,6 +68,16 @@ export default function PaymentsPage() {
     setFDueDate(ch.due_date?.split("T")[0] ?? ""); setFNotes(ch.notes ?? "");
   }
 
+  // חישוב גרייס חלקי לפי ימי הרבעון
+  function calcGrace(amount: number, gracePct: number, periodFrom: string, periodTo: string): number {
+    if (!gracePct || !periodFrom || !periodTo) return amount;
+    const from  = new Date(periodFrom);
+    const to    = new Date(periodTo);
+    const total = Math.ceil((to.getTime() - from.getTime()) / 86400000) + 1;
+    const grace = Math.min(gracePct / 100, 1);
+    return amount * (1 - grace);
+  }
+
   async function handleSave() {
     if (!fContractId) { alert("חובה: חוזה"); return; }
     if (!fAmount) { alert("חובה: סכום"); return; }
