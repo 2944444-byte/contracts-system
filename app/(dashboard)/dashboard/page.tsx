@@ -230,6 +230,27 @@ export default function DashboardPage() {
           </div>
         </div>
 
+      {/* פעולות מהירות */}
+      <div className="rounded-xl border border-slate-200 bg-white shadow-sm p-5">
+        <div className="font-semibold text-slate-700 mb-3">⚡ פעולות מהירות</div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+          {[
+            { label: "חוזה חדש",   href: "/contracts/new", icon: "📄", color: "bg-blue-600 hover:bg-blue-700"   },
+            { label: "שוכר חדש",   href: "/tenants",       icon: "👤", color: "bg-green-600 hover:bg-green-700" },
+            { label: "חיוב חדש",   href: "/payments",      icon: "₪",  color: "bg-purple-600 hover:bg-purple-700"},
+            { label: "דוח מחזור",  href: "/revenue",       icon: "📊", color: "bg-orange-600 hover:bg-orange-700"},
+          ].map(function(a) {
+            return (
+              <button key={a.href} onClick={function() { router.push(a.href); }}
+                className={"rounded-xl py-3 text-white text-sm font-semibold flex items-center justify-center gap-2 transition-colors " + a.color}>
+                <span>{a.icon}</span>
+                <span>{a.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
       </div>
     </div>
   );
