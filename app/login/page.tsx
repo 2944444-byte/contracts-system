@@ -36,7 +36,7 @@ export default function LoginPage() {
             <div>
               <label className="mb-1.5 block text-sm font-semibold text-slate-700">אימייל</label>
               <input
-                type="email" value={email}
+                type="email" dir="ltr" value={email}
                 onChange={function(e) { setEmail(e.target.value); }}
                 onKeyDown={function(e) { if (e.key === "Enter") handleLogin(); }}
                 placeholder="admin@company.co.il"
