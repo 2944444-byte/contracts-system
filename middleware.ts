@@ -1,41 +1,34 @@
-import { createServerClient } from "@supabase/ssr";
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
 export async function middleware(req: NextRequest) {
-  const res = NextResponse.next();
+  const { pathname } = req.nextUrl;
 
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll() { return req.cookies.getAll(); },
-        setAll(cs) { cs.forEach(function(c) { res.cookies.set(c.name, c.value, c.options); }); },
-      },
-    }
-  );
+  const isLogin  = pathname.startsWith("/login");
+  const isApi    = pathname.startsWith("/api");
+  const isStatic = pathname.startsWith("/_next") || pathname.includes(".");
 
-  const { data: { session } } = await supabase.auth.getSession();
+  if (isStatic || isApi) return NextResponse.next();
 
-  const isLogin = req.nextUrl.pathname.startsWith("/login");
-  const isApi   = req.nextUrl.pathname.startsWith("/api");
-  const isPublic = isLogin || isApi;
+  // בדוק cookie של supabase
+  const sbCookie = req.cookies.getAll().some(function(c) {
+    return c.name.includes("sb-") && c.name.includes("-auth-token");
+  });
 
-  if (!session && !isPublic) {
+  if (!sbCookie && !isLogin) {
     const url = req.nextUrl.clone();
     url.pathname = "/login";
-    url.searchParams.set("next", req.nextUrl.pathname);
+    url.searchParams.set("next", pathname);
     return NextResponse.redirect(url);
   }
 
-  if (session && isLogin) {
+  if (sbCookie && isLogin) {
     const url = req.nextUrl.clone();
     url.pathname = "/dashboard";
     return NextResponse.redirect(url);
   }
 
-  return res;
+  return NextResponse.next();
 }
 
 export const config = {
