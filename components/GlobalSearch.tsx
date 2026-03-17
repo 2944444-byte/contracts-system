@@ -3,13 +3,17 @@ import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "../lib/supabase";
 
-type Result = {
-  type: string; id: string; title: string; subtitle?: string;
-  href: string; icon: string; badge?: string;
-};
+type Result = { type:string; id:string; title:string; subtitle?:string; href:string; icon:string; };
+
+const QUICK_ACTIONS = [
+  { label:"חוזה חדש",  href:"/contracts/new", icon:"📄", color:"bg-blue-600"    },
+  { label:"שוכר חדש",  href:"/tenants",        icon:"👤", color:"bg-emerald-600" },
+  { label:"חיוב",       href:"/payments",       icon:"💳", color:"bg-purple-600"  },
+  { label:"התראות",    href:"/alerts",         icon:"🔔", color:"bg-orange-500"  },
+];
 
 export default function GlobalSearch() {
-  const router    = useRouter();
+  const router  = useRouter();
   const [open,    setOpen]    = useState(false);
   const [query,   setQuery]   = useState("");
   const [results, setResults] = useState<Result[]>([]);
@@ -19,11 +23,11 @@ export default function GlobalSearch() {
 
   useEffect(function() {
     function onKey(e: KeyboardEvent) {
-      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+      if ((e.metaKey||e.ctrlKey) && e.key==="k") {
         e.preventDefault(); setOpen(true);
-        setTimeout(function() { inputRef.current?.focus(); }, 50);
+        setTimeout(function(){inputRef.current?.focus();}, 60);
       }
-      if (e.key === "Escape") { setOpen(false); setQuery(""); }
+      if (e.key==="Escape") { setOpen(false); setQuery(""); setResults([]); }
     }
     window.addEventListener("keydown", onKey);
     return function() { window.removeEventListener("keydown", onKey); };
@@ -31,59 +35,39 @@ export default function GlobalSearch() {
 
   useEffect(function() {
     if (!query.trim()) { setResults([]); return; }
-    const t = setTimeout(function() { search(query); }, 180);
+    const t = setTimeout(function() { doSearch(query); }, 200);
     return function() { clearTimeout(t); };
   }, [query]);
 
-  async function search(q: string) {
+  async function doSearch(q: string) {
     setLoading(true);
-    const like = "%" + q + "%";
-    const [{ data: tenants }, { data: properties }, { data: contracts }, { data: spaces }] = await Promise.all([
-      supabase.from("tenants").select("id,name,company_name,contact_phone").ilike("name", like).limit(4),
-      supabase.from("properties").select("id,name,city,property_type").ilike("name", like).limit(3),
-      supabase.from("contracts").select("id,status,tenants(name),properties(name)").in("status",["active","expiring","extended"]).ilike("tenants.name", like).limit(4),
-      supabase.from("spaces").select("id,name,status,properties(name)").ilike("name", like).limit(3),
+    const like = "%"+q+"%";
+    const [{ data: t }, { data: p }, { data: c }] = await Promise.all([
+      supabase.from("tenants").select("id,name,company_name").ilike("name",like).limit(4),
+      supabase.from("properties").select("id,name,city").ilike("name",like).limit(3),
+      supabase.from("contracts").select("id,status,tenants(name),properties(name)")
+        .in("status",["active","expiring"]).ilike("tenants.name",like).limit(3),
     ]);
-
     const res: Result[] = [];
-    (tenants ?? []).forEach(function(t: any) {
-      res.push({ type:"tenant",   id:t.id, title:t.name, subtitle:t.company_name??t.contact_phone, href:"/tenants",    icon:"👤", badge:"שוכר"    });
-    });
-    (properties ?? []).forEach(function(p: any) {
-      res.push({ type:"property", id:p.id, title:p.name, subtitle:p.city,                          href:"/properties", icon:"🏢", badge:"נכס"     });
-    });
-    (contracts ?? []).forEach(function(c: any) {
-      res.push({ type:"contract", id:c.id, title:c.tenants?.name??"חוזה", subtitle:c.properties?.name, href:"/contracts", icon:"📄", badge:"חוזה" });
-    });
-    (spaces ?? []).forEach(function(s: any) {
-      res.push({ type:"space",    id:s.id, title:s.name, subtitle:s.properties?.name,               href:"/units",     icon:"🚪", badge:"יחידה"   });
-    });
+    (t??[]).forEach(function(x:any){res.push({type:"tenant",   id:x.id, title:x.name, subtitle:x.company_name, href:"/tenants",    icon:"👤"});});
+    (p??[]).forEach(function(x:any){res.push({type:"property", id:x.id, title:x.name, subtitle:x.city,         href:"/properties", icon:"🏢"});});
+    (c??[]).forEach(function(x:any){res.push({type:"contract", id:x.id, title:x.tenants?.name??"חוזה", subtitle:x.properties?.name, href:"/contracts", icon:"📄"});});
     setResults(res); setSel(0); setLoading(false);
   }
 
-  function nav(href: string) {
-    router.push(href); setOpen(false); setQuery(""); setResults([]);
-  }
+  function go(href: string) { router.push(href); setOpen(false); setQuery(""); setResults([]); }
 
   function onKeyDown(e: React.KeyboardEvent) {
-    if (e.key === "ArrowDown") { e.preventDefault(); setSel(function(s){return Math.min(s+1,results.length-1);}); }
-    if (e.key === "ArrowUp")   { e.preventDefault(); setSel(function(s){return Math.max(s-1,0);}); }
-    if (e.key === "Enter" && results[sel]) nav(results[sel].href);
+    if (e.key==="ArrowDown") { e.preventDefault(); setSel(function(s){return Math.min(s+1,results.length-1);}); }
+    if (e.key==="ArrowUp")   { e.preventDefault(); setSel(function(s){return Math.max(s-1,0);}); }
+    if (e.key==="Enter" && results[sel]) go(results[sel].href);
   }
 
-  // Quick actions
-  const QUICK = [
-    { label:"חוזה חדש",  href:"/contracts/new", icon:"📄" },
-    { label:"שוכר חדש",  href:"/tenants",       icon:"👤" },
-    { label:"חיוב חדש",  href:"/payments",      icon:"₪"  },
-    { label:"התראות",    href:"/alerts",        icon:"🔔" },
-  ];
-
   if (!open) return (
-    <button onClick={function(){setOpen(true);setTimeout(function(){inputRef.current?.focus();},50);}}
+    <button onClick={function(){setOpen(true);setTimeout(function(){inputRef.current?.focus();},60);}}
       className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm text-slate-400 hover:bg-white hover:border-slate-300 transition-all">
-      <span>🔍</span><span>חיפוש מהיר...</span>
-      <kbd className="hidden sm:block text-xs bg-slate-200 rounded px-1.5 py-0.5 font-mono mr-2">⌘K</kbd>
+      <span>🔍</span><span className="hidden sm:block">חיפוש מהיר...</span>
+      <kbd className="hidden sm:block ml-2 text-xs bg-slate-200 text-slate-500 rounded px-1.5 py-0.5 font-mono">⌘K</kbd>
     </button>
   );
 
@@ -92,32 +76,31 @@ export default function GlobalSearch() {
       onClick={function(){setOpen(false);setQuery("");}}>
       <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-lg overflow-hidden"
         onClick={function(e){e.stopPropagation();}}>
-        {/* שדה */}
         <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-100">
-          <span className="text-slate-400 text-lg">🔍</span>
+          <span className="text-slate-400">🔍</span>
           <input ref={inputRef} dir="rtl" value={query}
-            onChange={function(e){setQuery(e.target.value);}}
-            onKeyDown={onKeyDown}
+            onChange={function(e){setQuery(e.target.value);}} onKeyDown={onKeyDown}
             placeholder="חפש שוכרים, נכסים, חוזים..."
-            className="flex-1 text-sm text-slate-800 placeholder-slate-400 outline-none bg-transparent" autoComplete="off" />
-          {loading && <div className="w-4 h-4 rounded-full border-2 border-blue-400 border-t-transparent animate-spin" />}
-          <kbd className="text-xs text-slate-300 bg-slate-100 rounded px-1.5 py-0.5">Esc</kbd>
+            className="flex-1 text-sm text-slate-800 placeholder-slate-400 outline-none bg-transparent" />
+          {loading && <div className="w-4 h-4 rounded-full border-2 border-blue-300 border-t-blue-600 animate-spin shrink-0" />}
+          <kbd className="text-xs text-slate-300 bg-slate-100 rounded px-1.5 py-0.5 shrink-0">Esc</kbd>
         </div>
 
-        {/* תוצאות / quick actions */}
         {results.length > 0 ? (
           <div className="max-h-72 overflow-y-auto py-1" dir="rtl">
             {results.map(function(r, i) {
               return (
-                <button key={r.id+r.type} onClick={function(){nav(r.href);}}
+                <button key={r.id+r.type} onClick={function(){go(r.href);}}
                   className={"flex items-center gap-3 w-full px-4 py-2.5 text-right transition-colors " +
-                    (i===sel ? "bg-blue-50" : "hover:bg-slate-50")}>
+                    (i===sel?"bg-blue-50":"hover:bg-slate-50")}>
                   <span className="text-xl shrink-0">{r.icon}</span>
                   <div className="flex-1 min-w-0">
                     <div className="font-semibold text-slate-800 text-sm truncate">{r.title}</div>
                     {r.subtitle && <div className="text-xs text-slate-400 truncate">{r.subtitle}</div>}
                   </div>
-                  <span className="text-xs text-slate-300 shrink-0 bg-slate-100 rounded-full px-2 py-0.5">{r.badge}</span>
+                  <span className="text-xs text-slate-300 bg-slate-100 rounded-full px-2 py-0.5 shrink-0">
+                    {r.type==="tenant"?"שוכר":r.type==="property"?"נכס":"חוזה"}
+                  </span>
                 </button>
               );
             })}
@@ -128,12 +111,12 @@ export default function GlobalSearch() {
           <div className="p-3" dir="rtl">
             <div className="text-xs font-semibold text-slate-400 mb-2 px-1">פעולות מהירות</div>
             <div className="grid grid-cols-4 gap-2">
-              {QUICK.map(function(q) {
+              {QUICK_ACTIONS.map(function(q) {
                 return (
-                  <button key={q.href} onClick={function(){nav(q.href);}}
-                    className="flex flex-col items-center gap-1 p-2 rounded-xl hover:bg-slate-50 border border-slate-100 text-center transition-colors">
+                  <button key={q.href} onClick={function(){go(q.href);}}
+                    className={"flex flex-col items-center gap-1 p-2.5 rounded-xl text-center transition-all hover:opacity-90 text-white " + q.color}>
                     <span className="text-xl">{q.icon}</span>
-                    <span className="text-xs text-slate-600 font-medium">{q.label}</span>
+                    <span className="text-xs font-semibold">{q.label}</span>
                   </button>
                 );
               })}
@@ -141,9 +124,9 @@ export default function GlobalSearch() {
           </div>
         )}
 
-        <div className="flex items-center gap-4 px-4 py-2 border-t border-slate-100 text-xs text-slate-400" dir="rtl">
+        <div className="flex gap-4 px-4 py-2 border-t border-slate-100 text-xs text-slate-400" dir="rtl">
           <span><kbd className="bg-slate-100 rounded px-1">↑↓</kbd> ניווט</span>
-          <span><kbd className="bg-slate-100 rounded px-1">Enter</kbd> פתח</span>
+          <span><kbd className="bg-slate-100 rounded px-1">↵</kbd> פתח</span>
           <span><kbd className="bg-slate-100 rounded px-1">Esc</kbd> סגור</span>
         </div>
       </div>
