@@ -1,9 +1,4 @@
-import { createClient } from "@supabase/supabase-js";
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
+import { supabase } from "./supabase";
 
 export async function syncContractStatuses(): Promise<number> {
   const today = new Date().toISOString().split("T")[0];
@@ -14,8 +9,10 @@ export async function syncContractStatuses(): Promise<number> {
     .in("status", ["upcoming","active","expiring","extended"]);
 
   for (const c of contracts ?? []) {
+    const days = c.end_date
+      ? Math.ceil((new Date(c.end_date).getTime() - Date.now()) / 86400000)
+      : 999;
     let newStatus = c.status;
-    const days = Math.ceil((new Date(c.end_date).getTime() - Date.now()) / 86400000);
 
     if (c.status === "upcoming" && c.start_date <= today) {
       newStatus = "active";
@@ -23,7 +20,7 @@ export async function syncContractStatuses(): Promise<number> {
       newStatus = "expiring";
     } else if (c.status === "expiring" && days > 90) {
       newStatus = "active";
-    } else if (days <= 0 && c.status !== "ended") {
+    } else if (days <= 0 && !["ended","extended"].includes(c.status)) {
       newStatus = "ended";
     }
 
@@ -32,6 +29,5 @@ export async function syncContractStatuses(): Promise<number> {
       updated++;
     }
   }
-
   return updated;
 }
