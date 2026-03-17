@@ -5,188 +5,175 @@ import { logAudit } from "../../../lib/audit-log";
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 
-type MgmtRecord = {
-  id: string;
-  contract_id: string;
-  month: string;
-  base_amount: number;
-  final_amount: number;
-  method: string;
-  status: string;
-  grace_applied: boolean;
-  notes: string | null;
-  contracts?: any;
-};
+function fmtDate(d: string) {
+  if (!d) return "—";
+  return new Date(d).toLocaleDateString("he-IL");
+}
+function fmtMoney(n: number) {
+  return "₪" + Math.round(n ?? 0).toLocaleString();
+}
 
 export default function ManagementPage() {
-  const [contracts,  setContracts]  = useState<any[]>([]);
-  const [records,    setRecords]    = useState<MgmtRecord[]>([]);
-  const [loading,    setLoading]    = useState(true);
-  const [generating, setGenerating] = useState(false);
-  const [selMonth,   setSelMonth]   = useState(new Date().toISOString().slice(0,7));
-  const [editingId,  setEditingId]  = useState("");
-  const [saving,     setSaving]     = useState(false);
-
-  const [fContractId, setFContractId] = useState("");
-  const [fMethod,     setFMethod]     = useState("cost_plus");
-  const [fBasePct,    setFBasePct]    = useState("10");
-  const [fFixedAmt,   setFFixedAmt]   = useState("");
-  const [fGrace,      setFGrace]      = useState(false);
-  const [fGracePct,   setFGracePct]   = useState("0");
-  const [fNotes,      setFNotes]      = useState("");
+  const [fees,      setFees]      = useState<any[]>([]);
+  const [contracts, setContracts] = useState<any[]>([]);
+  const [loading,   setLoading]   = useState(true);
+  const [generating,setGenerating]= useState(false);
+  const [selMonth,  setSelMonth]  = useState(new Date().toISOString().slice(0,7));
+  const [filterSt,  setFilterSt]  = useState("all");
 
   useEffect(function() { loadAll(); }, [selMonth]);
 
   async function loadAll() {
     setLoading(true);
-    const [{ data: c }, { data: r }] = await Promise.all([
-      supabase.from("contracts")
-        .select("id, tenants(name), properties(name, mgmt_fee_per_sqm), charged_area, rent_per_sqm, investment_addition, management_method, grace_pct")
-        .in("status", ["active","expiring","extended"]),
+    const from = selMonth + "-01";
+    const to   = selMonth + "-31";
+    const [{ data: f }, { data: c }] = await Promise.all([
       supabase.from("management_fees")
-        .select("*, contracts(tenants(name), properties(name))")
-        .eq("month", selMonth + "-01")
-        .order("created_at", { ascending: false }),
+        .select("*, contracts(tenants(name), properties(name), management_fee_pct, management_fee_fixed)")
+        .gte("month", from).lte("month", to)
+        .order("created_at"),
+      supabase.from("contracts")
+        .select("id, status, rent_per_sqm, charged_area, investment_addition, management_fee_pct, management_fee_fixed, tenants(name), properties(name)")
+        .in("status", ["active","expiring","extended"]),
     ]);
+    setFees(f ?? []);
     setContracts(c ?? []);
-    setRecords((r ?? []) as MgmtRecord[]);
     setLoading(false);
   }
 
-  function calcMgmt(c: any): { base: number; final: number } {
-    const area    = c.charged_area ?? 0;
-    const feeRate = c.properties?.mgmt_fee_per_sqm ?? 0;
-    const base    = feeRate * area;
-    const grace   = c.grace_pct ?? 0;
-    const final   = base * (1 - grace / 100);
-    return { base, final };
-  }
-
   async function generateAll() {
-    if (!confirm("לייצר חיובי ניהול לחודש " + selMonth + " לכל החוזים הפעילים?")) return;
     setGenerating(true);
     try {
+      const month = selMonth + "-01";
+      let created = 0;
       for (const c of contracts) {
-        const { base, final } = calcMgmt(c);
-        if (base <= 0) continue;
         // בדוק אם כבר קיים
         const { data: existing } = await supabase.from("management_fees")
-          .select("id").eq("contract_id", c.id).eq("month", selMonth + "-01").limit(1);
+          .select("id").eq("contract_id", c.id).eq("month", month).limit(1);
         if (existing?.length) continue;
 
-        const { data } = await supabase.from("management_fees").insert({
-          contract_id:   c.id,
-          month:         selMonth + "-01",
-          base_amount:   base,
-          final_amount:  final,
-          method:        c.management_method ?? "cost_plus",
-          grace_applied: (c.grace_pct ?? 0) > 0,
-          grace_pct:     c.grace_pct ?? 0,
-          status:        "pending",
-        }).select().single();
-        if (data) {
-          await logAudit({ entity_type: "management_fee", entity_id: data.id, action: "generate" });
+        const baseRent = (c.rent_per_sqm??0)*(c.charged_area??0)+(c.investment_addition??0);
+        let feeAmount = 0;
+        if (c.management_fee_pct) feeAmount = baseRent * (c.management_fee_pct/100);
+        else if (c.management_fee_fixed) feeAmount = c.management_fee_fixed;
+
+        if (feeAmount > 0) {
+          await supabase.from("management_fees").insert({
+            contract_id: c.id,
+            month:       month,
+            base_amount: baseRent,
+            fee_amount:  feeAmount,
+            final_amount:feeAmount,
+            status:      "pending",
+          });
+          created++;
         }
       }
+      await logAudit({ entity_type:"management_fees", entity_id:selMonth, action:"generate", notes:created+" נוצרו" });
       await loadAll();
-    } catch(e: any) { alert("שגיאה: " + e?.message); }
+      alert("נוצרו " + created + " דמי ניהול");
+    } catch(e:any) { alert("שגיאה: "+e?.message); }
     finally { setGenerating(false); }
   }
 
-  async function updateStatus(id: string, status: string) {
-    await supabase.from("management_fees").update({ status }).eq("id", id);
-    await logAudit({ entity_type: "management_fee", entity_id: id, action: "status_" + status });
+  async function approve(id: string) {
+    await supabase.from("management_fees").update({ status:"approved" }).eq("id", id);
     await loadAll();
   }
 
-  function openEdit(r: MgmtRecord) {
-    setEditingId(r.id);
-    setFContractId(r.contract_id); setFMethod(r.method ?? "cost_plus");
-    setFFixedAmt(r.final_amount?.toString() ?? ""); setFNotes(r.notes ?? "");
-    setFGrace(r.grace_applied ?? false);
+  async function markPaid(id: string) {
+    await supabase.from("management_fees").update({ status:"paid", paid_at:new Date().toISOString() }).eq("id", id);
+    await loadAll();
   }
 
-  async function handleSave() {
-    setSaving(true);
-    try {
-      await supabase.from("management_fees").update({
-        final_amount:  Number(fFixedAmt),
-        grace_applied: fGrace,
-        notes:         fNotes || null,
-      }).eq("id", editingId);
-      setEditingId("");
-      await loadAll();
-    } catch(e: any) { alert("שגיאה: " + e?.message); }
-    finally { setSaving(false); }
+  async function approveAll() {
+    const pend = filtered.filter(function(f) { return f.status==="pending"; });
+    for (const f of pend) {
+      await supabase.from("management_fees").update({ status:"approved" }).eq("id", f.id);
+    }
+    await loadAll();
   }
 
-  const totalBase  = records.reduce(function(s, r) { return s + (r.base_amount ?? 0); }, 0);
-  const totalFinal = records.reduce(function(s, r) { return s + (r.final_amount ?? 0); }, 0);
-  const pending    = records.filter(function(r) { return r.status === "pending"; });
-  const approved   = records.filter(function(r) { return r.status === "approved"; });
+  const filtered = fees.filter(function(f) {
+    return filterSt==="all" || f.status===filterSt;
+  });
 
-  const contractsWithoutRecord = contracts.filter(function(c) {
-    return !records.find(function(r) { return r.contract_id === c.id; })
-      && (c.properties?.mgmt_fee_per_sqm ?? 0) > 0;
+  const totalPending  = fees.filter(function(f){return f.status==="pending";}).reduce(function(s,f){return s+(f.final_amount??0);},0);
+  const totalApproved = fees.filter(function(f){return f.status==="approved";}).reduce(function(s,f){return s+(f.final_amount??0);},0);
+  const totalPaid     = fees.filter(function(f){return f.status==="paid";}).reduce(function(s,f){return s+(f.final_amount??0);},0);
+
+  // חוזים שעדיין אין להם דמי ניהול החודש
+  const missingFees = contracts.filter(function(c) {
+    return (c.management_fee_pct||c.management_fee_fixed) &&
+      !fees.find(function(f){return f.contract_id===c.id;});
   });
 
   return (
     <div dir="rtl">
-      <div className="mb-6 flex items-center justify-between">
+      <div className="mb-6 flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-3xl font-bold text-slate-800">דמי ניהול</h1>
-          <p className="text-sm text-slate-500 mt-1">
-            {records.length} רשומות | ₪{Math.round(totalFinal).toLocaleString()} לגבייה
-            {totalBase !== totalFinal && (
-              <span className="text-green-600"> (הנחה ₪{Math.round(totalBase - totalFinal).toLocaleString()})</span>
-            )}
-          </p>
+          <p className="text-sm text-slate-500 mt-1">{fees.length} רשומות | {selMonth}</p>
         </div>
-        <div className="flex gap-2 items-center">
-          <input type="month" value={selMonth} onChange={function(e) { setSelMonth(e.target.value); }}
-            className="rounded-lg border border-slate-200 px-3 py-2 text-sm bg-white" />
-          <button onClick={generateAll} disabled={generating || contractsWithoutRecord.length === 0}
-            className="rounded-lg bg-blue-700 px-4 py-2.5 text-sm font-bold text-white hover:bg-blue-800 disabled:opacity-50">
-            {generating ? "מייצר..." : "⚡ ייצר לכולם (" + contractsWithoutRecord.length + ")"}
+        <div className="flex gap-2 items-center flex-wrap">
+          <input type="month" value={selMonth} onChange={function(e){setSelMonth(e.target.value);}}
+            className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm" />
+          {fees.filter(function(f){return f.status==="pending";}).length > 0 && (
+            <button onClick={approveAll}
+              className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100">
+              ✓ אשר הכל
+            </button>
+          )}
+          <button onClick={generateAll} disabled={generating}
+            className="rounded-lg bg-blue-700 px-5 py-2 font-bold text-white hover:bg-blue-800 disabled:opacity-50">
+            {generating ? "מייצר..." : "⚡ צור עבור " + selMonth}
           </button>
         </div>
       </div>
 
       {/* KPI */}
-      <div className="grid grid-cols-4 gap-3 mb-5">
+      <div className="grid grid-cols-3 gap-3 mb-5">
         {[
-          { label: "ממתין",    value: pending.length,   color: "text-yellow-700", bg: "bg-yellow-50",  border: "border-yellow-100", amt: pending.reduce(function(s,r){return s+r.final_amount;},0)  },
-          { label: "אושר",     value: approved.length,  color: "text-green-700",  bg: "bg-green-50",   border: "border-green-100",  amt: approved.reduce(function(s,r){return s+r.final_amount;},0) },
-          { label: "סה\"כ חיוב",value: "",              color: "text-slate-800",  bg: "bg-white",      border: "border-slate-200",  amt: totalFinal },
-          { label: "חוזים פעילים", value: contracts.length, color: "text-blue-700", bg: "bg-blue-50", border: "border-blue-100", amt: null },
+          { label:"ממתינים",  amount:totalPending,  count:fees.filter(function(f){return f.status==="pending";}).length,  color:"text-slate-700", bg:"bg-white",    filter:"pending"  },
+          { label:"מאושרים",  amount:totalApproved, count:fees.filter(function(f){return f.status==="approved";}).length, color:"text-blue-700",  bg:"bg-blue-50",  filter:"approved" },
+          { label:"שולמו",    amount:totalPaid,     count:fees.filter(function(f){return f.status==="paid";}).length,     color:"text-green-700", bg:"bg-green-50", filter:"paid"     },
         ].map(function(k) {
           return (
-            <div key={k.label} className={"rounded-xl border p-4 " + k.bg + " " + k.border}>
-              <div className={"text-2xl font-black " + k.color}>
-                {k.value !== "" ? k.value : k.amt != null ? "₪" + Math.round(k.amt).toLocaleString() : ""}
-              </div>
-              {k.amt != null && k.value !== "" && (
-                <div className="text-xs text-slate-500">₪{Math.round(k.amt).toLocaleString()}</div>
-              )}
-              <div className="text-xs text-slate-500 mt-0.5">{k.label}</div>
-            </div>
+            <button key={k.label} onClick={function(){setFilterSt(filterSt===k.filter?"all":k.filter);}}
+              className={"rounded-xl border p-4 text-center transition-all " + k.bg +
+                (filterSt===k.filter?" border-blue-500 ring-2 ring-blue-300":" border-slate-200")}>
+              <div className={"text-2xl font-black " + k.color}>{k.count}</div>
+              <div className={"text-sm font-bold " + k.color}>{fmtMoney(k.amount)}</div>
+              <div className={"text-xs " + k.color}>{k.label}</div>
+            </button>
           );
         })}
       </div>
 
+      {/* התראה — חוזים חסרים */}
+      {missingFees.length > 0 && (
+        <div className="mb-4 rounded-xl border border-yellow-200 bg-yellow-50 p-4 flex items-center justify-between">
+          <div className="text-sm text-yellow-800">
+            <span className="font-bold">⚠️ {missingFees.length} חוזים</span> עם דמי ניהול שעוד לא נוצרו החודש
+          </div>
+          <button onClick={generateAll} disabled={generating}
+            className="text-xs bg-yellow-600 text-white px-3 py-1.5 rounded-lg font-semibold hover:bg-yellow-700">
+            {generating ? "מייצר..." : "צור עכשיו"}
+          </button>
+        </div>
+      )}
+
       {/* טבלה */}
       {loading ? (
         <div className="text-center py-12 text-slate-400">טוען...</div>
-      ) : records.length === 0 ? (
+      ) : filtered.length === 0 ? (
         <div className="rounded-xl border-2 border-dashed border-slate-200 bg-white p-12 text-center text-slate-400">
-          <div className="text-5xl mb-3">🏦</div>
-          <div>אין רשומות לחודש זה</div>
-          {contractsWithoutRecord.length > 0 && (
-            <button onClick={generateAll}
-              className="mt-3 text-blue-600 hover:underline text-sm">
-              ⚡ ייצר ל-{contractsWithoutRecord.length} חוזים
-            </button>
-          )}
+          <div className="text-5xl mb-3">🔧</div>
+          <div>אין דמי ניהול לחודש זה</div>
+          <button onClick={generateAll} disabled={generating}
+            className="mt-3 text-blue-600 hover:underline text-sm">
+            {generating ? "מייצר..." : "⚡ צור עכשיו"}
+          </button>
         </div>
       ) : (
         <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
@@ -194,116 +181,59 @@ export default function ManagementPage() {
             <thead className="bg-slate-50 text-slate-700 border-b">
               <tr>
                 <th className="px-4 py-3 font-semibold">שוכר / נכס</th>
-                <th className="px-4 py-3 font-semibold">בסיס</th>
-                <th className="px-4 py-3 font-semibold">לאחר הנחה</th>
+                <th className="px-4 py-3 font-semibold">שכ"ד בסיס</th>
+                <th className="px-4 py-3 font-semibold">% ניהול</th>
+                <th className="px-4 py-3 font-semibold">דמי ניהול</th>
+                <th className="px-4 py-3 font-semibold">חודש</th>
                 <th className="px-4 py-3 font-semibold">סטטוס</th>
                 <th className="px-4 py-3 font-semibold">פעולות</th>
               </tr>
             </thead>
             <tbody>
-              {records.map(function(r) {
-                const discount = r.base_amount - r.final_amount;
+              {filtered.map(function(f) {
+                const pct = f.contracts?.management_fee_pct;
                 return (
-                  <tr key={r.id} className={"border-t border-slate-100 " +
-                    (r.status === "approved" ? "bg-green-50" : "hover:bg-slate-50")}>
+                  <tr key={f.id} className="border-t border-slate-100 hover:bg-slate-50">
                     <td className="px-4 py-3">
-                      <div className="font-semibold text-slate-800">{r.contracts?.tenants?.name}</div>
-                      <div className="text-xs text-slate-400">{r.contracts?.properties?.name}</div>
+                      <div className="font-semibold text-slate-800">{f.contracts?.tenants?.name}</div>
+                      <div className="text-xs text-slate-400">{f.contracts?.properties?.name}</div>
                     </td>
-                    <td className="px-4 py-3 text-slate-600">₪{Math.round(r.base_amount).toLocaleString()}</td>
-                    <td className="px-4 py-3">
-                      <div className="font-bold text-slate-800">₪{Math.round(r.final_amount).toLocaleString()}</div>
-                      {discount > 0 && (
-                        <div className="text-xs text-green-600">הנחה ₪{Math.round(discount).toLocaleString()}</div>
-                      )}
-                    </td>
+                    <td className="px-4 py-3 text-slate-600">{fmtMoney(f.base_amount??0)}</td>
+                    <td className="px-4 py-3 text-slate-500">{pct ? pct+"%" : "קבוע"}</td>
+                    <td className="px-4 py-3 font-bold text-purple-700">{fmtMoney(f.final_amount??0)}</td>
+                    <td className="px-4 py-3 text-xs text-slate-500">{fmtDate(f.month)}</td>
                     <td className="px-4 py-3">
                       <span className={"text-xs px-2 py-0.5 rounded-full font-semibold " +
-                        (r.status === "approved" ? "bg-green-100 text-green-700" :
-                          r.status === "invoiced" ? "bg-blue-100 text-blue-700" :
-                          "bg-yellow-100 text-yellow-700")}>
-                        {r.status === "approved" ? "✓ אושר" : r.status === "invoiced" ? "חויב" : "ממתין"}
+                        (f.status==="paid"?"bg-green-100 text-green-700":f.status==="approved"?"bg-blue-100 text-blue-700":"bg-slate-100 text-slate-600")}>
+                        {f.status==="paid"?"שולם":f.status==="approved"?"מאושר":"ממתין"}
                       </span>
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex gap-1">
-                        {r.status === "pending" && (
-                          <button onClick={function() { updateStatus(r.id, "approved"); }}
-                            className="text-xs bg-green-600 text-white px-2 py-1 rounded-lg hover:bg-green-700 font-semibold">
-                            ✓ אשר
-                          </button>
+                        {f.status==="pending" && (
+                          <button onClick={function(){approve(f.id);}}
+                            className="text-xs bg-blue-600 text-white px-2 py-1 rounded font-semibold">✓ אשר</button>
                         )}
-                        {r.status === "approved" && (
-                          <button onClick={function() { updateStatus(r.id, "invoiced"); }}
-                            className="text-xs bg-blue-600 text-white px-2 py-1 rounded-lg hover:bg-blue-700 font-semibold">
-                            📄 חייב
-                          </button>
+                        {f.status==="approved" && (
+                          <button onClick={function(){markPaid(f.id);}}
+                            className="text-xs bg-green-600 text-white px-2 py-1 rounded font-semibold">₪ שולם</button>
                         )}
-                        <button onClick={function() { openEdit(r); }}
-                          className="text-xs border border-slate-200 rounded px-2 py-1 text-slate-600 hover:bg-slate-50">
-                          עריכה
-                        </button>
                       </div>
                     </td>
                   </tr>
                 );
               })}
             </tbody>
+            <tfoot className="border-t-2 border-slate-200 bg-slate-50">
+              <tr>
+                <td colSpan={3} className="px-4 py-2.5 text-xs font-bold text-slate-600">סה"כ</td>
+                <td className="px-4 py-2.5 font-black text-purple-700">
+                  {fmtMoney(filtered.reduce(function(s,f){return s+(f.final_amount??0);},0))}
+                </td>
+                <td colSpan={3} />
+              </tr>
+            </tfoot>
           </table>
-        </div>
-      )}
-
-      {/* חוזים ללא רשומה */}
-      {contractsWithoutRecord.length > 0 && records.length > 0 && (
-        <div className="mt-4 rounded-xl border border-yellow-200 bg-yellow-50 p-4">
-          <div className="text-sm font-semibold text-yellow-800 mb-2">
-            ⚠️ {contractsWithoutRecord.length} חוזים ללא רשומת ניהול לחודש זה:
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {contractsWithoutRecord.map(function(c) {
-              return (
-                <span key={c.id} className="text-xs bg-white border border-yellow-200 rounded-lg px-2 py-1 text-slate-600">
-                  {c.tenants?.name} — {c.properties?.name}
-                </span>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* מודל עריכה */}
-      {editingId && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
-          onClick={function() { setEditingId(""); }}>
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6"
-            onClick={function(e) { e.stopPropagation(); }} dir="rtl">
-            <div className="flex items-center justify-between mb-5">
-              <h2 className="font-bold text-slate-800 text-lg">עריכת דמי ניהול</h2>
-              <button onClick={function() { setEditingId(""); }} className="text-2xl text-slate-400">×</button>
-            </div>
-            <div className="space-y-4">
-              <div>
-                <label className="mb-1 block text-xs font-semibold text-slate-700">סכום סופי (₪)</label>
-                <input type="number" value={fFixedAmt} onChange={function(e) { setFFixedAmt(e.target.value); }} className={ic} />
-              </div>
-              <label className="flex items-center gap-2 text-sm cursor-pointer">
-                <input type="checkbox" checked={fGrace} onChange={function(e) { setFGrace(e.target.checked); }} className="w-4 h-4" />
-                <span>הוחלה הנחת grace period</span>
-              </label>
-              <div>
-                <label className="mb-1 block text-xs font-semibold text-slate-700">הערות</label>
-                <input type="text" value={fNotes} onChange={function(e) { setFNotes(e.target.value); }} className={ic} />
-              </div>
-              <div className="flex gap-3 pt-1">
-                <button onClick={function() { setEditingId(""); }}
-                  className="flex-1 rounded-lg border border-slate-200 py-2.5 text-sm text-slate-600">ביטול</button>
-                <button onClick={handleSave} disabled={saving}
-                  className="flex-1 rounded-lg bg-blue-700 py-2.5 text-sm font-bold text-white disabled:opacity-50">
-                  {saving ? "שומר..." : "שמור"}
-                </button>
-              </div>
-            </div>
-          </div>
         </div>
       )}
     </div>
