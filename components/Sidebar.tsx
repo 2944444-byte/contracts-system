@@ -25,6 +25,7 @@ const NAV = [
   { href: "/letters",     label: "מכתבים",        icon: "✉️" },
   { section: "ניהול" },
   { href: "/reports",     label: "דוחות",         icon: "📊" },
+  { href: "/cashflow",    label: "תזרים שנתי",    icon: "💹" },
   { href: "/alerts",      label: "התראות",        icon: "🔔" },
   { href: "/calendar",    label: "לוח שנה",       icon: "📅" },
   { href: "/timeline",    label: "Timeline",      icon: "📊" },
