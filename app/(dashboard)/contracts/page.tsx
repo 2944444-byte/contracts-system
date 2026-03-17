@@ -3,301 +3,247 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "../../../lib/supabase";
 
-const STATUS_CONFIG: Record<string, { label: string; bg: string; color: string; dot: string }> = {
-  active:    { label: "פעיל",    bg: "bg-green-100",  color: "text-green-700",  dot: "bg-green-500"  },
-  expiring:  { label: "פוגה",   bg: "bg-yellow-100", color: "text-yellow-700", dot: "bg-yellow-500" },
-  extended:  { label: "מורחב",  bg: "bg-blue-100",   color: "text-blue-700",   dot: "bg-blue-500"   },
-  upcoming:  { label: "עתידי",  bg: "bg-purple-100", color: "text-purple-700", dot: "bg-purple-500" },
-  ended:     { label: "הסתיים", bg: "bg-slate-100",  color: "text-slate-500",  dot: "bg-slate-400"  },
-};
-
 function fmtDate(d: string) {
   if (!d) return "—";
   return new Date(d).toLocaleDateString("he-IL");
 }
-function daysLeft(d: string) {
-  return Math.ceil((new Date(d).getTime() - Date.now()) / 86400000);
+function fmtMoney(n: number) {
+  return "₪" + Math.round(n ?? 0).toLocaleString();
 }
 
+const STATUS_MAP: Record<string, { label:string; color:string }> = {
+  active:   { label:"פעיל",    color:"bg-green-100 text-green-700"  },
+  expiring: { label:"פוגה",   color:"bg-yellow-100 text-yellow-700"},
+  extended: { label:"מורחב",  color:"bg-blue-100 text-blue-700"    },
+  upcoming: { label:"עתידי",  color:"bg-purple-100 text-purple-700"},
+  ended:    { label:"הסתיים", color:"bg-slate-100 text-slate-500"  },
+};
+
 export default function ContractsPage() {
-  const router = useRouter();
+  const router    = useRouter();
   const [contracts, setContracts] = useState<any[]>([]);
   const [loading,   setLoading]   = useState(true);
   const [search,    setSearch]    = useState("");
   const [filterSt,  setFilterSt]  = useState("active");
-  const [selected,  setSelected]  = useState<any>(null);
+  const [selected,  setSelected]  = useState<string|null>(null);
 
   useEffect(function() { loadAll(); }, []);
 
   async function loadAll() {
     const { data } = await supabase.from("contracts")
-      .select(`id, status, start_date, end_date, rent_per_sqm, charged_area, investment_addition, vat_type, notes,
-        tenants(name, contact_phone, contact_email),
-        properties(name),
-        contract_options(id, option_number, status, start_date, end_date, duration_months),
-        contract_spaces(id, space_id, charge_method, price_per_sqm, fixed_amount, spaces(name, area)),
-        contract_price_tiers(id, tier_number, start_date, end_date, rent_per_sqm),
-        contract_ti(id, ti_amount, ti_type, status)`)
-      .order("created_at", { ascending: false });
+      .select("*, tenants(name,company_name,phone,email), properties(name,city), contract_options(*), contract_spaces(spaces(name,area)), guarantees(guarantee_type,amount_actual,status)")
+      .order("end_date");
     setContracts(data ?? []);
     setLoading(false);
   }
 
+  async function handleDelete(id: string) {
+    if (!confirm("למחוק חוזה?")) return;
+    await supabase.from("contracts").delete().eq("id", id);
+    setSelected(null); await loadAll();
+  }
+
   const filtered = contracts.filter(function(c) {
-    const ms = filterSt === "all" || c.status === filterSt;
-    const mq = !search ||
-      c.tenants?.name?.includes(search) ||
-      c.properties?.name?.includes(search);
+    const ms = filterSt==="all" || c.status===filterSt;
+    const mq = !search || c.tenants?.name?.includes(search) || c.properties?.name?.includes(search);
     return ms && mq;
   });
 
-  const counts: Record<string, number> = {};
-  contracts.forEach(function(c) { counts[c.status] = (counts[c.status] ?? 0) + 1; });
+  const selContract = contracts.find(function(c) { return c.id===selected; });
 
-  function calcMonthly(c: any) {
-    return (c.rent_per_sqm ?? 0) * (c.charged_area ?? 0) + (c.investment_addition ?? 0);
+  const STATUSES = [
+    {v:"active",l:"פעילים"},{v:"expiring",l:"פוגים"},{v:"extended",l:"מורחבים"},
+    {v:"upcoming",l:"עתידיים"},{v:"ended",l:"הסתיימו"},{v:"all",l:"הכל"},
+  ];
+
+  function monthly(c: any) {
+    return (c.rent_per_sqm??0)*(c.charged_area??0)+(c.investment_addition??0);
+  }
+  function daysLeft(c: any) {
+    if (!c.end_date) return null;
+    return Math.ceil((new Date(c.end_date).getTime()-Date.now())/86400000);
   }
 
   return (
-    <div dir="rtl" className="flex gap-5 h-[calc(100vh-120px)]">
-      {/* רשימה */}
-      <div className="w-80 shrink-0 flex flex-col rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-        <div className="p-4 border-b border-slate-100">
-          <div className="flex items-center justify-between mb-3">
-            <h1 className="text-lg font-bold text-slate-800">חוזים</h1>
-            <button onClick={function() { router.push("/contracts/new"); }}
-              className="text-xs bg-blue-700 text-white px-3 py-1.5 rounded-lg hover:bg-blue-800 font-bold">+ חדש</button>
-          </div>
-          <input type="text" value={search} onChange={function(e) { setSearch(e.target.value); }}
-            placeholder="חיפוש..." className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-right" />
-          {/* פילטר סטטוס */}
-          <div className="flex flex-wrap gap-1 mt-2">
-            <button onClick={function() { setFilterSt("all"); }}
-              className={"rounded-lg px-2 py-1 text-xs font-semibold " +
-                (filterSt === "all" ? "bg-slate-700 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200")}>
-              הכל ({contracts.length})
-            </button>
-            {Object.entries(STATUS_CONFIG).map(function([k, v]) {
-              if (!counts[k]) return null;
-              return (
-                <button key={k} onClick={function() { setFilterSt(k); }}
-                  className={"rounded-lg px-2 py-1 text-xs font-semibold " +
-                    (filterSt === k ? v.bg + " " + v.color : "bg-slate-100 text-slate-600 hover:bg-slate-200")}>
-                  {v.label} ({counts[k]})
-                </button>
-              );
-            })}
-          </div>
+    <div dir="rtl">
+      <div className="mb-6 flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold text-slate-800">חוזים</h1>
+          <p className="text-sm text-slate-500 mt-1">
+            {contracts.filter(function(c){return c.status==="active";}).length} פעילים |
+            {" "}{contracts.filter(function(c){return c.status==="expiring";}).length} פוגים
+          </p>
         </div>
-
-        <div className="flex-1 overflow-y-auto divide-y divide-slate-50">
-          {loading ? (
-            <div className="py-8 text-center text-slate-400 text-sm">טוען...</div>
-          ) : filtered.length === 0 ? (
-            <div className="py-8 text-center text-slate-400 text-sm">לא נמצאו חוזים</div>
-          ) : filtered.map(function(c) {
-            const sc = STATUS_CONFIG[c.status] ?? STATUS_CONFIG.ended;
-            const isSelected = selected?.id === c.id;
-            const monthly = calcMonthly(c);
-            const d = c.end_date ? daysLeft(c.end_date) : null;
-            return (
-              <div key={c.id} onClick={function() { setSelected(c); }}
-                className={"flex items-center gap-3 px-4 py-3 cursor-pointer " +
-                  (isSelected ? "bg-blue-50 border-r-2 border-r-blue-600" : "hover:bg-slate-50")}>
-                <div className={"w-2 h-2 rounded-full shrink-0 " + sc.dot} />
-                <div className="flex-1 min-w-0">
-                  <div className="font-semibold text-sm text-slate-800 truncate">{c.tenants?.name}</div>
-                  <div className="text-xs text-slate-400 truncate">{c.properties?.name}</div>
-                </div>
-                <div className="text-left shrink-0">
-                  {monthly > 0 && (
-                    <div className="text-xs font-bold text-green-700">₪{Math.round(monthly/1000)}K</div>
-                  )}
-                  {d !== null && d <= 90 && d >= 0 && (
-                    <div className={"text-xs font-semibold " + (d <= 30 ? "text-red-500" : "text-yellow-600")}>
-                      {d}י
-                    </div>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
+        <button onClick={function(){router.push("/contracts/new");}}
+          className="rounded-lg bg-blue-700 px-5 py-2.5 font-bold text-white hover:bg-blue-800">
+          + חוזה חדש
+        </button>
       </div>
 
-      {/* פירוט */}
-      {selected ? (
-        <div className="flex-1 rounded-xl border border-slate-200 bg-white shadow-sm overflow-y-auto">
-          {(() => {
-            const c  = selected;
-            const sc = STATUS_CONFIG[c.status] ?? STATUS_CONFIG.ended;
-            const monthly = calcMonthly(c);
-            const d = c.end_date ? daysLeft(c.end_date) : null;
-            return (
-              <div>
-                {/* Header */}
-                <div className="sticky top-0 bg-white px-6 py-4 border-b border-slate-100 z-10">
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <div className="flex items-center gap-2 mb-1">
-                        <div className={"w-2 h-2 rounded-full " + sc.dot} />
-                        <span className={"text-xs px-2 py-0.5 rounded-full font-semibold " + sc.bg + " " + sc.color}>
-                          {sc.label}
+      {/* פילטרים */}
+      <div className="flex gap-2 mb-4 flex-wrap">
+        <input type="text" value={search} onChange={function(e){setSearch(e.target.value);}}
+          placeholder="חיפוש שוכר/נכס..."
+          className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm" />
+        {STATUSES.map(function(s) {
+          const cnt = s.v==="all" ? contracts.length : contracts.filter(function(c){return c.status===s.v;}).length;
+          return (
+            <button key={s.v} onClick={function(){setFilterSt(s.v);}}
+              className={"rounded-xl border px-3 py-1.5 text-xs font-semibold " +
+                (filterSt===s.v?"border-blue-500 bg-blue-50 text-blue-700":"border-slate-200 text-slate-600")}>
+              {s.l} ({cnt})
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+        {/* רשימה */}
+        <div className="space-y-2 lg:col-span-1">
+          {loading ? <div className="text-center py-8 text-slate-400">טוען...</div> : (
+            <>
+              {filtered.map(function(c) {
+                const mon  = monthly(c);
+                const days = daysLeft(c);
+                const si   = STATUS_MAP[c.status] ?? STATUS_MAP.ended;
+                return (
+                  <div key={c.id} onClick={function(){setSelected(selected===c.id?null:c.id);}}
+                    className={"rounded-xl border p-3 cursor-pointer transition-all " +
+                      (selected===c.id?"border-blue-500 bg-blue-50 shadow-sm":"border-slate-200 bg-white hover:shadow-sm")}>
+                    <div className="flex items-center justify-between mb-1">
+                      <div className="font-semibold text-slate-800 text-sm">{c.tenants?.name}</div>
+                      <span className={"text-xs px-1.5 py-0.5 rounded-full font-semibold " + si.color}>{si.label}</span>
+                    </div>
+                    <div className="text-xs text-slate-400">{c.properties?.name}</div>
+                    <div className="flex items-center justify-between mt-1.5">
+                      <span className="text-xs text-green-600 font-semibold">{fmtMoney(mon)}/חודש</span>
+                      {days !== null && days <= 90 && c.status !== "ended" && (
+                        <span className={"text-xs font-bold " + (days<=30?"text-red-600":days<=60?"text-yellow-600":"text-slate-500")}>
+                          {days} יום
                         </span>
-                        {d !== null && d <= 90 && d >= 0 && (
-                          <span className={"text-xs font-bold " + (d <= 30 ? "text-red-500" : "text-yellow-600")}>
-                            {d} ימים
-                          </span>
-                        )}
-                      </div>
-                      <h2 className="text-xl font-bold text-slate-800">{c.tenants?.name}</h2>
-                      <div className="text-sm text-slate-500">{c.properties?.name}</div>
+                      )}
                     </div>
-                    <div className="flex gap-2">
-                      <button onClick={function() { router.push("/contracts/" + c.id + "/edit"); }}
-                        className="rounded-lg border border-blue-200 px-3 py-2 text-xs font-semibold text-blue-700 hover:bg-blue-50">
-                        ✏️ עריכה
-                      </button>
+                  </div>
+                );
+              })}
+              {filtered.length === 0 && <div className="text-center py-8 text-slate-400 text-sm">אין חוזים</div>}
+            </>
+          )}
+        </div>
+
+        {/* פרטי חוזה */}
+        <div className="lg:col-span-2">
+          {!selContract ? (
+            <div className="rounded-xl border-2 border-dashed border-slate-200 bg-white p-12 text-center text-slate-400">
+              <div className="text-5xl mb-3">📄</div><div>בחר חוזה לצפייה</div>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {/* כרטיס ראשי */}
+              <div className="rounded-xl border border-slate-200 bg-white shadow-sm p-5">
+                <div className="flex items-start justify-between mb-4">
+                  <div>
+                    <div className="flex items-center gap-2 mb-1">
+                      <h2 className="text-xl font-bold text-slate-800">{selContract.tenants?.name}</h2>
+                      <span className={"text-xs px-2 py-0.5 rounded-full font-semibold " + (STATUS_MAP[selContract.status]?.color)}>
+                        {STATUS_MAP[selContract.status]?.label}
+                      </span>
                     </div>
+                    <div className="text-sm text-slate-500">🏢 {selContract.properties?.name}</div>
+                    {selContract.tenants?.company_name && <div className="text-xs text-slate-400">{selContract.tenants.company_name}</div>}
+                  </div>
+                  <div className="flex gap-2">
+                    <button onClick={function(){router.push("/contracts/"+selContract.id+"/edit");}}
+                      className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">✏️ עריכה</button>
+                    <button onClick={function(){router.push("/contracts/"+selContract.id+"/print");}}
+                      className="rounded-lg border border-blue-200 px-3 py-1.5 text-xs font-semibold text-blue-600 hover:bg-blue-50">🖨 הדפס</button>
+                    <button onClick={function(){handleDelete(selContract.id);}}
+                      className="rounded-lg border border-red-100 px-3 py-1.5 text-xs font-semibold text-red-500 hover:bg-red-50">🗑</button>
                   </div>
                 </div>
 
                 {/* KPI */}
-                <div className="grid grid-cols-4 gap-3 p-6 pb-0">
+                <div className="grid grid-cols-3 gap-3 mb-4">
                   {[
-                    { label: "שכ\"ד/מ\"ר",      value: "₪" + (c.rent_per_sqm ?? 0) },
-                    { label: "שטח",            value: (c.charged_area ?? 0) + " מ\"ר" },
-                    { label: "הכנסה/חודש",     value: "₪" + Math.round(monthly).toLocaleString(), bold: true, green: true },
-                    { label: "מע\"מ",           value: c.vat_type === "exempt" ? "פטור" : "חייב" },
+                    { label:"הכנסה חודשית", value:fmtMoney(monthly(selContract)), color:"text-green-700" },
+                    { label:"תחילה",         value:fmtDate(selContract.start_date), color:"text-slate-700" },
+                    { label:"סיום",          value:fmtDate(selContract.end_date),   color:daysLeft(selContract)!==null&&daysLeft(selContract)!<=60?"text-yellow-700":"text-slate-700" },
                   ].map(function(k) {
                     return (
-                      <div key={k.label} className="rounded-xl border border-slate-200 p-3 text-center">
-                        <div className={"text-lg font-black " + (k.green ? "text-green-700" : "text-slate-800")}>{k.value}</div>
+                      <div key={k.label} className="rounded-xl bg-slate-50 p-3 text-center">
+                        <div className={"font-bold text-sm " + k.color}>{k.value}</div>
                         <div className="text-xs text-slate-400">{k.label}</div>
                       </div>
                     );
                   })}
                 </div>
 
-                <div className="grid grid-cols-2 gap-5 p-6">
-                  {/* פרטי חוזה */}
-                  <div className="space-y-2">
-                    <div className="text-xs font-bold text-slate-500 uppercase mb-2">פרטי חוזה</div>
-                    {[
-                      { label: "תחילה",      value: fmtDate(c.start_date) },
-                      { label: "סיום",       value: fmtDate(c.end_date)   },
-                      { label: "טלפון",      value: c.tenants?.contact_phone },
-                      { label: "אימייל",     value: c.tenants?.contact_email },
-                    ].map(function(row) {
-                      if (!row.value) return null;
+                {/* פרטים */}
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  {[
+                    {l:"שכ\"ד/מ\"ר",    v:selContract.rent_per_sqm ? "₪"+selContract.rent_per_sqm : "—"},
+                    {l:"שטח מחויב",      v:selContract.charged_area ? selContract.charged_area+" מ\"ר" : "—"},
+                    {l:"תוספת השקעה",    v:selContract.investment_addition ? fmtMoney(selContract.investment_addition) : "—"},
+                    {l:"מע\"מ",          v:selContract.vat_type==="taxable" ? "חייב 18%" : "פטור"},
+                    {l:"מדד בסיס",       v:selContract.base_cpi_value ? selContract.base_cpi_value+" ("+fmtDate(selContract.base_cpi_date)+")" : "—"},
+                    {l:"שיטת הצמדה",    v:selContract.indexation_method==="highest_in_period" ? "גבוה בתקופה" : "t-2"},
+                  ].map(function(row) {
+                    return (
+                      <div key={row.l} className="flex justify-between border-b border-slate-100 pb-1">
+                        <span className="text-slate-400">{row.l}</span>
+                        <span className="font-semibold text-slate-700">{row.v}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* אופציות */}
+              {(selContract.contract_options??[]).length > 0 && (
+                <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+                  <div className="px-5 py-3 border-b border-slate-100 font-semibold text-slate-700 text-sm">אופציות</div>
+                  <div className="divide-y divide-slate-100">
+                    {(selContract.contract_options??[]).map(function(opt: any) {
                       return (
-                        <div key={row.label} className="flex justify-between py-1.5 border-b border-slate-100">
-                          <span className="text-xs text-slate-500">{row.label}</span>
-                          <span className="text-sm text-slate-800 font-medium">{row.value}</span>
+                        <div key={opt.id} className="px-5 py-3 flex items-center justify-between text-sm">
+                          <div>
+                            <span className="font-semibold text-slate-800">אופציה {opt.option_number}</span>
+                            <span className="text-slate-500 mr-2">{opt.duration_months} חודשים</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {opt.end_date && <span className="text-xs text-slate-400">עד {fmtDate(opt.end_date)}</span>}
+                            <span className={"text-xs px-2 py-0.5 rounded-full font-semibold " +
+                              (opt.status==="exercised"?"bg-green-100 text-green-700":opt.status==="expired"?"bg-slate-100 text-slate-500":"bg-blue-100 text-blue-700")}>
+                              {opt.status==="exercised"?"מומשה":opt.status==="expired"?"פגה":"ממתינה"}
+                            </span>
+                          </div>
                         </div>
                       );
                     })}
-                  </div>
-
-                  {/* אופציות */}
-                  <div>
-                    <div className="text-xs font-bold text-slate-500 uppercase mb-2">
-                      אופציות ({(c.contract_options ?? []).length})
-                    </div>
-                    {(c.contract_options ?? []).length === 0 ? (
-                      <div className="text-xs text-slate-400">ללא אופציות</div>
-                    ) : (
-                      (c.contract_options ?? []).map(function(opt: any) {
-                        const optSc = opt.status === "exercised" ? "bg-blue-100 text-blue-700" :
-                          opt.status === "expired" ? "bg-slate-100 text-slate-400" : "bg-green-100 text-green-700";
-                        return (
-                          <div key={opt.id} className="flex items-center justify-between py-1.5 border-b border-slate-100">
-                            <span className="text-xs text-slate-600">
-                              אופציה {opt.option_number} | {opt.duration_months} חודשים
-                            </span>
-                            <span className={"text-xs px-1.5 py-0.5 rounded-full font-semibold " + optSc}>
-                              {opt.status === "exercised" ? "הופעלה" : opt.status === "expired" ? "פגה" : "פעילה"}
-                            </span>
-                          </div>
-                        );
-                      })
-                    )}
-
-                    {/* Spaces */}
-                    {(c.contract_spaces ?? []).length > 0 && (
-                      <div className="mt-4">
-                        <div className="text-xs font-bold text-slate-500 uppercase mb-2">יחידות בחוזה</div>
-                        {(c.contract_spaces ?? []).map(function(sp: any) {
-                          return (
-                            <div key={sp.id} className="flex justify-between py-1 border-b border-slate-100">
-                              <span className="text-xs text-slate-600">{sp.spaces?.name ?? "יחידה"}</span>
-                              <span className="text-xs text-slate-500">
-                                {sp.charge_method === "per_sqm" ? "₪" + sp.price_per_sqm + "/מ\"ר" :
-                                  sp.charge_method === "fixed" ? "₪" + sp.fixed_amount : sp.charge_method}
-                              </span>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
                   </div>
                 </div>
+              )}
 
-                {/* מדרגות מחיר */}
-                {(c.contract_price_tiers ?? []).length > 0 && (
-                  <div className="mx-6 mb-4 rounded-xl border border-slate-200 overflow-hidden">
-                    <div className="px-4 py-2 bg-slate-50 border-b text-xs font-bold text-slate-600">
-                      📈 מדרגות מחיר
-                    </div>
-                    <div className="divide-y divide-slate-100">
-                      {(c.contract_price_tiers ?? []).map(function(tier: any) {
-                        return (
-                          <div key={tier.id} className="flex justify-between items-center px-4 py-2">
-                            <span className="text-xs text-slate-600">
-                              {fmtDate(tier.start_date)} — {fmtDate(tier.end_date)}
-                            </span>
-                            <span className="text-sm font-bold text-slate-800">₪{tier.rent_per_sqm}/מ"ר</span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-
-                {/* TI */}
-                {(c.contract_ti ?? []).length > 0 && (
-                  <div className="mx-6 mb-4 rounded-xl border border-slate-200 p-4">
-                    <div className="text-xs font-bold text-slate-600 mb-2">🔨 השקעות שוכר (TI)</div>
-                    {(c.contract_ti ?? []).map(function(ti: any) {
+              {/* ערבויות */}
+              {(selContract.guarantees??[]).filter(function(g:any){return g.status==="active";}).length > 0 && (
+                <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+                  <div className="px-5 py-3 border-b border-slate-100 font-semibold text-slate-700 text-sm">ערבויות</div>
+                  <div className="divide-y divide-slate-100">
+                    {(selContract.guarantees??[]).filter(function(g:any){return g.status==="active";}).map(function(g: any, i: number) {
                       return (
-                        <div key={ti.id} className="flex justify-between">
-                          <span className="text-xs text-slate-600">{ti.ti_type}</span>
-                          <span className="text-sm font-bold">₪{(ti.ti_amount ?? 0).toLocaleString()}</span>
+                        <div key={i} className="px-5 py-3 flex items-center justify-between text-sm">
+                          <span className="text-slate-700">{g.guarantee_type}</span>
+                          <span className="font-bold text-slate-800">{fmtMoney(g.amount_actual??0)}</span>
                         </div>
                       );
                     })}
                   </div>
-                )}
-
-                {c.notes && (
-                  <div className="mx-6 mb-6 rounded-xl bg-slate-50 p-4 text-sm text-slate-600">{c.notes}</div>
-                )}
-              </div>
-            );
-          })()}
-        </div>
-      ) : (
-        <div className="flex-1 rounded-xl border-2 border-dashed border-slate-200 bg-white flex items-center justify-center">
-          <div className="text-center text-slate-400">
-            <div className="text-5xl mb-3">📄</div>
-            <div className="font-medium">בחר חוזה מהרשימה</div>
-            <div className="text-sm mt-1">
-              או <button onClick={function() { router.push("/contracts/new"); }}
-                className="text-blue-600 hover:underline">צור חוזה חדש</button>
+                </div>
+              )}
             </div>
-          </div>
+          )}
         </div>
-      )}
+      </div>
     </div>
   );
 }
