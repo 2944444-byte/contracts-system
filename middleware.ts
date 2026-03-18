@@ -4,25 +4,38 @@ import type { NextRequest } from "next/server";
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
-  // מסלולים ציבוריים
-  const publicPaths = ["/login", "/api/", "/_next/", "/favicon", "/robots"];
-  if (publicPaths.some(function(p){return pathname.startsWith(p);})) {
+  // מסלולים ציבוריים — לא בודקים auth
+  if (
+    pathname.startsWith("/login") ||
+    pathname.startsWith("/api/") ||
+    pathname.startsWith("/_next/") ||
+    pathname.startsWith("/favicon") ||
+    pathname === "/"
+  ) {
     return NextResponse.next();
   }
 
-  // בדיקת auth cookie
-  const cookieNames = req.cookies.getAll().map(function(c){return c.name;});
-  const hasAuth = cookieNames.some(function(n){return n.includes("auth-token") || n.includes("supabase");});
+  // Supabase v2 cookie format: sb-{ref}-auth-token
+  const cookies = req.cookies.getAll();
+  const hasAuth = cookies.some(function(c) {
+    return (
+      c.name.includes("sb-") && c.name.includes("auth-token") ||
+      c.name.includes("supabase-auth") ||
+      c.name === "sb-access-token"
+    );
+  });
 
   if (!hasAuth) {
-    const loginUrl = new URL("/login", req.url);
-    loginUrl.searchParams.set("next", pathname);
-    return NextResponse.redirect(loginUrl);
+    const url = req.nextUrl.clone();
+    url.pathname = "/login";
+    return NextResponse.redirect(url);
   }
 
   return NextResponse.next();
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+  matcher: [
+    "/((?!_next/static|_next/image|favicon.ico|robots.txt).*)",
+  ],
 };
