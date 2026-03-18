@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
-import { supabase } from "../../../lib/supabase";
-import { fetchCPI, fetchHighestCPI, calcIndexedRent, getT2Month, formatPeriod } from "../../../lib/cpi-utils";
+import { supabase } from '@/lib/supabase';
+import { fetchCPI, fetchHighestCPI, calcIndexedRent, getT2Month, formatPeriod } from '@/lib/cpi-utils';
 
 function fmtMoney(n: number) { return "₪" + Math.round(n ?? 0).toLocaleString(); }
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
