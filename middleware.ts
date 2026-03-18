@@ -1,31 +1,23 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
-export async function middleware(req: NextRequest) {
+export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
-  const isLogin  = pathname.startsWith("/login");
-  const isApi    = pathname.startsWith("/api");
-  const isStatic = pathname.startsWith("/_next") || pathname.includes(".");
-
-  if (isStatic || isApi) return NextResponse.next();
-
-  // בדוק cookie של supabase
-  const sbCookie = req.cookies.getAll().some(function(c) {
-    return c.name.includes("sb-") && c.name.includes("-auth-token");
-  });
-
-  if (!sbCookie && !isLogin) {
-    const url = req.nextUrl.clone();
-    url.pathname = "/login";
-    url.searchParams.set("next", pathname);
-    return NextResponse.redirect(url);
+  // מסלולים ציבוריים
+  const publicPaths = ["/login", "/api/", "/_next/", "/favicon", "/robots"];
+  if (publicPaths.some(function(p){return pathname.startsWith(p);})) {
+    return NextResponse.next();
   }
 
-  if (sbCookie && isLogin) {
-    const url = req.nextUrl.clone();
-    url.pathname = "/dashboard";
-    return NextResponse.redirect(url);
+  // בדיקת auth cookie
+  const cookieNames = req.cookies.getAll().map(function(c){return c.name;});
+  const hasAuth = cookieNames.some(function(n){return n.includes("auth-token") || n.includes("supabase");});
+
+  if (!hasAuth) {
+    const loginUrl = new URL("/login", req.url);
+    loginUrl.searchParams.set("next", pathname);
+    return NextResponse.redirect(loginUrl);
   }
 
   return NextResponse.next();
