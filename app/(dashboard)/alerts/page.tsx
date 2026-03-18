@@ -1,162 +1,137 @@
 "use client";
 import { useState, useEffect } from "react";
 import { supabase } from "../../../lib/supabase";
-import { logAudit } from "../../../lib/audit-log";
 
-const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
-
-const SEVERITIES = [
-  { v: "urgent",  l: "דחוף",   bg: "bg-red-100",    color: "text-red-700",    dot: "bg-red-500"    },
-  { v: "warning", l: "אזהרה",  bg: "bg-yellow-100", color: "text-yellow-700", dot: "bg-yellow-500" },
-  { v: "info",    l: "מידע",   bg: "bg-blue-100",   color: "text-blue-700",   dot: "bg-blue-500"   },
-];
+const SEVERITY_MAP: Record<string,{label:string;color:string;bg:string;dot:string}> = {
+  urgent:  { label:"דחוף",    color:"text-red-700",    bg:"bg-red-50 border-red-200",    dot:"bg-red-500"    },
+  warning: { label:"אזהרה",   color:"text-yellow-700", bg:"bg-yellow-50 border-yellow-200", dot:"bg-yellow-500" },
+  info:    { label:"מידע",    color:"text-blue-700",   bg:"bg-blue-50 border-blue-200",   dot:"bg-blue-400"   },
+};
 
 function fmtDate(d: string) {
   if (!d) return "—";
   return new Date(d).toLocaleDateString("he-IL");
 }
+function daysLeft(d: string) {
+  return Math.ceil((new Date(d).getTime() - Date.now()) / 86400000);
+}
 
 export default function AlertsPage() {
-  const [alerts,   setAlerts]   = useState<any[]>([]);
-  const [loading,  setLoading]  = useState(true);
-  const [filterSt, setFilterSt] = useState("open");
-  const [filterSv, setFilterSv] = useState("all");
-  const [editingId,setEditingId]= useState("");
-  const [isNew,    setIsNew]    = useState(false);
-  const [saving,   setSaving]   = useState(false);
+  const [alerts,    setAlerts]    = useState<any[]>([]);
+  const [loading,   setLoading]   = useState(true);
+  const [syncing,   setSyncing]   = useState(false);
+  const [filterSev, setFilterSev] = useState("all");
+  const [filterSt,  setFilterSt]  = useState("open");
 
-  const [fTitle,      setFTitle]      = useState("");
-  const [fDesc,       setFDesc]       = useState("");
-  const [fSeverity,   setFSeverity]   = useState("warning");
-  const [fDueDate,    setFDueDate]    = useState("");
-  const [fEntityType, setFEntityType] = useState("");
+  useEffect(function() { loadAlerts(); }, []);
 
-  useEffect(function() { loadAll(); }, []);
-
-  async function loadAll() {
+  async function loadAlerts() {
     const { data } = await supabase.from("alerts")
       .select("*")
-      .order("created_at", { ascending: false });
+      .order("severity", { ascending: true })
+      .order("due_date", { ascending: true });
     setAlerts(data ?? []);
     setLoading(false);
   }
 
-  function openNew() {
-    setIsNew(true); setEditingId("new");
-    setFTitle(""); setFDesc(""); setFSeverity("warning"); setFDueDate(""); setFEntityType("");
-  }
-
-  async function handleSave() {
-    if (!fTitle.trim()) { alert("חובה: כותרת"); return; }
-    setSaving(true);
+  async function handleSync() {
+    setSyncing(true);
     try {
-      const payload = {
-        title: fTitle.trim(), description: fDesc || null,
-        severity: fSeverity, due_date: fDueDate || null,
-        entity_type: fEntityType || null, status: "open",
-      };
-      if (isNew) {
-        const { data } = await supabase.from("alerts").insert(payload).select().single();
-        await logAudit({ entity_type: "alert", entity_id: data.id, action: "create" });
-      } else {
-        await supabase.from("alerts").update(payload).eq("id", editingId);
-      }
-      setEditingId("");
-      await loadAll();
-    } catch(e: any) { alert("שגיאה: " + e?.message); }
-    finally { setSaving(false); }
+      const res = await fetch("/api/alerts/sync", { method: "POST" });
+      const d   = await res.json();
+      await loadAlerts();
+      alert("✅ נוצרו " + (d.created ?? 0) + " התראות חדשות");
+    } catch(e:any) { alert("שגיאה: "+e?.message); }
+    finally { setSyncing(false); }
   }
 
-  async function closeAlert(id: string) {
-    await supabase.from("alerts").update({ status: "closed", closed_at: new Date().toISOString() }).eq("id", id);
-    await logAudit({ entity_type: "alert", entity_id: id, action: "close" });
-    await loadAll();
+  async function handleClose(id: string) {
+    await supabase.from("alerts").update({ status:"closed", closed_at: new Date().toISOString() }).eq("id", id);
+    await loadAlerts();
   }
 
-  async function bulkClose(ids: string[]) {
-    for (const id of ids) {
-      await supabase.from("alerts").update({ status: "closed", closed_at: new Date().toISOString() }).eq("id", id);
+  async function handleCloseAll() {
+    if (!confirm("לסגור את כל ההתראות הפתוחות?")) return;
+    const open = filtered.filter(function(a) { return a.status === "open"; });
+    for (const a of open) {
+      await supabase.from("alerts").update({ status:"closed", closed_at: new Date().toISOString() }).eq("id", a.id);
     }
-    await loadAll();
-  }
-
-  async function deleteAlert(id: string) {
-    if (!confirm("למחוק התראה?")) return;
-    await supabase.from("alerts").delete().eq("id", id);
-    await loadAll();
+    await loadAlerts();
   }
 
   const filtered = alerts.filter(function(a) {
     const ms = filterSt === "all" || a.status === filterSt;
-    const mv = filterSv === "all" || a.severity === filterSv;
+    const mv = filterSev === "all" || a.severity === filterSev;
     return ms && mv;
   });
 
-  const openAlerts = alerts.filter(function(a) { return a.status === "open"; });
-  const urgentCnt  = openAlerts.filter(function(a) { return a.severity === "urgent"; }).length;
-
-  function sevInfo(v: string) {
-    return SEVERITIES.find(function(s) { return s.v === v; }) ?? SEVERITIES[2];
-  }
+  const urgent  = alerts.filter(function(a) { return a.severity==="urgent"  && a.status==="open"; }).length;
+  const warning = alerts.filter(function(a) { return a.severity==="warning" && a.status==="open"; }).length;
+  const info    = alerts.filter(function(a) { return a.severity==="info"    && a.status==="open"; }).length;
+  const closed  = alerts.filter(function(a) { return a.status==="closed"; }).length;
 
   return (
     <div dir="rtl">
-      <div className="mb-6 flex items-center justify-between">
+      <div className="mb-6 flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-3xl font-bold text-slate-800">התראות</h1>
           <p className="text-sm text-slate-500 mt-1">
-            {openAlerts.length} פתוחות
-            {urgentCnt > 0 && <span className="text-red-600 font-bold"> | {urgentCnt} דחופות</span>}
+            {urgent > 0 && <span className="text-red-600 font-semibold">{urgent} דחופות | </span>}
+            {warning > 0 && <span className="text-yellow-600 font-semibold">{warning} אזהרות | </span>}
+            {info} מידע
           </p>
         </div>
         <div className="flex gap-2">
-          {openAlerts.length > 0 && (
-            <button onClick={function() { bulkClose(openAlerts.map(function(a) { return a.id; })); }}
-              className="rounded-lg border border-slate-200 px-4 py-2.5 text-sm text-slate-600 hover:bg-slate-50">
+          {filtered.filter(function(a){return a.status==="open";}).length > 0 && (
+            <button onClick={handleCloseAll}
+              className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50">
               ✓ סגור הכל
             </button>
           )}
-          <button onClick={openNew}
-            className="rounded-lg bg-blue-700 px-5 py-2.5 font-bold text-white hover:bg-blue-800">
-            + התראה חדשה
+          <button onClick={handleSync} disabled={syncing}
+            className="rounded-lg bg-blue-700 px-5 py-2 font-bold text-white hover:bg-blue-800 disabled:opacity-50">
+            {syncing ? "⏳ סורק..." : "🔄 סנכרן"}
           </button>
         </div>
       </div>
 
       {/* KPI */}
-      <div className="grid grid-cols-3 gap-3 mb-5">
-        {SEVERITIES.map(function(s) {
-          const cnt = openAlerts.filter(function(a) { return a.severity === s.v; }).length;
+      <div className="grid grid-cols-4 gap-3 mb-5">
+        {[
+          { label:"דחופות",  value:urgent,  color:"text-red-700",    bg:"bg-red-50",    filter:"urgent",  sev:"urgent"  },
+          { label:"אזהרות",  value:warning, color:"text-yellow-700", bg:"bg-yellow-50", filter:"warning", sev:"warning" },
+          { label:"מידע",    value:info,    color:"text-blue-700",   bg:"bg-blue-50",   filter:"info",    sev:"info"    },
+          { label:"סגורות",  value:closed,  color:"text-slate-500",  bg:"bg-white",     filter:"closed",  sev:"all"     },
+        ].map(function(k) {
           return (
-            <div key={s.v} className={"rounded-xl border p-4 " + s.bg}>
-              <div className={"text-2xl font-black " + s.color}>{cnt}</div>
-              <div className={"text-sm font-semibold " + s.color}>{s.l}</div>
-            </div>
+            <button key={k.label}
+              onClick={function(){setFilterSev(filterSev===k.sev&&filterSt===k.filter?"all":k.sev);setFilterSt(k.filter==="closed"?"closed":"open");}}
+              className={"rounded-xl border p-3 text-center transition-all " + k.bg +
+                (filterSev===k.sev?" border-blue-500 ring-2 ring-blue-300":" border-slate-200")}>
+              <div className={"text-2xl font-black " + k.color}>{k.value}</div>
+              <div className={"text-xs font-semibold " + k.color}>{k.label}</div>
+            </button>
           );
         })}
       </div>
 
       {/* פילטרים */}
       <div className="flex gap-2 mb-4 flex-wrap">
-        {[
-          { v: "open",   l: "פתוחות" },
-          { v: "closed", l: "סגורות" },
-          { v: "all",    l: "הכל"    },
-        ].map(function(t) {
+        {[{v:"open",l:"פתוחות"},{v:"closed",l:"סגורות"},{v:"all",l:"הכל"}].map(function(s) {
           return (
-            <button key={t.v} onClick={function() { setFilterSt(t.v); }}
+            <button key={s.v} onClick={function(){setFilterSt(s.v);}}
               className={"rounded-xl border px-3 py-1.5 text-xs font-semibold " +
-                (filterSt === t.v ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-200 text-slate-600")}>
-              {t.l}
+                (filterSt===s.v?"border-blue-500 bg-blue-50 text-blue-700":"border-slate-200 text-slate-600")}>
+              {s.l}
             </button>
           );
         })}
         <div className="w-px bg-slate-200 mx-1" />
-        {SEVERITIES.map(function(s) {
+        {[{v:"all",l:"כל החומרות"},{v:"urgent",l:"🔴 דחוף"},{v:"warning",l:"🟡 אזהרה"},{v:"info",l:"🔵 מידע"}].map(function(s) {
           return (
-            <button key={s.v} onClick={function() { setFilterSv(filterSv === s.v ? "all" : s.v); }}
+            <button key={s.v} onClick={function(){setFilterSev(s.v);}}
               className={"rounded-xl border px-3 py-1.5 text-xs font-semibold " +
-                (filterSv === s.v ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-200 text-slate-600")}>
+                (filterSev===s.v?"border-blue-500 bg-blue-50 text-blue-700":"border-slate-200 text-slate-600")}>
               {s.l}
             </button>
           );
@@ -168,113 +143,56 @@ export default function AlertsPage() {
         <div className="text-center py-12 text-slate-400">טוען...</div>
       ) : filtered.length === 0 ? (
         <div className="rounded-xl border-2 border-dashed border-slate-200 bg-white p-12 text-center text-slate-400">
-          <div className="text-5xl mb-3">🔔</div>
-          <div>אין התראות</div>
+          <div className="text-5xl mb-3">🎉</div>
+          <div className="font-semibold">אין התראות פתוחות!</div>
+          <button onClick={handleSync} disabled={syncing}
+            className="mt-3 text-blue-600 hover:underline text-sm">
+            {syncing ? "סורק..." : "לחץ לסנכרן ולבדוק"}
+          </button>
         </div>
       ) : (
         <div className="space-y-2">
           {filtered.map(function(a) {
-            const si = sevInfo(a.severity);
-            const isClosed = a.status === "closed";
+            const si = SEVERITY_MAP[a.severity] ?? SEVERITY_MAP.info;
+            const days = a.due_date ? daysLeft(a.due_date) : null;
             return (
               <div key={a.id}
-                className={"rounded-xl border p-4 transition-all " +
-                  (isClosed ? "border-slate-100 bg-slate-50 opacity-60" :
-                    a.severity === "urgent" ? "border-red-200 bg-red-50" :
-                    a.severity === "warning" ? "border-yellow-200 bg-yellow-50" :
-                    "border-blue-200 bg-blue-50")}>
-                <div className="flex items-start gap-3">
-                  <div className={"w-2 h-2 rounded-full mt-1.5 shrink-0 " + si.dot} />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-semibold text-slate-800 text-sm">{a.title}</span>
-                      <span className={"text-xs px-1.5 py-0.5 rounded-full font-semibold " + si.bg + " " + si.color}>
-                        {si.l}
-                      </span>
-                      {a.entity_type && (
-                        <span className="text-xs bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded-full">
-                          {a.entity_type}
-                        </span>
-                      )}
-                    </div>
-                    {a.description && <div className="text-xs text-slate-600 mt-1">{a.description}</div>}
-                    <div className="flex items-center gap-3 mt-1.5 text-xs text-slate-400">
-                      <span>{fmtDate(a.created_at)}</span>
-                      {a.due_date && <span className="text-orange-600">לטיפול עד: {fmtDate(a.due_date)}</span>}
-                    </div>
+                className={"rounded-xl border p-4 flex items-start gap-3 " + si.bg +
+                  (a.status==="closed" ? " opacity-50" : "")}>
+                <div className={"w-2.5 h-2.5 rounded-full mt-1.5 shrink-0 " + si.dot} />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-0.5">
+                    <span className={"text-xs font-bold px-1.5 py-0.5 rounded " + si.color.replace("text-","bg-").replace("700","100") + " " + si.color}>
+                      {si.label}
+                    </span>
+                    {a.entity_type && (
+                      <span className="text-xs text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded">{a.entity_type}</span>
+                    )}
                   </div>
-                  {!isClosed && (
-                    <div className="flex gap-1 shrink-0">
-                      <button onClick={function() { closeAlert(a.id); }}
-                        className="text-xs bg-green-600 text-white px-2 py-1 rounded-lg hover:bg-green-700 font-semibold">
-                        ✓ סגור
-                      </button>
-                      <button onClick={function() { deleteAlert(a.id); }}
-                        className="text-xs border border-red-100 rounded px-2 py-1 text-red-400 hover:bg-red-50">
-                        🗑
-                      </button>
+                  <div className="font-semibold text-slate-800 text-sm">{a.title}</div>
+                  {a.due_date && (
+                    <div className={"text-xs mt-0.5 font-medium " +
+                      (days!==null&&days<0?"text-red-500":days!==null&&days<=7?"text-orange-500":"text-slate-400")}>
+                      {days !== null && days < 0
+                        ? "⏰ איחור " + Math.abs(days) + " ימים"
+                        : days !== null && days === 0
+                        ? "⚠️ היום!"
+                        : "📅 " + fmtDate(a.due_date) + (days!==null?" ("+days+" ימים)":"")}
                     </div>
                   )}
                 </div>
+                {a.status === "open" && (
+                  <button onClick={function(){handleClose(a.id);}}
+                    className={"shrink-0 rounded-lg border px-3 py-1.5 text-xs font-semibold hover:opacity-80 " + si.color + " border-current"}>
+                    ✓ סגור
+                  </button>
+                )}
+                {a.status === "closed" && (
+                  <span className="shrink-0 text-xs text-slate-400">סגור {fmtDate(a.closed_at)}</span>
+                )}
               </div>
             );
           })}
-        </div>
-      )}
-
-      {/* מודל */}
-      {editingId && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
-          onClick={function() { setEditingId(""); }}>
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6"
-            onClick={function(e) { e.stopPropagation(); }} dir="rtl">
-            <div className="flex items-center justify-between mb-5">
-              <h2 className="font-bold text-slate-800 text-lg">התראה חדשה</h2>
-              <button onClick={function() { setEditingId(""); }} className="text-2xl text-slate-400">×</button>
-            </div>
-            <div className="space-y-4">
-              <div>
-                <label className="mb-1 block text-xs font-semibold text-slate-700">כותרת *</label>
-                <input type="text" value={fTitle} onChange={function(e){setFTitle(e.target.value);}} className={ic} />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs font-semibold text-slate-700">תיאור</label>
-                <textarea value={fDesc} onChange={function(e){setFDesc(e.target.value);}} rows={2} className={ic} />
-              </div>
-              <div>
-                <label className="mb-2 block text-xs font-semibold text-slate-700">עדיפות</label>
-                <div className="grid grid-cols-3 gap-2">
-                  {SEVERITIES.map(function(s) {
-                    return (
-                      <button key={s.v} type="button" onClick={function(){setFSeverity(s.v);}}
-                        className={"rounded-lg border p-2 text-center " +
-                          (fSeverity === s.v ? "border-blue-500 " + s.bg : "border-slate-200 hover:bg-slate-50")}>
-                        <div className={"text-xs font-bold " + (fSeverity === s.v ? s.color : "text-slate-600")}>{s.l}</div>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-700">תאריך טיפול</label>
-                  <input type="date" value={fDueDate} onChange={function(e){setFDueDate(e.target.value);}} className={ic} />
-                </div>
-                <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-700">סוג ישות</label>
-                  <input type="text" value={fEntityType} onChange={function(e){setFEntityType(e.target.value);}} className={ic} placeholder="contract, guarantee..." />
-                </div>
-              </div>
-              <div className="flex gap-3 pt-2">
-                <button onClick={function(){setEditingId("");}}
-                  className="flex-1 rounded-lg border border-slate-200 py-2.5 text-sm text-slate-600">ביטול</button>
-                <button onClick={handleSave} disabled={saving}
-                  className="flex-1 rounded-lg bg-blue-700 py-2.5 text-sm font-bold text-white disabled:opacity-50">
-                  {saving ? "שומר..." : "שמור"}
-                </button>
-              </div>
-            </div>
-          </div>
         </div>
       )}
     </div>
