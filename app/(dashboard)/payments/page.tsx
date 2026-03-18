@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
-import { supabase } from "../../../lib/supabase";
-import { logAudit } from "../../../lib/audit-log";
+import { supabase } from '@/lib/supabase';
+import { logAudit } from '@/lib/audit-log';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 const CHARGE_TYPES = [{v:"rent",l:'שכ"ד',icon:"🏢"},{v:"management",l:"דמי ניהול",icon:"🔧"},{v:"parking",l:"חניה",icon:"🅿️"},{v:"water",l:"מים",icon:"💧"},{v:"electricity",l:"חשמל",icon:"⚡"},{v:"other",l:"אחר",icon:"📋"}];
