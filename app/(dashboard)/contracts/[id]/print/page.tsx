@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { supabase } from "../../../../lib/supabase";
+import { supabase } from "@/lib/supabase";
 
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL",{day:"numeric",month:"long",year:"numeric"}) : "—"; }
 function fmtMoney(n: number) { return n ? "₪"+Math.round(n).toLocaleString() : "—"; }
