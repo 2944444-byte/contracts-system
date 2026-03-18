@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { supabase } from "../lib/supabase";
+import { supabase } from '@/lib/supabase';
 
 type Result = {type:string;id:string;title:string;subtitle?:string;href:string;icon:string};
 
