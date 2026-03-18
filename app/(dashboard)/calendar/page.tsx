@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
-import { supabase } from "../../../lib/supabase";
+import { supabase } from '@/lib/supabase';
 
 const DAYS_HE  = ["א","ב","ג","ד","ה","ו","ש"];
 const MONTHS_HE = ["","ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
