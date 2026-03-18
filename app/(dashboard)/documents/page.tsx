@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
-import { supabase } from "../../../lib/supabase";
-import { logAudit } from "../../../lib/audit-log";
+import { supabase } from '@/lib/supabase';
+import { logAudit } from '@/lib/audit-log';
 
 const FILE_ICONS: Record<string,string> = {
   pdf: "📄", doc: "📝", docx: "📝", xls: "📊", xlsx: "📊",
