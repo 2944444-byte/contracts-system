@@ -1,177 +1,144 @@
 "use client";
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
 import { supabase } from "../../../lib/supabase";
 
-function getDaysInMonth(year: number, month: number) {
-  return new Date(year, month + 1, 0).getDate();
-}
-function getFirstDayOfMonth(year: number, month: number) {
-  return new Date(year, month, 1).getDay();
-}
+const DAYS_HE  = ["א","ב","ג","ד","ה","ו","ש"];
+const MONTHS_HE = ["","ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
 
-const HE_MONTHS = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
-const HE_DAYS   = ["א","ב","ג","ד","ה","ו","ש"];
+type CalEvent = { date: string; label: string; type: string; color: string; };
 
 export default function CalendarPage() {
-  const router = useRouter();
-  const today  = new Date();
-  const [year,  setYear]  = useState(today.getFullYear());
-  const [month, setMonth] = useState(today.getMonth());
-  const [events, setEvents] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [selected, setSelected] = useState<string | null>(null);
+  const today    = new Date();
+  const [year,   setYear]   = useState(today.getFullYear());
+  const [month,  setMonth]  = useState(today.getMonth()+1);
+  const [events, setEvents] = useState<CalEvent[]>([]);
+  const [loading,setLoading]= useState(true);
+  const [sel,    setSel]    = useState<string | null>(null);
 
   useEffect(function() { loadEvents(); }, [year, month]);
 
   async function loadEvents() {
     setLoading(true);
-    const from = `${year}-${String(month+1).padStart(2,"0")}-01`;
-    const to   = `${year}-${String(month+1).padStart(2,"0")}-${getDaysInMonth(year,month)}`;
+    const from = `${year}-${String(month).padStart(2,"0")}-01`;
+    const to   = `${year}-${String(month).padStart(2,"0")}-31`;
 
-    const [{ data: contracts }, { data: alerts }] = await Promise.all([
+    const [{ data: c }, { data: a }, { data: g }] = await Promise.all([
       supabase.from("contracts")
-        .select("id, status, start_date, end_date, tenants(name), properties(name), contract_options(start_date, end_date, status)")
-        .or(`start_date.gte.${from},end_date.gte.${from}`)
-        .lte("start_date", to),
+        .select("id, end_date, start_date, tenants(name)")
+        .or(`end_date.gte.${from},start_date.gte.${from}`)
+        .or(`end_date.lte.${to},start_date.lte.${to}`),
       supabase.from("alerts")
-        .select("id, title, severity, due_date")
-        .eq("status", "open")
-        .gte("due_date", from)
-        .lte("due_date", to),
+        .select("id, title, due_date, severity")
+        .gte("due_date", from).lte("due_date", to).eq("status", "open"),
+      supabase.from("guarantees")
+        .select("id, end_date, contracts(tenants(name))")
+        .gte("end_date", from).lte("end_date", to).eq("status", "active"),
     ]);
 
-    const evts: any[] = [];
-
-    // חוזים שמתחילים החודש
-    (contracts ?? []).forEach(function(c) {
-      if (c.start_date >= from && c.start_date <= to) {
-        evts.push({ date: c.start_date, type: "start", label: "תחילת: " + c.tenants?.name, color: "bg-green-500", contractId: c.id });
+    const ev: CalEvent[] = [];
+    // חוזים פוגים
+    (c ?? []).forEach(function(x) {
+      if (x.end_date >= from && x.end_date <= to) {
+        ev.push({ date: x.end_date.split("T")[0], label: "סיום: " + (x.tenants?.name ?? ""), type:"contract_end", color:"bg-red-100 text-red-700 border-red-200" });
       }
-      if (c.end_date >= from && c.end_date <= to) {
-        evts.push({ date: c.end_date, type: "end", label: "סיום: " + c.tenants?.name, color: "bg-red-500", contractId: c.id });
+      if (x.start_date >= from && x.start_date <= to) {
+        ev.push({ date: x.start_date.split("T")[0], label: "תחילה: " + (x.tenants?.name ?? ""), type:"contract_start", color:"bg-green-100 text-green-700 border-green-200" });
       }
-      // אופציות
-      (c.contract_options ?? []).forEach(function(opt: any) {
-        if (opt.end_date >= from && opt.end_date <= to && opt.status === "pending") {
-          evts.push({ date: opt.end_date, type: "option", label: "אופציה: " + c.tenants?.name, color: "bg-blue-500", contractId: c.id });
-        }
-      });
     });
-
     // התראות
-    (alerts ?? []).forEach(function(a) {
-      if (a.due_date) {
-        const sev = a.severity === "urgent" ? "bg-red-400" : a.severity === "warning" ? "bg-yellow-400" : "bg-blue-400";
-        evts.push({ date: a.due_date, type: "alert", label: a.title, color: sev });
+    (a ?? []).forEach(function(x) {
+      if (x.due_date) {
+        ev.push({ date: x.due_date.split("T")[0], label: x.title, type:"alert", color: x.severity==="urgent" ? "bg-red-100 text-red-700 border-red-200" : "bg-yellow-100 text-yellow-700 border-yellow-200" });
+      }
+    });
+    // ערבויות
+    (g ?? []).forEach(function(x) {
+      if (x.end_date) {
+        ev.push({ date: x.end_date.split("T")[0], label: "ערבות פגה: " + (x.contracts?.tenants?.name ?? ""), type:"guarantee", color:"bg-orange-100 text-orange-700 border-orange-200" });
       }
     });
 
-    setEvents(evts);
+    setEvents(ev);
     setLoading(false);
   }
 
-  function getEventsForDay(day: number): any[] {
-    const dateStr = `${year}-${String(month+1).padStart(2,"0")}-${String(day).padStart(2,"0")}`;
-    return events.filter(function(e) { return e.date?.startsWith(dateStr); });
-  }
-
   function prevMonth() {
-    if (month === 0) { setYear(year-1); setMonth(11); }
-    else { setMonth(month-1); }
-    setSelected(null);
+    if (month === 1) { setYear(year-1); setMonth(12); }
+    else setMonth(month-1);
   }
   function nextMonth() {
-    if (month === 11) { setYear(year+1); setMonth(0); }
-    else { setMonth(month+1); }
-    setSelected(null);
+    if (month === 12) { setYear(year+1); setMonth(1); }
+    else setMonth(month+1);
   }
 
-  const daysInMonth   = getDaysInMonth(year, month);
-  const firstDay      = getFirstDayOfMonth(year, month);
-  const todayStr      = today.toISOString().split("T")[0];
-  const selectedEvts  = selected ? events.filter(function(e) { return e.date?.startsWith(selected); }) : [];
+  // בנה ימי החודש
+  const firstDay = new Date(year, month-1, 1).getDay(); // 0=ראשון
+  const daysInMonth = new Date(year, month, 0).getDate();
+  const cells: (number|null)[] = Array(firstDay).fill(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+  while (cells.length % 7 !== 0) cells.push(null);
 
-  // סיכום חודשי
-  const starts  = events.filter(function(e) { return e.type === "start"; }).length;
-  const ends    = events.filter(function(e) { return e.type === "end"; }).length;
-  const options = events.filter(function(e) { return e.type === "option"; }).length;
-  const alertsC = events.filter(function(e) { return e.type === "alert"; }).length;
+  function dayEvents(day: number) {
+    const dateStr = `${year}-${String(month).padStart(2,"0")}-${String(day).padStart(2,"0")}`;
+    return events.filter(function(e) { return e.date === dateStr; });
+  }
+
+  function isToday(day: number) {
+    return day === today.getDate() && month === today.getMonth()+1 && year === today.getFullYear();
+  }
+
+  const selEvents = sel ? events.filter(function(e){return e.date===sel;}) : [];
 
   return (
     <div dir="rtl">
       <div className="mb-6 flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold text-slate-800">לוח שנה</h1>
-          <p className="text-sm text-slate-500 mt-1">ציוני דרך לחוזים והתראות</p>
+          <p className="text-sm text-slate-500 mt-1">{events.length} אירועים החודש</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button onClick={prevMonth} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-slate-600 hover:bg-slate-50">←</button>
+          <span className="text-lg font-bold text-slate-700 min-w-36 text-center">{MONTHS_HE[month]} {year}</span>
+          <button onClick={nextMonth} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-slate-600 hover:bg-slate-50">→</button>
+          <button onClick={function(){setYear(today.getFullYear());setMonth(today.getMonth()+1);}}
+            className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-blue-700 text-sm font-semibold">היום</button>
         </div>
       </div>
 
-      {/* KPI חודשי */}
-      <div className="grid grid-cols-4 gap-3 mb-5">
-        {[
-          { label: "התחלות",  value: starts,  color: "text-green-700", bg: "bg-green-50",  border: "border-green-200"  },
-          { label: "סיומים",  value: ends,    color: "text-red-700",   bg: "bg-red-50",    border: "border-red-200"    },
-          { label: "אופציות", value: options, color: "text-blue-700",  bg: "bg-blue-50",   border: "border-blue-200"   },
-          { label: "התראות",  value: alertsC, color: "text-yellow-700",bg: "bg-yellow-50", border: "border-yellow-200" },
-        ].map(function(k) {
-          return (
-            <div key={k.label} className={"rounded-xl border p-3 text-center " + k.bg + " " + k.border}>
-              <div className={"text-2xl font-black " + k.color}>{k.value}</div>
-              <div className={"text-xs font-semibold " + k.color}>{k.label}</div>
-            </div>
-          );
-        })}
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
         {/* לוח */}
-        <div className="lg:col-span-2 rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-          {/* header */}
-          <div className="flex items-center justify-between px-5 py-3 border-b border-slate-100 bg-slate-50">
-            <button onClick={prevMonth} className="w-8 h-8 rounded-full hover:bg-slate-200 flex items-center justify-center text-slate-600">←</button>
-            <span className="font-bold text-slate-800">{HE_MONTHS[month]} {year}</span>
-            <button onClick={nextMonth} className="w-8 h-8 rounded-full hover:bg-slate-200 flex items-center justify-center text-slate-600">→</button>
-          </div>
-
-          {/* ימי שבוע */}
-          <div className="grid grid-cols-7 border-b border-slate-100">
-            {HE_DAYS.map(function(d) {
-              return <div key={d} className="text-center text-xs font-semibold text-slate-400 py-2">{d}</div>;
+        <div className="lg:col-span-3 rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+          {/* ימי השבוע */}
+          <div className="grid grid-cols-7 bg-slate-50 border-b border-slate-200">
+            {DAYS_HE.map(function(d) {
+              return (
+                <div key={d} className="text-center text-xs font-bold text-slate-500 py-2">{d}</div>
+              );
             })}
           </div>
-
           {/* ימים */}
           <div className="grid grid-cols-7">
-            {Array.from({ length: firstDay }).map(function(_, i) {
-              return <div key={"e"+i} className="min-h-[80px] border-b border-l border-slate-100 bg-slate-50" />;
-            })}
-            {Array.from({ length: daysInMonth }).map(function(_, i) {
-              const day     = i + 1;
-              const dateStr = `${year}-${String(month+1).padStart(2,"0")}-${String(day).padStart(2,"0")}`;
-              const dayEvts = getEventsForDay(day);
-              const isToday = dateStr === todayStr;
-              const isSel   = selected === dateStr;
+            {cells.map(function(day, i) {
+              if (!day) return <div key={i} className="min-h-20 border-b border-l border-slate-100 bg-slate-50/50" />;
+              const dayEvs = dayEvents(day);
+              const today_ = isToday(day);
               return (
-                <div key={day}
-                  onClick={function() { setSelected(isSel ? null : dateStr); }}
-                  className={"min-h-[80px] border-b border-l border-slate-100 p-1 cursor-pointer transition-colors " +
-                    (isSel ? "bg-blue-50" : isToday ? "bg-blue-50" : "hover:bg-slate-50")}>
-                  <div className={"text-xs font-bold mb-1 w-6 h-6 rounded-full flex items-center justify-center " +
-                    (isToday ? "bg-blue-600 text-white" : "text-slate-600")}>
+                <div key={i} onClick={function(){setSel(sel===`${year}-${String(month).padStart(2,"0")}-${String(day).padStart(2,"0")}`?null:`${year}-${String(month).padStart(2,"0")}-${String(day).padStart(2,"0")}`);}}
+                  className={"min-h-20 border-b border-l border-slate-100 p-1 cursor-pointer hover:bg-slate-50 transition-colors " +
+                    (today_?"bg-blue-50":"")}>
+                  <div className={"text-xs font-bold mb-1 w-6 h-6 flex items-center justify-center rounded-full " +
+                    (today_?"bg-blue-600 text-white":"text-slate-700")}>
                     {day}
                   </div>
                   <div className="space-y-0.5">
-                    {dayEvts.slice(0,3).map(function(e, j) {
+                    {dayEvs.slice(0,2).map(function(e,j) {
                       return (
-                        <div key={j} className={"text-white text-xs rounded px-1 truncate " + e.color}>
-                          {e.label}
+                        <div key={j} className={"text-xs px-1 py-0.5 rounded border truncate " + e.color}>
+                          {e.label.substring(0,18)}
                         </div>
                       );
                     })}
-                    {dayEvts.length > 3 && (
-                      <div className="text-xs text-slate-400">+{dayEvts.length-3}</div>
-                    )}
+                    {dayEvs.length > 2 && <div className="text-xs text-slate-400">+{dayEvs.length-2} עוד</div>}
                   </div>
                 </div>
               );
@@ -179,60 +146,61 @@ export default function CalendarPage() {
           </div>
         </div>
 
-        {/* פירוט יום נבחר */}
-        <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-          <div className="px-5 py-3 border-b border-slate-100 bg-slate-50">
-            <span className="font-semibold text-slate-700">
-              {selected ? new Date(selected).toLocaleDateString("he-IL", { day:"numeric", month:"long", year:"numeric" }) : "בחר יום"}
-            </span>
-          </div>
-          {!selected ? (
-            <div className="p-6 text-center text-slate-400 text-sm">לחץ על יום בלוח</div>
-          ) : selectedEvts.length === 0 ? (
-            <div className="p-6 text-center text-slate-400 text-sm">אין אירועים ביום זה</div>
-          ) : (
-            <div className="divide-y divide-slate-100">
-              {selectedEvts.map(function(e, i) {
-                const typeLabel = e.type === "start" ? "📗 תחילת חוזה" :
-                  e.type === "end" ? "📕 סיום חוזה" :
-                  e.type === "option" ? "📘 אופציה" : "🔔 התראה";
-                return (
-                  <div key={i} className="p-4">
-                    <div className="text-xs text-slate-400 mb-1">{typeLabel}</div>
-                    <div className="font-semibold text-slate-800 text-sm">{e.label}</div>
-                    {e.contractId && (
-                      <button onClick={function() { router.push("/contracts"); }}
-                        className="mt-2 text-xs text-blue-600 hover:underline">פתח חוזה →</button>
-                    )}
-                  </div>
-                );
-              })}
+        {/* פאנל ימין */}
+        <div className="space-y-4">
+          {/* אירועים ביום נבחר */}
+          {sel && (
+            <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+              <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
+                <span className="font-semibold text-slate-700 text-sm">
+                  {new Date(sel).toLocaleDateString("he-IL", {day:"numeric",month:"long",year:"numeric"})}
+                </span>
+                <button onClick={function(){setSel(null);}} className="text-slate-400 hover:text-slate-600">✕</button>
+              </div>
+              {selEvents.length === 0 ? (
+                <div className="p-4 text-center text-slate-400 text-sm">אין אירועים</div>
+              ) : (
+                <div className="divide-y divide-slate-100">
+                  {selEvents.map(function(e,i) {
+                    return (
+                      <div key={i} className="px-4 py-3">
+                        <div className={"text-xs px-2 py-0.5 rounded border inline-block mb-1 " + e.color}>
+                          {e.type==="contract_end"?"סיום חוזה":e.type==="contract_start"?"תחילת חוזה":e.type==="alert"?"התראה":"ערבות"}
+                        </div>
+                        <div className="text-sm text-slate-700 font-medium">{e.label}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
 
           {/* אירועים קרובים */}
-          <div className="border-t border-slate-100 px-5 py-3 bg-slate-50">
-            <div className="text-xs font-bold text-slate-500 mb-2">אירועים קרובים</div>
-            <div className="space-y-1.5">
-              {events
-                .filter(function(e) { return e.date >= todayStr; })
-                .sort(function(a, b) { return a.date.localeCompare(b.date); })
-                .slice(0, 5)
-                .map(function(e, i) {
+          <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+            <div className="px-4 py-3 border-b border-slate-100 font-semibold text-slate-700 text-sm">
+              אירועים החודש ({events.length})
+            </div>
+            {loading ? (
+              <div className="p-4 text-center text-slate-400 text-sm">טוען...</div>
+            ) : events.length === 0 ? (
+              <div className="p-4 text-center text-slate-400 text-sm">אין אירועים</div>
+            ) : (
+              <div className="divide-y divide-slate-100 max-h-80 overflow-y-auto">
+                {events.sort(function(a,b){return a.date.localeCompare(b.date);}).map(function(e,i) {
                   return (
-                    <div key={i} className="flex items-center gap-2">
-                      <div className={"w-2 h-2 rounded-full shrink-0 " + e.color} />
-                      <div className="text-xs text-slate-600 truncate">{e.label}</div>
-                      <div className="text-xs text-slate-400 shrink-0 mr-auto">
-                        {new Date(e.date).toLocaleDateString("he-IL", { day:"numeric", month:"short" })}
+                    <div key={i} className="px-4 py-2.5 flex gap-2 items-start cursor-pointer hover:bg-slate-50"
+                      onClick={function(){setSel(e.date);}}>
+                      <div className={"w-1.5 h-1.5 rounded-full mt-1.5 shrink-0 " + e.color.split(" ")[0].replace("bg-","bg-").replace("100","500")} />
+                      <div className="min-w-0">
+                        <div className="text-xs text-slate-500">{new Date(e.date).toLocaleDateString("he-IL",{day:"numeric",month:"short"})}</div>
+                        <div className="text-xs font-medium text-slate-700 truncate">{e.label}</div>
                       </div>
                     </div>
                   );
                 })}
-              {events.filter(function(e) { return e.date >= todayStr; }).length === 0 && (
-                <div className="text-xs text-slate-400">אין אירועים קרובים</div>
-              )}
-            </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
