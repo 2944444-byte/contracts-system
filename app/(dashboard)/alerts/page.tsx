@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
-import { supabase } from "../../../lib/supabase";
+import { supabase } from '@/lib/supabase';
 
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
 function daysLeft(d: string) { return Math.ceil((new Date(d).getTime()-Date.now())/86400000); }
