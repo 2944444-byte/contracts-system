@@ -220,11 +220,11 @@ export default function ContractEditPage() {
                   <div key={tier.id} className="rounded-xl border border-slate-200 p-4">
                     <div className="flex items-center justify-between mb-2">
                       <span className="font-semibold text-slate-700 text-sm">מדרגה {i+1}</span>
-                      <button onClick={function(){supabase.from("contract_price_tiers").delete().eq("id",tier.id);setTiers(function(prev){return prev.filter(function(t){return t.id!==tier.id;});}); }} className="text-xs border border-red-100 rounded px-2 py-1 text-red-400">🗑</button>
+                      <button onClick={function(){void supabase.from("contract_price_tiers").delete().eq("id",tier.id);setTiers(function(prev){return prev.filter(function(t){return t.id!==tier.id;});}); }} className="text-xs border border-red-100 rounded px-2 py-1 text-red-400">🗑</button>
                     </div>
                     <div className="grid grid-cols-2 gap-2">
-                      <div><label className="text-xs text-slate-500">תאריך תחילה</label><input type="date" defaultValue={tier.start_date?.split("T")[0]} onBlur={function(e){supabase.from("contract_price_tiers").update({start_date:e.target.value}).eq("id",tier.id);}} className={ic+" mt-0.5"}/></div>
-                      <div><label className="text-xs text-slate-500">שכ"ד למ"ר</label><input type="number" defaultValue={tier.rent_per_sqm} onBlur={function(e){supabase.from("contract_price_tiers").update({rent_per_sqm:Number(e.target.value)}).eq("id",tier.id);}} className={ic+" mt-0.5"}/></div>
+                      <div><label className="text-xs text-slate-500">תאריך תחילה</label><input type="date" defaultValue={tier.start_date?.split("T")[0]} onBlur={function(e){void supabase.from("contract_price_tiers").update({start_date:e.target.value}).eq("id",tier.id);}} className={ic+" mt-0.5"}/></div>
+                      <div><label className="text-xs text-slate-500">שכ"ד למ"ר</label><input type="number" defaultValue={tier.rent_per_sqm} onBlur={function(e){void supabase.from("contract_price_tiers").update({rent_per_sqm:Number(e.target.value)}).eq("id",tier.id);}} className={ic+" mt-0.5"}/></div>
                     </div>
                   </div>
                 );
