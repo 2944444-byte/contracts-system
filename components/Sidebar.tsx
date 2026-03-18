@@ -2,7 +2,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState, useEffect } from "react";
-import { supabase } from "../lib/supabase";
+import { supabase } from '@/lib/supabase';
 
 type NavItem = {href:string;label:string;icon:string} | {section:string};
 
