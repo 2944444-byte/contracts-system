@@ -1,255 +1,145 @@
 "use client";
 import { useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
-import { supabase } from "../../../../../lib/supabase";
+import { useParams } from "next/navigation";
+import { supabase } from "../../../../lib/supabase";
 
-function fmtDate(d: string) {
-  if (!d) return "—";
-  return new Date(d).toLocaleDateString("he-IL");
-}
-function fmtMoney(n: number) {
-  return n ? "₪" + Math.round(n).toLocaleString() : "—";
-}
+function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL",{day:"numeric",month:"long",year:"numeric"}) : "—"; }
+function fmtMoney(n: number) { return n ? "₪"+Math.round(n).toLocaleString() : "—"; }
 
 export default function ContractPrintPage() {
-  const params   = useParams();
-  const router   = useRouter();
-  const id       = params?.id as string;
-  const [data,    setData]    = useState<any>(null);
-  const [loading, setLoading] = useState(true);
+  const params = useParams();
+  const contractId = params?.id as string;
+  const [contract, setContract] = useState<any>(null);
+  const [loading,  setLoading]  = useState(true);
 
   useEffect(function() {
     async function load() {
-      const { data: c } = await supabase.from("contracts")
-        .select("*, tenants(*), properties(*), contract_options(*), contract_spaces(spaces(*)), guarantees(*)")
-        .eq("id", id).single();
-      setData(c);
-      setLoading(false);
+      const { data } = await supabase.from("contracts")
+        .select("*, tenants(*), properties(*), contract_spaces(spaces(name,area)), guarantees(*), contract_options(*)")
+        .eq("id", contractId).single();
+      setContract(data); setLoading(false);
     }
-    load();
-  }, [id]);
+    if (contractId) load();
+  }, [contractId]);
 
-  useEffect(function() {
-    if (data) setTimeout(function() { window.print(); }, 500);
-  }, [data]);
+  if (loading) return <div className="text-center py-20">טוען...</div>;
+  if (!contract) return <div className="text-center py-20 text-red-600">חוזה לא נמצא</div>;
 
-  if (loading) return (
-    <div className="flex items-center justify-center h-screen">
-      <div className="text-center text-slate-400">
-        <div className="w-8 h-8 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin mx-auto mb-3" />
-        <div>טוען חוזה...</div>
-      </div>
-    </div>
-  );
-  if (!data) return <div className="text-center p-8 text-red-500">חוזה לא נמצא</div>;
-
-  const monthly = (data.rent_per_sqm??0)*(data.charged_area??0)+(data.investment_addition??0);
-  const vat     = data.vat_type==="taxable" ? monthly*0.18 : 0;
+  const baseRent  = (contract.rent_per_sqm??0)*(contract.charged_area??0)+(contract.investment_addition??0);
+  const vat       = contract.vat_type==="taxable" ? baseRent*0.18 : 0;
+  const totalRent = baseRent+vat;
 
   return (
-    <>
-      {/* כפתורי ניווט — נסתרים בהדפסה */}
-      <div className="no-print fixed top-4 right-4 flex gap-2 z-50">
-        <button onClick={function(){router.back();}}
-          className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm text-slate-600 shadow hover:bg-slate-50">
-          ← חזרה
-        </button>
-        <button onClick={function(){window.print();}}
-          className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow hover:bg-blue-700">
-          🖨 הדפס
-        </button>
+    <div dir="rtl" className="max-w-3xl mx-auto">
+      {/* כפתורי הדפסה — נעלמים בהדפסה */}
+      <div className="print:hidden flex gap-3 mb-6">
+        <button onClick={function(){window.print();}} className="rounded-lg bg-blue-700 px-5 py-2.5 font-bold text-white hover:bg-blue-800">🖨 הדפס</button>
+        <button onClick={function(){window.history.back();}} className="rounded-lg border border-slate-200 px-5 py-2.5 text-slate-600 hover:bg-slate-50">← חזור</button>
       </div>
 
-      {/* תוכן להדפסה */}
-      <div className="print-page max-w-3xl mx-auto p-8 font-sans text-slate-800" dir="rtl"
-        style={{fontFamily:"Arial, sans-serif", direction:"rtl"}}>
-
+      {/* מסמך */}
+      <div className="bg-white border border-slate-200 rounded-2xl p-8 shadow-sm print:shadow-none print:border-none print:p-0">
         {/* כותרת */}
-        <div className="border-b-4 border-blue-600 pb-4 mb-6 flex items-start justify-between">
-          <div>
-            <h1 className="text-2xl font-black text-blue-800 mb-1">חוזה שכירות</h1>
-            <div className="text-sm text-slate-500">מזהה: {id.substring(0,8).toUpperCase()}</div>
-          </div>
-          <div className="text-left text-xs text-slate-400">
-            <div>הופק: {new Date().toLocaleDateString("he-IL")}</div>
-            <div>PropManager v4</div>
-          </div>
+        <div className="text-center mb-8 pb-6 border-b-2 border-slate-200">
+          <div className="text-3xl font-black text-slate-800 mb-1">הסכם שכירות מסחרי</div>
+          <div className="text-slate-500 text-sm">{fmtDate(contract.start_date)} — {fmtDate(contract.end_date)}</div>
         </div>
 
         {/* צדדים */}
-        <div className="grid grid-cols-2 gap-6 mb-6">
-          <div className="border border-slate-200 rounded-lg p-4 bg-slate-50">
-            <div className="text-xs font-bold text-slate-500 uppercase mb-2">המשכיר</div>
-            <div className="font-bold text-slate-800">{data.properties?.name}</div>
-            <div className="text-sm text-slate-600">{data.properties?.address}</div>
-            <div className="text-sm text-slate-600">{data.properties?.city}</div>
+        <div className="grid grid-cols-2 gap-6 mb-8">
+          <div className="rounded-xl bg-blue-50 border border-blue-100 p-4">
+            <div className="text-xs font-bold text-blue-600 mb-2 uppercase tracking-wide">המשכיר</div>
+            <div className="font-bold text-slate-800">{contract.properties?.name}</div>
+            {contract.properties?.address&&<div className="text-sm text-slate-600 mt-1">{contract.properties.address}{contract.properties.city?", "+contract.properties.city:""}</div>}
           </div>
-          <div className="border border-slate-200 rounded-lg p-4 bg-slate-50">
-            <div className="text-xs font-bold text-slate-500 uppercase mb-2">השוכר</div>
-            <div className="font-bold text-slate-800">{data.tenants?.name}</div>
-            {data.tenants?.company_name && <div className="text-sm text-slate-600">{data.tenants.company_name}</div>}
-            {data.tenants?.id_number && <div className="text-sm text-slate-600">ח.פ / ת.ז: {data.tenants.id_number}</div>}
-            {data.tenants?.phone && <div className="text-sm text-slate-600">טל: {data.tenants.phone}</div>}
-            {data.tenants?.address && <div className="text-sm text-slate-600">{data.tenants.address}</div>}
+          <div className="rounded-xl bg-green-50 border border-green-100 p-4">
+            <div className="text-xs font-bold text-green-600 mb-2 uppercase tracking-wide">השוכר</div>
+            <div className="font-bold text-slate-800">{contract.tenants?.name}</div>
+            {contract.tenants?.company_name&&<div className="text-sm text-slate-600">{contract.tenants.company_name}</div>}
+            {contract.tenants?.id_number&&<div className="text-xs text-slate-400 font-mono mt-1">ח.פ: {contract.tenants.id_number}</div>}
+            {contract.tenants?.phone&&<div className="text-sm text-slate-600 mt-1">📞 {contract.tenants.phone}</div>}
           </div>
         </div>
 
-        {/* פרטי חוזה */}
+        {/* פרטי הסכם */}
         <div className="mb-6">
-          <h2 className="text-sm font-black text-slate-600 uppercase tracking-wider mb-3 border-b border-slate-200 pb-1">פרטי החוזה</h2>
-          <div className="grid grid-cols-2 gap-x-8 gap-y-1.5 text-sm">
+          <div className="text-sm font-bold text-slate-700 mb-3 pb-1 border-b border-slate-100">פרטי ההסכם</div>
+          <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-sm">
             {[
-              {l:"תאריך תחילה",      v:fmtDate(data.start_date)},
-              {l:"תאריך סיום",       v:fmtDate(data.end_date)},
-              {l:'שכ"ד ל-מ"ר',      v:data.rent_per_sqm ? "₪"+data.rent_per_sqm+" למ\"ר" : "—"},
-              {l:"שטח מחויב",        v:data.charged_area ? data.charged_area+' מ"ר' : "—"},
-              {l:"תוספת השקעה",      v:fmtMoney(data.investment_addition)},
-              {l:"מע\"מ",            v:data.vat_type==="taxable" ? "חייב במע\"מ (18%)" : "פטור"},
-              {l:"מדד בסיס",         v:data.base_cpi_value ? data.base_cpi_value+" ("+fmtDate(data.base_cpi_date)+")" : "—"},
-              {l:"שיטת הצמדה",      v:data.indexation_method==="highest_in_period" ? "מדד גבוה ביותר בתקופה" : "t-2 (חודשיים לפני)"},
-            ].map(function(row) {
-              return (
-                <div key={row.l} className="flex justify-between py-1 border-b border-slate-100">
-                  <span className="text-slate-500">{row.l}</span>
-                  <span className="font-semibold text-slate-800">{row.v}</span>
-                </div>
-              );
-            })}
+              {l:"תחילת שכירות",  v:fmtDate(contract.start_date)},
+              {l:"סיום שכירות",   v:fmtDate(contract.end_date)},
+              {l:"שטח מושכר",    v:contract.charged_area?contract.charged_area+' מ"ר':"—"},
+              {l:"שכ\"ד למ\"ר",  v:fmtMoney(contract.rent_per_sqm)},
+              {l:"תוספת השקעות", v:fmtMoney(contract.investment_addition)},
+              {l:"שיטת הצמדה",   v:contract.indexation_method==="highest_in_period"?"מדד גבוה":"t-2"},
+              {l:"מדד בסיס",     v:contract.base_cpi_value?String(contract.base_cpi_value):"—"},
+              {l:"סטטוס",        v:contract.status==="active"?"פעיל":contract.status==="expiring"?"פוגה":"אחר"},
+            ].map(function(row){return (
+              <div key={row.l} className="flex justify-between py-1 border-b border-slate-50">
+                <span className="text-slate-500">{row.l}</span>
+                <span className="font-semibold text-slate-800">{row.v}</span>
+              </div>
+            );})}
           </div>
         </div>
 
-        {/* סיכום כספי */}
-        <div className="mb-6 bg-blue-50 border border-blue-200 rounded-lg p-4">
-          <h2 className="text-sm font-black text-blue-800 uppercase tracking-wider mb-3">סיכום כספי חודשי</h2>
+        {/* תשלומים */}
+        <div className="rounded-xl bg-slate-50 border border-slate-200 p-4 mb-6">
+          <div className="text-sm font-bold text-slate-700 mb-3">סיכום תשלום חודשי</div>
           <div className="space-y-1.5 text-sm">
-            <div className="flex justify-between">
-              <span className="text-slate-600">שכ"ד בסיס</span>
-              <span className="font-semibold">{fmtMoney(monthly - (data.investment_addition??0))}</span>
-            </div>
-            {(data.investment_addition??0) > 0 && (
-              <div className="flex justify-between">
-                <span className="text-slate-600">תוספת השקעה</span>
-                <span className="font-semibold">{fmtMoney(data.investment_addition)}</span>
-              </div>
-            )}
-            {vat > 0 && (
-              <div className="flex justify-between">
-                <span className="text-slate-600">מע"מ (18%)</span>
-                <span className="font-semibold">{fmtMoney(vat)}</span>
-              </div>
-            )}
-            <div className="flex justify-between pt-2 border-t-2 border-blue-300 font-black text-blue-800 text-base">
-              <span>סה"כ לתשלום חודשי</span>
-              <span>{fmtMoney(monthly + vat)}</span>
-            </div>
+            <div className="flex justify-between"><span className="text-slate-600">שכ"ד בסיס</span><span className="font-semibold">{fmtMoney(baseRent)}</span></div>
+            {vat>0&&<div className="flex justify-between"><span className="text-slate-600">מע"מ (18%)</span><span>{fmtMoney(vat)}</span></div>}
+            <div className="flex justify-between font-black text-base pt-2 border-t border-slate-200 mt-2"><span>סה"כ לתשלום</span><span className="text-blue-700">{fmtMoney(totalRent)}</span></div>
+            <div className="flex justify-between text-xs text-slate-400"><span>שנתי (לפני מע"מ)</span><span>{fmtMoney(baseRent*12)}</span></div>
           </div>
         </div>
 
         {/* יחידות */}
-        {(data.contract_spaces??[]).length > 0 && (
+        {contract.contract_spaces?.length>0&&(
           <div className="mb-6">
-            <h2 className="text-sm font-black text-slate-600 uppercase tracking-wider mb-3 border-b border-slate-200 pb-1">יחידות מושכרות</h2>
-            <div className="grid grid-cols-3 gap-2">
-              {(data.contract_spaces??[]).map(function(cs: any) {
-                return (
-                  <div key={cs.space_id} className="border border-slate-200 rounded-lg p-2.5 text-sm text-center bg-slate-50">
-                    <div className="font-semibold text-slate-800">{cs.spaces?.name}</div>
-                    {cs.spaces?.area && <div className="text-xs text-slate-500">{cs.spaces.area} מ"ר</div>}
-                    {cs.spaces?.floor !== undefined && cs.spaces?.floor !== null && (
-                      <div className="text-xs text-slate-400">קומה {cs.spaces.floor}</div>
-                    )}
-                  </div>
-                );
-              })}
+            <div className="text-sm font-bold text-slate-700 mb-2 pb-1 border-b border-slate-100">יחידות מושכרות</div>
+            <div className="flex flex-wrap gap-2">
+              {contract.contract_spaces.map(function(cs:any){return cs.spaces&&<span key={cs.spaces.name} className="text-xs bg-slate-100 text-slate-700 px-3 py-1 rounded-full">{cs.spaces.name}{cs.spaces.area?" — "+cs.spaces.area+' מ"ר':""}</span>;})}
             </div>
           </div>
         )}
 
         {/* אופציות */}
-        {(data.contract_options??[]).length > 0 && (
+        {contract.contract_options?.length>0&&(
           <div className="mb-6">
-            <h2 className="text-sm font-black text-slate-600 uppercase tracking-wider mb-3 border-b border-slate-200 pb-1">אופציות</h2>
-            <table className="w-full text-sm border border-slate-200 rounded-lg overflow-hidden">
-              <thead className="bg-slate-50">
-                <tr>
-                  <th className="px-3 py-2 text-right font-semibold text-slate-600">אופציה</th>
-                  <th className="px-3 py-2 text-right font-semibold text-slate-600">משך</th>
-                  <th className="px-3 py-2 text-right font-semibold text-slate-600">הודעה מראש</th>
-                  <th className="px-3 py-2 text-right font-semibold text-slate-600">עד תאריך</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(data.contract_options??[]).map(function(opt: any) {
-                  return (
-                    <tr key={opt.id} className="border-t border-slate-100">
-                      <td className="px-3 py-2 font-semibold">{opt.option_number}</td>
-                      <td className="px-3 py-2">{opt.duration_months} חודשים</td>
-                      <td className="px-3 py-2">{opt.notice_days_before_end ?? 90} יום</td>
-                      <td className="px-3 py-2">{fmtDate(opt.end_date)}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+            <div className="text-sm font-bold text-slate-700 mb-2 pb-1 border-b border-slate-100">אופציות חידוש</div>
+            {contract.contract_options.map(function(opt:any,i:number){return (
+              <div key={opt.id} className="text-sm flex justify-between py-1">
+                <span className="text-slate-600">אופציה {i+1}</span>
+                <span className="text-slate-800">{fmtDate(opt.start_date)} — {fmtDate(opt.end_date)}</span>
+              </div>
+            );})}
           </div>
         )}
 
         {/* ערבויות */}
-        {(data.guarantees??[]).filter(function(g:any){return g.status==="active";}).length > 0 && (
+        {contract.guarantees?.filter(function(g:any){return g.status==="active";}).length>0&&(
           <div className="mb-6">
-            <h2 className="text-sm font-black text-slate-600 uppercase tracking-wider mb-3 border-b border-slate-200 pb-1">ערבויות</h2>
-            <table className="w-full text-sm border border-slate-200 rounded-lg overflow-hidden">
-              <thead className="bg-slate-50">
-                <tr>
-                  <th className="px-3 py-2 text-right font-semibold text-slate-600">סוג</th>
-                  <th className="px-3 py-2 text-right font-semibold text-slate-600">בנק</th>
-                  <th className="px-3 py-2 text-right font-semibold text-slate-600">סכום</th>
-                  <th className="px-3 py-2 text-right font-semibold text-slate-600">תוקף עד</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(data.guarantees??[]).filter(function(g:any){return g.status==="active";}).map(function(g: any) {
-                  return (
-                    <tr key={g.id} className="border-t border-slate-100">
-                      <td className="px-3 py-2">{g.guarantee_type}</td>
-                      <td className="px-3 py-2">{g.bank_name ?? "—"}</td>
-                      <td className="px-3 py-2 font-semibold">{fmtMoney(g.amount_actual)}</td>
-                      <td className="px-3 py-2">{fmtDate(g.end_date)}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+            <div className="text-sm font-bold text-slate-700 mb-2 pb-1 border-b border-slate-100">ביטחונות</div>
+            {contract.guarantees.filter(function(g:any){return g.status==="active";}).map(function(g:any){return (
+              <div key={g.id} className="flex justify-between text-sm py-1">
+                <span className="text-slate-600">{g.guarantee_type==="bank"?"ערבות בנקאית":g.guarantee_type==="check"?"שיקים":g.guarantee_type}</span>
+                <span className="font-semibold">{fmtMoney(g.amount_actual??g.amount_required)}{g.bank_name?" — "+g.bank_name:""}</span>
+              </div>
+            );})}
           </div>
         )}
 
         {/* חתימות */}
-        <div className="mt-12 pt-6 border-t-2 border-slate-200">
-          <div className="grid grid-cols-2 gap-16">
-            <div className="text-center">
-              <div className="border-b-2 border-slate-400 mb-2 h-12"></div>
-              <div className="text-sm font-semibold text-slate-600">המשכיר</div>
-              <div className="text-xs text-slate-400">{data.properties?.name}</div>
-            </div>
-            <div className="text-center">
-              <div className="border-b-2 border-slate-400 mb-2 h-12"></div>
-              <div className="text-sm font-semibold text-slate-600">השוכר</div>
-              <div className="text-xs text-slate-400">{data.tenants?.name}</div>
-            </div>
-          </div>
-          <div className="text-center text-xs text-slate-300 mt-6">
-            הופק ב-{new Date().toLocaleDateString("he-IL")} | PropManager v4
-          </div>
+        <div className="mt-12 grid grid-cols-2 gap-8 text-center text-sm text-slate-500">
+          <div><div className="border-t border-slate-300 pt-2 mt-8">חתימת המשכיר + חותמת</div></div>
+          <div><div className="border-t border-slate-300 pt-2 mt-8">חתימת השוכר + חותמת</div></div>
+        </div>
+
+        <div className="mt-6 text-center text-xs text-slate-300 pt-4 border-t border-slate-100">
+          PropManager v4 — {new Date().toLocaleDateString("he-IL")}
         </div>
       </div>
-
-      <style>{`
-        @media print {
-          .no-print { display: none !important; }
-          body { background: white !important; }
-          .print-page { max-width: 100% !important; padding: 20px !important; }
-        }
-      `}</style>
-    </>
+    </div>
   );
 }
