@@ -4,28 +4,35 @@ import { useRouter } from "next/navigation";
 import { supabase } from "../lib/supabase";
 
 export default function AlertsBadge() {
-  const router  = useRouter();
+  const router = useRouter();
   const [count, setCount] = useState(0);
+  const [urgent, setUrgent] = useState(0);
 
   useEffect(function() {
-    async function load() {
-      const { count: c } = await supabase.from("alerts")
-        .select("id", { count: "exact", head: true })
-        .eq("status", "open");
-      setCount(c ?? 0);
-    }
-    load();
-    const interval = setInterval(load, 60000); // refresh every minute
+    loadCount();
+    // רענון כל 2 דקות
+    const interval = setInterval(loadCount, 120000);
     return function() { clearInterval(interval); };
   }, []);
 
+  async function loadCount() {
+    const { data } = await supabase.from("alerts")
+      .select("id,severity").eq("status","open");
+    const all = data ?? [];
+    setCount(all.length);
+    setUrgent(all.filter(function(a){return a.severity==="urgent";}).length);
+  }
+
+  if (count === 0) return null;
+
   return (
-    <button onClick={function() { router.push("/alerts"); }}
-      className="relative p-2 rounded-xl hover:bg-slate-100 transition-colors">
-      <span className="text-lg">🔔</span>
-      {count > 0 && (
-        <span className="absolute -top-0.5 -left-0.5 min-w-[18px] h-[18px] bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center px-1">
-          {count > 99 ? "99+" : count}
+    <button onClick={function(){router.push("/alerts");}}
+      className="relative flex items-center gap-1.5 rounded-xl bg-red-50 border border-red-200 px-3 py-1.5 hover:bg-red-100 transition-colors">
+      <span className="text-base">🔔</span>
+      <span className="text-xs font-bold text-red-700">{count}</span>
+      {urgent > 0 && (
+        <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-600 text-white text-[10px] font-black rounded-full flex items-center justify-center">
+          {urgent}
         </span>
       )}
     </button>
