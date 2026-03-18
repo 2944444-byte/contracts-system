@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
-import { supabase } from "../../../lib/supabase";
-import { syncContractStatuses } from "../../../lib/contractSync";
+import { supabase } from '@/lib/supabase';
+import { syncContractStatuses } from '@/lib/contractSync';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 const TABS = [{id:"general",l:"כללי",icon:"⚙️"},{id:"sync",l:"סנכרון",icon:"🔄"},{id:"vat",l:'מע"מ',icon:"📊"},{id:"templates",l:"תבניות",icon:"📝"}];
