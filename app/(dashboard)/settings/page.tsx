@@ -188,7 +188,7 @@ export default function SettingsPage() {
                     <span className="font-semibold text-slate-800">{t.name}</span>
                     <div className="flex gap-2">
                       <span className={"text-xs px-2 py-0.5 rounded-full "+(t.is_active?"bg-green-100 text-green-700":"bg-slate-100 text-slate-500")}>{t.is_active?"פעילה":"לא פעילה"}</span>
-                      <button onClick={async function(){await supabase.from("document_templates").update({is_active:!t.is_active}).eq("id",t.id);await loadAll();}} className="text-xs border border-slate-200 rounded px-2 py-0.5 text-slate-500 hover:bg-slate-50">{t.is_active?"השבת":"הפעל"}</button>
+                      <button onClick={function(){supabase.from("document_templates").update({is_active:!t.is_active}).eq("id",t.id).then(loadAll);}} className="text-xs border border-slate-200 rounded px-2 py-0.5 text-slate-500 hover:bg-slate-50">{t.is_active?"השבת":"הפעל"}</button>
                     </div>
                   </div>
                   <textarea defaultValue={t.body_template??""} rows={4}
