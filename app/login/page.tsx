@@ -1,7 +1,15 @@
 "use client";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { supabase } from '@/lib/supabase';
+import { createClient } from "@supabase/supabase-js";
+
+// Fallback hardcoded - במקרה שenv vars לא נטענו
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || "https://ndvcqgrpsqykhodiyrhx.supabase.co";
+const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5kdmNxZ3Jwc3F5a2hvZGl5cmh4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDIwNjMwODgsImV4cCI6MjA1NzYzOTA4OH0.mS9MjwuBH7MkOEXmEIJCQF5uPBvkKk_c60lP7m6RI_c";
+
+const supabaseClient = createClient(SUPABASE_URL, SUPABASE_KEY, {
+  auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
+});
 
 export default function LoginPage() {
   const router = useRouter();
@@ -12,26 +20,32 @@ export default function LoginPage() {
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault();
-    if (!email || !password) { setError("נא מלא אימייל וסיסמה"); return; }
+    if (!email.trim() || !password) { setError("נא מלא אימייל וסיסמה"); return; }
     setLoading(true);
     setError("");
-    const { error: err } = await supabase.auth.signInWithPassword({ email, password });
-    if (err) {
-      setError(err.message === "Invalid login credentials" ? "אימייל או סיסמה שגויים" : err.message);
+    try {
+      const { data, error: err } = await supabaseClient.auth.signInWithPassword({
+        email: email.trim(),
+        password,
+      });
+      if (err) throw err;
+      if (data.session) {
+        router.push("/dashboard");
+        router.refresh();
+      }
+    } catch (e: any) {
+      setError(
+        e.message === "Invalid login credentials"
+          ? "אימייל או סיסמה שגויים"
+          : e.message || "שגיאת התחברות"
+      );
       setLoading(false);
-      return;
     }
-    router.push("/dashboard");
-    router.refresh();
   }
 
   return (
-    <div
-      className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-blue-950 to-slate-900"
-      dir="rtl"
-    >
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-blue-950 to-slate-900" dir="rtl">
       <div className="w-full max-w-sm mx-4">
-        {/* Logo */}
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-blue-600 mb-4 shadow-xl">
             <span className="text-3xl">🏙️</span>
@@ -40,10 +54,8 @@ export default function LoginPage() {
           <p className="text-blue-300 text-sm mt-1">ניהול נכסים מסחריים</p>
         </div>
 
-        {/* Form */}
         <div className="bg-white rounded-2xl p-8 shadow-2xl">
           <h2 className="text-xl font-bold text-slate-800 text-center mb-6">כניסה למערכת</h2>
-
           <form onSubmit={handleLogin} className="space-y-4" noValidate>
             <div>
               <label className="block text-sm font-semibold text-slate-700 mb-1.5">אימייל</label>
@@ -57,7 +69,6 @@ export default function LoginPage() {
                 className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               />
             </div>
-
             <div>
               <label className="block text-sm font-semibold text-slate-700 mb-1.5">סיסמה</label>
               <input
@@ -69,13 +80,11 @@ export default function LoginPage() {
                 className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               />
             </div>
-
             {error && (
               <div className="rounded-xl bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700 text-center font-semibold">
                 ⚠️ {error}
               </div>
             )}
-
             <button
               type="submit"
               disabled={loading}
@@ -85,10 +94,7 @@ export default function LoginPage() {
             </button>
           </form>
         </div>
-
-        <p className="text-center text-blue-400/50 text-xs mt-4">
-          PropManager v4 © {new Date().getFullYear()}
-        </p>
+        <p className="text-center text-blue-400/50 text-xs mt-4">PropManager v4 © {new Date().getFullYear()}</p>
       </div>
     </div>
   );
