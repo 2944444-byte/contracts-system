@@ -2,246 +2,204 @@
 import { useState, useEffect } from "react";
 import { supabase } from "../../../lib/supabase";
 
-const MONTHS_HE = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
+function fmtMoney(n: number) { return "₪" + Math.round(n ?? 0).toLocaleString(); }
 
-function csvDownload(filename: string, rows: any[][], headers: string[]) {
-  const bom  = "\uFEFF";
-  const lines = [headers.join(","), ...rows.map(function(r) {
-    return r.map(function(v) { return '"' + String(v ?? "").replace(/"/g,'""') + '"'; }).join(",");
-  })];
-  const blob = new Blob([bom + lines.join("\n")], { type: "text/csv;charset=utf-8" });
-  const url  = URL.createObjectURL(blob);
-  const a    = document.createElement("a");
-  a.href = url; a.download = filename; a.click();
-  URL.revokeObjectURL(url);
-}
+const MONTHS_HE = ["","ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
 
 export default function CashflowPage() {
-  const [year,      setYear]      = useState(new Date().getFullYear());
-  const [loading,   setLoading]   = useState(true);
-  const [contracts, setContracts] = useState<any[]>([]);
-  const [charges,   setCharges]   = useState<any[]>([]);
-  const [mgmtFees,  setMgmtFees]  = useState<any[]>([]);
+  const [year,       setYear]       = useState(new Date().getFullYear());
+  const [contracts,  setContracts]  = useState<any[]>([]);
+  const [charges,    setCharges]    = useState<any[]>([]);
+  const [loading,    setLoading]    = useState(true);
 
   useEffect(function() { loadAll(); }, [year]);
 
   async function loadAll() {
     setLoading(true);
-    const from = `${year}-01-01`;
-    const to   = `${year}-12-31`;
-    const [{ data: c }, { data: ch }, { data: m }] = await Promise.all([
+    const [{ data: c }, { data: ch }] = await Promise.all([
       supabase.from("contracts")
-        .select("id, status, start_date, end_date, rent_per_sqm, charged_area, investment_addition, vat_type, tenants(name), properties(name)")
-        .in("status", ["active","expiring","extended"]),
+        .select("id, rent_per_sqm, charged_area, investment_addition, vat_type, status, start_date, end_date, tenants(name), properties(name)")
+        .in("status",["active","expiring","extended","upcoming"]),
       supabase.from("charges")
-        .select("id, total_amount, base_amount, vat_amount, charge_type, billing_period_start, status, contracts(tenants(name), properties(name))")
-        .gte("billing_period_start", from).lte("billing_period_start", to)
-        .order("billing_period_start"),
-      supabase.from("management_fees")
-        .select("id, final_amount, month, status")
-        .gte("month", from).lte("month", to)
-        .order("month"),
+        .select("id, billing_period_start, total_amount, status, charge_type")
+        .gte("billing_period_start", year+"-01-01")
+        .lte("billing_period_start", year+"-12-31"),
     ]);
     setContracts(c ?? []);
     setCharges(ch ?? []);
-    setMgmtFees(m ?? []);
     setLoading(false);
   }
 
-  // חשב הכנסה חודשית צפויה לכל חוזה
-  function expectedMonthly(c: any, month: number): number {
-    const start = new Date(c.start_date);
-    const end   = new Date(c.end_date);
-    const d     = new Date(year, month, 1);
-    if (d < start || d > end) return 0;
-    return (c.rent_per_sqm ?? 0) * (c.charged_area ?? 0) + (c.investment_addition ?? 0);
+  // חשב הכנסה חודשית לכל חוזה
+  function contractMonthly(c: any) {
+    const base = (c.rent_per_sqm??0)*(c.charged_area??0)+(c.investment_addition??0);
+    const vat  = c.vat_type==="taxable" ? base*0.18 : 0;
+    return { base, withVat: base+vat };
   }
 
-  // נתונים לכל חודש
-  const monthlyData = Array.from({ length: 12 }, function(_, m) {
-    const expected = contracts.reduce(function(s, c) { return s + expectedMonthly(c, m); }, 0);
-    const billed   = charges.filter(function(ch) {
-      return new Date(ch.billing_period_start).getMonth() === m;
-    }).reduce(function(s, ch) { return s + (ch.base_amount ?? 0); }, 0);
-    const vatBilled = charges.filter(function(ch) {
-      return new Date(ch.billing_period_start).getMonth() === m;
-    }).reduce(function(s, ch) { return s + (ch.vat_amount ?? 0); }, 0);
-    const paid = charges.filter(function(ch) {
-      return new Date(ch.billing_period_start).getMonth() === m && ch.status === "paid";
-    }).reduce(function(s, ch) { return s + (ch.base_amount ?? 0); }, 0);
-    const mgmt = mgmtFees.filter(function(mf) {
-      return new Date(mf.month).getMonth() === m;
-    }).reduce(function(s, mf) { return s + (mf.final_amount ?? 0); }, 0);
-    const total = billed + mgmt;
-    return { month: m, expected, billed, vatBilled, paid, mgmt, total };
-  });
+  // בנה נתוני חודש
+  function monthData(month: number) {
+    const from = new Date(year, month-1, 1);
+    const to   = new Date(year, month, 0);
 
-  const totalExpected = monthlyData.reduce(function(s, m) { return s + m.expected; }, 0);
-  const totalBilled   = monthlyData.reduce(function(s, m) { return s + m.billed; }, 0);
-  const totalPaid     = monthlyData.reduce(function(s, m) { return s + m.paid; }, 0);
-  const totalMgmt     = monthlyData.reduce(function(s, m) { return s + m.mgmt; }, 0);
-  const maxBar        = Math.max(...monthlyData.map(function(m) { return m.expected; }), 1);
-
-  function handleCSV() {
-    const rows = monthlyData.map(function(m) {
-      return [
-        MONTHS_HE[m.month],
-        Math.round(m.expected),
-        Math.round(m.billed),
-        Math.round(m.vatBilled),
-        Math.round(m.paid),
-        Math.round(m.mgmt),
-        Math.round(m.total),
-      ];
+    // חוזים פעילים בחודש זה
+    const active = contracts.filter(function(c) {
+      if (!c.start_date || !c.end_date) return c.status==="active";
+      const cs = new Date(c.start_date);
+      const ce = new Date(c.end_date);
+      return cs <= to && ce >= from;
     });
-    csvDownload(`תזרים_${year}.csv`, rows, ["חודש","צפוי","חויב (ללא מעמ)","מעמ","שולם","דמי ניהול","סה\"כ"]);
+
+    const potential = active.reduce(function(s,c) { return s+contractMonthly(c).withVat; },0);
+
+    // חיובים ששולמו
+    const paid = charges
+      .filter(function(ch) { return ch.billing_period_start?.startsWith(year+"-"+String(month).padStart(2,"0")); })
+      .filter(function(ch) { return ch.status==="paid"; })
+      .reduce(function(s,ch) { return s+(ch.total_amount??0); }, 0);
+
+    const pct = potential > 0 ? Math.round(paid/potential*100) : 0;
+    return { potential, paid, pct, activeCount: active.length };
+  }
+
+  const months = Array.from({length:12},function(_,i){return i+1;});
+  const monthlyData = months.map(function(m) { return { month:m, ...monthData(m) }; });
+
+  const totalPotential = monthlyData.reduce(function(s,m){return s+m.potential;},0);
+  const totalPaid      = monthlyData.reduce(function(s,m){return s+m.paid;},0);
+  const avgPct         = totalPotential>0 ? Math.round(totalPaid/totalPotential*100) : 0;
+  const maxVal         = Math.max(...monthlyData.map(function(m){return m.potential;}), 1);
+
+  // CSV Export
+  function exportCSV() {
+    const bom   = "\uFEFF";
+    const header = "חודש,הכנסה פוטנציאלית,גבייה בפועל,% גבייה,חוזים פעילים";
+    const rows   = monthlyData.map(function(m) {
+      return [MONTHS_HE[m.month]+" "+year, Math.round(m.potential), Math.round(m.paid), m.pct+"%", m.activeCount].join(",");
+    });
+    const csv = bom + [header, ...rows].join("\n");
+    const url = URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8"}));
+    const a = document.createElement("a"); a.href=url; a.download=`תזרים_${year}.csv`; a.click();
+    URL.revokeObjectURL(url);
   }
 
   return (
     <div dir="rtl">
       <div className="mb-6 flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-slate-800">תזרים כספי שנתי</h1>
-          <p className="text-sm text-slate-500 mt-1">הכנסות צפויות מול בפועל | שנת {year}</p>
+          <h1 className="text-3xl font-bold text-slate-800">תזרים שנתי</h1>
+          <p className="text-sm text-slate-500 mt-1">
+            פוטנציאל: {fmtMoney(totalPotential)} | גבייה: {fmtMoney(totalPaid)} | ממוצע גבייה: <strong className={avgPct>=90?"text-green-600":avgPct>=70?"text-yellow-600":"text-red-600"}>{avgPct}%</strong>
+          </p>
         </div>
         <div className="flex gap-2 items-center">
-          <button onClick={function(){setYear(year-1);}} className="w-8 h-8 rounded-full border border-slate-200 flex items-center justify-center text-slate-600 hover:bg-slate-50">←</button>
-          <span className="font-bold text-slate-800 w-14 text-center">{year}</span>
-          <button onClick={function(){setYear(year+1);}} className="w-8 h-8 rounded-full border border-slate-200 flex items-center justify-center text-slate-600 hover:bg-slate-50">→</button>
-          <button onClick={handleCSV} className="rounded-lg bg-slate-700 text-white px-4 py-2 text-sm font-semibold hover:bg-slate-800">⬇ CSV</button>
+          <button onClick={function(){setYear(year-1);}} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-slate-600 hover:bg-slate-50">←</button>
+          <span className="text-lg font-bold text-slate-700 w-16 text-center">{year}</span>
+          <button onClick={function(){setYear(year+1);}} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-slate-600 hover:bg-slate-50">→</button>
+          <button onClick={exportCSV} className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm text-slate-600 hover:bg-slate-50">⬇ CSV</button>
         </div>
       </div>
 
-      {/* KPI שנתי */}
-      <div className="grid grid-cols-4 gap-3 mb-6">
+      {/* KPI */}
+      <div className="grid grid-cols-3 gap-3 mb-6">
         {[
-          { label: "הכנסה צפויה",    value: totalExpected, color: "text-slate-800",   bg: "bg-white",      border: "border-slate-200"  },
-          { label: "חויב בפועל",     value: totalBilled,   color: "text-blue-700",    bg: "bg-blue-50",    border: "border-blue-100"   },
-          { label: "שולם בפועל",     value: totalPaid,     color: "text-green-700",   bg: "bg-green-50",   border: "border-green-100"  },
-          { label: "דמי ניהול",      value: totalMgmt,     color: "text-purple-700",  bg: "bg-purple-50",  border: "border-purple-100" },
+          {label:"הכנסה שנתית פוטנציאלית", value:fmtMoney(totalPotential), color:"text-slate-800"},
+          {label:"גבייה בפועל",            value:fmtMoney(totalPaid),      color:"text-green-700"},
+          {label:"ממוצע גבייה שנתי",       value:avgPct+"%",               color:avgPct>=90?"text-green-700":avgPct>=70?"text-yellow-600":"text-red-600"},
         ].map(function(k) {
           return (
-            <div key={k.label} className={"rounded-xl border p-4 " + k.bg + " " + k.border}>
-              <div className={"text-2xl font-black " + k.color}>₪{Math.round(k.value).toLocaleString()}</div>
-              <div className="text-xs text-slate-500 mt-0.5">{k.label}</div>
-              <div className="text-xs text-slate-400">שנת {year}</div>
+            <div key={k.label} className="rounded-xl border border-slate-200 bg-white p-4 text-center shadow-sm">
+              <div className={"text-2xl font-black " + k.color}>{k.value}</div>
+              <div className="text-xs text-slate-400 mt-0.5">{k.label}</div>
             </div>
           );
         })}
       </div>
 
-      {/* גרף עמודות */}
-      <div className="rounded-xl border border-slate-200 bg-white shadow-sm p-5 mb-5">
-        <div className="text-sm font-semibold text-slate-700 mb-4">הכנסה חודשית — צפוי מול חויב</div>
-        <div className="flex items-end gap-1.5 h-40">
-          {monthlyData.map(function(m) {
-            const expectedH = (m.expected / maxBar) * 100;
-            const billedH   = (m.billed   / maxBar) * 100;
-            const isCurrentMonth = m.month === new Date().getMonth() && year === new Date().getFullYear();
-            return (
-              <div key={m.month} className={"flex-1 flex flex-col items-center gap-0.5 group " + (isCurrentMonth ? "opacity-100" : "opacity-80 hover:opacity-100")}>
-                <div className="w-full flex items-end gap-0.5" style={{ height: "120px" }}>
-                  {/* צפוי */}
-                  <div className={"flex-1 rounded-t-sm bg-slate-200 transition-all " + (isCurrentMonth ? "bg-blue-200" : "")}
-                    style={{ height: expectedH + "%" }} title={`צפוי: ₪${Math.round(m.expected).toLocaleString()}`} />
-                  {/* חויב */}
-                  <div className={"flex-1 rounded-t-sm bg-blue-500 transition-all " + (isCurrentMonth ? "bg-blue-600" : "")}
-                    style={{ height: billedH + "%" }} title={`חויב: ₪${Math.round(m.billed).toLocaleString()}`} />
-                </div>
-                <div className={"text-[9px] text-slate-500 " + (isCurrentMonth ? "font-bold text-blue-600" : "")}>
-                  {MONTHS_HE[m.month].substring(0,3)}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-        <div className="flex gap-4 mt-3 text-xs text-slate-500">
-          <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-sm bg-slate-200" />צפוי</div>
-          <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-sm bg-blue-500" />חויב</div>
-        </div>
-      </div>
-
-      {/* טבלה חודשית */}
-      <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-        <div className="px-5 py-3 border-b border-slate-100 flex justify-between items-center">
-          <span className="font-semibold text-slate-700">פירוט חודשי</span>
-        </div>
-        {loading ? (
-          <div className="py-8 text-center text-slate-400">טוען...</div>
-        ) : (
-          <table className="w-full text-right text-sm">
-            <thead className="bg-slate-50 text-slate-600 border-b text-xs">
-              <tr>
-                <th className="px-4 py-2.5 font-semibold">חודש</th>
-                <th className="px-4 py-2.5 font-semibold">צפוי</th>
-                <th className="px-4 py-2.5 font-semibold">חויב</th>
-                <th className="px-4 py-2.5 font-semibold">מע"מ</th>
-                <th className="px-4 py-2.5 font-semibold">שולם</th>
-                <th className="px-4 py-2.5 font-semibold">דמי ניהול</th>
-                <th className="px-4 py-2.5 font-semibold">סה"כ</th>
-                <th className="px-4 py-2.5 font-semibold">גביה %</th>
-              </tr>
-            </thead>
-            <tbody>
+      {loading ? (
+        <div className="text-center py-12 text-slate-400">טוען...</div>
+      ) : (
+        <>
+          {/* גרף עמודות */}
+          <div className="rounded-xl border border-slate-200 bg-white shadow-sm p-5 mb-4">
+            <div className="text-xs font-semibold text-slate-500 mb-4">הכנסה חודשית (₪)</div>
+            <div className="flex items-end gap-1 h-48">
               {monthlyData.map(function(m) {
-                const collectionRate = m.billed > 0 ? Math.round(m.paid / m.billed * 100) : 0;
-                const isCurrentMonth = m.month === new Date().getMonth() && year === new Date().getFullYear();
+                const h  = maxVal > 0 ? Math.round((m.potential/maxVal)*100) : 0;
+                const hp = maxVal > 0 ? Math.round((m.paid/maxVal)*100) : 0;
+                const isNow = m.month === new Date().getMonth()+1 && year === new Date().getFullYear();
                 return (
-                  <tr key={m.month} className={"border-t border-slate-100 " + (isCurrentMonth ? "bg-blue-50 font-semibold" : "hover:bg-slate-50")}>
-                    <td className="px-4 py-2.5 font-medium text-slate-800">{MONTHS_HE[m.month]}</td>
-                    <td className="px-4 py-2.5 text-slate-600">
-                      {m.expected > 0 ? "₪" + Math.round(m.expected).toLocaleString() : "—"}
-                    </td>
-                    <td className="px-4 py-2.5 text-blue-700 font-semibold">
-                      {m.billed > 0 ? "₪" + Math.round(m.billed).toLocaleString() : "—"}
-                    </td>
-                    <td className="px-4 py-2.5 text-slate-500">
-                      {m.vatBilled > 0 ? "₪" + Math.round(m.vatBilled).toLocaleString() : "—"}
-                    </td>
-                    <td className="px-4 py-2.5 text-green-700 font-semibold">
-                      {m.paid > 0 ? "₪" + Math.round(m.paid).toLocaleString() : "—"}
-                    </td>
-                    <td className="px-4 py-2.5 text-purple-700">
-                      {m.mgmt > 0 ? "₪" + Math.round(m.mgmt).toLocaleString() : "—"}
-                    </td>
-                    <td className="px-4 py-2.5 font-bold text-slate-800">
-                      {m.total > 0 ? "₪" + Math.round(m.total).toLocaleString() : "—"}
-                    </td>
-                    <td className="px-4 py-2.5">
-                      {m.billed > 0 && (
-                        <div className="flex items-center gap-1.5">
-                          <div className="w-12 bg-slate-100 rounded-full h-1.5">
-                            <div className={"h-1.5 rounded-full " + (collectionRate >= 80 ? "bg-green-500" : collectionRate >= 50 ? "bg-yellow-400" : "bg-red-400")}
-                              style={{ width: collectionRate + "%" }} />
-                          </div>
-                          <span className={"text-xs font-semibold " + (collectionRate >= 80 ? "text-green-700" : collectionRate >= 50 ? "text-yellow-600" : "text-red-600")}>
-                            {collectionRate}%
-                          </span>
-                        </div>
-                      )}
-                    </td>
-                  </tr>
+                  <div key={m.month} className="flex-1 flex flex-col items-center gap-0.5 group relative">
+                    {/* Tooltip */}
+                    <div className="absolute bottom-full mb-1 hidden group-hover:block z-10 bg-slate-800 text-white text-xs rounded-lg p-2 whitespace-nowrap text-right">
+                      <div>{MONTHS_HE[m.month]}</div>
+                      <div>פוטנציאל: {fmtMoney(m.potential)}</div>
+                      <div>גבייה: {fmtMoney(m.paid)}</div>
+                      <div>% גבייה: {m.pct}%</div>
+                    </div>
+                    {/* עמודת גבייה */}
+                    <div className="w-full flex items-end gap-0.5 h-40">
+                      <div className={"flex-1 rounded-t transition-all " + (isNow?"bg-blue-600":"bg-blue-200")}
+                        style={{height: h+"%", minHeight: m.potential>0?"4px":"0"}} />
+                      <div className={"flex-1 rounded-t transition-all " + (isNow?"bg-green-500":"bg-green-300")}
+                        style={{height: hp+"%", minHeight: m.paid>0?"4px":"0"}} />
+                    </div>
+                    <div className={"text-xs text-center truncate w-full " + (isNow?"font-bold text-blue-700":"text-slate-400")}>
+                      {MONTHS_HE[m.month].substring(0,3)}
+                    </div>
+                  </div>
                 );
               })}
-              {/* שורת סיכום */}
-              <tr className="border-t-2 border-slate-300 bg-slate-50 font-black">
-                <td className="px-4 py-2.5 text-slate-800">סה"כ {year}</td>
-                <td className="px-4 py-2.5 text-slate-700">₪{Math.round(totalExpected).toLocaleString()}</td>
-                <td className="px-4 py-2.5 text-blue-700">₪{Math.round(totalBilled).toLocaleString()}</td>
-                <td className="px-4 py-2.5 text-slate-500">₪{Math.round(monthlyData.reduce(function(s,m){return s+m.vatBilled;},0)).toLocaleString()}</td>
-                <td className="px-4 py-2.5 text-green-700">₪{Math.round(totalPaid).toLocaleString()}</td>
-                <td className="px-4 py-2.5 text-purple-700">₪{Math.round(totalMgmt).toLocaleString()}</td>
-                <td className="px-4 py-2.5 text-slate-800">₪{Math.round(totalBilled+totalMgmt).toLocaleString()}</td>
-                <td className="px-4 py-2.5">
-                  {totalBilled > 0 && (
-                    <span className="text-green-700">{Math.round(totalPaid/totalBilled*100)}%</span>
-                  )}
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        )}
-      </div>
+            </div>
+            <div className="flex gap-4 mt-3 text-xs text-slate-500">
+              <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-blue-200 inline-block" /> פוטנציאל</span>
+              <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-green-300 inline-block" /> גבייה</span>
+            </div>
+          </div>
+
+          {/* טבלה */}
+          <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+            <table className="w-full text-right text-sm">
+              <thead className="bg-slate-50 border-b">
+                <tr>
+                  <th className="px-4 py-3 font-semibold text-slate-700">חודש</th>
+                  <th className="px-4 py-3 font-semibold text-slate-700">חוזים פעילים</th>
+                  <th className="px-4 py-3 font-semibold text-slate-700">פוטנציאל</th>
+                  <th className="px-4 py-3 font-semibold text-slate-700">גבייה</th>
+                  <th className="px-4 py-3 font-semibold text-slate-700">% גבייה</th>
+                </tr>
+              </thead>
+              <tbody>
+                {monthlyData.map(function(m) {
+                  const isNow = m.month === new Date().getMonth()+1 && year === new Date().getFullYear();
+                  return (
+                    <tr key={m.month} className={"border-t border-slate-100 " + (isNow?"bg-blue-50":"hover:bg-slate-50")}>
+                      <td className={"px-4 py-2.5 font-semibold " + (isNow?"text-blue-700":"text-slate-800")}>
+                        {MONTHS_HE[m.month]} {year}
+                        {isNow && <span className="mr-2 text-xs bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full">נוכחי</span>}
+                      </td>
+                      <td className="px-4 py-2.5 text-slate-600">{m.activeCount}</td>
+                      <td className="px-4 py-2.5 text-slate-700">{fmtMoney(m.potential)}</td>
+                      <td className="px-4 py-2.5 font-semibold text-green-700">{fmtMoney(m.paid)}</td>
+                      <td className="px-4 py-2.5">
+                        <div className="flex items-center gap-2">
+                          <div className="flex-1 bg-slate-100 rounded-full h-2 max-w-20">
+                            <div className={"h-2 rounded-full " + (m.pct>=90?"bg-green-500":m.pct>=70?"bg-yellow-400":"bg-red-400")}
+                              style={{width:m.pct+"%"}} />
+                          </div>
+                          <span className={"font-bold text-xs " + (m.pct>=90?"text-green-700":m.pct>=70?"text-yellow-700":"text-red-600")}>
+                            {m.pct}%
+                          </span>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
     </div>
   );
 }
