@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
-import { supabase } from "../../../lib/supabase";
+import { supabase } from '@/lib/supabase';
 
 const TABS = [
   {id:"contracts",  label:"חוזים",       icon:"📄"},
