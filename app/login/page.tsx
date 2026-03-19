@@ -1,18 +1,13 @@
 "use client";
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { createClient } from "@supabase/supabase-js";
 
-// Fallback hardcoded - במקרה שenv vars לא נטענו
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || "https://ndvcqgrpsqykhodiyrhx.supabase.co";
-const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5kdmNxZ3Jwc3F5a2hvZGl5cmh4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDIwNjMwODgsImV4cCI6MjA1NzYzOTA4OH0.mS9MjwuBH7MkOEXmEIJCQF5uPBvkKk_c60lP7m6RI_c";
-
-const supabaseClient = createClient(SUPABASE_URL, SUPABASE_KEY, {
-  auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
-});
+const supabase = createClient(
+  "https://ndvcqgrpsqykhodiyrhx.supabase.co",
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5kdmNxZ3Jwc3F5a2hvZGl5cmh4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDIwNjMwODgsImV4cCI6MjA1NzYzOTA4OH0.mS9MjwuBH7MkOEXmEIJCQF5uPBvkKk_c60lP7m6RI_c"
+);
 
 export default function LoginPage() {
-  const router = useRouter();
   const [email,    setEmail]    = useState("");
   const [password, setPassword] = useState("");
   const [loading,  setLoading]  = useState(false);
@@ -24,21 +19,14 @@ export default function LoginPage() {
     setLoading(true);
     setError("");
     try {
-      const { data, error: err } = await supabaseClient.auth.signInWithPassword({
-        email: email.trim(),
-        password,
-      });
+      const { data, error: err } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
       if (err) throw err;
       if (data.session) {
-        router.push("/dashboard");
-        router.refresh();
+        // שימוש ב-window.location במקום router - מבטיח reload מלא עם cookies
+        window.location.href = "/dashboard";
       }
     } catch (e: any) {
-      setError(
-        e.message === "Invalid login credentials"
-          ? "אימייל או סיסמה שגויים"
-          : e.message || "שגיאת התחברות"
-      );
+      setError(e.message === "Invalid login credentials" ? "אימייל או סיסמה שגויים" : e.message || "שגיאה");
       setLoading(false);
     }
   }
@@ -53,31 +41,25 @@ export default function LoginPage() {
           <h1 className="text-2xl font-black text-white">PropManager v4</h1>
           <p className="text-blue-300 text-sm mt-1">ניהול נכסים מסחריים</p>
         </div>
-
         <div className="bg-white rounded-2xl p-8 shadow-2xl">
           <h2 className="text-xl font-bold text-slate-800 text-center mb-6">כניסה למערכת</h2>
           <form onSubmit={handleLogin} className="space-y-4" noValidate>
             <div>
               <label className="block text-sm font-semibold text-slate-700 mb-1.5">אימייל</label>
               <input
-                type="email"
-                value={email}
+                type="email" value={email}
                 onChange={function(e) { setEmail(e.target.value); setError(""); }}
-                placeholder="your@email.com"
-                autoComplete="email"
-                dir="ltr"
-                className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                placeholder="your@email.com" autoComplete="email" dir="ltr"
+                className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
             </div>
             <div>
               <label className="block text-sm font-semibold text-slate-700 mb-1.5">סיסמה</label>
               <input
-                type="password"
-                value={password}
+                type="password" value={password}
                 onChange={function(e) { setPassword(e.target.value); setError(""); }}
-                placeholder="••••••••"
-                autoComplete="current-password"
-                className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                placeholder="••••••••" autoComplete="current-password"
+                className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
             </div>
             {error && (
@@ -85,11 +67,8 @@ export default function LoginPage() {
                 ⚠️ {error}
               </div>
             )}
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full rounded-xl bg-blue-700 hover:bg-blue-800 disabled:bg-blue-400 py-3 text-white font-bold text-sm transition-colors mt-2"
-            >
+            <button type="submit" disabled={loading}
+              className="w-full rounded-xl bg-blue-700 hover:bg-blue-800 disabled:bg-blue-400 py-3 text-white font-bold text-sm transition-colors">
               {loading ? "מתחבר..." : "כניסה →"}
             </button>
           </form>
