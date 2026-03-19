@@ -28,7 +28,7 @@ export default function ContractsPage() {
 
   async function loadContracts() {
     const { data } = await supabase.from("contracts")
-      .select("*, tenants(name,phone,email,company_name), properties(name,city), contract_spaces(spaces(space_name,area)), contract_options(id,option_number,end_date,status), guarantees(id,status,amount_required,amount_actual)")
+      .select("*, tenants(name,phone,email,company_name), properties(name,city), contract_options(id,option_number,end_date,status), guarantees(id,status,amount_required,amount_actual)")
       .order("end_date");
     setContracts(data??[]);
     setLoading(false);
