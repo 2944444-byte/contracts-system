@@ -51,7 +51,7 @@ export default function Sidebar() {
     async function loadBadges() {
       const [{ count: p }, { count: a }] = await Promise.all([
         supabase.from("charges").select("id",{count:"exact",head:true}).eq("status","pending"),
-        supabase.from("alerts").select("id",{count:"exact",head:true}).eq("status","open"),
+        supabase.from("alerts").select("id",{count:"exact",head:true}).eq("is_resolved",false),
       ]);
       setPendingPay(p??0);
       setOpenAlerts(a??0);
