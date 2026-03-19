@@ -4,7 +4,7 @@ import { createClient } from "@supabase/supabase-js";
 
 const supabase = createClient(
   "https://ndvcqgrpsqykhodiyrhx.supabase.co",
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5kdmNxZ3Jwc3F5a2hvZGl5cmh4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDIwNjMwODgsImV4cCI6MjA1NzYzOTA4OH0.mS9MjwuBH7MkOEXmEIJCQF5uPBvkKk_c60lP7m6RI_c"
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5kdmNxZ3Jwc3F5a2hvZGl5cmh4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI4OTQ3MDksImV4cCI6MjA4ODQ3MDcwOX0.5PD32C1EfZMKatWJj3paUC5mckbrAK4ij6-qSgc3OPU
 );
 
 export default function LoginPage() {
