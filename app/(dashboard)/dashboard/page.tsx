@@ -41,13 +41,13 @@ export default function DashboardPage() {
     ] = await Promise.all([
       supabase.from("contracts").select("id",{count:"exact",head:true}).eq("status","active"),
       supabase.from("contracts").select("id",{count:"exact",head:true}).eq("status","expiring"),
-      supabase.from("charges").select("id",{count:"exact",head:true}).eq("status","pending"),
-      supabase.from("alerts").select("id",{count:"exact",head:true}).eq("status","open"),
+      supabase.from("contracts").select("id",{count:"exact",head:true}).eq("status","expiring"),
+      supabase.from("alerts").select("id",{count:"exact",head:true}).eq("is_resolved",false),
       supabase.from("contracts").select("rent_per_sqm,charged_area,investment_addition").in("status",["active","expiring","extended"]),
       supabase.from("spaces").select("id,status"),
-      supabase.from("charges").select("id,due_date,status").eq("status","pending"),
+      supabase.from("contracts").select("id,end_date,status").eq("status","expiring"),
       supabase.from("contracts").select("id,end_date,status,tenants(name),properties(name),rent_per_sqm,charged_area,investment_addition").in("status",["active","expiring"]).order("end_date").limit(5),
-      supabase.from("alerts").select("id,title,severity,due_date,entity_type").eq("status","open").in("severity",["urgent","warning"]).order("severity").order("due_date").limit(6),
+      supabase.from("alerts").select("id,title,severity,due_date,entity_type").eq("is_resolved",false).in("severity",["urgent","warning"]).order("severity").order("due_date").limit(6),
       supabase.from("guarantees").select("amount_required,amount_actual").eq("status","active"),
       supabase.from("properties").select("id",{count:"exact",head:true}),
     ]);
