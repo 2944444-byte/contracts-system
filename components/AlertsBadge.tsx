@@ -17,7 +17,7 @@ export default function AlertsBadge() {
 
   async function loadCount() {
     const { data } = await supabase.from("alerts")
-      .select("id,severity").eq("status","open");
+      .select("id,severity").eq("is_resolved",false);
     const all = data ?? [];
     setCount(all.length);
     setUrgent(all.filter(function(a){return a.severity==="urgent";}).length);
