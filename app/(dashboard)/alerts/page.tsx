@@ -42,21 +42,21 @@ export default function AlertsPage() {
   }
 
   async function closeAlert(id: string) {
-    await supabase.from("alerts").update({status:"closed"}).eq("id",id);
-    setAlerts(function(prev){return prev.map(function(a){return a.id===id?{...a,status:"closed"}:a;});});
+    await supabase.from("alerts").update({is_resolved:true}).eq("id",id);
+    setAlerts(function(prev){return prev.map(function(a){return a.id===id?{...a,is_resolved:true}:a;});});
   }
 
   async function bulkClose() {
     if (!selected.size) return;
     if (!confirm(`לסגור ${selected.size} התראות?`)) return;
-    for (const id of selected) await supabase.from("alerts").update({status:"closed"}).eq("id",id);
+    for (const id of selected) await supabase.from("alerts").update({is_resolved:true}).eq("id",id);
     setSelected(new Set());
     await loadAlerts();
   }
 
   async function reopen(id: string) {
-    await supabase.from("alerts").update({status:"open"}).eq("id",id);
-    setAlerts(function(prev){return prev.map(function(a){return a.id===id?{...a,status:"open"}:a;});});
+    await supabase.from("alerts").update({is_resolved:false}).eq("id",id);
+    setAlerts(function(prev){return prev.map(function(a){return a.id===id?{...a,is_resolved:false}:a;});});
   }
 
   function toggleSel(id: string) {
@@ -67,9 +67,9 @@ export default function AlertsPage() {
     return (filterSt==="all"||a.status===filterSt) && (filterSev==="all"||a.severity===filterSev);
   });
 
-  const urgentOpen  = alerts.filter(function(a){return a.status==="open"&&a.severity==="urgent";}).length;
-  const warningOpen = alerts.filter(function(a){return a.status==="open"&&a.severity==="warning";}).length;
-  const totalOpen   = alerts.filter(function(a){return a.status==="open";}).length;
+  const urgentOpen  = alerts.filter(function(a){return !a.is_resolved&&a.severity==="urgent";}).length;
+  const warningOpen = alerts.filter(function(a){return !a.is_resolved&&a.severity==="warning";}).length;
+  const totalOpen   = alerts.filter(function(a){return !a.is_resolved;}).length;
 
   return (
     <div dir="rtl">
@@ -119,9 +119,9 @@ export default function AlertsPage() {
           </button>
         );})}
         <div className="flex-1"/>
-        {filtered.some(function(a){return a.status==="open";})&&(
+        {filtered.some(function(a){return !a.is_resolved;})&&(
           <label className="flex items-center gap-1.5 text-xs text-slate-500 cursor-pointer">
-            <input type="checkbox" onChange={function(e){setSelected(e.target.checked?new Set(filtered.filter(function(a){return a.status==="open";}).map(function(a){return a.id;})):new Set());}} className="w-3.5 h-3.5"/>
+            <input type="checkbox" onChange={function(e){setSelected(e.target.checked?new Set(filtered.filter(function(a){return !a.is_resolved;}).map(function(a){return a.id;})):new Set());}} className="w-3.5 h-3.5"/>
             בחר הכל
           </label>
         )}
@@ -139,7 +139,7 @@ export default function AlertsPage() {
             const si     = SEV_MAP[a.severity] ?? SEV_MAP.info;
             const icon   = ENTITY_ICONS[a.entity_type] ?? ENTITY_ICONS.default;
             const d      = a.due_date ? daysLeft(a.due_date) : null;
-            const isOpen = a.status==="open";
+            const isOpen = !a.is_resolved;
             const isSel  = selected.has(a.id);
             return (
               <div key={a.id} className={"rounded-xl border p-4 flex items-start gap-3 transition-all "+(isOpen?si.bg+" "+si.border:"bg-white border-slate-200 opacity-60")+(isSel?" ring-2 ring-blue-400":"")}>
