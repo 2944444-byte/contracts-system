@@ -4,7 +4,7 @@ import type { NextRequest } from "next/server";
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
-  // מסלולים ציבוריים — לא בודקים auth
+  // דפים ציבוריים - תמיד מאפשר
   if (
     pathname.startsWith("/login") ||
     pathname.startsWith("/api/") ||
@@ -15,27 +15,29 @@ export function middleware(req: NextRequest) {
     return NextResponse.next();
   }
 
-  // Supabase v2 cookie format: sb-{ref}-auth-token
+  // בדוק cookies - Supabase v2 cookie name: sb-{project_ref}-auth-token
+  const PROJECT_REF = "ndvcqgrpsqykhodiyrhx";
   const cookies = req.cookies.getAll();
+  
   const hasAuth = cookies.some(function(c) {
     return (
-      c.name.includes("sb-") && c.name.includes("auth-token") ||
-      c.name.includes("supabase-auth") ||
-      c.name === "sb-access-token"
+      c.name === `sb-${PROJECT_REF}-auth-token` ||
+      c.name === `sb-${PROJECT_REF}-auth-token.0` ||
+      c.name === `sb-${PROJECT_REF}-auth-token.1` ||
+      c.name.startsWith(`sb-${PROJECT_REF}`) ||
+      c.name.startsWith("sb-") ||
+      c.name.includes("auth-token")
     );
   });
 
   if (!hasAuth) {
-    const url = req.nextUrl.clone();
-    url.pathname = "/login";
-    return NextResponse.redirect(url);
+    const loginUrl = new URL("/login", req.url);
+    return NextResponse.redirect(loginUrl);
   }
 
   return NextResponse.next();
 }
 
 export const config = {
-  matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|robots.txt).*)",
-  ],
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|robots.txt).*)" ],
 };
