@@ -3,8 +3,8 @@ import { useState, useEffect } from "react";
 import { supabase } from '@/lib/supabase';
 import { fetchCPI, fetchHighestCPI, calcIndexedRent, getT2Month, formatPeriod } from '@/lib/cpi-utils';
 
-function fmtMoney(n: number) { return "₪" + Math.round(n ?? 0).toLocaleString(); }
-function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
+function fmtMoney(n: number) { return "âª" + Math.round(n ?? 0).toLocaleString(); }
+function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "â"; }
 
 export default function IndexationPage() {
   const [contracts,    setContracts]    = useState<any[]>([]);
@@ -20,9 +20,9 @@ export default function IndexationPage() {
 
   async function loadContracts() {
     const { data } = await supabase.from("contracts")
-      .select("id, base_cpi_value, base_cpi_date, rent_per_sqm, charged_area, investment_addition, indexation_method, vat_type, tenants(name), properties(name)")
+      .select("id, index_base_value, index_base_date, rent_per_sqm, charged_area, investment_addition, index_mechanism, vat_type, tenants(name), properties(name)")
       .in("status", ["active","expiring","extended"])
-      .not("base_cpi_value", "is", null);
+      .not("index_base_value", "is", null);
     setContracts(data ?? []);
     setLoading(false);
   }
@@ -46,8 +46,8 @@ export default function IndexationPage() {
       const { year, month } = getT2Month(date);
       let currentIdx: number | null;
 
-      if (c.indexation_method === "highest_in_period" && c.base_cpi_date) {
-        const baseDate = new Date(c.base_cpi_date);
+      if (c.index_mechanism === "highest_in_period" && c.index_base_date) {
+        const baseDate = new Date(c.index_base_date);
         currentIdx = await fetchHighestCPI(
           baseDate.getFullYear(), baseDate.getMonth()+1, year, month
         );
@@ -55,11 +55,11 @@ export default function IndexationPage() {
         currentIdx = await fetchCPI(year, month);
       }
 
-      if (!currentIdx) { alert("לא ניתן לשלוף מדד מה-CBS"); return; }
+      if (!currentIdx) { alert("×× × ××ª× ××©×××£ ××× ××-CBS"); return; }
 
       const baseRent    = (c.rent_per_sqm??0)*(c.charged_area??0)+(c.investment_addition??0);
-      const indexedRent = calcIndexedRent(baseRent, c.base_cpi_value, currentIdx);
-      const change      = ((currentIdx / c.base_cpi_value) - 1) * 100;
+      const indexedRent = calcIndexedRent(baseRent, c.index_base_value, currentIdx);
+      const change      = ((currentIdx / c.index_base_value) - 1) * 100;
       const vat         = c.vat_type==="taxable" ? indexedRent*0.18 : 0;
 
       setResults(function(prev) {
@@ -68,11 +68,11 @@ export default function IndexationPage() {
           [c.id]: {
             baseRent, indexedRent, change, currentIdx, vat,
             period: formatPeriod(year, month),
-            method: c.indexation_method,
+            method: c.index_mechanism,
           }
         };
       });
-    } catch(e:any) { alert("שגיאה: "+e?.message); }
+    } catch(e:any) { alert("×©××××: "+e?.message); }
     finally { setCalculating(null); }
   }
 
@@ -89,59 +89,59 @@ export default function IndexationPage() {
     <div dir="rtl">
       <div className="mb-6 flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-3xl font-bold text-slate-800">הצמדה למדד</h1>
+          <h1 className="text-3xl font-bold text-slate-800">××¦××× ××××</h1>
           <p className="text-sm text-slate-500 mt-1">
-            {cpiLoading ? "טוען מדד..." : currentCPI ? (
-              <span>מדד נוכחי: <strong className="text-blue-700">{currentCPI}</strong> | {cpiPeriod}</span>
-            ) : "לא ניתן לשלוף מדד"}
+            {cpiLoading ? "×××¢× ×××..." : currentCPI ? (
+              <span>××× × ××××: <strong className="text-blue-700">{currentCPI}</strong> | {cpiPeriod}</span>
+            ) : "×× × ××ª× ××©×××£ ×××"}
           </p>
         </div>
         <div className="flex gap-2 items-center">
           <div>
-            <label className="text-xs text-slate-500 block mb-1">תאריך תשלום</label>
+            <label className="text-xs text-slate-500 block mb-1">×ª××¨×× ×ª×©×××</label>
             <input type="date" value={paymentDate}
               onChange={function(e){setPaymentDate(e.target.value);setResults({});}}
               className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm" />
           </div>
           <button onClick={calcAll} disabled={!!calculating || contracts.length===0}
             className="self-end rounded-lg bg-blue-700 px-5 py-2 font-bold text-white hover:bg-blue-800 disabled:opacity-50">
-            {calculating==="all" ? "⏳ מחשב..." : "⚡ חשב הכל"}
+            {calculating==="all" ? "â³ ×××©×..." : "â¡ ××©× ×××"}
           </button>
         </div>
       </div>
 
       {/* CBS Banner */}
       <div className="rounded-xl bg-blue-50 border border-blue-200 p-3 mb-5 text-sm flex items-center gap-2">
-        <span className="text-xl">📊</span>
+        <span className="text-xl">ð</span>
         <div>
-          <span className="font-semibold text-blue-800">CBS API חי</span>
-          <span className="text-blue-600 mr-2">— נתונים בזמן אמת ממדד המחירים לצרכן של הלמ"ס</span>
+          <span className="font-semibold text-blue-800">CBS API ××</span>
+          <span className="text-blue-600 mr-2">â × ×ª×× ×× ×××× ×××ª ×××× ×××××¨×× ××¦×¨×× ×©× ×××"×¡</span>
         </div>
         {currentCPI && (
-          <span className="mr-auto text-blue-700 font-bold">מדד {cpiPeriod}: {currentCPI}</span>
+          <span className="mr-auto text-blue-700 font-bold">××× {cpiPeriod}: {currentCPI}</span>
         )}
       </div>
 
       {loading ? (
-        <div className="text-center py-12 text-slate-400">טוען חוזים...</div>
+        <div className="text-center py-12 text-slate-400">×××¢× ×××××...</div>
       ) : contracts.length === 0 ? (
         <div className="rounded-xl border-2 border-dashed border-slate-200 bg-white p-12 text-center text-slate-400">
-          <div className="text-5xl mb-3">📈</div>
-          <div>אין חוזים עם מדד בסיס</div>
-          <div className="text-xs mt-2">הגדר מדד בסיס בחוזה כדי לחשב הצמדה</div>
+          <div className="text-5xl mb-3">ð</div>
+          <div>××× ××××× ×¢× ××× ××¡××¡</div>
+          <div className="text-xs mt-2">××××¨ ××× ××¡××¡ ××××× ××× ×××©× ××¦×××</div>
         </div>
       ) : (
         <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
           <table className="w-full text-right text-sm">
             <thead className="bg-slate-50 border-b">
               <tr>
-                <th className="px-4 py-3 font-semibold text-slate-700">שוכר / נכס</th>
-                <th className="px-4 py-3 font-semibold text-slate-700">שכ"ד בסיס</th>
-                <th className="px-4 py-3 font-semibold text-slate-700">מדד בסיס</th>
-                <th className="px-4 py-3 font-semibold text-slate-700">שיטה</th>
-                <th className="px-4 py-3 font-semibold text-slate-700">שכ"ד מוצמד</th>
-                <th className="px-4 py-3 font-semibold text-slate-700">שינוי</th>
-                <th className="px-4 py-3 font-semibold text-slate-700">פעולה</th>
+                <th className="px-4 py-3 font-semibold text-slate-700">×©×××¨ / × ××¡</th>
+                <th className="px-4 py-3 font-semibold text-slate-700">×©×"× ××¡××¡</th>
+                <th className="px-4 py-3 font-semibold text-slate-700">××× ××¡××¡</th>
+                <th className="px-4 py-3 font-semibold text-slate-700">×©×××</th>
+                <th className="px-4 py-3 font-semibold text-slate-700">×©×"× ×××¦××</th>
+                <th className="px-4 py-3 font-semibold text-slate-700">×©×× ××</th>
+                <th className="px-4 py-3 font-semibold text-slate-700">×¤×¢×××</th>
               </tr>
             </thead>
             <tbody>
@@ -157,24 +157,24 @@ export default function IndexationPage() {
                     </td>
                     <td className="px-4 py-3 font-semibold text-slate-700">{fmtMoney(baseRent)}</td>
                     <td className="px-4 py-3">
-                      <div className="font-semibold text-slate-700">{c.base_cpi_value}</div>
-                      <div className="text-xs text-slate-400">{fmtDate(c.base_cpi_date)}</div>
+                      <div className="font-semibold text-slate-700">{c.index_base_value}</div>
+                      <div className="text-xs text-slate-400">{fmtDate(c.index_base_date)}</div>
                     </td>
                     <td className="px-4 py-3">
                       <span className={"text-xs px-2 py-0.5 rounded-full font-semibold " +
-                        (c.indexation_method==="highest_in_period"?"bg-purple-100 text-purple-700":"bg-slate-100 text-slate-600")}>
-                        {c.indexation_method==="highest_in_period"?"גבוה ביותר":"t-2"}
+                        (c.index_mechanism==="highest_in_period"?"bg-purple-100 text-purple-700":"bg-slate-100 text-slate-600")}>
+                        {c.index_mechanism==="highest_in_period"?"×××× ××××ª×¨":"t-2"}
                       </span>
                     </td>
                     <td className="px-4 py-3">
                       {res ? (
                         <div>
                           <div className="font-black text-green-700">{fmtMoney(res.indexedRent)}</div>
-                          <div className="text-xs text-slate-400">+ מע"מ: {fmtMoney(res.indexedRent + res.vat)}</div>
-                          <div className="text-xs text-slate-400">מדד {res.period}: {res.currentIdx}</div>
+                          <div className="text-xs text-slate-400">+ ××¢"×: {fmtMoney(res.indexedRent + res.vat)}</div>
+                          <div className="text-xs text-slate-400">××× {res.period}: {res.currentIdx}</div>
                         </div>
                       ) : (
-                        <span className="text-slate-300">—</span>
+                        <span className="text-slate-300">â</span>
                       )}
                     </td>
                     <td className="px-4 py-3">
@@ -183,14 +183,14 @@ export default function IndexationPage() {
                           {res.change >= 0 ? "+" : ""}{res.change.toFixed(2)}%
                         </span>
                       ) : (
-                        <span className="text-slate-300">—</span>
+                        <span className="text-slate-300">â</span>
                       )}
                     </td>
                     <td className="px-4 py-3">
                       <button onClick={function(){calcForContract(c);}}
                         disabled={isCalc || calculating==="all"}
                         className="rounded-lg bg-blue-600 text-white text-xs px-3 py-1.5 font-semibold hover:bg-blue-700 disabled:opacity-50">
-                        {isCalc ? "⏳" : "חשב"}
+                        {isCalc ? "â³" : "××©×"}
                       </button>
                     </td>
                   </tr>
