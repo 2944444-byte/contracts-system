@@ -13,7 +13,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
           <div className="flex items-center gap-3">
             <AlertsBadge />
             <div className="hidden md:flex items-center gap-1 text-xs text-slate-400 font-medium">
-              <span>🏙️</span>
+              <span>🔄ï¸</span>
               <span>PropManager v4</span>
             </div>
           </div>
