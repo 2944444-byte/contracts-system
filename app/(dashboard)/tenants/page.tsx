@@ -6,8 +6,8 @@ import { logAudit } from '@/lib/audit-log';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 
-function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
-function fmtMoney(n: number) { return n ? "₪"+Math.round(n).toLocaleString() : "—"; }
+function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "â"; }
+function fmtMoney(n: number) { return n ? "âª"+Math.round(n).toLocaleString() : "â"; }
 
 export default function TenantsPage() {
   const router = useRouter();
@@ -60,7 +60,7 @@ export default function TenantsPage() {
   }
 
   async function handleSave() {
-    if (!fName.trim()) { alert("חובה: שם שוכר"); return; }
+    if (!fName.trim()) { alert("××××: ×©× ×©×××¨"); return; }
     setSaving(true);
     try {
       const payload = {
@@ -77,12 +77,24 @@ export default function TenantsPage() {
         await logAudit({ entity_type:"tenant", entity_id:editingId, action:"update" });
       }
       setEditingId(""); await loadAll();
-    } catch(e:any) { alert("שגיאה: "+e?.message); }
+    } catch(e:any) { alert("×©××××: "+e?.message); }
     finally { setSaving(false); }
   }
 
   async function handleDelete(id: string) {
-    if (!confirm("למחוק שוכר?")) return;
+    if (!confirm("למחוק שוכר? פעולה זו תמחק גם את כל חוזי השוכר וכל הנתונים הקשורים אליהם.")) return;
+    const { data: tContracts } = await supabase.from("contracts").select("id").eq("tenant_id", id);
+    const tcIds = (tContracts||[]).map((c:any)=>c.id);
+    if(tcIds.length > 0){
+      await supabase.from("charges").delete().in("contract_id", tcIds);
+      await supabase.from("contract_spaces").delete().in("contract_id", tcIds);
+      await supabase.from("contract_options").delete().in("contract_id", tcIds);
+      await supabase.from("contract_price_tiers").delete().in("contract_id", tcIds);
+      await supabase.from("guarantees").delete().in("contract_id", tcIds);
+      await supabase.from("insurances_tenant").delete().in("contract_id", tcIds);
+      await supabase.from("letters").delete().in("contract_id", tcIds);
+      await supabase.from("contracts").delete().in("id", tcIds);
+    }
     await supabase.from("tenants").delete().eq("id", id);
     setSelected(null); await loadAll();
   }
@@ -96,31 +108,31 @@ export default function TenantsPage() {
   const selRevenue   = selContracts.reduce(function(s,c){return s+(c.rent_per_sqm??0)*(c.charged_area??0)+(c.investment_addition??0);},0);
 
   const STATUS_MAP: Record<string,{label:string;color:string}> = {
-    active:   {label:"פעיל",    color:"bg-green-100 text-green-700"   },
-    expiring: {label:"פוגה",   color:"bg-yellow-100 text-yellow-700" },
-    extended: {label:"מורחב",  color:"bg-blue-100 text-blue-700"     },
-    upcoming: {label:"עתידי",  color:"bg-purple-100 text-purple-700" },
+    active:   {label:"×¤×¢××",    color:"bg-green-100 text-green-700"   },
+    expiring: {label:"×¤×××",   color:"bg-yellow-100 text-yellow-700" },
+    extended: {label:"×××¨××",  color:"bg-blue-100 text-blue-700"     },
+    upcoming: {label:"×¢×ª×××",  color:"bg-purple-100 text-purple-700" },
   };
 
   return (
     <div dir="rtl">
       <div className="mb-6 flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-slate-800">שוכרים</h1>
-          <p className="text-sm text-slate-500 mt-1">{tenants.length} שוכרים</p>
+          <h1 className="text-3xl font-bold text-slate-800">×©×××¨××</h1>
+          <p className="text-sm text-slate-500 mt-1">{tenants.length} ×©×××¨××</p>
         </div>
         <button onClick={openNew} className="rounded-lg bg-blue-700 px-5 py-2.5 font-bold text-white hover:bg-blue-800">
-          + שוכר חדש
+          + ×©×××¨ ×××©
         </button>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-5">
-        {/* רשימה */}
+        {/* ×¨×©××× */}
         <div className="space-y-2">
           <input type="text" value={search} onChange={function(e){setSearch(e.target.value);}}
-            placeholder="חיפוש שם / חברה / ח.פ..."
+            placeholder="×××¤××© ×©× / ×××¨× / ×.×¤..."
             className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm mb-2" />
-          {loading ? <div className="text-center py-4 text-slate-400">טוען...</div> : (
+          {loading ? <div className="text-center py-4 text-slate-400">×××¢×...</div> : (
             filtered.map(function(t) {
               const tenContracts = contracts.filter(function(c){return c.tenant_id===t.id;});
               const hasActive = tenContracts.some(function(c){return c.status==="active";});
@@ -142,37 +154,37 @@ export default function TenantsPage() {
               );
             })
           )}
-          {filtered.length === 0 && !loading && <div className="text-center py-4 text-slate-400 text-sm">אין שוכרים</div>}
+          {filtered.length === 0 && !loading && <div className="text-center py-4 text-slate-400 text-sm">××× ×©×××¨××</div>}
         </div>
 
-        {/* פרטים */}
+        {/* ×¤×¨××× */}
         <div className="lg:col-span-3">
           {!selTenant ? (
             <div className="rounded-xl border-2 border-dashed border-slate-200 bg-white p-12 text-center text-slate-400">
-              <div className="text-5xl mb-3">👤</div><div>בחר שוכר לצפייה</div>
+              <div className="text-5xl mb-3">ð¤</div><div>×××¨ ×©×××¨ ××¦×¤×××</div>
             </div>
           ) : (
             <div className="space-y-4">
-              {/* כרטיס ראשי */}
+              {/* ××¨×××¡ ×¨××©× */}
               <div className="rounded-xl border border-slate-200 bg-white shadow-sm p-5">
                 <div className="flex items-start justify-between mb-4">
                   <div>
                     <h2 className="text-xl font-bold text-slate-800 mb-0.5">{selTenant.name}</h2>
-                    {selTenant.company_name && <div className="text-sm text-slate-500">🏛️ {selTenant.company_name}</div>}
-                    {selTenant.id_number && <div className="text-xs text-slate-400 font-mono">ח.פ/ת.ז: {selTenant.id_number}</div>}
+                    {selTenant.company_name && <div className="text-sm text-slate-500">ðï¸ {selTenant.company_name}</div>}
+                    {selTenant.id_number && <div className="text-xs text-slate-400 font-mono">×.×¤/×ª.×: {selTenant.id_number}</div>}
                   </div>
                   <div className="flex gap-2">
-                    <button onClick={function(){openEdit(selTenant);}} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">✏️ עריכה</button>
-                    <button onClick={function(){handleDelete(selTenant.id);}} className="rounded-lg border border-red-100 px-3 py-1.5 text-xs font-semibold text-red-500 hover:bg-red-50">🗑</button>
+                    <button onClick={function(){openEdit(selTenant);}} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">âï¸ ×¢×¨×××</button>
+                    <button onClick={function(){handleDelete(selTenant.id);}} className="rounded-lg border border-red-100 px-3 py-1.5 text-xs font-semibold text-red-500 hover:bg-red-50">ð</button>
                   </div>
                 </div>
 
                 {/* KPI */}
                 <div className="grid grid-cols-3 gap-3 mb-4">
                   {[
-                    {label:"חוזים פעילים", value:String(selContracts.length),             color:"text-slate-800", bg:"bg-slate-50"},
-                    {label:"הכנסה חודשית", value:fmtMoney(selRevenue),                    color:"text-green-700", bg:"bg-green-50"},
-                    {label:"נכסים",        value:String(new Set(selContracts.map(function(c){return c.properties?.name;})).size), color:"text-blue-700", bg:"bg-blue-50"},
+                    {label:"××××× ×¤×¢××××", value:String(selContracts.length),             color:"text-slate-800", bg:"bg-slate-50"},
+                    {label:"××× ×¡× ××××©××ª", value:fmtMoney(selRevenue),                    color:"text-green-700", bg:"bg-green-50"},
+                    {label:"× ××¡××",        value:String(new Set(selContracts.map(function(c){return c.properties?.name;})).size), color:"text-blue-700", bg:"bg-blue-50"},
                   ].map(function(k) {
                     return (
                       <div key={k.label} className={"rounded-xl p-3 text-center " + k.bg}>
@@ -183,13 +195,13 @@ export default function TenantsPage() {
                   })}
                 </div>
 
-                {/* פרטי קשר */}
+                {/* ×¤×¨×× ×§×©×¨ */}
                 <div className="grid grid-cols-2 gap-2 text-xs">
                   {[
-                    {l:"טלפון",    v:selTenant.phone,        dir:"ltr"},
-                    {l:"אימייל",   v:selTenant.email,        dir:"ltr"},
-                    {l:"כתובת",   v:selTenant.address ? selTenant.address+(selTenant.city?", "+selTenant.city:"") : selTenant.city, dir:"rtl"},
-                    {l:"איש קשר", v:selTenant.contact_name ? selTenant.contact_name+(selTenant.contact_phone?" | "+selTenant.contact_phone:"") : null, dir:"rtl"},
+                    {l:"×××¤××",    v:selTenant.phone,        dir:"ltr"},
+                    {l:"××××××",   v:selTenant.email,        dir:"ltr"},
+                    {l:"××ª×××ª",   v:selTenant.address ? selTenant.address+(selTenant.city?", "+selTenant.city:"") : selTenant.city, dir:"rtl"},
+                    {l:"×××© ×§×©×¨", v:selTenant.contact_name ? selTenant.contact_name+(selTenant.contact_phone?" | "+selTenant.contact_phone:"") : null, dir:"rtl"},
                   ].filter(function(f){return f.v;}).map(function(f) {
                     return (
                       <div key={f.l} className="flex gap-2 border-b border-slate-100 pb-1.5">
@@ -202,13 +214,13 @@ export default function TenantsPage() {
                 {selTenant.notes && <div className="mt-3 text-xs text-slate-500 bg-slate-50 rounded-lg p-2">{selTenant.notes}</div>}
               </div>
 
-              {/* חוזים */}
+              {/* ××××× */}
               {selContracts.length > 0 && (
                 <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
                   <div className="px-5 py-3 border-b border-slate-100 flex items-center justify-between">
-                    <span className="font-semibold text-slate-700 text-sm">חוזים ({selContracts.length})</span>
+                    <span className="font-semibold text-slate-700 text-sm">××××× ({selContracts.length})</span>
                     <button onClick={function(){router.push("/contracts/new");}}
-                      className="text-xs bg-blue-600 text-white px-2 py-1 rounded-lg font-semibold hover:bg-blue-700">+ חוזה חדש</button>
+                      className="text-xs bg-blue-600 text-white px-2 py-1 rounded-lg font-semibold hover:bg-blue-700">+ ×××× ×××©</button>
                   </div>
                   <div className="divide-y divide-slate-100">
                     {selContracts.map(function(c) {
@@ -221,13 +233,13 @@ export default function TenantsPage() {
                             <div className="font-medium text-slate-800 text-sm">{c.properties?.name}</div>
                             <div className="flex items-center gap-2 mt-0.5">
                               <span className={"text-xs px-1.5 py-0.5 rounded-full "+si.color}>{si.label}</span>
-                              <span className="text-xs text-slate-400">{fmtDate(c.start_date)} — {fmtDate(c.end_date)}</span>
+                              <span className="text-xs text-slate-400">{fmtDate(c.start_date)} â {fmtDate(c.end_date)}</span>
                               {days!==null && days<=90 && days>0 && (
-                                <span className={"text-xs font-semibold " + (days<=30?"text-red-600":"text-yellow-600")}>{days} יום</span>
+                                <span className={"text-xs font-semibold " + (days<=30?"text-red-600":"text-yellow-600")}>{days} ×××</span>
                               )}
                             </div>
                           </div>
-                          <div className="font-bold text-green-700 text-sm">{fmtMoney(mon)}/חודש</div>
+                          <div className="font-bold text-green-700 text-sm">{fmtMoney(mon)}/××××©</div>
                         </div>
                       );
                     })}
@@ -239,61 +251,61 @@ export default function TenantsPage() {
         </div>
       </div>
 
-      {/* מודל */}
+      {/* ×××× */}
       {editingId && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={function(){setEditingId("");}}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={function(e){e.stopPropagation();}} dir="rtl">
             <div className="sticky top-0 bg-white border-b px-6 py-4 flex items-center justify-between">
-              <h2 className="font-bold text-slate-800 text-lg">{isNew?"שוכר חדש":"עריכת שוכר"}</h2>
-              <button onClick={function(){setEditingId("");}} className="text-2xl text-slate-400">×</button>
+              <h2 className="font-bold text-slate-800 text-lg">{isNew?"×©×××¨ ×××©":"×¢×¨×××ª ×©×××¨"}</h2>
+              <button onClick={function(){setEditingId("");}} className="text-2xl text-slate-400">Ã</button>
             </div>
             <div className="p-6 space-y-3">
               <div>
-                <label className="mb-1 block text-xs font-semibold text-slate-700">שם *</label>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">×©× *</label>
                 <input type="text" value={fName} onChange={function(e){setFName(e.target.value);}} className={ic} />
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-700">שם חברה</label>
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">×©× ×××¨×</label>
                   <input type="text" value={fCompany} onChange={function(e){setFCompany(e.target.value);}} className={ic} />
                 </div>
                 <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-700">ח.פ / ת.ז</label>
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">×.×¤ / ×ª.×</label>
                   <input type="text" value={fIdNumber} onChange={function(e){setFIdNumber(e.target.value);}} className={ic} dir="ltr" />
                 </div>
                 <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-700">טלפון</label>
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">×××¤××</label>
                   <input type="tel" value={fPhone} onChange={function(e){setFPhone(e.target.value);}} className={ic} dir="ltr" />
                 </div>
                 <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-700">אימייל</label>
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">××××××</label>
                   <input type="email" value={fEmail} onChange={function(e){setFEmail(e.target.value);}} className={ic} dir="ltr" />
                 </div>
                 <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-700">כתובת</label>
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">××ª×××ª</label>
                   <input type="text" value={fAddress} onChange={function(e){setFAddress(e.target.value);}} className={ic} />
                 </div>
                 <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-700">עיר</label>
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">×¢××¨</label>
                   <input type="text" value={fCity} onChange={function(e){setFCity(e.target.value);}} className={ic} />
                 </div>
                 <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-700">איש קשר</label>
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">×××© ×§×©×¨</label>
                   <input type="text" value={fContactName} onChange={function(e){setFContactName(e.target.value);}} className={ic} />
                 </div>
                 <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-700">טלפון איש קשר</label>
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">×××¤×× ×××© ×§×©×¨</label>
                   <input type="tel" value={fContactPhone} onChange={function(e){setFContactPhone(e.target.value);}} className={ic} dir="ltr" />
                 </div>
               </div>
               <div>
-                <label className="mb-1 block text-xs font-semibold text-slate-700">הערות</label>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">××¢×¨××ª</label>
                 <textarea value={fNotes} onChange={function(e){setFNotes(e.target.value);}} rows={2} className={ic} />
               </div>
               <div className="flex gap-3 pt-2">
-                <button onClick={function(){setEditingId("");}} className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm text-slate-600">ביטול</button>
+                <button onClick={function(){setEditingId("");}} className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm text-slate-600">×××××</button>
                 <button onClick={handleSave} disabled={saving} className="flex-1 rounded-xl bg-blue-700 py-2.5 text-sm font-bold text-white disabled:opacity-50">
-                  {saving?"שומר...":"שמור"}
+                  {saving?"×©×××¨...":"×©×××¨"}
                 </button>
               </div>
             </div>
