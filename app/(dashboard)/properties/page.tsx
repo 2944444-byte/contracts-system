@@ -7,15 +7,15 @@ import { logAudit } from '@/lib/audit-log';
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 
 const PROP_TYPES = [
-  {v:"office",    l:"משרדים",    icon:"💼"},
-  {v:"retail",    l:"מסחרי",     icon:"🏪"},
-  {v:"industrial",l:"תעשייה",   icon:"🏭"},
-  {v:"mixed",     l:"מעורב",     icon:"🏢"},
-  {v:"other",     l:"אחר",       icon:"🏗️"},
+  {v:"office",    l:"××©×¨×××",    icon:"ð¼"},
+  {v:"retail",    l:"××¡××¨×",     icon:"ðª"},
+  {v:"industrial",l:"×ª×¢×©×××",   icon:"ð­"},
+  {v:"mixed",     l:"××¢××¨×",     icon:"ð¢"},
+  {v:"other",     l:"×××¨",       icon:"ðï¸"},
 ];
 
-function fmtMoney(n: number) { return n ? "₪"+Math.round(n).toLocaleString() : "—"; }
-function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
+function fmtMoney(n: number) { return n ? "âª"+Math.round(n).toLocaleString() : "â"; }
+function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "â"; }
 
 export default function PropertiesPage() {
   const router  = useRouter();
@@ -69,7 +69,7 @@ export default function PropertiesPage() {
   }
 
   async function handleSave() {
-    if (!fName.trim()) { alert("חובה: שם נכס"); return; }
+    if (!fName.trim()) { alert("××××: ×©× × ××¡"); return; }
     setSaving(true);
     try {
       const payload = {
@@ -87,12 +87,28 @@ export default function PropertiesPage() {
         await logAudit({ entity_type:"property", entity_id:editingId, action:"update" });
       }
       setEditingId(""); await loadAll();
-    } catch(e:any) { alert("שגיאה: "+e?.message); }
+    } catch(e:any) { alert("×©××××: "+e?.message); }
     finally { setSaving(false); }
   }
 
   async function handleDelete(id: string) {
-    if (!confirm("למחוק נכס?")) return;
+    if (!confirm("למחוק נכס? פעולה זו תמחק גם את כל החוזים, היחידות, הביטוחים ובדיקות הבטיחות!")) return;
+    const { data: pContracts } = await supabase.from("contracts").select("id").eq("property_id", id);
+    const cIds = (pContracts||[]).map((c:any)=>c.id);
+    if(cIds.length > 0){
+      await supabase.from("charges").delete().in("contract_id", cIds);
+      await supabase.from("contract_spaces").delete().in("contract_id", cIds);
+      await supabase.from("contract_options").delete().in("contract_id", cIds);
+      await supabase.from("contract_price_tiers").delete().in("contract_id", cIds);
+      await supabase.from("guarantees").delete().in("contract_id", cIds);
+      await supabase.from("insurances_tenant").delete().in("contract_id", cIds);
+      await supabase.from("letters").delete().in("contract_id", cIds);
+      await supabase.from("contracts").delete().in("id", cIds);
+    }
+    await supabase.from("units").delete().eq("property_id", id);
+    await supabase.from("spaces").delete().eq("property_id", id);
+    await supabase.from("insurances_building").delete().eq("property_id", id);
+    await supabase.from("safety_inspections").delete().eq("property_id", id);
     await supabase.from("properties").delete().eq("id", id);
     setSelected(null); await loadAll();
   }
@@ -114,21 +130,21 @@ export default function PropertiesPage() {
     <div dir="rtl">
       <div className="mb-6 flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-slate-800">נכסים</h1>
-          <p className="text-sm text-slate-500 mt-1">{properties.length} נכסים</p>
+          <h1 className="text-3xl font-bold text-slate-800">× ××¡××</h1>
+          <p className="text-sm text-slate-500 mt-1">{properties.length} × ××¡××</p>
         </div>
         <button onClick={openNew} className="rounded-lg bg-blue-700 px-5 py-2.5 font-bold text-white hover:bg-blue-800">
-          + נכס חדש
+          + × ××¡ ×××©
         </button>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-5">
-        {/* רשימה */}
+        {/* ×¨×©××× */}
         <div className="space-y-2">
           <input type="text" value={search} onChange={function(e){setSearch(e.target.value);}}
-            placeholder="חיפוש..."
+            placeholder="×××¤××©..."
             className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm mb-2" />
-          {loading ? <div className="text-center py-4 text-slate-400">טוען...</div> : (
+          {loading ? <div className="text-center py-4 text-slate-400">×××¢×...</div> : (
             filtered.map(function(p) {
               const ti = typeInfo(p.property_type);
               const propContracts = contracts.filter(function(c){return c.property_id===p.id;});
@@ -144,24 +160,24 @@ export default function PropertiesPage() {
                       <span className="text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full font-semibold">{propContracts.length}</span>
                     )}
                   </div>
-                  {p.city && <div className="text-xs text-slate-400">📍 {p.city}</div>}
-                  {p.companies?.company_name && <div className="text-xs text-slate-400">🏛️ {p.companies.company_name}</div>}
+                  {p.city && <div className="text-xs text-slate-400">ð {p.city}</div>}
+                  {p.companies?.company_name && <div className="text-xs text-slate-400">ðï¸ {p.companies.company_name}</div>}
                 </div>
               );
             })
           )}
-          {filtered.length === 0 && !loading && <div className="text-center py-4 text-slate-400 text-sm">אין נכסים</div>}
+          {filtered.length === 0 && !loading && <div className="text-center py-4 text-slate-400 text-sm">××× × ××¡××</div>}
         </div>
 
-        {/* פרטים */}
+        {/* ×¤×¨××× */}
         <div className="lg:col-span-3">
           {!selProp ? (
             <div className="rounded-xl border-2 border-dashed border-slate-200 bg-white p-12 text-center text-slate-400">
-              <div className="text-5xl mb-3">🏢</div><div>בחר נכס לצפייה</div>
+              <div className="text-5xl mb-3">ð¢</div><div>×××¨ × ××¡ ××¦×¤×××</div>
             </div>
           ) : (
             <div className="space-y-4">
-              {/* כרטיס ראשי */}
+              {/* ××¨×××¡ ×¨××©× */}
               <div className="rounded-xl border border-slate-200 bg-white shadow-sm p-5">
                 <div className="flex items-start justify-between mb-4">
                   <div>
@@ -169,22 +185,22 @@ export default function PropertiesPage() {
                       <span className="text-2xl">{typeInfo(selProp.property_type).icon}</span>
                       <h2 className="text-xl font-bold text-slate-800">{selProp.name}</h2>
                     </div>
-                    {selProp.companies?.company_name && <div className="text-sm text-slate-500">🏛️ {selProp.companies.company_name}</div>}
-                    {selProp.city && <div className="text-sm text-slate-500">📍 {selProp.address ? selProp.address+", " : ""}{selProp.city}</div>}
+                    {selProp.companies?.company_name && <div className="text-sm text-slate-500">ðï¸ {selProp.companies.company_name}</div>}
+                    {selProp.city && <div className="text-sm text-slate-500">ð {selProp.address ? selProp.address+", " : ""}{selProp.city}</div>}
                   </div>
                   <div className="flex gap-2">
-                    <button onClick={function(){openEdit(selProp);}} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">✏️ עריכה</button>
-                    <button onClick={function(){handleDelete(selProp.id);}} className="rounded-lg border border-red-100 px-3 py-1.5 text-xs font-semibold text-red-500 hover:bg-red-50">🗑</button>
+                    <button onClick={function(){openEdit(selProp);}} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">âï¸ ×¢×¨×××</button>
+                    <button onClick={function(){handleDelete(selProp.id);}} className="rounded-lg border border-red-100 px-3 py-1.5 text-xs font-semibold text-red-500 hover:bg-red-50">ð</button>
                   </div>
                 </div>
 
                 {/* KPI */}
                 <div className="grid grid-cols-4 gap-3">
                   {[
-                    {label:"הכנסה חודשית", value:fmtMoney(selRevenue),      color:"text-green-700", bg:"bg-green-50"},
-                    {label:"תפוסה",         value:selOccPct+"%",              color:"text-blue-700",  bg:"bg-blue-50"},
-                    {label:"יחידות",        value:selSpaces.length+" יח'",   color:"text-slate-700", bg:"bg-slate-50"},
-                    {label:"חוזים פעילים", value:String(selContracts.length),color:"text-purple-700",bg:"bg-purple-50"},
+                    {label:"××× ×¡× ××××©××ª", value:fmtMoney(selRevenue),      color:"text-green-700", bg:"bg-green-50"},
+                    {label:"×ª×¤××¡×",         value:selOccPct+"%",              color:"text-blue-700",  bg:"bg-blue-50"},
+                    {label:"××××××ª",        value:selSpaces.length+" ××'",   color:"text-slate-700", bg:"bg-slate-50"},
+                    {label:"××××× ×¤×¢××××", value:String(selContracts.length),color:"text-purple-700",bg:"bg-purple-50"},
                   ].map(function(k) {
                     return (
                       <div key={k.label} className={"rounded-xl p-3 text-center " + k.bg}>
@@ -195,12 +211,12 @@ export default function PropertiesPage() {
                   })}
                 </div>
 
-                {/* פרטים נוספים */}
+                {/* ×¤×¨××× × ××¡×¤×× */}
                 <div className="grid grid-cols-3 gap-2 mt-3 text-xs">
                   {[
-                    {l:"סוג",    v:typeInfo(selProp.property_type).l},
-                    {l:"שטח",   v:selProp.total_area ? selProp.total_area+' מ"ר' : "—"},
-                    {l:"קומות", v:selProp.floors ? selProp.floors+" קומות" : "—"},
+                    {l:"×¡××",    v:typeInfo(selProp.property_type).l},
+                    {l:"×©××",   v:selProp.total_area ? selProp.total_area+' ×"×¨' : "â"},
+                    {l:"×§××××ª", v:selProp.floors ? selProp.floors+" ×§××××ª" : "â"},
                   ].map(function(row) {
                     return (
                       <div key={row.l} className="flex justify-between border-b border-slate-100 pb-1">
@@ -213,12 +229,12 @@ export default function PropertiesPage() {
                 {selProp.notes && <div className="mt-3 text-xs text-slate-500 bg-slate-50 rounded-lg p-2">{selProp.notes}</div>}
               </div>
 
-              {/* חוזים */}
+              {/* ××××× */}
               {selContracts.length > 0 && (
                 <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
                   <div className="px-5 py-3 border-b border-slate-100 flex items-center justify-between">
-                    <span className="font-semibold text-slate-700 text-sm">חוזים פעילים ({selContracts.length})</span>
-                    <button onClick={function(){router.push("/contracts");}} className="text-xs text-blue-600 hover:underline">הכל →</button>
+                    <span className="font-semibold text-slate-700 text-sm">××××× ×¤×¢×××× ({selContracts.length})</span>
+                    <button onClick={function(){router.push("/contracts");}} className="text-xs text-blue-600 hover:underline">××× â</button>
                   </div>
                   <div className="divide-y divide-slate-100">
                     {selContracts.map(function(c) {
@@ -229,10 +245,10 @@ export default function PropertiesPage() {
                             <div className="font-medium text-slate-800 text-sm">{c.tenants?.name}</div>
                             <span className={"text-xs px-1.5 py-0.5 rounded-full " +
                               (c.status==="active"?"bg-green-100 text-green-700":c.status==="expiring"?"bg-yellow-100 text-yellow-700":"bg-blue-100 text-blue-700")}>
-                              {c.status==="active"?"פעיל":c.status==="expiring"?"פוגה":"מורחב"}
+                              {c.status==="active"?"×¤×¢××":c.status==="expiring"?"×¤×××":"×××¨××"}
                             </span>
                           </div>
-                          <div className="font-bold text-green-700 text-sm">{fmtMoney(mon)}/חודש</div>
+                          <div className="font-bold text-green-700 text-sm">{fmtMoney(mon)}/××××©</div>
                         </div>
                       );
                     })}
@@ -240,18 +256,18 @@ export default function PropertiesPage() {
                 </div>
               )}
 
-              {/* יחידות */}
+              {/* ××××××ª */}
               {selSpaces.length > 0 && (
                 <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
                   <div className="px-5 py-3 border-b border-slate-100 flex items-center justify-between">
-                    <span className="font-semibold text-slate-700 text-sm">יחידות ({selSpaces.length})</span>
-                    <button onClick={function(){router.push("/units");}} className="text-xs text-blue-600 hover:underline">נהל →</button>
+                    <span className="font-semibold text-slate-700 text-sm">××××××ª ({selSpaces.length})</span>
+                    <button onClick={function(){router.push("/units");}} className="text-xs text-blue-600 hover:underline">× ×× â</button>
                   </div>
                   <div className="px-5 py-3 grid grid-cols-3 gap-2">
                     {[
-                      {label:"מושכרות", count:selOccupied,                               color:"text-green-600"},
-                      {label:"פנויות",  count:selSpaces.filter(function(s){return s.status==="vacant";}).length, color:"text-blue-600"},
-                      {label:"תחזוקה", count:selSpaces.filter(function(s){return s.status==="maintenance";}).length, color:"text-slate-400"},
+                      {label:"×××©××¨××ª", count:selOccupied,                               color:"text-green-600"},
+                      {label:"×¤× ××××ª",  count:selSpaces.filter(function(s){return s.status==="vacant";}).length, color:"text-blue-600"},
+                      {label:"×ª××××§×", count:selSpaces.filter(function(s){return s.status==="maintenance";}).length, color:"text-slate-400"},
                     ].map(function(k) {
                       return (
                         <div key={k.label} className="text-center">
@@ -268,28 +284,28 @@ export default function PropertiesPage() {
         </div>
       </div>
 
-      {/* מודל */}
+      {/* ×××× */}
       {editingId && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={function(){setEditingId("");}}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={function(e){e.stopPropagation();}} dir="rtl">
             <div className="sticky top-0 bg-white border-b px-6 py-4 flex items-center justify-between">
-              <h2 className="font-bold text-slate-800 text-lg">{isNew?"נכס חדש":"עריכת נכס"}</h2>
-              <button onClick={function(){setEditingId("");}} className="text-2xl text-slate-400">×</button>
+              <h2 className="font-bold text-slate-800 text-lg">{isNew?"× ××¡ ×××©":"×¢×¨×××ª × ××¡"}</h2>
+              <button onClick={function(){setEditingId("");}} className="text-2xl text-slate-400">Ã</button>
             </div>
             <div className="p-6 space-y-3">
               <div>
-                <label className="mb-1 block text-xs font-semibold text-slate-700">שם הנכס *</label>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">×©× ×× ××¡ *</label>
                 <input type="text" value={fName} onChange={function(e){setFName(e.target.value);}} className={ic} />
               </div>
               <div>
-                <label className="mb-1 block text-xs font-semibold text-slate-700">חברה</label>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">×××¨×</label>
                 <select value={fCompanyId} onChange={function(e){setFCompanyId(e.target.value);}} className={ic}>
-                  <option value="">-- ללא חברה --</option>
+                  <option value="">-- ××× ×××¨× --</option>
                   {companies.map(function(c){return <option key={c.id} value={c.id}>{c.company_name}</option>;})}
                 </select>
               </div>
               <div>
-                <label className="mb-2 block text-xs font-semibold text-slate-700">סוג נכס</label>
+                <label className="mb-2 block text-xs font-semibold text-slate-700">×¡×× × ××¡</label>
                 <div className="grid grid-cols-5 gap-1.5">
                   {PROP_TYPES.map(function(t) {
                     return (
@@ -304,30 +320,30 @@ export default function PropertiesPage() {
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-700">כתובת</label>
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">××ª×××ª</label>
                   <input type="text" value={fAddress} onChange={function(e){setFAddress(e.target.value);}} className={ic} />
                 </div>
                 <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-700">עיר</label>
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">×¢××¨</label>
                   <input type="text" value={fCity} onChange={function(e){setFCity(e.target.value);}} className={ic} />
                 </div>
                 <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-700">שטח כולל (מ"ר)</label>
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">×©×× ×××× (×"×¨)</label>
                   <input type="number" value={fArea} onChange={function(e){setFArea(e.target.value);}} className={ic} />
                 </div>
                 <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-700">קומות</label>
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">×§××××ª</label>
                   <input type="number" value={fFloors} onChange={function(e){setFFloors(e.target.value);}} className={ic} />
                 </div>
               </div>
               <div>
-                <label className="mb-1 block text-xs font-semibold text-slate-700">הערות</label>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">××¢×¨××ª</label>
                 <textarea value={fNotes} onChange={function(e){setFNotes(e.target.value);}} rows={2} className={ic} />
               </div>
               <div className="flex gap-3 pt-2">
-                <button onClick={function(){setEditingId("");}} className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm text-slate-600">ביטול</button>
+                <button onClick={function(){setEditingId("");}} className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm text-slate-600">×××××</button>
                 <button onClick={handleSave} disabled={saving} className="flex-1 rounded-xl bg-blue-700 py-2.5 text-sm font-bold text-white disabled:opacity-50">
-                  {saving?"שומר...":"שמור"}
+                  {saving?"×©×××¨...":"×©×××¨"}
                 </button>
               </div>
             </div>
