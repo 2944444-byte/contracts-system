@@ -1,17 +1,17 @@
 "use client";
 import { useState } from "react";
-import { createClient } from "@supabase/supabase-js";
+import { createBrowserClient } from "@supabase/ssr";
 
-const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  );
+const supabase = createBrowserClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
 
 export default function LoginPage() {
-  const [email,    setEmail]    = useState("");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [loading,  setLoading]  = useState(false);
-  const [error,    setError]    = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault();
@@ -22,7 +22,6 @@ export default function LoginPage() {
       const { data, error: err } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
       if (err) throw err;
       if (data.session) {
-        // שימוש ב-window.location במקום router - מבטיח reload מלא עם cookies
         window.location.href = "/dashboard";
       }
     } catch (e: any) {
@@ -78,4 +77,3 @@ export default function LoginPage() {
     </div>
   );
 }
-// cache bust Sat Mar 21 20:18:35 IST 2026
