@@ -1,8 +1,7 @@
-
 "use client";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { createTenant } from "../../../../lib/db";
+import { supabase } from "@/lib/supabase";
 
 export default function NewTenantPage() {
   const router = useRouter();
@@ -20,10 +19,18 @@ export default function NewTenantPage() {
     if (!name) { alert("שם שוכר הוא חובה"); return; }
     setSaving(true);
     try {
-      await createTenant({ name, company_name: companyName, contact_name: contactName, contact_phone: contactPhone, contact_email: contactEmail, contact_role: contactRole });
+      const { error } = await supabase.from("tenants").insert({
+        name,
+        legal_name: name,
+        company_name: companyName || null,
+        phone: contactPhone || null,
+        primary_email: contactEmail || null,
+        contacts: contactName ? [{ name: contactName, phone: contactPhone, email: contactEmail, role: contactRole }] : [],
+      });
+      if (error) throw error;
       router.push("/tenants");
-    } catch(e) {
-      alert("שגיאה: " + e);
+    } catch(e: any) {
+      alert("שגיאה: " + e?.message);
       setSaving(false);
     }
   }
@@ -31,11 +38,10 @@ export default function NewTenantPage() {
   return (
     <div dir="rtl" className="max-w-2xl mx-auto pb-12">
       <div className="mb-6 flex items-center gap-3">
-        <button onClick={() => router.back()} className="text-slate-400 hover:text-slate-700 text-2xl">&larr;</button>
+        <button onClick={() => router.back()} className="text-slate-400 hover:text-slate-700 text-2xl">←</button>
         <h1 className="text-2xl font-bold text-slate-800">שוכר חדש</h1>
       </div>
       <div className="space-y-5">
-
         <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
           <h2 className="mb-4 text-sm font-bold text-slate-500">פרטי שוכר</h2>
           <div className="mb-3">
@@ -53,27 +59,27 @@ export default function NewTenantPage() {
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="mb-1 block text-xs font-medium text-slate-600">שם מלא</label>
-              <input type="text" value={contactName} onChange={e => setContactName(e.target.value)} className={ic} />
+              <input type="text" value={contactName} onChange={e => setContactName(e.target.value)} placeholder="ישראל ישראלי" className={ic} />
             </div>
             <div>
               <label className="mb-1 block text-xs font-medium text-slate-600">תפקיד</label>
-              <input type="text" value={contactRole} onChange={e => setContactRole(e.target.value)} className={ic} />
+              <input type="text" value={contactRole} onChange={e => setContactRole(e.target.value)} placeholder="מנכ"ל" className={ic} />
             </div>
             <div>
               <label className="mb-1 block text-xs font-medium text-slate-600">טלפון</label>
-              <input type="tel" value={contactPhone} onChange={e => setContactPhone(e.target.value)} className={ic} />
+              <input type="tel" value={contactPhone} onChange={e => setContactPhone(e.target.value)} placeholder="050-0000000" className={ic} />
             </div>
             <div>
               <label className="mb-1 block text-xs font-medium text-slate-600">אימייל</label>
-              <input type="email" value={contactEmail} onChange={e => setContactEmail(e.target.value)} className={ic} />
+              <input type="email" value={contactEmail} onChange={e => setContactEmail(e.target.value)} placeholder="name@co.il" className={ic} />
             </div>
           </div>
         </div>
 
-        <div className="flex gap-3 pt-2">
-          <button onClick={() => router.back()} className="flex-1 rounded-lg border border-slate-200 py-2.5 font-medium text-slate-600 hover:bg-slate-50">ביטול</button>
-          <button onClick={handleSave} disabled={saving} className="flex-1 rounded-lg bg-blue-700 py-2.5 font-bold text-white hover:bg-blue-800 disabled:opacity-50">
-            {saving ? "שומר..." : "שמור שוכר"}
+        <div className="flex gap-3 justify-end">
+          <button onClick={() => router.back()} className="rounded-lg border border-slate-300 px-5 py-2 text-sm text-slate-600">ביטול</button>
+          <button onClick={handleSave} disabled={saving} className="rounded-lg bg-blue-700 px-5 py-2 text-sm font-bold text-white hover:bg-blue-800 disabled:opacity-50">
+            {saving ? "שומר..." : "צור שוכר"}
           </button>
         </div>
       </div>
