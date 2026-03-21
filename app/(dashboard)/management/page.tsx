@@ -6,10 +6,10 @@ import { logAudit } from '@/lib/audit-log';
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 
 function fmtDate(d: string) {
-  if (!d) return "â";
+  if (!d) return "—";
   return new Date(d).toLocaleDateString("he-IL", { month:"long", year:"numeric" });
 }
-function fmtMoney(n: number) { return "âª" + Math.round(n ?? 0).toLocaleString(); }
+function fmtMoney(n: number) { return "₪" + Math.round(n ?? 0).toLocaleString(); }
 
 export default function ManagementPage() {
   const [fees,       setFees]       = useState<any[]>([]);
@@ -59,11 +59,11 @@ export default function ManagementPage() {
         });
         created++;
       }
-      await logAudit({ entity_type:"management_fees", entity_id:selMonth, action:"generate", notes:created+" × ××¦×¨×" });
+      await logAudit({ entity_type:"management_fees", entity_id:selMonth, action:"generate", notes:created+" נוצרו" });
       await loadAll();
-      if (created === 0) alert("×× ×××××× ×××¨ ××© ××× ××× × ×××× ×××××© ××");
-      else alert(`â × ××¦×¨× ${created} ××× × ××××`);
-    } catch(e:any) { alert("×©××××: "+e?.message); }
+      if (created === 0) alert("כל החוזים כבר יש להם דמי ניהול לחודש זה");
+      else alert(`✅ נוצרו ${created} דמי ניהול`);
+    } catch(e:any) { alert("שגיאה: "+e?.message); }
     finally { setGenerating(false); }
   }
 
@@ -86,7 +86,7 @@ export default function ManagementPage() {
   }
 
   async function deleteRow(id: string) {
-    if (!confirm("×××××§ ×¨×©×××?")) return;
+    if (!confirm("למחוק רשומה?")) return;
     await supabase.from("management_fees").delete().eq("id",id);
     await loadAll();
   }
@@ -107,8 +107,8 @@ export default function ManagementPage() {
     <div dir="rtl">
       <div className="mb-6 flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-3xl font-bold text-slate-800">××× × ××××</h1>
-          <p className="text-sm text-slate-500 mt-1">{fees.length} ×¨×©××××ª | {selMonth}</p>
+          <h1 className="text-3xl font-bold text-slate-800">דמי ניהול</h1>
+          <p className="text-sm text-slate-500 mt-1">{fees.length} רשומות | {selMonth}</p>
         </div>
         <div className="flex gap-2 items-center flex-wrap">
           <input type="month" value={selMonth} onChange={function(e){setSelMonth(e.target.value);}}
@@ -116,12 +116,12 @@ export default function ManagementPage() {
           {fees.filter(function(f){return f.status==="pending";}).length > 0 && (
             <button onClick={approveAll}
               className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100">
-              â ××©×¨ ××× ({fees.filter(function(f){return f.status==="pending";}).length})
+              ✓ אשר הכל ({fees.filter(function(f){return f.status==="pending";}).length})
             </button>
           )}
           <button onClick={generateAll} disabled={generating || contracts.length===0}
             className="rounded-lg bg-blue-700 px-5 py-2 font-bold text-white hover:bg-blue-800 disabled:opacity-50">
-            {generating ? "â³ ××××¦×¨..." : "â¡ ×¦××¨ " + selMonth}
+            {generating ? "⏳ מייצר..." : "⚡ צור " + selMonth}
           </button>
         </div>
       </div>
@@ -129,9 +129,9 @@ export default function ManagementPage() {
       {/* KPI */}
       <div className="grid grid-cols-3 gap-3 mb-5">
         {[
-          {label:"×××ª×× ××",   amount:totalPending,  count:fees.filter(function(f){return f.status==="pending";}).length,  color:"text-slate-700",  bg:"bg-white",    f:"pending"  },
-          {label:"××××©×¨××",   amount:totalApproved, count:fees.filter(function(f){return f.status==="approved";}).length, color:"text-blue-700",   bg:"bg-blue-50",  f:"approved" },
-          {label:"×©××××",     amount:totalPaid,     count:fees.filter(function(f){return f.status==="paid";}).length,     color:"text-green-700",  bg:"bg-green-50", f:"paid"     },
+          {label:"ממתינים",   amount:totalPending,  count:fees.filter(function(f){return f.status==="pending";}).length,  color:"text-slate-700",  bg:"bg-white",    f:"pending"  },
+          {label:"מאושרים",   amount:totalApproved, count:fees.filter(function(f){return f.status==="approved";}).length, color:"text-blue-700",   bg:"bg-blue-50",  f:"approved" },
+          {label:"שולמו",     amount:totalPaid,     count:fees.filter(function(f){return f.status==="paid";}).length,     color:"text-green-700",  bg:"bg-green-50", f:"paid"     },
         ].map(function(k) {
           return (
             <button key={k.label} onClick={function(){setFilterSt(filterSt===k.f?"all":k.f);}}
@@ -145,23 +145,23 @@ export default function ManagementPage() {
         })}
       </div>
 
-      {/* ××ª×¨×× â ××××× ××× ××× × ×××× */}
+      {/* התראה — חוזים ללא דמי ניהול */}
       {contractsWithoutFees.length > 0 && (
         <div className="mb-4 rounded-xl border border-yellow-200 bg-yellow-50 p-4 flex items-center justify-between">
           <div className="text-sm text-yellow-800">
-            <span className="font-bold">â ï¸ {contractsWithoutFees.length} ×××××</span> ×¢× ××× × ×××× ×©×¢×× ×× × ××¦×¨× ×××××©
+            <span className="font-bold">⚠️ {contractsWithoutFees.length} חוזים</span> עם דמי ניהול שעוד לא נוצרו החודש
             <span className="text-xs text-yellow-600 mr-2">({contractsWithoutFees.map(function(c){return c.tenants?.name;}).join(", ")})</span>
           </div>
           <button onClick={generateAll} disabled={generating}
             className="shrink-0 text-xs bg-yellow-600 text-white px-3 py-1.5 rounded-lg font-semibold hover:bg-yellow-700 disabled:opacity-50">
-            {generating ? "â³" : "â¡ ×¦××¨ ×¢××©××"}
+            {generating ? "⏳" : "⚡ צור עכשיו"}
           </button>
         </div>
       )}
 
-      {/* ×¤××××¨ */}
+      {/* פילטר */}
       <div className="flex gap-2 mb-4">
-        {[{v:"all",l:"×××"},{v:"pending",l:"×××ª×× ××"},{v:"approved",l:"××××©×¨××"},{v:"paid",l:"×©××××"}].map(function(s) {
+        {[{v:"all",l:"הכל"},{v:"pending",l:"ממתינים"},{v:"approved",l:"מאושרים"},{v:"paid",l:"שולמו"}].map(function(s) {
           return (
             <button key={s.v} onClick={function(){setFilterSt(s.v);}}
               className={"rounded-xl border px-3 py-1.5 text-xs font-semibold " +
@@ -173,19 +173,19 @@ export default function ManagementPage() {
       </div>
 
       {loading ? (
-        <div className="text-center py-12 text-slate-400">×××¢×...</div>
+        <div className="text-center py-12 text-slate-400">טוען...</div>
       ) : filtered.length === 0 ? (
         <div className="rounded-xl border-2 border-dashed border-slate-200 bg-white p-12 text-center text-slate-400">
-          <div className="text-5xl mb-3">ð§</div>
-          <div>××× ××× × ×××× ×××××© ××</div>
+          <div className="text-5xl mb-3">🔧</div>
+          <div>אין דמי ניהול לחודש זה</div>
           {contracts.length > 0 && (
             <button onClick={generateAll} disabled={generating}
               className="mt-3 text-blue-600 hover:underline text-sm">
-              {generating ? "â³ ××××¦×¨..." : "â¡ ×¦××¨ ×¢××©××"}
+              {generating ? "⏳ מייצר..." : "⚡ צור עכשיו"}
             </button>
           )}
           {contracts.length === 0 && (
-            <div className="text-xs mt-2 text-slate-400">××× ××××× ×¢× ××××¨×ª ××× × ××××</div>
+            <div className="text-xs mt-2 text-slate-400">אין חוזים עם הגדרת דמי ניהול</div>
           )}
         </div>
       ) : (
@@ -193,13 +193,13 @@ export default function ManagementPage() {
           <table className="w-full text-right text-sm">
             <thead className="bg-slate-50 border-b">
               <tr>
-                <th className="px-4 py-3 font-semibold text-slate-700">×©×××¨ / × ××¡</th>
-                <th className="px-4 py-3 font-semibold text-slate-700">×©×"× ××¡××¡</th>
-                <th className="px-4 py-3 font-semibold text-slate-700">×©×××</th>
-                <th className="px-4 py-3 font-semibold text-slate-700">××× × ××××</th>
-                <th className="px-4 py-3 font-semibold text-slate-700">××××©</th>
-                <th className="px-4 py-3 font-semibold text-slate-700">×¡××××¡</th>
-                <th className="px-4 py-3 font-semibold text-slate-700">×¤×¢××××ª</th>
+                <th className="px-4 py-3 font-semibold text-slate-700">שוכר / נכס</th>
+                <th className="px-4 py-3 font-semibold text-slate-700">שכ"ד בסיס</th>
+                <th className="px-4 py-3 font-semibold text-slate-700">שיטה</th>
+                <th className="px-4 py-3 font-semibold text-slate-700">דמי ניהול</th>
+                <th className="px-4 py-3 font-semibold text-slate-700">חודש</th>
+                <th className="px-4 py-3 font-semibold text-slate-700">סטטוס</th>
+                <th className="px-4 py-3 font-semibold text-slate-700">פעולות</th>
               </tr>
             </thead>
             <tbody>
@@ -215,7 +215,7 @@ export default function ManagementPage() {
                     <td className="px-4 py-3 text-slate-600">{fmtMoney(f.base_amount??0)}</td>
                     <td className="px-4 py-3">
                       <span className="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full">
-                        {pct ? pct+"%" : fixed ? "×§×××¢" : "â"}
+                        {pct ? pct+"%" : fixed ? "קבוע" : "—"}
                       </span>
                     </td>
                     <td className="px-4 py-3 font-bold text-purple-700">{fmtMoney(f.final_amount??0)}</td>
@@ -223,21 +223,21 @@ export default function ManagementPage() {
                     <td className="px-4 py-3">
                       <span className={"text-xs px-2 py-0.5 rounded-full font-semibold " +
                         (f.status==="paid"?"bg-green-100 text-green-700":f.status==="approved"?"bg-blue-100 text-blue-700":"bg-slate-100 text-slate-600")}>
-                        {f.status==="paid"?"×©×××":f.status==="approved"?"××××©×¨":"×××ª××"}
+                        {f.status==="paid"?"שולם":f.status==="approved"?"מאושר":"ממתין"}
                       </span>
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex gap-1">
                         {f.status==="pending" && (
                           <button onClick={function(){approve(f.id);}}
-                            className="text-xs bg-blue-600 text-white px-2 py-1 rounded font-semibold hover:bg-blue-700">â ××©×¨</button>
+                            className="text-xs bg-blue-600 text-white px-2 py-1 rounded font-semibold hover:bg-blue-700">✓ אשר</button>
                         )}
                         {f.status==="approved" && (
                           <button onClick={function(){markPaid(f.id);}}
-                            className="text-xs bg-green-600 text-white px-2 py-1 rounded font-semibold hover:bg-green-700">âª ×©×××</button>
+                            className="text-xs bg-green-600 text-white px-2 py-1 rounded font-semibold hover:bg-green-700">₪ שולם</button>
                         )}
                         <button onClick={function(){deleteRow(f.id);}}
-                          className="text-xs border border-red-100 rounded px-2 py-1 text-red-400 hover:bg-red-50">ð</button>
+                          className="text-xs border border-red-100 rounded px-2 py-1 text-red-400 hover:bg-red-50">🗑</button>
                       </div>
                     </td>
                   </tr>
@@ -246,7 +246,7 @@ export default function ManagementPage() {
             </tbody>
             <tfoot className="border-t-2 border-slate-200 bg-slate-50">
               <tr>
-                <td colSpan={3} className="px-4 py-2.5 text-xs font-bold text-slate-600">×¡×"× {filtered.length} ×¨×©××××ª</td>
+                <td colSpan={3} className="px-4 py-2.5 text-xs font-bold text-slate-600">סה"כ {filtered.length} רשומות</td>
                 <td className="px-4 py-2.5 font-black text-purple-700">
                   {fmtMoney(filtered.reduce(function(s,f){return s+(f.final_amount??0);},0))}
                 </td>
