@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import Sidebar from "../../components/Sidebar";
 import GlobalSearch from "../../components/GlobalSearch";
 import AlertsBadge from "../../components/AlertsBadge";
+import UserBadge from "../../components/UserBadge";
 
 export default function DashboardLayout({ children }: { children: ReactNode }) {
   return (
@@ -12,8 +13,9 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
           <GlobalSearch />
           <div className="flex items-center gap-3">
             <AlertsBadge />
+            <UserBadge />
             <div className="hidden md:flex items-center gap-1 text-xs text-slate-400 font-medium">
-              <span>🔄ï¸</span>
+              <span>🔄</span>
               <span>PropManager v4</span>
             </div>
           </div>
