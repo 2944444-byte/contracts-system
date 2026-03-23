@@ -73,7 +73,7 @@ export default function PropertiesPage() {
     setSaving(true);
     try {
       const payload = {
-        property_name: fName.trim(), company_id: fCompanyId||null,
+        name: fName.trim(), company_id: fCompanyId||null,
         property_type: fType, address: fAddress||null, city: fCity||null,
         total_area: fArea ? Number(fArea) : null, floors: fFloors ? Number(fFloors) : null,
         notes: fNotes||null,
