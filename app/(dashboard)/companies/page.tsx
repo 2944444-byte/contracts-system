@@ -43,7 +43,7 @@ export default function CompaniesPage() {
     setSaving(true);
     try {
       const payload={company_name:fName.trim(),company_id:fId||null,address:fAddress||null,city:fCity||null,phone:fPhone||null,email:fEmail||null,contact_name:fContact||null,notes:fNotes||null};
-      if (isNew) { const { data } = await supabase.from("companies").insert(payload).select().single(); await logAudit({entity_type:"company",entity_id:data.id,action:"create"}); setSelected(data.id); }
+      if (isNew) { const { data, error: ie } = await supabase.from("companies").insert(payload).select().single(); if (ie) throw new Error(ie.message); await logAudit({entity_type:"company",entity_id:data!.id,action:"create"}); setSelected(data!.id); }
       else { await supabase.from("companies").update(payload).eq("id",editingId); await logAudit({entity_type:"company",entity_id:editingId,action:"update"}); }
       setEditingId(""); await loadAll();
     } catch(e:any) { alert("שגיאה: "+e?.message); }
