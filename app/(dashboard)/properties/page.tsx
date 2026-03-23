@@ -79,7 +79,9 @@ export default function PropertiesPage() {
         notes: fNotes||null,
       };
       if (isNew) {
-        const { data } = await supabase.from("properties").insert(payload).select().single();
+        const { data, error: _ie } = await supabase.from("properties").insert(payload).select().single();
+      if (_ie) throw new Error(_ie.message);
+      if (!data?.id) throw new Error("שגיאה בשמירה");
         await logAudit({ entity_type:"property", entity_id:data.id, action:"create" });
         setSelected(data.id);
       } else {

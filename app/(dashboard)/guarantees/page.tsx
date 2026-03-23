@@ -48,7 +48,9 @@ export default function GuaranteesPage() {
     setSaving(true);
     try {
       const payload={contract_id:fContractId,guarantee_type:fType,amount_required:fRequired?Number(fRequired):null,amount_actual:fActual?Number(fActual):null,bank_name:fBank||null,reference_number:fRef||null,start_date:fStartDate||null,end_date:fEndDate||null,status:fStatus,notes:fNotes||null};
-      if (isNew) { const { data } = await supabase.from("guarantees").insert(payload).select().single(); await logAudit({entity_type:"guarantee",entity_id:data.id,action:"create"}); }
+      if (isNew) { const { data, error: _ie } = await supabase.from("guarantees").insert(payload).select().single();
+      if (_ie) throw new Error(_ie.message);
+      if (!data?.id) throw new Error("שגיאה בשמירה"); await logAudit({entity_type:"guarantee",entity_id:data.id,action:"create"}); }
       else { await supabase.from("guarantees").update(payload).eq("id",editingId); await logAudit({entity_type:"guarantee",entity_id:editingId,action:"update"}); }
       setEditingId(""); await loadAll();
     } catch(e:any) { alert("שגיאה: "+e?.message); }

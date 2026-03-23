@@ -51,7 +51,9 @@ export default function PaymentsPage() {
     setSaving(true);
     try {
       const base=Number(fBaseAmount), vat=fVatType==="taxable"?base*0.18:0;
-      const { data } = await supabase.from("charges").insert({contract_id:fContractId,charge_type:fType,base_amount:base,vat_amount:vat,total_amount:base+vat,vat_type:fVatType,billing_period_start:fPeriodFrom||null,billing_period_end:fPeriodTo||null,due_date:fDueDate||null,status:"pending",notes:fNotes||null}).select().single();
+      const { data, error: _ie } = await supabase.from("charges").insert({contract_id:fContractId,charge_type:fType,base_amount:base,vat_amount:vat,total_amount:base+vat,vat_type:fVatType,billing_period_start:fPeriodFrom||null,billing_period_end:fPeriodTo||null,due_date:fDueDate||null,status:"pending",notes:fNotes||null}).select().single();
+      if (_ie) throw new Error(_ie.message);
+      if (!data?.id) throw new Error("שגיאה בשמירה");
       await logAudit({entity_type:"charge",entity_id:data.id,action:"create"});
       setEditingId(""); await loadAll();
     } catch(e:any) { alert("שגיאה: "+e?.message); }

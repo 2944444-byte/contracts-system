@@ -80,7 +80,9 @@ export default function InsurancesPage() {
         notes:           fNotes||null,
       };
       if (isNew) {
-        const { data } = await supabase.from(table).insert(payload).select().single();
+        const { data, error: _ie } = await supabase.from(table).insert(payload).select().single();
+      if (_ie) throw new Error(_ie.message);
+      if (!data?.id) throw new Error("שגיאה בשמירה");
         await logAudit({ entity_type:"insurance", entity_id:data.id, action:"create" });
       } else {
         await supabase.from(table).update(payload).eq("id", editingId);

@@ -44,7 +44,9 @@ export default function UnitsPage() {
     setSaving(true);
     try {
       const payload={property_id:fPropertyId,space_name:fName.trim(),space_type:fType,area:fArea?Number(fArea):null,floor:fFloor?Number(fFloor):null,status:fStatus,notes:fNotes||null};
-      if (isNew) { const { data } = await supabase.from("spaces").insert(payload).select().single(); await logAudit({entity_type:"space",entity_id:data.id,action:"create"}); }
+      if (isNew) { const { data, error: _ie } = await supabase.from("spaces").insert(payload).select().single();
+      if (_ie) throw new Error(_ie.message);
+      if (!data?.id) throw new Error("שגיאה בשמירה"); await logAudit({entity_type:"space",entity_id:data.id,action:"create"}); }
       else { await supabase.from("spaces").update(payload).eq("id",editingId); }
       setEditingId(""); await loadAll();
     } catch(e:any) { alert("שגיאה: "+e?.message); }
