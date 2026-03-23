@@ -56,7 +56,7 @@ export default function ContractsNewPage() {
   useEffect(function() { loadRef(); }, []);
   useEffect(function() {
     if (propertyId) {
-      supabase.from("spaces").select("id,name,area,status").eq("property_id",propertyId).then(function({data}){setSpaces(data??[]);});
+      supabase.from("spaces").select("id,space_name,area,status").eq("property_id",propertyId).then(function({data}){setSpaces(data??[]);});
     }
   }, [propertyId]);
 
@@ -93,10 +93,10 @@ export default function ContractsNewPage() {
         investment_addition:Number(investAdd)||null,
         vat_type:vatType,
         indexation_method:indexMethod,
-        base_cpi_value:baseCPI?Number(baseCPI):null,
-        base_cpi_date:baseCPIDate||null,
-        management_fee_pct:mgmtFeePct?Number(mgmtFeePct):null,
-        management_fee_fixed:mgmtFeeFixed?Number(mgmtFeeFixed):null,
+        index_base_value:baseCPI?Number(baseCPI):null,
+        index_base_date:baseCPIDate||null,
+        mgmt_fee_per_sqm:mgmtFeePct?Number(mgmtFeePct):null,
+        
         status:"active",
       }).select().single();
 
@@ -115,7 +115,7 @@ export default function ContractsNewPage() {
 
       // ערבות
       if (addGuarantee && guaranteeAmt && contract) {
-        await supabase.from("guarantees").insert({contract_id:contract.id,guarantee_type:guaranteeType,amount_required:Number(guaranteeAmt),amount_actual:guaranteeActual?Number(guaranteeActual):null,bank_name:guaranteeBank||null,end_date:guaranteeEnd||null,status:"active"});
+        await supabase.from("guarantees").insert({contract_id:contract.id,guarantee_type:guaranteeType,amount_required:Number(guaranteeAmt),amount_actual:guaranteeActual?Number(guaranteeActual):null,bank:guaranteeBank||null,end_date:guaranteeEnd||null,status:"active"});
       }
 
       await logAudit({entity_type:"contract",entity_id:contract.id,action:"create",notes:tenants.find(function(t){return t.id===tenantId;})?.name});
@@ -177,7 +177,7 @@ export default function ContractsNewPage() {
                       <button key={s.id} type="button" onClick={function(){toggleSpace(s.id);}}
                         className={"rounded-lg border p-2 text-center text-xs transition-all "+(sel?"border-blue-500 bg-blue-50 font-bold text-blue-700":s.status==="occupied"?"border-slate-100 bg-slate-50 opacity-50 cursor-not-allowed":"border-slate-200 hover:bg-slate-50")}
                         disabled={s.status==="occupied"&&!sel}>
-                        <div className="font-semibold">{s.name}</div>
+                        <div className="font-semibold">{s.space_name}</div>
                         {s.area&&<div className="text-slate-400">{s.area} מ"ר</div>}
                         <div className={"text-xs "+(s.status==="occupied"?"text-red-400":"text-green-500")}>{s.status==="occupied"?"מושכרת":"פנויה"}</div>
                       </button>
