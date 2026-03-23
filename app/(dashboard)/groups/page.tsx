@@ -34,8 +34,8 @@ export default function GroupsPage() {
     if (!fName.trim()) { alert("חובה: שם קבוצה"); return; }
     setSaving(true);
     try {
-      if (isNew) { const { data } = await supabase.from("property_groups").insert({name:fName.trim(),notes:fNotes||null}).select().single(); await logAudit({entity_type:"group",entity_id:data.id,action:"create"}); }
-      else { await supabase.from("property_groups").update({name:fName.trim(),notes:fNotes||null}).eq("id",editingId); }
+      if (isNew) { const { data } = await supabase.from("property_groups").insert({group_name:fName.trim(),notes:fNotes||null}).select().single(); await logAudit({entity_type:"group",entity_id:data.id,action:"create"}); }
+      else { await supabase.from("property_groups").update({group_name:fName.trim(),notes:fNotes||null}).eq("id",editingId); }
       setEditingId(""); await loadAll();
     } catch(e:any) { alert("שגיאה: "+e?.message); }
     finally { setSaving(false); }

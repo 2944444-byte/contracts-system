@@ -29,8 +29,8 @@ export default function UnitsPage() {
 
   async function loadAll() {
     const [{ data: sp }, { data: pr }, { data: c }] = await Promise.all([
-      supabase.from("spaces").select("*, properties(name)").order("space_name"),
-      supabase.from("properties").select("id,name").order("space_name"),
+      supabase.from("spaces").select("*, properties(property_name)").order("space_name"),
+      supabase.from("properties").select("id,property_name").order("space_name"),
       supabase.from("contracts").select("id,tenant_id,tenants(name),contract_spaces(space_id)").in("status",["active","expiring","extended"]),
     ]);
     setSpaces(sp??[]); setProperties(pr??[]); setContracts(c??[]); setLoading(false);
@@ -43,7 +43,7 @@ export default function UnitsPage() {
     if (!fPropertyId||!fName.trim()) { alert("חובה: נכס + שם"); return; }
     setSaving(true);
     try {
-      const payload={property_id:fPropertyId,name:fName.trim(),space_type:fType,area:fArea?Number(fArea):null,floor:fFloor?Number(fFloor):null,status:fStatus,notes:fNotes||null};
+      const payload={property_id:fPropertyId,space_name:fName.trim(),space_type:fType,area:fArea?Number(fArea):null,floor:fFloor?Number(fFloor):null,status:fStatus,notes:fNotes||null};
       if (isNew) { const { data } = await supabase.from("spaces").insert(payload).select().single(); await logAudit({entity_type:"space",entity_id:data.id,action:"create"}); }
       else { await supabase.from("spaces").update(payload).eq("id",editingId); }
       setEditingId(""); await loadAll();
