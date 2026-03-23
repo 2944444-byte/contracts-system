@@ -56,7 +56,7 @@ export default function LettersPage() {
     if (!fContractId||!fSubject.trim()) { alert("חובה: חוזה + נושא"); return; }
     setSaving(true);
     try {
-      const { data } = await supabase.from("letters").insert({contract_id:fContractId,letter_type:fType,subject:fSubject.trim(),body:fBody,template_id:fTemplateId||null,status:"draft"}).select().single();
+      const { data } = await supabase.from("letters").insert({contract_id:fContractId,letter_type:fType,title:fSubject.trim(),content_json:JSON.stringify({body:fBody}),template_id:fTemplateId||null,status:"draft"}).select().single();
       await logAudit({entity_type:"letter",entity_id:data.id,action:"create"});
       setEditingId(""); await loadAll();
     } catch(e:any) { alert("שגיאה: "+e?.message); }

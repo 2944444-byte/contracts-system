@@ -55,7 +55,7 @@ export default function ManagementPage() {
         if (feeAmount <= 0) continue;
         await supabase.from("management_fees").insert({
           contract_id: c.id, month, base_amount: baseRent,
-          fee_amount: feeAmount, final_amount: feeAmount, status: "pending",
+          base_amount: feeAmount, final_amount: feeAmount, status: "pending",
         });
         created++;
       }

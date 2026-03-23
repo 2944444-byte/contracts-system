@@ -47,7 +47,7 @@ export default function GuaranteesPage() {
     if (!fContractId) { alert("חובה: חוזה"); return; }
     setSaving(true);
     try {
-      const payload={contract_id:fContractId,guarantee_type:fType,amount_required:fRequired?Number(fRequired):null,amount_actual:fActual?Number(fActual):null,bank_name:fBank||null,reference_number:fRef||null,start_date:fStartDate||null,end_date:fEndDate||null,status:fStatus,notes:fNotes||null};
+      const payload={contract_id:fContractId,guarantee_type:fType,amount_required:fRequired?Number(fRequired):null,amount_actual:fActual?Number(fActual):null,bank:fBank||null,reference_number:fRef||null,start_date:fStartDate||null,end_date:fEndDate||null,status:fStatus,notes:fNotes||null};
       if (isNew) { const { data, error: _ie } = await supabase.from("guarantees").insert(payload).select().single();
       if (_ie) throw new Error(_ie.message);
       if (!data?.id) throw new Error("שגיאה בשמירה"); await logAudit({entity_type:"guarantee",entity_id:data.id,action:"create"}); }

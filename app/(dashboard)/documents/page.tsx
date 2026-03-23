@@ -75,12 +75,12 @@ export default function DocumentsPage() {
       const { data: urlData } = supabase.storage.from("documents").getPublicUrl(path);
       const { data: doc } = await supabase.from("documents").insert({
         contract_id:   fContractId || null,
-        document_type: fDocType,
-        file_name:     fName.trim() || file.name,
+        doc_type: fDocType,
+        title:     fName.trim() || file.name,
         file_url:      urlData.publicUrl,
         file_size:     file.size,
         file_type:     file.type,
-        storage_path:  path,
+        file_url:  path,
       }).select().single();
       await logAudit({ entity_type:"document", entity_id:doc.id, action:"upload" });
       setFName(""); setFContractId(""); setFDocType("contract");
