@@ -30,6 +30,7 @@ export type ExtensionOption = {
   rent_mechanism: "no_change" | "increase_pct" | "new_value";
   new_rent_value: number | null;
   rent_increase_pct: number | null;
+  auto_renewal: boolean;
   start_date: string;
   end_date: string;
   notes: string;
@@ -95,6 +96,7 @@ export function emptyOption(): ExtensionOption {
     rent_mechanism: "no_change",
     new_rent_value: null,
     rent_increase_pct: null,
+    auto_renewal: false,
     start_date: "",
     end_date: "",
     notes: "",

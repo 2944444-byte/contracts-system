@@ -26,7 +26,7 @@ export default function UnitsPage() {
   const [editUnit, setEditUnit] = useState<any>(null);
   const [selectedUnit, setSelectedUnit] = useState<any>(null);
   const [unitContract, setUnitContract] = useState<any>(null);
-  const [form, setForm] = useState({ property_id: "", name: "", area: "", use_type: "", floor: "", notes: "" });
+  const [form, setForm] = useState({ property_id: "", name: "", area: "", use_type: "", floor: "", notes: "", asking_rent_per_sqm: "", expected_vacancy_date: "" });
   const [saving, setSaving] = useState(false);
 
   const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
@@ -98,26 +98,32 @@ export default function UnitsPage() {
 
   function openNew() {
     setEditUnit(null);
-    setForm({ property_id: properties[0]?.id ?? "", name: "", area: "", use_type: "", floor: "", notes: "" });
+    setForm({ property_id: properties[0]?.id ?? "", name: "", area: "", use_type: "", floor: "", notes: "", asking_rent_per_sqm: "", expected_vacancy_date: "" });
     setShowForm(true);
   }
 
   function openEdit(u: any) {
     setEditUnit(u);
-    setForm({ property_id: u.property_id, name: u.name ?? "", area: u.area?.toString() ?? "", use_type: u.use_type ?? "", floor: u.floor?.toString() ?? "", notes: u.notes ?? "" });
+    setForm({ property_id: u.property_id, name: u.name ?? "", area: u.area?.toString() ?? "", use_type: u.use_type ?? "", floor: u.floor?.toString() ?? "", notes: u.notes ?? "", asking_rent_per_sqm: u.asking_rent_per_sqm?.toString() ?? "", expected_vacancy_date: u.expected_vacancy_date ?? "" });
     setShowForm(true);
   }
 
   async function handleSave() {
     if (!form.name || !form.property_id) { alert("שם ונכס הם חובה"); return; }
     setSaving(true);
-    if (editUnit) {
-      await supabase.from("units").update({ ...form, area: Number(form.area), floor: form.floor ? Number(form.floor) : null }).eq("id", editUnit.id);
-    } else {
-      await supabase.from("units").insert({ ...form, area: Number(form.area), floor: form.floor ? Number(form.floor) : null, status: "vacant" });
-    }
+    const payload = {
+      ...form,
+      area: Number(form.area),
+      floor: form.floor ? Number(form.floor) : null,
+      asking_rent_per_sqm: form.asking_rent_per_sqm ? Number(form.asking_rent_per_sqm) : null,
+      expected_vacancy_date: form.expected_vacancy_date || null,
+    };
+    const res = editUnit
+      ? await supabase.from("units").update(payload).eq("id", editUnit.id)
+      : await supabase.from("units").insert({ ...payload, status: "vacant" });
+    if (res.error) { setSaving(false); alert("שגיאה בשמירה: " + res.error.message); return; }
     setSaving(false); setShowForm(false); setEditUnit(null);
-    load();
+    await load();
   }
 
   async function handleDelete(id: string) {
@@ -326,6 +332,16 @@ export default function UnitsPage() {
                     <option value="">בחר סוג</option>
                     {UNIT_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
                   </select>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-slate-600">שכ&quot;ד מבוקש (₪/מ&quot;ר)</label>
+                  <input type="number" value={form.asking_rent_per_sqm} onChange={e => setForm(f => ({...f, asking_rent_per_sqm: e.target.value}))} placeholder="0" className={ic} />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-slate-600">תאריך פינוי צפוי</label>
+                  <input type="date" value={form.expected_vacancy_date} onChange={e => setForm(f => ({...f, expected_vacancy_date: e.target.value}))} className={ic} />
                 </div>
               </div>
               <div>

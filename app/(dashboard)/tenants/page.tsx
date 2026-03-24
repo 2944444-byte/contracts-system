@@ -29,6 +29,7 @@ export default function TenantsPage() {
   const [fContactName, setFContactName] = useState("");
   const [fContactPhone, setFContactPhone] = useState("");
   const [fNotes, setFNotes] = useState("");
+  const [fContacts, setFContacts] = useState<{name:string;role:string;email:string;phone:string}[]>([]);
 
   useEffect(() => { loadAll(); }, []);
 
@@ -49,7 +50,7 @@ export default function TenantsPage() {
     setIsNew(true); setEditingId("new");
     setFName(""); setFCompany(""); setFIdNumber(""); setFPhone("");
     setFEmail(""); setFAddress(""); setFCity(""); setFContactName("");
-    setFContactPhone(""); setFNotes("");
+    setFContactPhone(""); setFNotes(""); setFContacts([]);
   }
 
   function openEdit(t: any) {
@@ -59,6 +60,7 @@ export default function TenantsPage() {
     setFEmail(t.email ?? ""); setFAddress(t.address ?? "");
     setFCity(t.city ?? ""); setFContactName(t.contact_name ?? "");
     setFContactPhone(t.contact_phone ?? ""); setFNotes(t.notes ?? "");
+    setFContacts(Array.isArray(t.contacts) ? t.contacts : []);
   }
 
   async function handleSave() {
@@ -71,6 +73,7 @@ export default function TenantsPage() {
         email: fEmail||null, address: fAddress||null,
         city: fCity||null, contact_name: fContactName||null,
         contact_phone: fContactPhone||null, notes: fNotes||null,
+        contacts: fContacts.filter(c => c.name.trim()),
       };
       if (isNew) {
         const { data, error: _ie } = await supabase.from("tenants").insert(payload).select().single();
@@ -306,6 +309,37 @@ export default function TenantsPage() {
                 <label className="mb-1 block text-xs font-semibold text-slate-700">הערות</label>
                 <textarea value={fNotes} onChange={e => setFNotes(e.target.value)} rows={2} className={ic} />
               </div>
+
+              {/* אנשי קשר */}
+              <div className="rounded-lg border border-slate-200 p-3 mt-1">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-bold text-slate-700">אנשי קשר נוספים</span>
+                  <button type="button" onClick={() => setFContacts(prev => [...prev, {name:"",role:"",email:"",phone:""}])}
+                    className="text-xs bg-blue-600 text-white px-2 py-1 rounded-lg font-semibold hover:bg-blue-700">+ הוסף</button>
+                </div>
+                {fContacts.length === 0 ? (
+                  <div className="text-xs text-slate-400 text-center py-2">אין אנשי קשר נוספים</div>
+                ) : fContacts.map((c, i) => (
+                  <div key={i} className="rounded-lg bg-slate-50 p-2 mb-2 space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-slate-600">איש קשר {i+1}</span>
+                      <button type="button" onClick={() => setFContacts(prev => prev.filter((_,j)=>j!==i))}
+                        className="text-xs text-red-500 hover:text-red-700">הסר</button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <input type="text" value={c.name} placeholder="שם" className={ic+" text-xs"}
+                        onChange={e => setFContacts(prev => prev.map((x,j)=>j===i?{...x,name:e.target.value}:x))} />
+                      <input type="text" value={c.role} placeholder="תפקיד" className={ic+" text-xs"}
+                        onChange={e => setFContacts(prev => prev.map((x,j)=>j===i?{...x,role:e.target.value}:x))} />
+                      <input type="email" value={c.email} placeholder="אימייל" className={ic+" text-xs"} dir="ltr"
+                        onChange={e => setFContacts(prev => prev.map((x,j)=>j===i?{...x,email:e.target.value}:x))} />
+                      <input type="tel" value={c.phone} placeholder="טלפון" className={ic+" text-xs"} dir="ltr"
+                        onChange={e => setFContacts(prev => prev.map((x,j)=>j===i?{...x,phone:e.target.value}:x))} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+
               <div className="flex gap-3 pt-2">
                 <button onClick={() => setEditingId("")}
                   className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm text-slate-600">ביטול</button>

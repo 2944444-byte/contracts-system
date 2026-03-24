@@ -113,6 +113,7 @@ export default function ContractsNewPage() {
   const [baseCPI, setBaseCPI] = useState("");
   const [baseCPIDate, setBaseCPIDate] = useState("");
   const [mgmtFeePct, setMgmtFeePct] = useState("");
+  const [documentUrl, setDocumentUrl] = useState("");
 
   // Step 3 — Grace & Increase
   const [hasGrace, setHasGrace] = useState(false);
@@ -268,6 +269,7 @@ export default function ContractsNewPage() {
         index_base_value: baseCPI ? Number(baseCPI) : null,
         index_base_date: baseCPIDate || null,
         mgmt_fee_per_sqm: mgmtFeePct ? Number(mgmtFeePct) : null,
+        document_url: documentUrl || null,
         status,
       };
 
@@ -324,6 +326,7 @@ export default function ContractsNewPage() {
           rent_mechanism: opt.rent_mechanism,
           new_rent_value: opt.new_rent_value,
           rent_increase_pct: opt.rent_increase_pct,
+          auto_extend: opt.auto_renewal,
           status: "pending",
           notes: opt.notes || null,
         }));
@@ -758,6 +761,21 @@ export default function ContractsNewPage() {
                 />
               </div>
             </div>
+
+            {/* Document URL */}
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-slate-700">
+                קישור לחוזה מקורי (URL)
+              </label>
+              <input
+                type="url"
+                value={documentUrl}
+                onChange={(e) => setDocumentUrl(e.target.value)}
+                placeholder="https://drive.google.com/..."
+                className={ic}
+                dir="ltr"
+              />
+            </div>
           </div>
         )}
 
@@ -1113,6 +1131,20 @@ export default function ContractsNewPage() {
                       </span>
                     </div>
                   )}
+
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={opt.auto_renewal}
+                      onChange={(e) =>
+                        updateOption(idx, "auto_renewal", e.target.checked)
+                      }
+                      className="w-4 h-4"
+                    />
+                    <label className="text-xs font-semibold text-slate-700">
+                      הארכה אוטומטית (אם לא נמסרה הודעה)
+                    </label>
+                  </div>
 
                   <div>
                     <label className="mb-1 block text-xs font-semibold text-slate-700">

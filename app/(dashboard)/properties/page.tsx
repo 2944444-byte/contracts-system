@@ -38,6 +38,13 @@ export default function PropertiesPage() {
   const [fArea,       setFArea]       = useState("");
   const [fFloors,     setFFloors]     = useState("");
   const [fNotes,      setFNotes]      = useState("");
+  const [fYardArea,   setFYardArea]   = useState("");
+  const [fParking,    setFParking]    = useState("");
+  const [fInsurCost,  setFInsurCost]  = useState("");
+  const [fInsurDate,  setFInsurDate]  = useState("");
+  const [fInsurPolicy,setFInsurPolicy]= useState("");
+  const [fMgmtBudget, setFMgmtBudget] = useState("");
+  const [fWasteCost,  setFWasteCost]  = useState("");
 
   useEffect(function() { loadAll(); }, []);
 
@@ -59,6 +66,7 @@ export default function PropertiesPage() {
   function openNew() {
     setIsNew(true); setEditingId("new");
     setFName(""); setFCompanyId(""); setFType("office"); setFAddress(""); setFCity(""); setFArea(""); setFFloors(""); setFNotes("");
+    setFYardArea(""); setFParking(""); setFInsurCost(""); setFInsurDate(""); setFInsurPolicy(""); setFMgmtBudget(""); setFWasteCost("");
   }
 
   function openEdit(p: any) {
@@ -66,17 +74,28 @@ export default function PropertiesPage() {
     setFName(p.name??""); setFCompanyId(p.company_id??""); setFType(p.property_type??"office");
     setFAddress(p.address??""); setFCity(p.city??""); setFArea(p.total_area?.toString()??"");
     setFFloors(p.floors?.toString()??""); setFNotes(p.notes??"");
+    setFYardArea(p.yard_terrace_area?.toString()??""); setFParking(p.parking_spaces?.toString()??"");
+    setFInsurCost(p.annual_insurance_cost?.toString()??""); setFInsurDate(p.insurance_renewal_date??"");
+    setFInsurPolicy(p.insurance_policy_number??""); setFMgmtBudget(p.annual_management_budget?.toString()??"");
+    setFWasteCost(p.annual_waste_cost?.toString()??"");
   }
 
   async function handleSave() {
     if (!fName.trim()) { alert("חובה: שם נכס"); return; }
     setSaving(true);
     try {
-      const payload = {
+      const payload: any = {
         name: fName.trim(), company_id: fCompanyId||null,
         property_type: fType, address: fAddress||null, city: fCity||null,
         total_area: fArea ? Number(fArea) : null, floors: fFloors ? Number(fFloors) : null,
         notes: fNotes||null,
+        yard_terrace_area: fYardArea ? Number(fYardArea) : null,
+        parking_spaces: fParking ? Number(fParking) : null,
+        annual_insurance_cost: fInsurCost ? Number(fInsurCost) : null,
+        insurance_renewal_date: fInsurDate||null,
+        insurance_policy_number: fInsurPolicy||null,
+        annual_management_budget: fMgmtBudget ? Number(fMgmtBudget) : null,
+        annual_waste_cost: fWasteCost ? Number(fWasteCost) : null,
       };
       if (isNew) {
         const { data, error: _ie } = await supabase.from("properties").insert(payload).select().single();
@@ -330,14 +349,57 @@ export default function PropertiesPage() {
                   <input type="text" value={fCity} onChange={function(e){setFCity(e.target.value);}} className={ic} />
                 </div>
                 <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-700">שטח כולל (מ"ר)</label>
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">שטח להשכרה (מ&quot;ר)</label>
                   <input type="number" value={fArea} onChange={function(e){setFArea(e.target.value);}} className={ic} />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">שטח חצר/מרפסות (מ&quot;ר)</label>
+                  <input type="number" value={fYardArea} onChange={function(e){setFYardArea(e.target.value);}} className={ic} />
                 </div>
                 <div>
                   <label className="mb-1 block text-xs font-semibold text-slate-700">קומות</label>
                   <input type="number" value={fFloors} onChange={function(e){setFFloors(e.target.value);}} className={ic} />
                 </div>
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">מקומות חניה</label>
+                  <input type="number" value={fParking} onChange={function(e){setFParking(e.target.value);}} className={ic} />
+                </div>
               </div>
+
+              {/* ביטוח */}
+              <div className="rounded-lg bg-blue-50 border border-blue-100 p-3 mt-2">
+                <div className="text-xs font-bold text-blue-700 mb-2">ביטוח מבנה</div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-slate-600">עלות שנתית (₪)</label>
+                    <input type="number" value={fInsurCost} onChange={function(e){setFInsurCost(e.target.value);}} className={ic} />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-slate-600">תאריך חידוש</label>
+                    <input type="date" value={fInsurDate} onChange={function(e){setFInsurDate(e.target.value);}} className={ic} />
+                  </div>
+                  <div className="col-span-2">
+                    <label className="mb-1 block text-xs font-semibold text-slate-600">מספר פוליסה</label>
+                    <input type="text" value={fInsurPolicy} onChange={function(e){setFInsurPolicy(e.target.value);}} className={ic} />
+                  </div>
+                </div>
+              </div>
+
+              {/* תקציב */}
+              <div className="rounded-lg bg-amber-50 border border-amber-100 p-3">
+                <div className="text-xs font-bold text-amber-700 mb-2">תקציב שנתי</div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-slate-600">ניהול (₪)</label>
+                    <input type="number" value={fMgmtBudget} onChange={function(e){setFMgmtBudget(e.target.value);}} className={ic} />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-slate-600">פינוי אשפה (₪)</label>
+                    <input type="number" value={fWasteCost} onChange={function(e){setFWasteCost(e.target.value);}} className={ic} />
+                  </div>
+                </div>
+              </div>
+
               <div>
                 <label className="mb-1 block text-xs font-semibold text-slate-700">הערות</label>
                 <textarea value={fNotes} onChange={function(e){setFNotes(e.target.value);}} rows={2} className={ic} />
