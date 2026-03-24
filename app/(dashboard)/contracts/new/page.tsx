@@ -24,7 +24,7 @@ const STEPS = [
 ];
 
 const VAT_TYPES = [
-  { v: "taxable", l: 'חייב במע"מ (18%)' },
+  { v: "taxable", l: 'חייב במע"מ' },
   { v: "exempt", l: "פטור" },
   { v: "partial", l: "חלקי" },
 ];
@@ -91,6 +91,9 @@ export default function ContractsNewPage() {
   const [tenants, setTenants] = useState<any[]>([]);
   const [properties, setProperties] = useState<any[]>([]);
   const [spaces, setSpaces] = useState<any[]>([]);
+  const [cpiRecords, setCpiRecords] = useState<any[]>([]);
+  const [currentVatPct, setCurrentVatPct] = useState(18);
+  const [unitRentOverrides, setUnitRentOverrides] = useState<Record<string, string>>({});
 
   // Step 1 — Tenant & Property
   const [tenantId, setTenantId] = useState("");
@@ -148,6 +151,23 @@ export default function ContractsNewPage() {
     }
   }, [startDate, leasePeriodValue, leasePeriodUnit]);
 
+  // === Auto-populate CPI base index from start date (month before start) ===
+  useEffect(() => {
+    if (startDate && cpiRecords.length > 0 && indexMethod !== "none") {
+      const start = new Date(startDate);
+      if (isNaN(start.getTime())) return;
+      // Base index = month before start date
+      const baseMonth = start.getMonth(); // 0-indexed, so Jan=0
+      const baseYear = baseMonth === 0 ? start.getFullYear() - 1 : start.getFullYear();
+      const baseMonthNum = baseMonth === 0 ? 12 : baseMonth;
+      const record = cpiRecords.find((r: any) => r.year === baseYear && r.month === baseMonthNum);
+      if (record) {
+        setBaseCPI(record.value.toString());
+        setBaseCPIDate(`${baseYear}-${String(baseMonthNum).padStart(2, "0")}-01`);
+      }
+    }
+  }, [startDate, cpiRecords.length, indexMethod]);
+
   // === Auto-calculate option dates ===
   useEffect(() => {
     if (endDate && extensionOptions.length > 0) {
@@ -167,7 +187,7 @@ export default function ContractsNewPage() {
     (Number(rentPerSqm) || 0) * (Number(chargedArea) || 0) +
     (Number(investAdd) || 0);
   const mgmtFeeMonthly = (Number(mgmtFeePct) || 0) * (Number(chargedArea) || 0);
-  const vat = vatType === "taxable" ? baseRent * 0.18 : 0;
+  const vat = vatType === "taxable" ? baseRent * (currentVatPct / 100) : 0;
   const totalRent = baseRent + vat;
   const annualRent = baseRent * 12;
 
@@ -178,7 +198,7 @@ export default function ContractsNewPage() {
     monthlyRent: baseRent,
     managementFee: mgmtFeeMonthly,
     includesManagement: depositIncludesMgmt,
-    vatPct: vatType === "taxable" ? 18 : 0,
+    vatPct: vatType === "taxable" ? currentVatPct : 0,
   });
 
   // Keep guarantee amount in sync when using months_based
@@ -207,12 +227,16 @@ export default function ContractsNewPage() {
   }, [propertyId]);
 
   async function loadRef() {
-    const [{ data: t }, { data: p }] = await Promise.all([
+    const [{ data: t }, { data: p }, { data: cpi }, { data: vat }] = await Promise.all([
       supabase.from("tenants").select("id,name,company_name").order("name"),
       supabase.from("properties").select("id,name,city").order("name"),
+      supabase.from("cpi_records").select("year,month,value").order("year", { ascending: false }).order("month", { ascending: false }),
+      supabase.from("vat_rates").select("rate_pct,effective_from,effective_to").order("effective_from", { ascending: false }).limit(1),
     ]);
     setTenants(t ?? []);
     setProperties(p ?? []);
+    setCpiRecords(cpi ?? []);
+    if (vat && vat.length > 0) setCurrentVatPct(Number(vat[0].rate_pct));
   }
 
   function toggleSpace(id: string) {
@@ -305,10 +329,15 @@ export default function ContractsNewPage() {
       if (ce) throw new Error(ce.message);
       if (!contract?.id) throw new Error("שגיאה בשמירת חוזה");
 
-      // Contract ↔ Spaces
+      // Contract ↔ Spaces (with per-unit rent overrides)
       if (selSpaces.length > 0) {
         await supabase.from("contract_spaces").insert(
-          selSpaces.map((sid) => ({ contract_id: contract.id, space_id: sid }))
+          selSpaces.map((sid) => ({
+            contract_id: contract.id,
+            space_id: sid,
+            price_per_sqm: unitRentOverrides[sid] ? Number(unitRentOverrides[sid]) : Number(rentPerSqm) || null,
+            charge_method: "per_sqm",
+          }))
         );
         await supabase.from("spaces").update({ status: "occupied" }).in("id", selSpaces);
       }
@@ -708,6 +737,34 @@ export default function ContractsNewPage() {
               </div>
             )}
 
+            {/* Per-unit rent overrides — shown when multiple spaces selected */}
+            {selSpaces.length > 1 && (
+              <div className="rounded-xl border border-slate-200 p-4">
+                <div className="text-xs font-bold text-slate-700 mb-2">מחיר למ&quot;ר לפי יחידה (אופציונלי)</div>
+                <div className="text-xs text-slate-400 mb-3">השאר ריק להשתמש במחיר ברירת מחדל ({rentPerSqm || "0"} ₪)</div>
+                <div className="space-y-2">
+                  {selSpaces.map((sid) => {
+                    const sp = spaces.find((s) => s.id === sid);
+                    if (!sp) return null;
+                    return (
+                      <div key={sid} className="flex items-center gap-3">
+                        <span className="text-xs font-semibold text-slate-600 w-32 truncate">{sp.space_name}</span>
+                        <span className="text-xs text-slate-400">{sp.area} מ&quot;ר</span>
+                        <input
+                          type="number"
+                          value={unitRentOverrides[sid] || ""}
+                          onChange={(e) => setUnitRentOverrides((prev) => ({ ...prev, [sid]: e.target.value }))}
+                          placeholder={rentPerSqm || "מחיר ברירת מחדל"}
+                          className={ic + " flex-1 max-w-32"}
+                        />
+                        <span className="text-xs text-slate-400">₪/מ&quot;ר</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="mb-1 block text-xs font-semibold text-slate-700">
@@ -727,13 +784,20 @@ export default function ContractsNewPage() {
               </div>
               <div>
                 <label className="mb-1 block text-xs font-semibold text-slate-700">
-                  מדד בסיס
+                  מדד בסיס {baseCPI && baseCPIDate && (() => {
+                    const d = new Date(baseCPIDate);
+                    const rec = cpiRecords.find((r: any) => r.year === d.getFullYear() && r.month === (d.getMonth() + 1));
+                    if (rec && Math.abs(Number(rec.value) - Number(baseCPI)) > 0.01) {
+                      return <span className="text-orange-600 font-normal"> (שונה מהמדד הרשום: {rec.value})</span>;
+                    }
+                    return null;
+                  })()}
                 </label>
                 <input
                   type="number"
                   value={baseCPI}
                   onChange={(e) => setBaseCPI(e.target.value)}
-                  placeholder="למשל 107.5"
+                  placeholder="נטען אוטומטית מהלמ״ס"
                   className={ic}
                 />
               </div>
@@ -1390,7 +1454,7 @@ export default function ContractsNewPage() {
                   l: "הצמדה",
                   v: INDEX_METHODS.find((m) => m.v === indexMethod)?.l,
                 },
-                { l: 'מע"מ', v: vatType === "taxable" ? "18%" : "פטור" },
+                { l: 'מע"מ', v: vatType === "taxable" ? `${currentVatPct}%` : "פטור" },
                 {
                   l: "גרייס",
                   v: hasGrace

@@ -3,6 +3,7 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit-log';
+import PropertyBudgetManager from '@/components/PropertyBudgetManager';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 
@@ -29,6 +30,7 @@ export default function PropertiesPage() {
   const [isNew,      setIsNew]      = useState(false);
   const [saving,     setSaving]     = useState(false);
   const [search,     setSearch]     = useState("");
+  const [budgetFor,  setBudgetFor]  = useState<any>(null);
 
   const [fName,       setFName]       = useState("");
   const [fCompanyId,  setFCompanyId]  = useState("");
@@ -248,6 +250,12 @@ export default function PropertiesPage() {
                   })}
                 </div>
                 {selProp.notes && <div className="mt-3 text-xs text-slate-500 bg-slate-50 rounded-lg p-2">{selProp.notes}</div>}
+
+                {/* Budget button */}
+                <button onClick={() => setBudgetFor(selProp)}
+                  className="w-full mt-3 rounded-lg border border-slate-200 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50">
+                  📊 ניהול תקציבים שנתיים
+                </button>
               </div>
 
               {/* חוזים */}
@@ -411,6 +419,15 @@ export default function PropertiesPage() {
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Budget manager modal */}
+      {budgetFor && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setBudgetFor(null)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xl max-h-[90vh] overflow-y-auto p-6" onClick={(e) => e.stopPropagation()}>
+            <PropertyBudgetManager propertyId={budgetFor.id} propertyName={budgetFor.name} onClose={() => setBudgetFor(null)} />
           </div>
         </div>
       )}
