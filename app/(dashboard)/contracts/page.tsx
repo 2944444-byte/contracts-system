@@ -3,6 +3,7 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from '@/lib/supabase';
 import { syncContractStatuses } from '@/lib/contractSync';
+import { logAudit } from '@/lib/audit-log';
 
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
 function fmtMoney(n: number) { return "₪"+Math.round(n??0).toLocaleString(); }
@@ -62,16 +63,27 @@ export default function ContractsPage() {
 
   async function handleDeleteContract(id: string) {
     if (!confirm("למחוק חוזה? פעולה זו תמחק גם את כל החיובים, הערבויות, הביטוחים והמכתבים של החוזה!")) return;
-    await supabase.from("charges").delete().eq("contract_id", id);
-    await supabase.from("contract_spaces").delete().eq("contract_id", id);
-    await supabase.from("contract_options").delete().eq("contract_id", id);
-    await supabase.from("contract_price_tiers").delete().eq("contract_id", id);
-    await supabase.from("guarantees").delete().eq("contract_id", id);
-    await supabase.from("insurances_tenant").delete().eq("contract_id", id);
-    await supabase.from("letters").delete().eq("contract_id", id);
-    await supabase.from("contracts").delete().eq("id", id);
-    setSelected(null);
-    await loadAll();
+    try {
+      // Get linked spaces to update their status back to vacant
+      const { data: linkedSpaces } = await supabase.from("contract_spaces").select("space_id").eq("contract_id", id);
+      const spaceIds = (linkedSpaces || []).map((r: any) => r.space_id);
+      // Delete all child records
+      await supabase.from("charges").delete().eq("contract_id", id);
+      await supabase.from("contract_spaces").delete().eq("contract_id", id);
+      await supabase.from("contract_options").delete().eq("contract_id", id);
+      await supabase.from("contract_price_tiers").delete().eq("contract_id", id);
+      await supabase.from("guarantees").delete().eq("contract_id", id);
+      await supabase.from("insurances_tenant").delete().eq("contract_id", id);
+      await supabase.from("letters").delete().eq("contract_id", id);
+      await supabase.from("contracts").delete().eq("id", id);
+      // Release spaces back to vacant
+      if (spaceIds.length > 0) {
+        await supabase.from("spaces").update({ status: "vacant" }).in("id", spaceIds);
+      }
+      await logAudit({ entity_type: "contract", entity_id: id, action: "delete" });
+      setSelected(null);
+      await loadContracts();
+    } catch (e: any) { alert("שגיאה במחיקה: " + e?.message); }
   }
 
   return (

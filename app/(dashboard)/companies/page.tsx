@@ -51,8 +51,35 @@ export default function CompaniesPage() {
   }
 
   async function handleDelete(id: string) {
-    if (!confirm("למחוק חברה?")) return;
-    await supabase.from("companies").delete().eq("id",id); setSelected(null); await loadAll();
+    const companyProps = properties.filter(p => p.company_id === id);
+    const propCount = companyProps.length;
+    if (!confirm(`למחוק חברה? פעולה זו תמחק גם ${propCount} נכסים, כל היחידות, החוזים, הערבויות והביטוחים הקשורים!`)) return;
+    try {
+      // For each property of the company, cascade delete
+      for (const prop of companyProps) {
+        const { data: pContracts } = await supabase.from("contracts").select("id").eq("property_id", prop.id);
+        const cIds = (pContracts || []).map((c: any) => c.id);
+        if (cIds.length > 0) {
+          await supabase.from("charges").delete().in("contract_id", cIds);
+          await supabase.from("contract_spaces").delete().in("contract_id", cIds);
+          await supabase.from("contract_options").delete().in("contract_id", cIds);
+          await supabase.from("contract_price_tiers").delete().in("contract_id", cIds);
+          await supabase.from("guarantees").delete().in("contract_id", cIds);
+          await supabase.from("insurances_tenant").delete().in("contract_id", cIds);
+          await supabase.from("letters").delete().in("contract_id", cIds);
+          await supabase.from("contracts").delete().in("id", cIds);
+        }
+        await supabase.from("units").delete().eq("property_id", prop.id);
+        await supabase.from("spaces").delete().eq("property_id", prop.id);
+        await supabase.from("insurances_building").delete().eq("property_id", prop.id);
+        await supabase.from("safety_inspections").delete().eq("property_id", prop.id);
+        await supabase.from("property_budgets").delete().eq("property_id", prop.id);
+        await supabase.from("properties").delete().eq("id", prop.id);
+      }
+      await supabase.from("companies").delete().eq("id", id);
+      await logAudit({ entity_type: "company", entity_id: id, action: "delete" });
+      setSelected(null); await loadAll();
+    } catch (e: any) { alert("שגיאה במחיקה: " + e?.message); }
   }
 
   const filtered = companies.filter(function(c){ return !search||c.company_name?.includes(search)||c.city?.includes(search); });

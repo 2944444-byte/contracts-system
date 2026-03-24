@@ -127,9 +127,28 @@ export default function UnitsPage() {
   }
 
   async function handleDelete(id: string) {
-    if (!confirm("למחוק יחידה זו?")) return;
-    await supabase.from("units").delete().eq("id", id);
-    setSelectedUnit(null); load();
+    // Check for contracts linked to this unit via contract_spaces
+    const { data: linkedContracts } = await supabase
+      .from("contract_spaces").select("contract_id").eq("space_id", id);
+    const cIds = [...new Set((linkedContracts || []).map((r: any) => r.contract_id))];
+    const msg = cIds.length > 0
+      ? `למחוק יחידה זו? פעולה זו תמחק גם ${cIds.length} חוזים וכל הנתונים הקשורים אליהם!`
+      : "למחוק יחידה זו?";
+    if (!confirm(msg)) return;
+    try {
+      if (cIds.length > 0) {
+        await supabase.from("charges").delete().in("contract_id", cIds);
+        await supabase.from("contract_spaces").delete().in("contract_id", cIds);
+        await supabase.from("contract_options").delete().in("contract_id", cIds);
+        await supabase.from("contract_price_tiers").delete().in("contract_id", cIds);
+        await supabase.from("guarantees").delete().in("contract_id", cIds);
+        await supabase.from("insurances_tenant").delete().in("contract_id", cIds);
+        await supabase.from("letters").delete().in("contract_id", cIds);
+        await supabase.from("contracts").delete().in("id", cIds);
+      }
+      await supabase.from("units").delete().eq("id", id);
+      setSelectedUnit(null); await load();
+    } catch (e: any) { alert("שגיאה במחיקה: " + e?.message); }
   }
 
   return (
