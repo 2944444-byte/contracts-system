@@ -25,9 +25,32 @@ function yearsMonthsLeft(endDate: string) {
   return { years, months, text, isExpired: false };
 }
 
-function calcCpiAdjusted(baseRentPerSqm: number, baseIndex: number|null, latestIndex: number|null): number|null {
-  if (!baseIndex || !latestIndex || baseIndex <= 0) return null;
-  return Math.round(baseRentPerSqm * (latestIndex / baseIndex) * 100) / 100;
+// t-2 rule: current billing month minus 2 → that's the known index month
+function getT2Date(): string {
+  const now = new Date();
+  now.setMonth(now.getMonth() - 2);
+  const mm = String(now.getMonth() + 1).padStart(2, "0");
+  const yyyy = now.getFullYear();
+  return `${mm}-${yyyy}`;
+}
+
+function getBaseIndexDate(indexBaseDate: string|null, startDate: string|null): string|null {
+  // Use index_base_date if available, else month before start_date
+  if (indexBaseDate) {
+    const d = new Date(indexBaseDate);
+    if (!isNaN(d.getTime())) {
+      return `${String(d.getMonth() + 1).padStart(2, "0")}-${d.getFullYear()}`;
+    }
+  }
+  if (startDate) {
+    const d = new Date(startDate);
+    if (!isNaN(d.getTime())) {
+      // Base = month before contract start
+      d.setMonth(d.getMonth() - 1);
+      return `${String(d.getMonth() + 1).padStart(2, "0")}-${d.getFullYear()}`;
+    }
+  }
+  return null;
 }
 
 const STATUS_MAP: Record<string,{label:string;color:string;dot:string}> = {
@@ -46,10 +69,10 @@ export default function ContractsPage() {
   const [selected,  setSelected]  = useState<string|null>(null);
   const [filterSt,  setFilterSt]  = useState("active");
   const [search,    setSearch]    = useState("");
-  const [latestCpi, setLatestCpi] = useState<number|null>(null);
-  const [latestCpiMonth, setLatestCpiMonth] = useState("");
+  const [cpiResult, setCpiResult] = useState<any>(null);
+  const [cpiLoading, setCpiLoading] = useState(false);
 
-  useEffect(function() { loadContracts(); loadLatestCpi(); }, []);
+  useEffect(function() { loadContracts(); }, []);
 
   async function loadContracts() {
     const { data } = await supabase.from("contracts")
@@ -62,17 +85,45 @@ export default function ContractsPage() {
     }
   }
 
-  async function loadLatestCpi() {
-    const { data } = await supabase.from("cpi_records")
-      .select("value,year,month")
-      .order("year", { ascending: false })
-      .order("month", { ascending: false })
-      .limit(1);
-    if (data && data.length > 0) {
-      setLatestCpi(data[0].value);
-      setLatestCpiMonth(`${data[0].month}/${data[0].year}`);
-    }
-  }
+  const selContract = contracts.find(function(c){return c.id===selected;});
+
+  // Load CPI-adjusted price when contract is selected
+  useEffect(function() {
+    if (!selContract) { setCpiResult(null); return; }
+    if (selContract.indexation_method === "none") { setCpiResult(null); return; }
+    const rentPerSqm = selContract.rent_per_sqm;
+    if (!rentPerSqm) { setCpiResult(null); return; }
+
+    const baseDate = getBaseIndexDate(selContract.index_base_date, selContract.start_date);
+    const toDate = getT2Date();
+    if (!baseDate) { setCpiResult(null); return; }
+
+    // Add investment per sqm to get true rent per sqm
+    const investPerSqm = selContract.charged_area > 0 && selContract.investment_addition
+      ? selContract.investment_addition / selContract.charged_area
+      : 0;
+    const totalRentPerSqm = rentPerSqm + investPerSqm;
+
+    setCpiLoading(true);
+    fetch(`/api/cpi-calc?value=${totalRentPerSqm}&from=${baseDate}&to=${toDate}`)
+      .then(r => r.json())
+      .then(data => {
+        if (data.to_value) {
+          setCpiResult({
+            baseRentPerSqm: totalRentPerSqm,
+            adjustedRentPerSqm: Math.round(data.to_value * 100) / 100,
+            changePct: data.change_percent,
+            fromDate: baseDate,
+            toDate: toDate,
+            verificationUrl: data.verification_url,
+          });
+        } else {
+          setCpiResult(null);
+        }
+      })
+      .catch(() => setCpiResult(null))
+      .finally(() => setCpiLoading(false));
+  }, [selected]);
 
   async function handleSync() {
     setSyncing(true);
@@ -96,17 +147,13 @@ export default function ContractsPage() {
     return ms && mq;
   });
 
-  const selContract = contracts.find(function(c){return c.id===selected;});
+  // selContract already defined above
   const baseRent    = selContract ? (selContract.rent_per_sqm??0)*(selContract.charged_area??0)+(selContract.investment_addition??0) : 0;
+  const investPerSqm = selContract && selContract.charged_area > 0 && selContract.investment_addition
+    ? Math.round(selContract.investment_addition / selContract.charged_area * 100) / 100 : 0;
+  const trueRentPerSqm = (selContract?.rent_per_sqm ?? 0) + investPerSqm;
   const vat         = selContract?.vat_type==="taxable" ? baseRent*0.18 : 0;
   const remaining   = selContract?.end_date ? yearsMonthsLeft(selContract.end_date) : null;
-
-  // CPI adjusted price
-  const cpiAdjustedPerSqm = selContract ? calcCpiAdjusted(
-    selContract.rent_per_sqm ?? 0,
-    selContract.index_base_value,
-    latestCpi
-  ) : null;
 
   const counts: Record<string,number> = {};
   contracts.forEach(function(c){counts[c.status]=(counts[c.status]??0)+1;});
@@ -259,19 +306,39 @@ export default function ContractsPage() {
                   </div>
                 </div>
 
-                {/* CPI-adjusted price */}
-                {cpiAdjustedPerSqm && selContract.rent_per_sqm && (
-                  <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 mb-3 flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-bold text-amber-700">📊 מחיר מוצמד למדד</span>
-                      <span className="text-[10px] text-amber-500">(מדד {latestCpiMonth})</span>
+                {/* True rent per sqm (base + investment) */}
+                {investPerSqm > 0 && (
+                  <div className="rounded-lg bg-slate-50 border border-slate-200 px-3 py-2 mb-2 flex items-center justify-between text-xs">
+                    <span className="text-slate-500">שכ&quot;ד אמיתי למ&quot;ר (בסיס {fmtMoney(selContract.rent_per_sqm)} + תוספת {fmtMoney(investPerSqm)})</span>
+                    <span className="font-black text-slate-800">{fmtMoney(trueRentPerSqm)}/מ&quot;ר</span>
+                  </div>
+                )}
+
+                {/* CPI-adjusted price via CBS calculator */}
+                {cpiLoading && (
+                  <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 mb-3 text-xs text-amber-600 animate-pulse">
+                    📊 מחשב הצמדה למדד (API למ&quot;ס)...
+                  </div>
+                )}
+                {cpiResult && !cpiLoading && (
+                  <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2.5 mb-3">
+                    <div className="flex items-center justify-between mb-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold text-amber-700">📊 שכ&quot;ד מוצמד למדד (t-2)</span>
+                        <span className="text-[10px] text-amber-500">({cpiResult.fromDate} → {cpiResult.toDate})</span>
+                      </div>
+                      <div className="text-sm font-black text-amber-800">
+                        {fmtMoney(cpiResult.adjustedRentPerSqm)}/מ&quot;ר
+                      </div>
                     </div>
-                    <div className="text-sm font-black text-amber-800">
-                      {fmtMoney(cpiAdjustedPerSqm)}/מ&quot;ר
-                      {cpiAdjustedPerSqm !== selContract.rent_per_sqm && (
-                        <span className="text-[10px] text-amber-500 mr-1">(בסיס: {fmtMoney(selContract.rent_per_sqm)})</span>
-                      )}
+                    <div className="flex items-center justify-between text-[10px] text-amber-600">
+                      <span>בסיס: {fmtMoney(cpiResult.baseRentPerSqm)}/מ&quot;ר | שינוי: {cpiResult.changePct != null ? cpiResult.changePct + "%" : "—"}</span>
+                      <span>חודשי: {fmtMoney(cpiResult.adjustedRentPerSqm * (selContract.charged_area ?? 0))}</span>
                     </div>
+                    {cpiResult.verificationUrl && (
+                      <a href={cpiResult.verificationUrl} target="_blank" rel="noopener noreferrer"
+                        className="text-[10px] text-blue-500 hover:underline mt-0.5 block">🔗 אימות מול למ&quot;ס</a>
+                    )}
                   </div>
                 )}
 
