@@ -312,7 +312,24 @@ export function buildPriceTimeline(params: {
     if (opt.price_schedule_type === "custom" && opt.price_tiers.length > 0) {
       const optPreviews = calculateTierPreviews(opt.price_tiers, optionBaseRent);
       const optStart = new Date(opt.start_date);
-      optPreviews.forEach((tier) => {
+      const sortedTiers = [...optPreviews].sort((a, b) => a.from_year - b.from_year);
+
+      // Add base period before first custom tier (e.g. years 1-4 at exercise price)
+      if (sortedTiers[0]?.from_year > 1) {
+        const baseEnd = new Date(optStart);
+        baseEnd.setFullYear(baseEnd.getFullYear() + sortedTiers[0].from_year - 1);
+        timeline.push({
+          label: `אופציה ${i + 1} — שנים 1-${sortedTiers[0].from_year - 1}`,
+          startDate: opt.start_date,
+          endDate: format(baseEnd, "yyyy-MM-dd"),
+          rentPerSqm: optionBaseRent,
+          fixedAmount: null,
+          source: `option_${i + 1}`,
+          type: "base",
+        });
+      }
+
+      sortedTiers.forEach((tier) => {
         const tierStart = new Date(optStart);
         tierStart.setFullYear(tierStart.getFullYear() + tier.from_year - 1);
         const tierEnd = new Date(optStart);
@@ -327,7 +344,7 @@ export function buildPriceTimeline(params: {
           type: tier.increase_type,
         });
       });
-      lastMainRent = optPreviews[optPreviews.length - 1]?.calculated_rent_per_sqm ?? optionBaseRent;
+      lastMainRent = sortedTiers[sortedTiers.length - 1]?.calculated_rent_per_sqm ?? optionBaseRent;
     } else {
       timeline.push({
         label: `אופציה ${i + 1}`,

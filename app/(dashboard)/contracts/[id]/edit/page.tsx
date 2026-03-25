@@ -862,6 +862,18 @@ export default function ContractEditPage() {
                         ))}
                       </div>
                     )}
+                    {/* Base period before first tier */}
+                    {priceTiers.length > 0 && (() => {
+                      const sorted = [...priceTiers].sort((a, b) => a.from_year - b.from_year);
+                      if (sorted[0]?.from_year > 1) {
+                        return (
+                          <div className="rounded-lg bg-green-50 border border-green-200 px-4 py-2 text-sm text-green-700 font-semibold">
+                            שנים 1–{sorted[0].from_year - 1}: {fmtMoney(Number(rentPerSqm) || 0)}/מ&quot;ר (מחיר בסיס)
+                          </div>
+                        );
+                      }
+                      return null;
+                    })()}
                     {priceTiers.map((tier, idx) => {
                       const preview = previews.find(p => p.from_year === tier.from_year);
                       const hasError = errors.some(e => e.includes(`שלב ${idx + 1}`));
@@ -1132,11 +1144,20 @@ export default function ContractEditPage() {
                             }
                             if (opt.rent_mechanism === "increase_pct" && opt.rent_increase_pct) optBase = optBase * (1 + opt.rent_increase_pct / 100);
                             else if (opt.rent_mechanism === "new_value" && opt.new_rent_value) optBase = opt.new_rent_value;
-                            const previews = calculateTierPreviews(opt.price_tiers || [], optBase);
-                            if (previews.length === 0) return null;
+                            const optRoundBase = Math.round(optBase * 100) / 100;
+                            const tiers = opt.price_tiers || [];
+                            const previews = calculateTierPreviews(tiers, optRoundBase);
+                            const sorted = [...tiers].sort((a, b) => a.from_year - b.from_year);
+                            const firstYear = sorted[0]?.from_year ?? 1;
                             return (
                               <div className="rounded-lg bg-green-50 border border-green-200 p-3 mt-2">
-                                <div className="text-xs font-bold text-green-700 mb-1">📊 תצוגת מחירים מחושבת</div>
+                                <div className="text-xs font-bold text-green-700 mb-1">📊 תצוגת מחירים מחושבת (אופציה)</div>
+                                {firstYear > 1 && (
+                                  <div className="flex justify-between text-xs text-green-800 py-1 border-b border-green-100">
+                                    <span>שנים 1–{firstYear - 1}: מחיר פתיחה (קפיצה {opt.rent_mechanism === "increase_pct" ? `+${opt.rent_increase_pct}%` : ""})</span>
+                                    <span className="font-black">{fmtMoney(optRoundBase)}/מ&quot;ר</span>
+                                  </div>
+                                )}
                                 {previews.map((p, pi) => (
                                   <div key={pi} className="flex justify-between text-xs text-green-800 py-1 border-b border-green-100 last:border-0">
                                     <span>שנים {p.from_year}–{p.to_year}: {p.increase_type === "none" ? "ללא שינוי" : p.increase_type === "pct" ? `+${p.increase_value}%` : `+₪${p.increase_value}`}</span>
