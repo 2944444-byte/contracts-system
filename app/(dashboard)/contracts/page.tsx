@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { supabase } from '@/lib/supabase';
 import { syncContractStatuses } from '@/lib/contractSync';
 import { logAudit } from '@/lib/audit-log';
-import { fetchCpiAdjusted } from '@/lib/cpi-server';
+// CPI fetched via /api/cpi-calc route (server action had issues on Vercel)
 
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
 function fmtMoney(n: number) { return "₪"+Math.round(n??0).toLocaleString(); }
@@ -105,20 +105,33 @@ export default function ContractsPage() {
       : 0;
     const totalRentPerSqm = rentPerSqm + investPerSqm;
 
-    // Call CBS calculator via Server Action (runs server-side, no CORS)
+    // Call CBS calculator via API route (same-origin, no CORS)
     setCpiLoading(true);
-    console.log("[CPI] Calling CBS:", { value: totalRentPerSqm, fromMM: baseDate, toMM: toDate });
-    fetchCpiAdjusted({ value: totalRentPerSqm, fromMM: baseDate, toMM: toDate })
-      .then(result => {
-        console.log("[CPI] Result:", result);
-        if (result && result.success) {
-          setCpiResult(result);
+    fetch(`/api/cpi-calc?value=${totalRentPerSqm}&from=${baseDate}&to=${toDate}`)
+      .then(r => {
+        if (!r.ok) throw new Error(`API returned ${r.status}`);
+        return r.json();
+      })
+      .then(data => {
+        if (data.to_value) {
+          setCpiResult({
+            success: true,
+            baseRentPerSqm: data.from_value ?? totalRentPerSqm,
+            adjustedRentPerSqm: Math.round(data.to_value * 100) / 100,
+            changePct: data.change_percent ?? null,
+            fromDate: data.from_index_date || baseDate,
+            toDate: data.to_index_date || toDate,
+            fromIndexValue: data.from_index_value ?? null,
+            toIndexValue: data.to_index_value ?? null,
+            baseYear: data.base_year ?? null,
+            verificationUrl: data.verification_url ?? null,
+          });
         } else {
-          console.error("[CPI] Error:", result);
+          console.error("[CPI] No to_value:", data);
           setCpiResult(null);
         }
       })
-      .catch((e) => { console.error("[CPI] Exception:", e); setCpiResult(null); })
+      .catch((e) => { console.error("[CPI] Error:", e); setCpiResult(null); })
       .finally(() => setCpiLoading(false));
   }, [selected]);
 
