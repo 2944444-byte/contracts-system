@@ -61,26 +61,39 @@ export default function ContractsPage() {
   contracts.forEach(function(c){counts[c.status]=(counts[c.status]??0)+1;});
 
 
-  async function handleDeleteContract(id: string) {
+  async function handleDeleteContract(contractId: string) {
     if (!confirm("למחוק חוזה? פעולה זו תמחק גם את כל החיובים, הערבויות, הביטוחים והמכתבים של החוזה!")) return;
     try {
       // Get linked spaces to update their status back to vacant
-      const { data: linkedSpaces } = await supabase.from("contract_spaces").select("space_id").eq("contract_id", id);
+      const { data: linkedSpaces } = await supabase.from("contract_spaces").select("space_id").eq("contract_id", contractId);
       const spaceIds = (linkedSpaces || []).map((r: any) => r.space_id);
-      // Delete all child records
-      await supabase.from("charges").delete().eq("contract_id", id);
-      await supabase.from("contract_spaces").delete().eq("contract_id", id);
-      await supabase.from("contract_options").delete().eq("contract_id", id);
-      await supabase.from("contract_price_tiers").delete().eq("contract_id", id);
-      await supabase.from("guarantees").delete().eq("contract_id", id);
-      await supabase.from("insurances_tenant").delete().eq("contract_id", id);
-      await supabase.from("letters").delete().eq("contract_id", id);
-      await supabase.from("contracts").delete().eq("id", id);
+
+      // Clear self-referencing parent_contract_id on child contracts
+      await supabase.from("contracts").update({ parent_contract_id: null }).eq("parent_contract_id", contractId);
+
+      // Delete ALL child records (every FK table)
+      await supabase.from("alerts").delete().eq("contract_id", contractId);
+      await supabase.from("charges").delete().eq("contract_id", contractId);
+      await supabase.from("contract_spaces").delete().eq("contract_id", contractId);
+      await supabase.from("contract_options").delete().eq("contract_id", contractId);
+      await supabase.from("contract_price_tiers").delete().eq("contract_id", contractId);
+      await supabase.from("contract_ti").delete().eq("contract_id", contractId);
+      await supabase.from("documents").delete().eq("contract_id", contractId);
+      await supabase.from("guarantees").delete().eq("contract_id", contractId);
+      await supabase.from("insurances_tenant").delete().eq("contract_id", contractId);
+      await supabase.from("letters").delete().eq("contract_id", contractId);
+      await supabase.from("management_fees").delete().eq("contract_id", contractId);
+      await supabase.from("revenue_reports").delete().eq("contract_id", contractId);
+
+      // Now delete the contract itself
+      const { error } = await supabase.from("contracts").delete().eq("id", contractId);
+      if (error) throw error;
+
       // Release spaces back to vacant
       if (spaceIds.length > 0) {
         await supabase.from("spaces").update({ status: "vacant" }).in("id", spaceIds);
       }
-      await logAudit({ entity_type: "contract", entity_id: id, action: "delete" });
+      await logAudit({ entity_type: "contract", entity_id: contractId, action: "delete" });
       setSelected(null);
       await loadContracts();
     } catch (e: any) { alert("שגיאה במחיקה: " + e?.message); }
@@ -174,8 +187,8 @@ export default function ContractsPage() {
                   <div className="flex gap-2 flex-wrap">
                     <button onClick={function(){router.push("/contracts/"+selContract.id+"/edit");}} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">✏️ עריכה</button>
                     <button onClick={function(){router.push("/contracts/"+selContract.id+"/print");}} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">🖨 הדפס</button>
-        <button onClick={()=>selected && handleDeleteContract(selected.id)}
-          className="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-sm text-red-600 hover:bg-red-100 flex items-center gap-1">
+        <button onClick={()=>selected && handleDeleteContract(selected)}
+          className="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs text-red-600 hover:bg-red-100 flex items-center gap-1 font-semibold">
           🗑 מחק
         </button>
                   </div>
