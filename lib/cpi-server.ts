@@ -1,51 +1,70 @@
 "use server";
 
+const CBS_CALC_URL = "https://api.cbs.gov.il/index/data/calculator/120010";
+
 /**
  * Server Action: Fetch CPI-adjusted value from CBS calculator.
- * Runs server-side — no CORS issues, no Vercel auth issues.
- * Uses CBS official calculator (index 120010) which handles base-year changes automatically.
+ * Runs server-side — no CORS issues.
+ * CBS index 120010 = CPI. The calculator handles base-year conversions automatically.
+ *
+ * @param fromMM - Base date in MM-YYYY format
+ * @param toMM   - Target date in MM-YYYY format
+ * @param value  - Rent per sqm to adjust
  */
 export async function fetchCpiAdjusted(params: {
   value: number;
-  fromMM: string; // MM-YYYY
-  toMM: string;   // MM-YYYY
-}): Promise<{
-  success: boolean;
-  baseRentPerSqm: number;
-  adjustedRentPerSqm: number;
-  changePct: number | null;
-  fromDate: string;
-  toDate: string;
-  fromIndexValue: number | null;
-  toIndexValue: number | null;
-  baseYear: string | null;
-  verificationUrl: string;
-} | { success: false; error: string }> {
+  fromMM: string;
+  toMM: string;
+}): Promise<any> {
   const { value, fromMM, toMM } = params;
 
-  // Convert MM-YYYY to MM-DD-YYYY for CBS API
+  if (!value || !fromMM || !toMM) {
+    return { success: false, error: "Missing params" };
+  }
+
+  // Convert MM-YYYY → MM-DD-YYYY for CBS API
   const [fMM, fYYYY] = fromMM.split("-");
   const [tMM, tYYYY] = toMM.split("-");
+
+  if (!fMM || !fYYYY || !tMM || !tYYYY) {
+    return { success: false, error: `Invalid date format: from=${fromMM} to=${toMM}` };
+  }
+
   const fromDate = `${fMM}-01-${fYYYY}`;
   const toDate = `${tMM}-01-${tYYYY}`;
 
-  const cbsUrl = `https://api.cbs.gov.il/index/data/calculator/120010?value=${value}&date=${fromDate}&toDate=${toDate}&format=json&download=false`;
+  const cbsUrl = `${CBS_CALC_URL}?value=${value}&date=${fromDate}&toDate=${toDate}&format=json&download=false`;
 
   try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+
     const res = await fetch(cbsUrl, {
-      headers: { "Accept": "application/json" },
-      next: { revalidate: 3600 }, // cache 1 hour
+      signal: controller.signal,
+      headers: {
+        "Accept": "application/json",
+        "User-Agent": "PropManager/4.0",
+      },
     });
 
+    clearTimeout(timeout);
+
     if (!res.ok) {
-      return { success: false, error: `CBS API returned ${res.status}` };
+      const text = await res.text();
+      return { success: false, error: `CBS API ${res.status}: ${text.substring(0, 200)}` };
+    }
+
+    const contentType = res.headers.get("content-type") || "";
+    if (!contentType.includes("json")) {
+      const text = await res.text();
+      return { success: false, error: `CBS returned non-JSON (${contentType}): ${text.substring(0, 200)}` };
     }
 
     const data = await res.json();
-    const answer = data.answer ?? data;
+    const answer = data.answer;
 
-    if (!answer.to_value) {
-      return { success: false, error: "No result from CBS" };
+    if (!answer || !answer.to_value) {
+      return { success: false, error: "CBS returned no answer: " + JSON.stringify(data).substring(0, 300) };
     }
 
     return {
@@ -61,6 +80,6 @@ export async function fetchCpiAdjusted(params: {
       verificationUrl: cbsUrl,
     };
   } catch (e: any) {
-    return { success: false, error: e.message };
+    return { success: false, error: `Fetch failed: ${e.name} — ${e.message}` };
   }
 }

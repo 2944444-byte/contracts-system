@@ -105,18 +105,20 @@ export default function ContractsPage() {
       : 0;
     const totalRentPerSqm = rentPerSqm + investPerSqm;
 
-    // Call CBS calculator via Server Action (no CORS/auth issues)
+    // Call CBS calculator via Server Action (runs server-side, no CORS)
     setCpiLoading(true);
+    console.log("[CPI] Calling CBS:", { value: totalRentPerSqm, fromMM: baseDate, toMM: toDate });
     fetchCpiAdjusted({ value: totalRentPerSqm, fromMM: baseDate, toMM: toDate })
       .then(result => {
-        if (result.success) {
+        console.log("[CPI] Result:", result);
+        if (result && result.success) {
           setCpiResult(result);
         } else {
-          console.error("CPI error:", (result as any).error);
+          console.error("[CPI] Error:", result);
           setCpiResult(null);
         }
       })
-      .catch((e) => { console.error("CPI fetch error:", e); setCpiResult(null); })
+      .catch((e) => { console.error("[CPI] Exception:", e); setCpiResult(null); })
       .finally(() => setCpiLoading(false));
   }, [selected]);
 
