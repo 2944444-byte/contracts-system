@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { supabase } from '@/lib/supabase';
 import { syncContractStatuses } from '@/lib/contractSync';
 import { logAudit } from '@/lib/audit-log';
+import { fetchCpiAdjusted } from '@/lib/cpi-server';
 
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
 function fmtMoney(n: number) { return "₪"+Math.round(n??0).toLocaleString(); }
@@ -104,33 +105,18 @@ export default function ContractsPage() {
       : 0;
     const totalRentPerSqm = rentPerSqm + investPerSqm;
 
-    // Call CBS calculator API directly (bypass Vercel auth issues with API routes)
-    const [fromMM, fromYYYY] = baseDate.split("-");
-    const [toMM, toYYYY] = toDate.split("-");
-    const cbsUrl = `https://api.cbs.gov.il/index/data/calculator/120010?value=${totalRentPerSqm}&date=${fromMM}-01-${fromYYYY}&toDate=${toMM}-01-${toYYYY}&format=json&download=false`;
-
+    // Call CBS calculator via Server Action (no CORS/auth issues)
     setCpiLoading(true);
-    fetch(cbsUrl)
-      .then(r => r.json())
-      .then(data => {
-        const answer = data.answer ?? data;
-        if (answer.to_value) {
-          setCpiResult({
-            baseRentPerSqm: Math.round(totalRentPerSqm * 100) / 100,
-            adjustedRentPerSqm: Math.round(answer.to_value * 100) / 100,
-            changePct: answer.change_percent,
-            fromDate: baseDate,
-            toDate: answer.to_index_date || toDate,
-            fromIndexValue: answer.from_index_value,
-            toIndexValue: answer.to_index_value,
-            baseYear: answer.base_year,
-            verificationUrl: cbsUrl,
-          });
+    fetchCpiAdjusted({ value: totalRentPerSqm, fromMM: baseDate, toMM: toDate })
+      .then(result => {
+        if (result.success) {
+          setCpiResult(result);
         } else {
+          console.error("CPI error:", (result as any).error);
           setCpiResult(null);
         }
       })
-      .catch((e) => { console.error("CBS API error:", e); setCpiResult(null); })
+      .catch((e) => { console.error("CPI fetch error:", e); setCpiResult(null); })
       .finally(() => setCpiLoading(false));
   }, [selected]);
 
@@ -330,29 +316,34 @@ export default function ContractsPage() {
                   </div>
                 )}
                 {cpiResult && !cpiLoading && (
-                  <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2.5 mb-3">
-                    <div className="flex items-center justify-between mb-1">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-bold text-amber-700">📊 שכ&quot;ד מוצמד למדד (t-2)</span>
-                        <span className="text-[10px] text-amber-500">(שנת בסיס: {cpiResult.baseYear})</span>
+                  <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-3 mb-3 space-y-2">
+                    <div className="text-xs font-bold text-amber-800 mb-1">📊 הצמדה למדד (מחשבון למ&quot;ס — כלל t-2)</div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      {/* CPI-adjusted rent per sqm */}
+                      <div className="rounded-lg bg-white border border-amber-200 p-2.5 text-center">
+                        <div className="text-lg font-black text-amber-900">{fmtMoney(cpiResult.adjustedRentPerSqm)}/מ&quot;ר</div>
+                        <div className="text-[10px] text-amber-600">שכ&quot;ד צמוד למדד היום</div>
                       </div>
-                      <div className="text-sm font-black text-amber-800">
-                        {fmtMoney(cpiResult.adjustedRentPerSqm)}/מ&quot;ר
+                      {/* Total monthly CPI-adjusted */}
+                      <div className="rounded-lg bg-white border border-amber-200 p-2.5 text-center">
+                        <div className="text-lg font-black text-amber-900">{fmtMoney(cpiResult.adjustedRentPerSqm * (selContract.charged_area ?? 0))}</div>
+                        <div className="text-[10px] text-amber-600">סה&quot;כ הכנסה צמודה לחודש</div>
                       </div>
                     </div>
-                    <div className="grid grid-cols-2 gap-1 text-[10px] text-amber-600 mt-1">
-                      <div>מדד בסיס ({cpiResult.fromDate}): {cpiResult.fromIndexValue}</div>
-                      <div>מדד נוכחי ({cpiResult.toDate}): {cpiResult.toIndexValue}</div>
-                      <div>שכ&quot;ד בסיס: {fmtMoney(cpiResult.baseRentPerSqm)}/מ&quot;ר</div>
-                      <div>שינוי: {cpiResult.changePct != null ? cpiResult.changePct + "%" : "—"}</div>
+
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-[10px] text-amber-600">
+                      <div className="flex justify-between"><span>מדד בסיס ({cpiResult.fromDate}):</span><span className="font-semibold">{cpiResult.fromIndexValue}</span></div>
+                      <div className="flex justify-between"><span>מדד נוכחי ({cpiResult.toDate}):</span><span className="font-semibold">{cpiResult.toIndexValue}</span></div>
+                      <div className="flex justify-between"><span>שכ&quot;ד בסיס:</span><span className="font-semibold">{fmtMoney(cpiResult.baseRentPerSqm)}/מ&quot;ר</span></div>
+                      <div className="flex justify-between"><span>שינוי מצטבר:</span><span className="font-semibold">{cpiResult.changePct != null ? cpiResult.changePct + "%" : "—"}</span></div>
+                      <div className="flex justify-between"><span>שנת בסיס מדד:</span><span className="font-semibold">{cpiResult.baseYear}</span></div>
+                      <div className="flex justify-between"><span>שטח מחויב:</span><span className="font-semibold">{selContract.charged_area} מ&quot;ר</span></div>
                     </div>
-                    <div className="flex items-center justify-between mt-1.5 pt-1.5 border-t border-amber-200">
-                      <span className="text-xs font-bold text-amber-800">שכ&quot;ד חודשי מוצמד:</span>
-                      <span className="text-sm font-black text-amber-900">{fmtMoney(cpiResult.adjustedRentPerSqm * (selContract.charged_area ?? 0))}</span>
-                    </div>
+
                     {cpiResult.verificationUrl && (
                       <a href={cpiResult.verificationUrl} target="_blank" rel="noopener noreferrer"
-                        className="text-[10px] text-blue-500 hover:underline mt-1 block">🔗 אימות מול מחשבון הלמ&quot;ס</a>
+                        className="text-[10px] text-blue-500 hover:underline block">🔗 אימות מול מחשבון הלמ&quot;ס</a>
                     )}
                   </div>
                 )}
