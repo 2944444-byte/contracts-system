@@ -23,6 +23,18 @@ export function calculateEndDate(
   }
 }
 
+// ── Dynamic Price Tier for Step-Rent Builder ──
+export type PriceTier = {
+  increase_type: "pct" | "fixed_sqm" | "fixed_total" | "none";
+  increase_value: number;
+  from_year: number;
+  to_year: number;
+  is_recurring: boolean;
+  recurring_every_years: number | null;
+  calculated_rent_per_sqm: number | null;
+  notes: string;
+};
+
 export type ExtensionOption = {
   duration_months: number;
   duration_years: number;
@@ -35,6 +47,9 @@ export type ExtensionOption = {
   start_date: string;
   end_date: string;
   notes: string;
+  // Price schedule within the option period
+  price_schedule_type: "inherit" | "custom";
+  price_tiers: PriceTier[];
 };
 
 export type IncreaseStep = {
@@ -42,18 +57,6 @@ export type IncreaseStep = {
   value: number;
   from_year: number;
   to_year: number;
-};
-
-// ── New: Dynamic Price Tier for Step-Rent Builder ──
-export type PriceTier = {
-  increase_type: "pct" | "fixed_sqm" | "fixed_total" | "none";
-  increase_value: number;
-  from_year: number;
-  to_year: number;
-  is_recurring: boolean;
-  recurring_every_years: number | null;
-  calculated_rent_per_sqm: number | null; // preview only, computed client-side
-  notes: string;
 };
 
 export function emptyPriceTier(fromYear: number = 1): PriceTier {
@@ -207,6 +210,8 @@ export function emptyOption(): ExtensionOption {
     start_date: "",
     end_date: "",
     notes: "",
+    price_schedule_type: "inherit",
+    price_tiers: [],
   };
 }
 
@@ -217,4 +222,120 @@ export function emptyIncreaseStep(fromYear: number = 1): IncreaseStep {
     from_year: fromYear,
     to_year: fromYear + 2,
   };
+}
+
+/**
+ * Build a unified price timeline combining main contract tiers + option tiers.
+ * Each entry has: period label, date range, rent/sqm, source (main / option N).
+ */
+export type TimelineEntry = {
+  label: string;
+  startDate: string;
+  endDate: string;
+  rentPerSqm: number | null;
+  fixedAmount: number | null;
+  source: string;
+  type: string;
+};
+
+export function buildPriceTimeline(params: {
+  contractStart: string;
+  contractEnd: string;
+  baseRentPerSqm: number;
+  mainTiers: PriceTier[];
+  options: ExtensionOption[];
+}): TimelineEntry[] {
+  const { contractStart, contractEnd, baseRentPerSqm, mainTiers, options } = params;
+  const timeline: TimelineEntry[] = [];
+
+  // Base period (year 0 = before any tier kicks in)
+  const mainPreviews = calculateTierPreviews(mainTiers, baseRentPerSqm);
+
+  if (mainTiers.length === 0) {
+    timeline.push({
+      label: "תקופה ראשית",
+      startDate: contractStart,
+      endDate: contractEnd,
+      rentPerSqm: baseRentPerSqm,
+      fixedAmount: null,
+      source: "main",
+      type: "base",
+    });
+  } else {
+    // Add base period before first tier
+    if (mainTiers[0]?.from_year > 1) {
+      const baseEnd = new Date(contractStart);
+      baseEnd.setFullYear(baseEnd.getFullYear() + mainTiers[0].from_year - 1);
+      timeline.push({
+        label: `שנים 1-${mainTiers[0].from_year - 1}`,
+        startDate: contractStart,
+        endDate: format(baseEnd, "yyyy-MM-dd"),
+        rentPerSqm: baseRentPerSqm,
+        fixedAmount: null,
+        source: "main",
+        type: "base",
+      });
+    }
+    mainPreviews.forEach((tier) => {
+      const tStart = new Date(contractStart);
+      tStart.setFullYear(tStart.getFullYear() + tier.from_year - 1);
+      const tEnd = new Date(contractStart);
+      tEnd.setFullYear(tEnd.getFullYear() + tier.to_year);
+      timeline.push({
+        label: `שנים ${tier.from_year}-${tier.to_year}`,
+        startDate: format(tStart, "yyyy-MM-dd"),
+        endDate: format(tEnd, "yyyy-MM-dd"),
+        rentPerSqm: tier.increase_type === "fixed_total" ? null : tier.calculated_rent_per_sqm,
+        fixedAmount: tier.increase_type === "fixed_total" ? tier.increase_value : null,
+        source: "main",
+        type: tier.increase_type,
+      });
+    });
+  }
+
+  // Options
+  let lastMainRent = mainPreviews.length > 0
+    ? (mainPreviews[mainPreviews.length - 1].calculated_rent_per_sqm ?? baseRentPerSqm)
+    : baseRentPerSqm;
+
+  options.forEach((opt, i) => {
+    if (!opt.start_date || !opt.end_date) return;
+
+    // Exercise jump
+    let optionBaseRent = lastMainRent;
+    if (opt.rent_mechanism === "increase_pct" && opt.rent_increase_pct) {
+      optionBaseRent = lastMainRent * (1 + opt.rent_increase_pct / 100);
+    } else if (opt.rent_mechanism === "new_value" && opt.new_rent_value) {
+      optionBaseRent = opt.new_rent_value;
+    }
+
+    if (opt.price_schedule_type === "custom" && opt.price_tiers.length > 0) {
+      const optPreviews = calculateTierPreviews(opt.price_tiers, optionBaseRent);
+      optPreviews.forEach((tier) => {
+        timeline.push({
+          label: `אופציה ${i + 1} — שנים ${tier.from_year}-${tier.to_year}`,
+          startDate: opt.start_date,
+          endDate: opt.end_date,
+          rentPerSqm: tier.increase_type === "fixed_total" ? null : tier.calculated_rent_per_sqm,
+          fixedAmount: tier.increase_type === "fixed_total" ? tier.increase_value : null,
+          source: `option_${i + 1}`,
+          type: tier.increase_type,
+        });
+      });
+      lastMainRent = optPreviews[optPreviews.length - 1]?.calculated_rent_per_sqm ?? optionBaseRent;
+    } else {
+      timeline.push({
+        label: `אופציה ${i + 1}`,
+        startDate: opt.start_date,
+        endDate: opt.end_date,
+        rentPerSqm: optionBaseRent,
+        fixedAmount: null,
+        source: `option_${i + 1}`,
+        type: opt.rent_mechanism === "no_change" ? "none" : "jump",
+      });
+      lastMainRent = optionBaseRent;
+    }
+  });
+
+  return timeline;
 }

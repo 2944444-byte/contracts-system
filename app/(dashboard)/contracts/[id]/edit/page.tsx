@@ -11,6 +11,7 @@ import {
   emptyPriceTier,
   validatePriceTiers,
   calculateTierPreviews,
+  buildPriceTimeline,
   type ExtensionOption,
   type PriceTier,
 } from "@/lib/contract-utils";
@@ -321,6 +322,8 @@ export default function ContractEditPage() {
         start_date: o.start_date?.split("T")[0] ?? "",
         end_date: o.end_date?.split("T")[0] ?? "",
         notes: o.notes ?? "",
+        price_schedule_type: o.price_schedule_type ?? "inherit",
+        price_tiers: o.price_tiers && Array.isArray(o.price_tiers) ? o.price_tiers : [],
       })));
     }
 
@@ -451,10 +454,10 @@ export default function ContractEditPage() {
         );
       }
 
-      // Delete + re-insert options
+      // Delete + re-insert options (cascade deletes option price tiers via FK)
       await supabase.from("contract_options").delete().eq("contract_id", id);
       if (extensionOptions.length > 0) {
-        await supabase.from("contract_options").insert(
+        const { data: insertedOpts } = await supabase.from("contract_options").insert(
           extensionOptions.map((opt, i) => ({
             contract_id: id,
             option_number: i + 1,
@@ -470,8 +473,38 @@ export default function ContractEditPage() {
             auto_extend: opt.auto_renewal,
             status: "pending",
             notes: opt.notes || null,
+            price_schedule_type: opt.price_schedule_type || "inherit",
+            price_tiers: opt.price_schedule_type === "custom" ? opt.price_tiers : [],
           }))
-        );
+        ).select("id,option_number");
+
+        // Save option-level price tiers
+        if (insertedOpts) {
+          for (const dbOpt of insertedOpts) {
+            const uiOpt = extensionOptions[dbOpt.option_number - 1];
+            if (uiOpt?.price_schedule_type === "custom" && uiOpt.price_tiers?.length > 0) {
+              const optPreviews = calculateTierPreviews(uiOpt.price_tiers, Number(rentPerSqm) || 0);
+              await supabase.from("contract_price_tiers").insert(
+                optPreviews.map((tier, i) => ({
+                  contract_id: id,
+                  option_id: dbOpt.id,
+                  tier_number: i + 1,
+                  start_date: uiOpt.start_date,
+                  end_date: uiOpt.end_date,
+                  increase_type: tier.increase_type,
+                  increase_value: tier.increase_value || 0,
+                  is_recurring: tier.is_recurring,
+                  from_year: tier.from_year,
+                  to_year: tier.to_year,
+                  price_per_sqm: tier.increase_type === "fixed_total" ? null : tier.calculated_rent_per_sqm,
+                  fixed_amount: tier.increase_type === "fixed_total" ? tier.increase_value : null,
+                  calculated_rent_per_sqm: tier.calculated_rent_per_sqm,
+                  notes: tier.notes || null,
+                }))
+              );
+            }
+          }
+        }
       }
 
       // Delete + re-insert guarantee
@@ -949,7 +982,7 @@ export default function ContractEditPage() {
                 <div key={idx} className="rounded-xl border border-slate-200 p-4 space-y-3">
                   <div className="flex items-center justify-between">
                     <span className="font-bold text-slate-700 text-sm">אופציה {idx + 1}</span>
-                    <button type="button" onClick={() => removeOption(idx)} className="text-xs text-red-500 hover:text-red-700">הסר</button>
+                    <button type="button" onClick={() => removeOption(idx)} className="text-xs text-red-500 hover:text-red-700 font-semibold">🗑 הסר</button>
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div>
@@ -970,7 +1003,7 @@ export default function ContractEditPage() {
                         onChange={(e) => updateOption(idx, "notice_days_before_end", Number(e.target.value) || 0)} className={ic} />
                     </div>
                     <div>
-                      <label className="mb-1 block text-xs font-semibold text-slate-700">מנגנון שכ&quot;ד</label>
+                      <label className="mb-1 block text-xs font-semibold text-slate-700">קפיצת מחיר בעת מימוש</label>
                       <select value={opt.rent_mechanism} onChange={(e) => updateOption(idx, "rent_mechanism", e.target.value)} className={ic}>
                         {RENT_MECHANISMS.map((rm) => <option key={rm.v} value={rm.v}>{rm.l}</option>)}
                       </select>
@@ -1000,6 +1033,102 @@ export default function ContractEditPage() {
                     <input type="checkbox" checked={opt.auto_renewal} onChange={(e) => updateOption(idx, "auto_renewal", e.target.checked)} className="w-4 h-4" />
                     <label className="text-xs font-semibold text-slate-700">הארכה אוטומטית (אם לא נמסרה הודעה)</label>
                   </div>
+                  {/* Price Schedule within Option */}
+                  {opt.duration_years > 1 && (
+                    <div className="rounded-xl border border-blue-200 bg-blue-50/30 p-3 space-y-3">
+                      <div className="flex items-center gap-2">
+                        <label className="text-xs font-bold text-blue-800">מנגנון מחיר פנימי:</label>
+                        <div className="flex gap-1">
+                          <button type="button" onClick={() => updateOption(idx, "price_schedule_type", "inherit")}
+                            className={"rounded border px-2.5 py-1 text-xs transition-all " + ((opt.price_schedule_type ?? "inherit") === "inherit" ? "border-blue-500 bg-blue-100 font-bold text-blue-700" : "border-slate-200 bg-white")}>
+                            המשך מחוזה ראשי
+                          </button>
+                          <button type="button" onClick={() => {
+                            updateOption(idx, "price_schedule_type", "custom");
+                            if (!opt.price_tiers || opt.price_tiers.length === 0) updateOption(idx, "price_tiers", [emptyPriceTier(1)]);
+                          }} className={"rounded border px-2.5 py-1 text-xs transition-all " + (opt.price_schedule_type === "custom" ? "border-blue-500 bg-blue-100 font-bold text-blue-700" : "border-slate-200 bg-white")}>
+                            לוגיקה מותאמת
+                          </button>
+                        </div>
+                      </div>
+                      {opt.price_schedule_type === "custom" && (
+                        <div className="space-y-2">
+                          {(opt.price_tiers || []).map((tier, tIdx) => {
+                            const optYears = opt.duration_years;
+                            const hasError = tier.from_year > tier.to_year || tier.to_year > optYears;
+                            return (
+                              <div key={tIdx} className={"rounded-lg border p-3 space-y-2 " + (hasError ? "border-red-300 bg-red-50/50" : "border-slate-100 bg-white")}>
+                                <div className="flex items-center justify-between">
+                                  <span className="text-xs font-bold text-slate-600">שלב {tIdx + 1}</span>
+                                  {(opt.price_tiers || []).length > 1 && (
+                                    <button type="button" onClick={() => {
+                                      const newTiers = (opt.price_tiers || []).filter((_: any, i: number) => i !== tIdx);
+                                      updateOption(idx, "price_tiers", newTiers);
+                                    }} className="text-xs text-red-500">הסר</button>
+                                  )}
+                                </div>
+                                <div className="grid grid-cols-4 gap-2">
+                                  <div>
+                                    <label className="mb-1 block text-xs text-slate-500">משנה</label>
+                                    <input type="number" min="1" max={optYears} value={tier.from_year}
+                                      onChange={(e) => {
+                                        const newTiers = [...(opt.price_tiers || [])];
+                                        newTiers[tIdx] = { ...newTiers[tIdx], from_year: Number(e.target.value) || 1 };
+                                        updateOption(idx, "price_tiers", newTiers);
+                                      }} className={ic} />
+                                  </div>
+                                  <div>
+                                    <label className="mb-1 block text-xs text-slate-500">עד שנה</label>
+                                    <input type="number" min="1" max={optYears} value={tier.to_year}
+                                      onChange={(e) => {
+                                        const newTiers = [...(opt.price_tiers || [])];
+                                        newTiers[tIdx] = { ...newTiers[tIdx], to_year: Number(e.target.value) || 1 };
+                                        updateOption(idx, "price_tiers", newTiers);
+                                      }} className={ic} />
+                                  </div>
+                                  <div className="col-span-2">
+                                    <label className="mb-1 block text-xs text-slate-500">סוג</label>
+                                    <div className="flex gap-1 flex-wrap">
+                                      {INCREASE_TYPES.map((it) => (
+                                        <button key={it.v} type="button" onClick={() => {
+                                          const newTiers = [...(opt.price_tiers || [])];
+                                          newTiers[tIdx] = { ...newTiers[tIdx], increase_type: it.v as any };
+                                          updateOption(idx, "price_tiers", newTiers);
+                                        }} className={"rounded border px-2 py-1 text-xs " + (tier.increase_type === it.v ? "border-blue-500 bg-blue-50 font-bold text-blue-700" : "border-slate-200")}>
+                                          {it.icon} {it.l}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  </div>
+                                </div>
+                                {tier.increase_type !== "none" && (
+                                  <div className="max-w-[200px]">
+                                    <input type="number" step="0.1" value={tier.increase_value || ""}
+                                      onChange={(e) => {
+                                        const newTiers = [...(opt.price_tiers || [])];
+                                        newTiers[tIdx] = { ...newTiers[tIdx], increase_value: Number(e.target.value) || 0 };
+                                        updateOption(idx, "price_tiers", newTiers);
+                                      }} className={ic} placeholder={tier.increase_type === "pct" ? "%" : "₪"} />
+                                  </div>
+                                )}
+                                {hasError && <div className="text-xs text-red-500">⚠️ חורג מתקופת האופציה</div>}
+                              </div>
+                            );
+                          })}
+                          <button type="button" onClick={() => {
+                            const tiers = opt.price_tiers || [];
+                            const last = tiers[tiers.length - 1];
+                            updateOption(idx, "price_tiers", [...tiers, emptyPriceTier(last ? last.to_year + 1 : 1)]);
+                          }} className="rounded border border-dashed border-blue-300 px-3 py-2 text-xs font-bold text-blue-600 hover:bg-blue-50 w-full">
+                            + שלב נוסף
+                          </button>
+                        </div>
+                      )}
+                      {(opt.price_schedule_type ?? "inherit") === "inherit" && (
+                        <div className="text-xs text-blue-600">ממשיך את מנגנון העלייה של החוזה הראשי</div>
+                      )}
+                    </div>
+                  )}
                   <div>
                     <label className="mb-1 block text-xs font-semibold text-slate-700">הערות</label>
                     <input type="text" value={opt.notes} onChange={(e) => updateOption(idx, "notes", e.target.value)}
@@ -1119,6 +1248,40 @@ export default function ContractEditPage() {
                 ) : null
               )}
             </div>
+            {/* Price Timeline */}
+            {(() => {
+              const timeline = buildPriceTimeline({
+                contractStart: startDate,
+                contractEnd: endDate,
+                baseRentPerSqm: Number(rentPerSqm) || 0,
+                mainTiers: priceTiers,
+                options: extensionOptions,
+              });
+              if (timeline.length === 0) return null;
+              return (
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="text-sm font-bold text-slate-800 mb-3">📊 ציר זמן מחירים</div>
+                  <div className="space-y-1">
+                    {timeline.map((entry, i) => {
+                      const isOption = entry.source.startsWith("option");
+                      return (
+                        <div key={i} className={"rounded-lg border px-3 py-2 flex items-center justify-between text-xs " + (isOption ? "bg-blue-50 border-blue-200" : "bg-white border-slate-100")}>
+                          <div className="flex items-center gap-2">
+                            <span className={"font-bold " + (isOption ? "text-blue-800" : "text-slate-800")}>{entry.label}</span>
+                            <span className="text-slate-400">
+                              {entry.startDate && new Date(entry.startDate).toLocaleDateString("he-IL")} → {entry.endDate && new Date(entry.endDate).toLocaleDateString("he-IL")}
+                            </span>
+                          </div>
+                          <span className={"font-black text-sm " + (isOption ? "text-blue-800" : "text-slate-800")}>
+                            {entry.rentPerSqm ? `${fmtMoney(entry.rentPerSqm)}/מ"ר` : entry.fixedAmount ? `${fmtMoney(entry.fixedAmount)}/חודש` : "—"}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         )}
 
