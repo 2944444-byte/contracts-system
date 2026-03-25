@@ -8,7 +8,9 @@ import {
   calculateOptionDates,
   calculateDepositAmount,
   emptyOption,
+  emptyIncreaseStep,
   type ExtensionOption,
+  type IncreaseStep,
 } from "@/lib/contract-utils";
 
 const ic =
@@ -128,6 +130,10 @@ export default function ContractsNewPage() {
   const [increaseValue, setIncreaseValue] = useState("");
   const [increaseFreqMo, setIncreaseFreqMo] = useState("12");
   const [increaseUntilYr, setIncreaseUntilYr] = useState("");
+  const [increaseSteps, setIncreaseSteps] = useState<IncreaseStep[]>([]);
+
+  // CBS fetch state
+  const [cbsFetching, setCbsFetching] = useState(false);
 
   // Step 4 — Extension Options
   const [extensionOptions, setExtensionOptions] = useState<ExtensionOption[]>([]);
@@ -180,7 +186,7 @@ export default function ContractsNewPage() {
       );
       if (needsUpdate) setExtensionOptions(updated);
     }
-  }, [endDate, extensionOptions.length, ...extensionOptions.map((o) => o.duration_months)]);
+  }, [endDate, extensionOptions.length, ...extensionOptions.map((o) => o.duration_years || o.duration_months)]);
 
   // === Auto-calculate deposit ===
   const baseRent =
@@ -305,14 +311,23 @@ export default function ContractsNewPage() {
           graceType === "partial" ? Number(graceDiscountPct) || null : null;
       }
 
-      // Annual increase
+      // Annual increase — multi-tiered steps
       if (hasIncrease) {
-        insertPayload.price_increase_type = increaseType;
-        insertPayload.price_increase_value = Number(increaseValue) || null;
-        insertPayload.price_increase_freq_months = Number(increaseFreqMo) || 12;
-        insertPayload.price_increase_until_year = increaseUntilYr
-          ? Number(increaseUntilYr)
-          : null;
+        if (increaseSteps.length > 0) {
+          insertPayload.increase_steps = increaseSteps;
+          // Also save legacy fields from first step for backward compat
+          const first = increaseSteps[0];
+          insertPayload.price_increase_type = first.type;
+          insertPayload.price_increase_value = first.value || null;
+          insertPayload.price_increase_freq_months = Number(increaseFreqMo) || 12;
+        } else {
+          insertPayload.price_increase_type = increaseType;
+          insertPayload.price_increase_value = Number(increaseValue) || null;
+          insertPayload.price_increase_freq_months = Number(increaseFreqMo) || 12;
+          insertPayload.price_increase_until_year = increaseUntilYr
+            ? Number(increaseUntilYr)
+            : null;
+        }
       }
 
       // Deposit fields
@@ -348,6 +363,7 @@ export default function ContractsNewPage() {
           contract_id: contract.id,
           option_number: i + 1,
           duration_months: opt.duration_months,
+          duration_years: opt.duration_years || null,
           start_date: opt.start_date,
           end_date: opt.end_date,
           notice_type: opt.notice_type,
@@ -793,13 +809,51 @@ export default function ContractsNewPage() {
                     return null;
                   })()}
                 </label>
-                <input
-                  type="number"
-                  value={baseCPI}
-                  onChange={(e) => setBaseCPI(e.target.value)}
-                  placeholder="נטען אוטומטית מהלמ״ס"
-                  className={ic}
-                />
+                <div className="flex gap-2">
+                  <input
+                    type="number"
+                    value={baseCPI}
+                    onChange={(e) => setBaseCPI(e.target.value)}
+                    placeholder="נטען אוטומטית מהלמ״ס"
+                    className={ic + " flex-1"}
+                  />
+                  <button
+                    type="button"
+                    disabled={cbsFetching || !baseCPIDate}
+                    onClick={async () => {
+                      if (!baseCPIDate) {
+                        alert("נא לבחור תאריך מדד בסיס קודם");
+                        return;
+                      }
+                      setCbsFetching(true);
+                      try {
+                        const d = new Date(baseCPIDate);
+                        const year = d.getFullYear();
+                        const month = d.getMonth() + 1;
+                        const res = await fetch(`/api/cpi?year=${year}`);
+                        const data = await res.json();
+                        const records = data.records || [];
+                        const rec = records.find((r: any) => r.year === year && r.month === month);
+                        if (rec) {
+                          setBaseCPI(rec.value.toString());
+                          // Also refresh CPI records in state
+                          const allRes = await fetch("/api/cpi");
+                          const allData = await allRes.json();
+                          if (allData.records) setCpiRecords(allData.records);
+                        } else {
+                          alert(`מדד לחודש ${month}/${year} לא פורסם עדיין בלמ"ס`);
+                        }
+                      } catch (e: any) {
+                        alert("שגיאה בשליפת מדד: " + e.message);
+                      } finally {
+                        setCbsFetching(false);
+                      }
+                    }}
+                    className="rounded-lg bg-green-600 px-3 py-2 text-xs font-bold text-white hover:bg-green-700 disabled:opacity-40 whitespace-nowrap"
+                  >
+                    {cbsFetching ? "טוען..." : "משוך מדד"}
+                  </button>
+                </div>
               </div>
               <div>
                 <label className="mb-1 block text-xs font-semibold text-slate-700">
@@ -932,14 +986,19 @@ export default function ContractsNewPage() {
               )}
             </div>
 
-            {/* Annual increase */}
+            {/* Annual increase — multi-tiered */}
             <div className="rounded-xl border border-slate-200 p-4">
               <div className="flex items-center gap-2 mb-3">
                 <input
                   type="checkbox"
                   id="increase"
                   checked={hasIncrease}
-                  onChange={(e) => setHasIncrease(e.target.checked)}
+                  onChange={(e) => {
+                    setHasIncrease(e.target.checked);
+                    if (e.target.checked && increaseSteps.length === 0) {
+                      setIncreaseSteps([emptyIncreaseStep(1)]);
+                    }
+                  }}
                   className="w-4 h-4"
                 />
                 <label
@@ -951,69 +1010,117 @@ export default function ContractsNewPage() {
               </div>
               {hasIncrease && (
                 <div className="space-y-3">
+                  {/* Frequency */}
                   <div>
-                    <label className="mb-2 block text-xs font-semibold text-slate-700">
-                      סוג עלייה
+                    <label className="mb-1 block text-xs font-semibold text-slate-700">
+                      עלייה כל X שנים
                     </label>
-                    <div className="flex gap-2">
-                      {INCREASE_TYPES.map((it) => (
-                        <button
-                          key={it.v}
-                          type="button"
-                          onClick={() => setIncreaseType(it.v)}
-                          className={
-                            "rounded-lg border px-3 py-2 text-xs transition-all " +
-                            (increaseType === it.v
-                              ? "border-blue-500 bg-blue-50 font-bold text-blue-700"
-                              : "border-slate-200 hover:bg-slate-50")
-                          }
-                        >
-                          {it.l}
-                        </button>
-                      ))}
-                    </div>
+                    <select
+                      value={increaseFreqMo}
+                      onChange={(e) => setIncreaseFreqMo(e.target.value)}
+                      className={ic + " max-w-xs"}
+                    >
+                      <option value="12">כל שנה</option>
+                      <option value="24">כל 2 שנים</option>
+                      <option value="36">כל 3 שנים</option>
+                      <option value="48">כל 4 שנים</option>
+                      <option value="60">כל 5 שנים</option>
+                    </select>
                   </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="mb-1 block text-xs font-semibold text-slate-700">
-                        {increaseType === "pct"
-                          ? "שיעור עלייה (%)"
-                          : 'סכום עלייה (₪/מ"ר)'}
-                      </label>
-                      <input
-                        type="number"
-                        value={increaseValue}
-                        onChange={(e) => setIncreaseValue(e.target.value)}
-                        className={ic}
-                      />
+
+                  {/* Steps repeater */}
+                  <div className="text-xs font-bold text-slate-600 mb-1">שלבי עלייה</div>
+                  {increaseSteps.map((step, idx) => (
+                    <div key={idx} className="rounded-lg border border-slate-100 bg-slate-50 p-3 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-slate-600">שלב {idx + 1}</span>
+                        {increaseSteps.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => setIncreaseSteps(prev => prev.filter((_, i) => i !== idx))}
+                            className="text-xs text-red-500 hover:text-red-700"
+                          >
+                            הסר
+                          </button>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-4 gap-2">
+                        <div>
+                          <label className="mb-1 block text-xs text-slate-500">סוג עלייה</label>
+                          <div className="flex gap-1">
+                            {INCREASE_TYPES.map((it) => (
+                              <button
+                                key={it.v}
+                                type="button"
+                                onClick={() => setIncreaseSteps(prev => prev.map((s, i) => i === idx ? { ...s, type: it.v as any } : s))}
+                                className={
+                                  "rounded border px-2 py-1 text-xs transition-all " +
+                                  (step.type === it.v
+                                    ? "border-blue-500 bg-blue-50 font-bold text-blue-700"
+                                    : "border-slate-200 hover:bg-white")
+                                }
+                              >
+                                {it.l}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        {step.type !== "none" && (
+                          <div>
+                            <label className="mb-1 block text-xs text-slate-500">
+                              {step.type === "pct" ? "אחוז (%)" : 'סכום (₪/מ"ר)'}
+                            </label>
+                            <input
+                              type="number"
+                              value={step.value || ""}
+                              onChange={(e) => setIncreaseSteps(prev => prev.map((s, i) => i === idx ? { ...s, value: Number(e.target.value) || 0 } : s))}
+                              className={ic}
+                            />
+                          </div>
+                        )}
+                        <div>
+                          <label className="mb-1 block text-xs text-slate-500">משנה</label>
+                          <input
+                            type="number"
+                            min="1"
+                            value={step.from_year}
+                            onChange={(e) => setIncreaseSteps(prev => prev.map((s, i) => i === idx ? { ...s, from_year: Number(e.target.value) || 1 } : s))}
+                            className={ic}
+                          />
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-xs text-slate-500">עד שנה</label>
+                          <input
+                            type="number"
+                            min="1"
+                            value={step.to_year}
+                            onChange={(e) => setIncreaseSteps(prev => prev.map((s, i) => i === idx ? { ...s, to_year: Number(e.target.value) || 1 } : s))}
+                            className={ic}
+                          />
+                        </div>
+                      </div>
+                      {/* Preview */}
+                      <div className="text-xs text-slate-400">
+                        {step.type === "none"
+                          ? `שנים ${step.from_year}-${step.to_year}: ללא עלייה`
+                          : step.type === "pct"
+                            ? `שנים ${step.from_year}-${step.to_year}: עלייה של ${step.value}%`
+                            : `שנים ${step.from_year}-${step.to_year}: עלייה של ₪${step.value}/מ"ר`
+                        }
+                      </div>
                     </div>
-                    <div>
-                      <label className="mb-1 block text-xs font-semibold text-slate-700">
-                        תדירות (חודשים)
-                      </label>
-                      <select
-                        value={increaseFreqMo}
-                        onChange={(e) => setIncreaseFreqMo(e.target.value)}
-                        className={ic}
-                      >
-                        <option value="12">שנתי (12)</option>
-                        <option value="24">דו-שנתי (24)</option>
-                        <option value="36">כל 3 שנים</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="mb-1 block text-xs font-semibold text-slate-700">
-                        עלייה עד שנה (אופציונלי)
-                      </label>
-                      <input
-                        type="number"
-                        value={increaseUntilYr}
-                        onChange={(e) => setIncreaseUntilYr(e.target.value)}
-                        placeholder="למשל: 3"
-                        className={ic}
-                      />
-                    </div>
-                  </div>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const lastStep = increaseSteps[increaseSteps.length - 1];
+                      const nextFrom = lastStep ? lastStep.to_year + 1 : 1;
+                      setIncreaseSteps(prev => [...prev, emptyIncreaseStep(nextFrom)]);
+                    }}
+                    className="rounded-lg border border-dashed border-blue-300 px-4 py-2 text-xs font-bold text-blue-600 hover:bg-blue-50 w-full"
+                  >
+                    + הוסף שלב עלייה
+                  </button>
                 </div>
               )}
               {!hasIncrease && (
@@ -1072,19 +1179,17 @@ export default function ContractsNewPage() {
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="mb-1 block text-xs font-semibold text-slate-700">
-                        תקופה (חודשים) *
+                        תקופה (שנים) *
                       </label>
                       <input
                         type="number"
                         min="1"
-                        value={opt.duration_months}
-                        onChange={(e) =>
-                          updateOption(
-                            idx,
-                            "duration_months",
-                            Number(e.target.value) || 0
-                          )
-                        }
+                        value={opt.duration_years}
+                        onChange={(e) => {
+                          const years = Number(e.target.value) || 0;
+                          updateOption(idx, "duration_years", years);
+                          updateOption(idx, "duration_months", years * 12);
+                        }}
                         className={ic}
                       />
                     </div>
@@ -1464,7 +1569,9 @@ export default function ContractsNewPage() {
                 {
                   l: "עלייה",
                   v: hasIncrease
-                    ? `${increaseValue}${increaseType === "pct" ? "%" : "₪"} כל ${increaseFreqMo} חודשים`
+                    ? increaseSteps.length > 0
+                      ? `${increaseSteps.length} שלבים`
+                      : `${increaseValue}${increaseType === "pct" ? "%" : "₪"} כל ${Number(increaseFreqMo) / 12} שנים`
                     : "לא",
                 },
                 {
@@ -1493,6 +1600,26 @@ export default function ContractsNewPage() {
               )}
             </div>
 
+            {/* Increase steps summary */}
+            {hasIncrease && increaseSteps.length > 0 && (
+              <div className="rounded-xl bg-amber-50 border border-amber-200 p-4">
+                <div className="text-xs font-bold text-amber-700 mb-2">
+                  שלבי עלייה בשכ&quot;ד
+                </div>
+                {increaseSteps.map((step, i) => (
+                  <div
+                    key={i}
+                    className="flex justify-between text-xs text-amber-800 py-1 border-b border-amber-100 last:border-0"
+                  >
+                    <span>
+                      שנים {step.from_year}–{step.to_year}:
+                      {step.type === "none" ? " ללא עלייה" : step.type === "pct" ? ` ${step.value}%` : ` ₪${step.value}/מ"ר`}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+
             {/* Options summary */}
             {extensionOptions.length > 0 && (
               <div className="rounded-xl bg-blue-50 border border-blue-200 p-4">
@@ -1505,7 +1632,7 @@ export default function ContractsNewPage() {
                     className="flex justify-between text-xs text-blue-800 py-1 border-b border-blue-100 last:border-0"
                   >
                     <span>
-                      אופציה {i + 1}: {opt.duration_months} חודשים
+                      אופציה {i + 1}: {opt.duration_years ? `${opt.duration_years} שנים` : `${opt.duration_months} חודשים`}
                     </span>
                     <span>
                       {opt.start_date &&

@@ -25,6 +25,7 @@ export function calculateEndDate(
 
 export type ExtensionOption = {
   duration_months: number;
+  duration_years: number;
   notice_type: "exercise" | "non_renewal" | "auto";
   notice_days_before_end: number;
   rent_mechanism: "no_change" | "increase_pct" | "new_value";
@@ -36,9 +37,20 @@ export type ExtensionOption = {
   notes: string;
 };
 
+export type IncreaseStep = {
+  type: "pct" | "fixed" | "none";
+  value: number;
+  from_year: number;
+  to_year: number;
+};
+
 /**
  * Chain-calculate option start/end dates.
  * Option[0] starts at contractEndDate, option[1] starts at option[0] end, etc.
+ */
+/**
+ * Chain-calculate option start/end dates.
+ * Uses duration_years as primary (falls back to duration_months for legacy).
  */
 export function calculateOptionDates(
   contractEndDate: string,
@@ -48,11 +60,14 @@ export function calculateOptionDates(
   let prevEnd = contractEndDate;
   return options.map((opt) => {
     const start = prevEnd;
-    const end = opt.duration_months > 0
-      ? format(addMonths(new Date(start), opt.duration_months), "yyyy-MM-dd")
-      : start;
+    let end = start;
+    if (opt.duration_years > 0) {
+      end = format(addYears(new Date(start), opt.duration_years), "yyyy-MM-dd");
+    } else if (opt.duration_months > 0) {
+      end = format(addMonths(new Date(start), opt.duration_months), "yyyy-MM-dd");
+    }
     prevEnd = end;
-    return { ...opt, start_date: start, end_date: end };
+    return { ...opt, start_date: start, end_date: end, duration_months: (opt.duration_years || 0) * 12 || opt.duration_months };
   });
 }
 
@@ -91,6 +106,7 @@ export function calculateDepositAmount(params: {
 export function emptyOption(): ExtensionOption {
   return {
     duration_months: 12,
+    duration_years: 1,
     notice_type: "exercise",
     notice_days_before_end: 90,
     rent_mechanism: "no_change",
@@ -100,5 +116,14 @@ export function emptyOption(): ExtensionOption {
     start_date: "",
     end_date: "",
     notes: "",
+  };
+}
+
+export function emptyIncreaseStep(fromYear: number = 1): IncreaseStep {
+  return {
+    type: "pct",
+    value: 0,
+    from_year: fromYear,
+    to_year: fromYear + 2,
   };
 }
