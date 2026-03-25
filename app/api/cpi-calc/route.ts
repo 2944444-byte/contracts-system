@@ -37,12 +37,17 @@ export async function GET(req: NextRequest) {
 
     const data = await res.json();
 
-    // תגובת הלמ"ס: { from_value, to_value, change_percent, base_year }
+    // CBS response: { request: {...}, answer: { from_value, to_value, change_percent, base_year, ... } }
+    const answer = data.answer ?? data;
     return NextResponse.json({
-      from_value:       data.from_value ?? Number(value),
-      to_value:         data.to_value,
-      change_percent:   data.change_percent,
-      base_year:        data.base_year,
+      from_value:       answer.from_value ?? Number(value),
+      to_value:         answer.to_value,
+      change_percent:   answer.change_percent,
+      base_year:        answer.base_year,
+      from_index_date:  answer.from_index_date,
+      from_index_value: answer.from_index_value,
+      to_index_date:    answer.to_index_date,
+      to_index_value:   answer.to_index_value,
       from_date:        from,
       to_date:          to,
       verification_url: apiUrl,

@@ -76,7 +76,7 @@ export default function ContractsPage() {
 
   async function loadContracts() {
     const { data } = await supabase.from("contracts")
-      .select("*, tenants(name,phone,primary_email,company_name), properties(name,city), contract_options(id,option_number,duration_months,duration_years,end_date,notice_days_before_end,notice_type,status,is_exercised,rent_mechanism,rent_increase_pct,new_rent_value), guarantees(id,status,amount_required,amount_actual), contract_spaces(space_id,spaces(space_name,area))")
+      .select("*, tenants(name,phone,primary_email,company_name), properties(name,city), contract_options(id,option_number,duration_months,duration_years,end_date,notice_days_before_end,notice_type,status,is_exercised,rent_mechanism,rent_increase_pct,new_rent_value), guarantees(id,guarantee_type,status,amount_required,amount_actual,end_date,bank), contract_spaces(space_id,spaces(space_name,area))")
       .order("end_date");
     setContracts(data??[]);
     setLoading(false);
@@ -420,12 +420,56 @@ export default function ContractsPage() {
 
               {/* Guarantees */}
               <div className="rounded-xl border border-slate-200 bg-white shadow-sm p-4">
-                <div className="text-xs font-bold text-slate-500 mb-2">🏦 ערבויות ({(selContract.guarantees??[]).filter(function(g:any){return g.status==="active";}).length})</div>
-                {(selContract.guarantees??[]).filter(function(g:any){return g.status==="active";}).length===0 ? <div className="text-xs text-slate-400">אין</div> : (
-                  selContract.guarantees.filter(function(g:any){return g.status==="active";}).map(function(g:any){
-                    const diff=(g.amount_actual??0)-(g.amount_required??0);
-                    return <div key={g.id} className="text-xs py-0.5 flex justify-between"><span className="text-slate-500">{fmtMoney(g.amount_actual??0)}</span><span className={diff<0?"text-red-600 font-bold":"text-green-600"}>{diff<0?"פער!":"✓"}</span></div>;
-                  })
+                <div className="text-xs font-bold text-slate-500 mb-3">🏦 ערבויות ({(selContract.guarantees??[]).length})</div>
+                {(selContract.guarantees??[]).length===0 ? <div className="text-xs text-slate-400">אין ערבויות</div> : (
+                  <div className="space-y-2">
+                    {selContract.guarantees.map(function(g:any){
+                      const diff = (g.amount_actual??0) - (g.amount_required??0);
+                      const isExpired = g.end_date && new Date(g.end_date) < new Date();
+                      const daysToExpiry = g.end_date ? Math.ceil((new Date(g.end_date).getTime() - Date.now()) / 86400000) : null;
+                      const GTYPE: Record<string,string> = { bank:"🏦 בנקאית", check:"📝 שיקים", cash:"💵 מזומן", insurance:"🛡️ ביטוח", personal:"👤 אישית" };
+                      return (
+                        <div key={g.id} className={"rounded-lg border p-2.5 " + (isExpired ? "border-red-300 bg-red-50" : g.status !== "active" ? "border-slate-200 bg-slate-50" : "border-green-200 bg-green-50/30")}>
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-xs font-bold text-slate-700">{GTYPE[g.guarantee_type] ?? g.guarantee_type}</span>
+                            <span className={"text-xs px-2 py-0.5 rounded-full font-semibold " +
+                              (isExpired ? "bg-red-100 text-red-700" : g.status === "active" ? "bg-green-100 text-green-700" : "bg-slate-100 text-slate-500")}>
+                              {isExpired ? "⚠️ לא בתוקף" : g.status === "active" ? "✓ בתוקף" : "לא פעיל"}
+                            </span>
+                          </div>
+                          <div className="grid grid-cols-2 gap-1 text-xs text-slate-600">
+                            <div className="flex justify-between">
+                              <span className="text-slate-400">נדרש:</span>
+                              <span className="font-semibold">{fmtMoney(g.amount_required??0)}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-slate-400">בפועל:</span>
+                              <span className={"font-semibold " + (diff < 0 ? "text-red-600" : "text-green-600")}>{fmtMoney(g.amount_actual??0)}</span>
+                            </div>
+                            {g.bank && (
+                              <div className="flex justify-between">
+                                <span className="text-slate-400">בנק:</span>
+                                <span>{g.bank}</span>
+                              </div>
+                            )}
+                            {g.end_date && (
+                              <div className="flex justify-between">
+                                <span className="text-slate-400">פקיעה:</span>
+                                <span className={"font-semibold " + (isExpired ? "text-red-600" : daysToExpiry !== null && daysToExpiry <= 60 ? "text-yellow-600" : "")}>
+                                  {fmtDate(g.end_date)}
+                                  {isExpired && " (פג!)"}
+                                  {!isExpired && daysToExpiry !== null && daysToExpiry <= 60 && ` (${daysToExpiry} יום)`}
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                          {diff < 0 && (
+                            <div className="text-xs text-red-600 font-bold mt-1">⚠️ פער: {fmtMoney(Math.abs(diff))}</div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
                 )}
               </div>
             </div>
