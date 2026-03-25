@@ -111,57 +111,64 @@ export default function ContractsPage() {
     const toYear = t2.getFullYear();
 
     setCpiLoading(true);
+    const cbsFromDate = `${bMM}-01-${bYYYY}`;
+    const cbsToDate = `${String(toMonth).padStart(2,'0')}-01-${toYear}`;
+    const cbsUrl = `/api/cpi-calc?value=${totalRentPerSqm}&from=${baseDate}&to=${String(toMonth).padStart(2,'0')}-${toYear}`;
 
-    // Fetch ALL records from base month onward to chain percent_change values
-    // This handles base-year transitions correctly (2018→2020→2022→2024)
-    supabase.from("cpi_records")
-      .select("year,month,value,base_year,percent_change")
-      .or(`year.gt.${baseYr},and(year.eq.${baseYr},month.gte.${baseMonth})`)
-      .order("year").order("month")
-      .then(function({ data: records }) {
-        if (!records || records.length < 2) {
-          console.warn("[CPI] Not enough records:", records?.length);
-          setCpiResult(null); setCpiLoading(false); return;
-        }
-
-        // Find base record
-        const baseRec = records.find(function(r) { return r.year === baseYr && r.month === baseMonth; });
-        if (!baseRec) {
-          console.warn("[CPI] Base record not found:", baseYr, baseMonth);
-          setCpiResult(null); setCpiLoading(false); return;
-        }
-
-        // Chain cumulative percent changes from base+1 to t-2
-        // percent_change is month-over-month %, independent of base year
-        let cumulative = 1.0;
-        let lastRec = baseRec;
-        for (let i = 0; i < records.length; i++) {
-          const r = records[i];
-          const isAfterBase = (r.year > baseYr) || (r.year === baseYr && r.month > baseMonth);
-          const isPastTarget = (r.year > toYear) || (r.year === toYear && r.month > toMonth);
-          if (isPastTarget) break;
-          if (isAfterBase && r.percent_change != null) {
-            cumulative *= (1 + Number(r.percent_change) / 100);
-            lastRec = r;
-          }
-        }
-
-        const adjustedRent = Math.round(totalRentPerSqm * cumulative * 100) / 100;
-        const changePct = Math.round((cumulative - 1) * 1000) / 10;
-
+    // Primary: CBS Calculator via API route (exact result)
+    // Fallback: cumulative % chain from cpi_records (close approximation)
+    fetch(cbsUrl)
+      .then(function(r) { if (!r.ok) throw new Error("API " + r.status); return r.json(); })
+      .then(function(data) {
+        if (!data.to_value) throw new Error("No to_value");
         setCpiResult({
-          success: true,
+          success: true, source: "cbs",
           baseRentPerSqm: Math.round(totalRentPerSqm * 100) / 100,
-          adjustedRentPerSqm: adjustedRent,
-          changePct: changePct,
-          fromDate: `${baseMonth}/${baseYr}`,
-          toDate: `${lastRec.month}/${lastRec.year}`,
-          fromIndexValue: Number(baseRec.value),
-          toIndexValue: Number(lastRec.value),
-          baseYear: baseRec.base_year || null,
-          verificationUrl: `https://api.cbs.gov.il/index/data/calculator/120010?value=${totalRentPerSqm}&date=${bMM}-01-${bYYYY}&toDate=${String(toMonth).padStart(2,'0')}-01-${toYear}&format=json`,
+          adjustedRentPerSqm: Math.round(data.to_value * 100) / 100,
+          changePct: data.change_percent ?? null,
+          fromDate: data.from_index_date || baseDate,
+          toDate: data.to_index_date || `${toMonth}/${toYear}`,
+          fromIndexValue: data.from_index_value ?? null,
+          toIndexValue: data.to_index_value ?? null,
+          baseYear: data.base_year ?? null,
+          verificationUrl: data.verification_url ?? null,
         });
         setCpiLoading(false);
+      })
+      .catch(function() {
+        // Fallback: cumulative % from Supabase cpi_records
+        supabase.from("cpi_records")
+          .select("year,month,value,base_year,percent_change")
+          .or(`year.gt.${baseYr},and(year.eq.${baseYr},month.gte.${baseMonth})`)
+          .order("year").order("month")
+          .then(function({ data: records }) {
+            if (!records || records.length < 2) { setCpiResult(null); setCpiLoading(false); return; }
+            const baseRec = records.find(function(r) { return r.year === baseYr && r.month === baseMonth; });
+            if (!baseRec) { setCpiResult(null); setCpiLoading(false); return; }
+            let cumulative = 1.0;
+            let lastRec = baseRec;
+            for (let i = 0; i < records.length; i++) {
+              const r = records[i];
+              if ((r.year > toYear) || (r.year === toYear && r.month > toMonth)) break;
+              if (((r.year > baseYr) || (r.year === baseYr && r.month > baseMonth)) && r.percent_change != null) {
+                cumulative *= (1 + Number(r.percent_change) / 100);
+                lastRec = r;
+              }
+            }
+            setCpiResult({
+              success: true, source: "local",
+              baseRentPerSqm: Math.round(totalRentPerSqm * 100) / 100,
+              adjustedRentPerSqm: Math.round(totalRentPerSqm * cumulative * 100) / 100,
+              changePct: Math.round((cumulative - 1) * 1000) / 10,
+              fromDate: `${baseMonth}/${baseYr}`,
+              toDate: `${lastRec.month}/${lastRec.year}`,
+              fromIndexValue: Number(baseRec.value),
+              toIndexValue: Number(lastRec.value),
+              baseYear: baseRec.base_year || null,
+              verificationUrl: `https://api.cbs.gov.il/index/data/calculator/120010?value=${totalRentPerSqm}&date=${cbsFromDate}&toDate=${cbsToDate}&format=json`,
+            });
+            setCpiLoading(false);
+          });
       });
   }, [selected]);
 
@@ -362,7 +369,12 @@ export default function ContractsPage() {
                 )}
                 {cpiResult && !cpiLoading && (
                   <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-3 mb-3 space-y-2">
-                    <div className="text-xs font-bold text-amber-800 mb-1">📊 הצמדה למדד (מחשבון למ&quot;ס — כלל t-2)</div>
+                    <div className="text-xs font-bold text-amber-800 mb-1 flex items-center gap-2">
+                      📊 הצמדה למדד (כלל t-2)
+                      <span className={"rounded px-1.5 py-0.5 text-[9px] font-bold " + (cpiResult.source === "cbs" ? "bg-green-100 text-green-700" : "bg-yellow-100 text-yellow-700")}>
+                        {cpiResult.source === "cbs" ? "✓ מחשבון למ\"ס" : "≈ חישוב מקומי"}
+                      </span>
+                    </div>
 
                     <div className="grid grid-cols-2 gap-2">
                       {/* CPI-adjusted rent per sqm */}
