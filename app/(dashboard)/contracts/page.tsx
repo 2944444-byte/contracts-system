@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { supabase } from '@/lib/supabase';
 import { syncContractStatuses } from '@/lib/contractSync';
 import { logAudit } from '@/lib/audit-log';
-// CPI fetched via /api/cpi-calc route (server action had issues on Vercel)
+// CPI calculated client-side from cpi_records (cumulative % chain)
 
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
 function fmtMoney(n: number) { return "₪"+Math.round(n??0).toLocaleString(); }
@@ -88,7 +88,8 @@ export default function ContractsPage() {
 
   const selContract = contracts.find(function(c){return c.id===selected;});
 
-  // Load CPI-adjusted price when contract is selected
+  // Load CPI-adjusted price from cpi_records using cumulative % chain
+  // This avoids base-year issues since we multiply month-over-month changes
   useEffect(function() {
     if (!selContract) { setCpiResult(null); return; }
     if (selContract.indexation_method === "none") { setCpiResult(null); return; }
@@ -96,7 +97,6 @@ export default function ContractsPage() {
     if (!rentPerSqm) { setCpiResult(null); return; }
 
     const baseDate = getBaseIndexDate(selContract.index_base_date, selContract.start_date);
-    const toDate = getT2Date();
     if (!baseDate) { setCpiResult(null); return; }
 
     // Add investment per sqm to get true rent per sqm
@@ -105,34 +105,64 @@ export default function ContractsPage() {
       : 0;
     const totalRentPerSqm = rentPerSqm + investPerSqm;
 
-    // Call CBS calculator via API route (same-origin, no CORS)
+    // Parse base date (MM-YYYY)
+    const [bMM, bYYYY] = baseDate.split("-");
+    const baseMonth = Number(bMM);
+    const baseYear = Number(bYYYY);
+
+    // t-2 rule: current CPI = 2 months before today
+    const today = new Date();
+    const t2 = new Date(today.getFullYear(), today.getMonth() - 2, 1);
+    const toMonth = t2.getMonth() + 1;
+    const toYear = t2.getFullYear();
+
     setCpiLoading(true);
-    fetch(`/api/cpi-calc?value=${totalRentPerSqm}&from=${baseDate}&to=${toDate}`)
-      .then(r => {
-        if (!r.ok) throw new Error(`API returned ${r.status}`);
-        return r.json();
-      })
-      .then(data => {
-        if (data.to_value) {
-          setCpiResult({
-            success: true,
-            baseRentPerSqm: data.from_value ?? totalRentPerSqm,
-            adjustedRentPerSqm: Math.round(data.to_value * 100) / 100,
-            changePct: data.change_percent ?? null,
-            fromDate: data.from_index_date || baseDate,
-            toDate: data.to_index_date || toDate,
-            fromIndexValue: data.from_index_value ?? null,
-            toIndexValue: data.to_index_value ?? null,
-            baseYear: data.base_year ?? null,
-            verificationUrl: data.verification_url ?? null,
-          });
-        } else {
-          console.error("[CPI] No to_value:", data);
-          setCpiResult(null);
+    // Fetch all CPI records from base to current
+    supabase.from("cpi_records")
+      .select("year,month,value,percent,base_year")
+      .gte("year", baseYear)
+      .order("year").order("month")
+      .then(function({ data: records }) {
+        if (!records || records.length === 0) { setCpiResult(null); setCpiLoading(false); return; }
+
+        // Find base record and current record
+        const baseRec = records.find(function(r) { return r.year === baseYear && r.month === baseMonth; });
+        const currentRec = records.find(function(r) { return r.year === toYear && r.month === toMonth; });
+
+        if (!baseRec || !currentRec) { setCpiResult(null); setCpiLoading(false); return; }
+
+        // Chain cumulative % changes from base+1 to current
+        // This handles base-year changes correctly because each month's %
+        // is relative to the previous month regardless of base year
+        let cumulative = 1.0;
+        let started = false;
+        for (let i = 0; i < records.length; i++) {
+          const r = records[i];
+          const isAfterBase = (r.year > baseYear) || (r.year === baseYear && r.month > baseMonth);
+          const isPastCurrent = (r.year > toYear) || (r.year === toYear && r.month > toMonth);
+          if (isPastCurrent) break;
+          if (isAfterBase && r.percent != null) {
+            cumulative *= (1 + Number(r.percent) / 100);
+          }
         }
-      })
-      .catch((e) => { console.error("[CPI] Error:", e); setCpiResult(null); })
-      .finally(() => setCpiLoading(false));
+
+        const adjustedRent = Math.round(totalRentPerSqm * cumulative * 100) / 100;
+        const changePct = Math.round((cumulative - 1) * 1000) / 10;
+
+        setCpiResult({
+          success: true,
+          baseRentPerSqm: Math.round(totalRentPerSqm * 100) / 100,
+          adjustedRentPerSqm: adjustedRent,
+          changePct: changePct,
+          fromDate: `${baseMonth}/${baseYear}`,
+          toDate: `${toMonth}/${toYear}`,
+          fromIndexValue: Number(baseRec.value),
+          toIndexValue: Number(currentRec.value),
+          baseYear: baseRec.base_year || null,
+          verificationUrl: `https://api.cbs.gov.il/index/data/calculator/120010?value=${totalRentPerSqm}&date=${bMM}-01-${bYYYY}&toDate=${String(toMonth).padStart(2,'0')}-01-${toYear}&format=json`,
+        });
+        setCpiLoading(false);
+      });
   }, [selected]);
 
   async function handleSync() {
