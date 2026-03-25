@@ -8,6 +8,28 @@ import { logAudit } from '@/lib/audit-log';
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
 function fmtMoney(n: number) { return "₪"+Math.round(n??0).toLocaleString(); }
 
+function yearsMonthsLeft(endDate: string) {
+  const now = new Date();
+  const end = new Date(endDate);
+  if (isNaN(end.getTime())) return null;
+  const diffMs = end.getTime() - now.getTime();
+  if (diffMs <= 0) return { years: 0, months: 0, text: "פג!", isExpired: true };
+  const totalMonths = Math.floor(diffMs / (1000*60*60*24*30.44));
+  const years = Math.floor(totalMonths / 12);
+  const months = totalMonths % 12;
+  let text = "";
+  if (years > 0) text += years + " שנים";
+  if (years > 0 && months > 0) text += " ו-";
+  if (months > 0) text += months + " חודשים";
+  if (!text) text = "פחות מחודש";
+  return { years, months, text, isExpired: false };
+}
+
+function calcCpiAdjusted(baseRentPerSqm: number, baseIndex: number|null, latestIndex: number|null): number|null {
+  if (!baseIndex || !latestIndex || baseIndex <= 0) return null;
+  return Math.round(baseRentPerSqm * (latestIndex / baseIndex) * 100) / 100;
+}
+
 const STATUS_MAP: Record<string,{label:string;color:string;dot:string}> = {
   active:   {label:"פעיל",    color:"bg-green-100 text-green-700",  dot:"bg-green-500"},
   expiring: {label:"פוגה",   color:"bg-yellow-100 text-yellow-700",dot:"bg-yellow-500"},
@@ -24,17 +46,31 @@ export default function ContractsPage() {
   const [selected,  setSelected]  = useState<string|null>(null);
   const [filterSt,  setFilterSt]  = useState("active");
   const [search,    setSearch]    = useState("");
+  const [latestCpi, setLatestCpi] = useState<number|null>(null);
+  const [latestCpiMonth, setLatestCpiMonth] = useState("");
 
-  useEffect(function() { loadContracts(); }, []);
+  useEffect(function() { loadContracts(); loadLatestCpi(); }, []);
 
   async function loadContracts() {
     const { data } = await supabase.from("contracts")
-      .select("*, tenants(name,phone,primary_email,company_name), properties(name,city), contract_options(id,option_number,end_date,status), guarantees(id,status,amount_required,amount_actual)")
+      .select("*, tenants(name,phone,primary_email,company_name), properties(name,city), contract_options(id,option_number,duration_months,duration_years,end_date,notice_days_before_end,notice_type,status,is_exercised,rent_mechanism,rent_increase_pct,new_rent_value), guarantees(id,status,amount_required,amount_actual), contract_spaces(space_id,spaces(space_name,area))")
       .order("end_date");
     setContracts(data??[]);
     setLoading(false);
     if (!selected && (data??[]).filter(function(c){return c.status==="active";}).length>0) {
       setSelected((data??[]).filter(function(c){return c.status==="active";})[0].id);
+    }
+  }
+
+  async function loadLatestCpi() {
+    const { data } = await supabase.from("cpi_records")
+      .select("value,year,month")
+      .order("year", { ascending: false })
+      .order("month", { ascending: false })
+      .limit(1);
+    if (data && data.length > 0) {
+      setLatestCpi(data[0].value);
+      setLatestCpiMonth(`${data[0].month}/${data[0].year}`);
     }
   }
 
@@ -46,6 +82,14 @@ export default function ContractsPage() {
     if (n>0) alert(`✅ עודכנו ${n} חוזים`);
   }
 
+  async function handleExerciseOption(optionId: string, exercised: boolean) {
+    await supabase.from("contract_options").update({
+      is_exercised: exercised,
+      status: exercised ? "exercised" : "pending",
+    }).eq("id", optionId);
+    await loadContracts();
+  }
+
   const filtered = contracts.filter(function(c) {
     const ms = filterSt==="all" || c.status===filterSt;
     const mq = !search || c.tenants?.name?.includes(search) || c.properties?.name?.includes(search);
@@ -55,23 +99,24 @@ export default function ContractsPage() {
   const selContract = contracts.find(function(c){return c.id===selected;});
   const baseRent    = selContract ? (selContract.rent_per_sqm??0)*(selContract.charged_area??0)+(selContract.investment_addition??0) : 0;
   const vat         = selContract?.vat_type==="taxable" ? baseRent*0.18 : 0;
-  const days        = selContract?.end_date ? Math.ceil((new Date(selContract.end_date).getTime()-Date.now())/86400000) : null;
+  const remaining   = selContract?.end_date ? yearsMonthsLeft(selContract.end_date) : null;
+
+  // CPI adjusted price
+  const cpiAdjustedPerSqm = selContract ? calcCpiAdjusted(
+    selContract.rent_per_sqm ?? 0,
+    selContract.index_base_value,
+    latestCpi
+  ) : null;
 
   const counts: Record<string,number> = {};
   contracts.forEach(function(c){counts[c.status]=(counts[c.status]??0)+1;});
 
-
   async function handleDeleteContract(contractId: string) {
     if (!confirm("למחוק חוזה? פעולה זו תמחק גם את כל החיובים, הערבויות, הביטוחים והמכתבים של החוזה!")) return;
     try {
-      // Get linked spaces to update their status back to vacant
       const { data: linkedSpaces } = await supabase.from("contract_spaces").select("space_id").eq("contract_id", contractId);
       const spaceIds = (linkedSpaces || []).map((r: any) => r.space_id);
-
-      // Clear self-referencing parent_contract_id on child contracts
       await supabase.from("contracts").update({ parent_contract_id: null }).eq("parent_contract_id", contractId);
-
-      // Delete ALL child records (every FK table)
       await supabase.from("alerts").delete().eq("contract_id", contractId);
       await supabase.from("charges").delete().eq("contract_id", contractId);
       await supabase.from("contract_spaces").delete().eq("contract_id", contractId);
@@ -84,12 +129,8 @@ export default function ContractsPage() {
       await supabase.from("letters").delete().eq("contract_id", contractId);
       await supabase.from("management_fees").delete().eq("contract_id", contractId);
       await supabase.from("revenue_reports").delete().eq("contract_id", contractId);
-
-      // Now delete the contract itself
       const { error } = await supabase.from("contracts").delete().eq("id", contractId);
       if (error) throw error;
-
-      // Release spaces back to vacant
       if (spaceIds.length > 0) {
         await supabase.from("spaces").update({ status: "vacant" }).in("id", spaceIds);
       }
@@ -117,7 +158,7 @@ export default function ContractsPage() {
         </div>
       </div>
 
-      {/* סטטוס פילטר */}
+      {/* Status filter */}
       <div className="flex gap-2 mb-4 flex-wrap">
         {[{v:"all",l:"הכל"},{v:"active",l:"פעיל"},{v:"expiring",l:"פוגה"},{v:"extended",l:"מורחב"},{v:"upcoming",l:"עתידי"},{v:"ended",l:"הסתיים"}].map(function(s) {
           const cnt = s.v==="all" ? contracts.length : (counts[s.v]??0);
@@ -138,7 +179,7 @@ export default function ContractsPage() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
-        {/* רשימה */}
+        {/* List */}
         <div className="lg:col-span-2 space-y-2 max-h-[70vh] overflow-y-auto pl-1">
           {loading ? <div className="text-center py-8 text-slate-400">טוען...</div> : filtered.length===0 ? (
             <div className="rounded-xl border-2 border-dashed border-slate-200 p-8 text-center text-slate-400">
@@ -147,7 +188,7 @@ export default function ContractsPage() {
           ) : filtered.map(function(c) {
             const si   = STATUS_MAP[c.status] ?? STATUS_MAP.ended;
             const mon  = (c.rent_per_sqm??0)*(c.charged_area??0)+(c.investment_addition??0);
-            const d    = c.end_date ? Math.ceil((new Date(c.end_date).getTime()-Date.now())/86400000) : null;
+            const rem  = c.end_date ? yearsMonthsLeft(c.end_date) : null;
             const isSel = selected===c.id;
             return (
               <div key={c.id} onClick={function(){setSelected(isSel?null:c.id);}}
@@ -160,15 +201,19 @@ export default function ContractsPage() {
                 <div className="text-xs text-slate-400">{c.properties?.name}</div>
                 <div className="flex items-center justify-between mt-1.5">
                   <span className="text-xs font-semibold text-green-700">{fmtMoney(mon)}/חודש</span>
-                  {d!==null&&d<=90&&d>0&&<span className={"text-xs font-bold "+(d<=30?"text-red-600":"text-yellow-600")}>{d} יום</span>}
-                  {d!==null&&d<=0&&<span className="text-xs font-bold text-red-600">פג!</span>}
+                  {rem && !rem.isExpired && (
+                    <span className={"text-xs font-semibold " + (rem.years < 1 ? "text-red-600" : rem.years < 2 ? "text-yellow-600" : "text-slate-500")}>
+                      {rem.text}
+                    </span>
+                  )}
+                  {rem?.isExpired && <span className="text-xs font-bold text-red-600">פג!</span>}
                 </div>
               </div>
             );
           })}
         </div>
 
-        {/* פרטים */}
+        {/* Details */}
         <div className="lg:col-span-3">
           {!selContract ? (
             <div className="rounded-xl border-2 border-dashed border-slate-200 bg-white p-12 text-center text-slate-400">
@@ -187,70 +232,134 @@ export default function ContractsPage() {
                   <div className="flex gap-2 flex-wrap">
                     <button onClick={function(){router.push("/contracts/"+selContract.id+"/edit");}} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">✏️ עריכה</button>
                     <button onClick={function(){router.push("/contracts/"+selContract.id+"/print");}} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">🖨 הדפס</button>
-        <button onClick={()=>selected && handleDeleteContract(selected)}
-          className="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs text-red-600 hover:bg-red-100 flex items-center gap-1 font-semibold">
-          🗑 מחק
-        </button>
+                    <button onClick={()=>selected && handleDeleteContract(selected)}
+                      className="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs text-red-600 hover:bg-red-100 font-semibold">🗑 מחק</button>
                   </div>
                 </div>
 
-                {/* KPI */}
+                {/* KPI — redesigned */}
                 <div className="grid grid-cols-4 gap-2 mb-3">
-                  {[
-                    {l:"בסיס",    v:fmtMoney(baseRent),    c:"text-slate-700", bg:"bg-slate-50"},
-                    {l:'מע"מ',    v:fmtMoney(vat),          c:"text-slate-500", bg:"bg-white"},
-                    {l:"סה\"כ",   v:fmtMoney(baseRent+vat), c:"text-blue-700 font-black", bg:"bg-blue-50"},
-                    {l:"ימים",    v:days!==null?(days>0?String(days):"פג!"):"∞", c:days!==null&&days<=30?"text-red-600 font-black":days!==null&&days<=90?"text-yellow-600 font-bold":"text-green-600 font-semibold", bg:"bg-white"},
-                  ].map(function(k){return <div key={k.l} className={"rounded-xl p-2.5 text-center border border-slate-100 "+k.bg}><div className={"text-base "+k.c}>{k.v}</div><div className="text-xs text-slate-400">{k.l}</div></div>;})}
+                  <div className="rounded-xl p-2.5 text-center border border-slate-100 bg-slate-50">
+                    <div className="text-base text-slate-700">{fmtMoney(baseRent)}</div>
+                    <div className="text-xs text-slate-400">בסיס</div>
+                  </div>
+                  <div className="rounded-xl p-2.5 text-center border border-slate-100">
+                    <div className="text-base text-slate-500">{fmtMoney(vat)}</div>
+                    <div className="text-xs text-slate-400">מע&quot;מ</div>
+                  </div>
+                  <div className="rounded-xl p-2.5 text-center border border-blue-200 bg-blue-50">
+                    <div className="text-base text-blue-700 font-black">{fmtMoney(baseRent+vat)}</div>
+                    <div className="text-xs text-blue-500">סה&quot;כ</div>
+                  </div>
+                  <div className={"rounded-xl p-2.5 text-center border " + (remaining?.isExpired ? "border-red-200 bg-red-50" : remaining && remaining.years < 1 ? "border-orange-200 bg-orange-50" : "border-green-200 bg-green-50")}>
+                    <div className={"text-sm font-bold " + (remaining?.isExpired ? "text-red-600" : remaining && remaining.years < 1 ? "text-orange-600" : "text-green-700")}>
+                      {remaining?.text ?? "—"}
+                    </div>
+                    <div className="text-xs text-slate-400">עד {fmtDate(selContract.end_date)}</div>
+                  </div>
                 </div>
 
-                {/* פרטים */}
+                {/* CPI-adjusted price */}
+                {cpiAdjustedPerSqm && selContract.rent_per_sqm && (
+                  <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 mb-3 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold text-amber-700">📊 מחיר מוצמד למדד</span>
+                      <span className="text-[10px] text-amber-500">(מדד {latestCpiMonth})</span>
+                    </div>
+                    <div className="text-sm font-black text-amber-800">
+                      {fmtMoney(cpiAdjustedPerSqm)}/מ&quot;ר
+                      {cpiAdjustedPerSqm !== selContract.rent_per_sqm && (
+                        <span className="text-[10px] text-amber-500 mr-1">(בסיס: {fmtMoney(selContract.rent_per_sqm)})</span>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Details */}
                 <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs text-slate-600">
                   {[
                     {l:"תחילה",   v:fmtDate(selContract.start_date)},
                     {l:"סיום",    v:fmtDate(selContract.end_date)},
                     {l:"שטח",    v:selContract.charged_area?selContract.charged_area+' מ"ר':"—"},
-                    {l:"הצמדה",  v:selContract.indexation_method==="highest_in_period"?"מדד גבוה":"t-2"},
-                    {l:"מדד בסיס",v:selContract.base_cpi_value||"—"},
-                    {l:"מע\"מ",  v:selContract.vat_type==="taxable"?"18%":"פטור"},
+                    {l:"הצמדה",  v:selContract.indexation_method==="highest_in_period"?"מדד גבוה":selContract.indexation_method==="none"?"ללא":"t-2"},
+                    {l:"מדד בסיס",v:selContract.index_base_value||"—"},
+                    {l:'מע"מ',  v:selContract.vat_type==="taxable"?"18%":"פטור"},
                   ].map(function(r){return <div key={r.l} className="flex justify-between border-b border-slate-50 py-1"><span className="text-slate-400">{r.l}</span><span className="font-medium">{r.v}</span></div>;})}
                 </div>
               </div>
 
-              {/* יחידות */}
-              {(selContract.contract_spaces??[]).length>0&&(
-                <div className="rounded-xl border border-slate-200 bg-white shadow-sm p-4">
-                  <div className="text-xs font-bold text-slate-500 mb-2">יחידות ({selContract.contract_spaces.length})</div>
-                  <div className="flex flex-wrap gap-2">
-                    {selContract.contract_spaces.map(function(cs:any){return cs.spaces&&<span key={cs.spaces.name} className="text-xs bg-slate-100 text-slate-700 px-2.5 py-1 rounded-full">{cs.spaces.name}{cs.spaces.area?" — "+cs.spaces.area+' מ"ר':""}</span>;})}
+              {/* Options — enhanced */}
+              <div className="rounded-xl border border-slate-200 bg-white shadow-sm p-4">
+                <div className="text-xs font-bold text-slate-500 mb-3">🔄 אופציות ({(selContract.contract_options??[]).length})</div>
+                {(selContract.contract_options??[]).length===0 ? <div className="text-xs text-slate-400">אין אופציות</div> : (
+                  <div className="space-y-2">
+                    {(selContract.contract_options??[]).sort((a:any,b:any) => a.option_number - b.option_number).map(function(opt:any) {
+                      const optYears = opt.duration_years || (opt.duration_months ? Math.round(opt.duration_months / 12) : 0);
+                      const noticeDate = opt.end_date && opt.notice_days_before_end
+                        ? new Date(new Date(opt.end_date).getTime() - opt.notice_days_before_end * 86400000)
+                        : null;
+                      const noticePassed = noticeDate ? new Date() > noticeDate : false;
+                      const isExercised = opt.is_exercised || opt.status === "exercised";
+                      const needsAttention = noticePassed && !isExercised && opt.status !== "expired";
+                      return (
+                        <div key={opt.id} className={"rounded-lg border p-3 " + (needsAttention ? "border-red-300 bg-red-50" : isExercised ? "border-green-200 bg-green-50" : "border-slate-100")}>
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-sm font-bold text-slate-700">אופציה {opt.option_number} — {optYears} שנים</span>
+                            <div className="flex items-center gap-2">
+                              <span className={"text-xs px-2 py-0.5 rounded-full font-semibold " +
+                                (isExercised ? "bg-green-100 text-green-700" : opt.status==="expired" ? "bg-red-100 text-red-600" : "bg-blue-100 text-blue-600")}>
+                                {isExercised ? "✓ מומשה" : opt.status==="expired" ? "פגה" : "ממתינה"}
+                              </span>
+                              {!isExercised && opt.status !== "expired" && (
+                                <button onClick={async (e) => { e.stopPropagation(); if (confirm("לסמן אופציה כמומשת?")) await handleExerciseOption(opt.id, true); }}
+                                  className="text-xs border border-green-300 bg-green-50 text-green-700 rounded px-2 py-0.5 hover:bg-green-100 font-semibold">
+                                  סמן מימוש
+                                </button>
+                              )}
+                              {isExercised && (
+                                <button onClick={async (e) => { e.stopPropagation(); if (confirm("לבטל מימוש?")) await handleExerciseOption(opt.id, false); }}
+                                  className="text-xs border border-slate-200 text-slate-500 rounded px-2 py-0.5 hover:bg-slate-50">
+                                  בטל
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                          <div className="text-xs text-slate-500 space-y-0.5">
+                            {opt.rent_mechanism === "increase_pct" && opt.rent_increase_pct && (
+                              <div>קפיצת מחיר: +{opt.rent_increase_pct}%</div>
+                            )}
+                            {opt.rent_mechanism === "new_value" && opt.new_rent_value && (
+                              <div>מחיר חדש: {fmtMoney(opt.new_rent_value)}/מ&quot;ר</div>
+                            )}
+                            {noticeDate && (
+                              <div className={"font-semibold " + (noticePassed && !isExercised ? "text-red-600" : "text-slate-600")}>
+                                {noticePassed && !isExercised ? "⚠️ " : "📅 "}
+                                מועד אחרון להודעה: {fmtDate(noticeDate.toISOString())}
+                                {noticePassed && !isExercised && " — עבר!"}
+                              </div>
+                            )}
+                          </div>
+                          {needsAttention && (
+                            <div className="mt-1.5 rounded bg-red-100 border border-red-200 px-2 py-1.5 text-xs text-red-700 font-semibold">
+                              ⚠️ מועד ההודעה עבר ולא סומן מימוש — האם לסמן כמומשה או כפגה?
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
-                </div>
-              )}
+                )}
+              </div>
 
-              {/* אופציות + ערבויות */}
-              <div className="grid grid-cols-2 gap-3">
-                <div className="rounded-xl border border-slate-200 bg-white shadow-sm p-3">
-                  <div className="text-xs font-bold text-slate-500 mb-2">אופציות ({(selContract.contract_options??[]).length})</div>
-                  {(selContract.contract_options??[]).length===0 ? <div className="text-xs text-slate-400">אין</div> : (
-                    selContract.contract_options.map(function(opt:any,i:number){return (
-                      <div key={opt.id} className="text-xs flex justify-between py-0.5">
-                        <span className="text-slate-500">אופציה {i+1}</span>
-                        <span className={"px-1.5 rounded-full "+(opt.status==="exercised"?"bg-green-100 text-green-700":opt.status==="expired"?"bg-red-100 text-red-600":"bg-blue-100 text-blue-600")}>
-                          {opt.status==="exercised"?"מומשה":opt.status==="expired"?"פגה":"ממתינה"}
-                        </span>
-                      </div>
-                    );})
-                  )}
-                </div>
-                <div className="rounded-xl border border-slate-200 bg-white shadow-sm p-3">
-                  <div className="text-xs font-bold text-slate-500 mb-2">ערבויות ({(selContract.guarantees??[]).filter(function(g:any){return g.status==="active";}).length})</div>
-                  {(selContract.guarantees??[]).filter(function(g:any){return g.status==="active";}).length===0 ? <div className="text-xs text-slate-400">אין</div> : (
-                    selContract.guarantees.filter(function(g:any){return g.status==="active";}).map(function(g:any){
-                      const diff=(g.amount_actual??0)-(g.amount_required??0);
-                      return <div key={g.id} className="text-xs py-0.5 flex justify-between"><span className="text-slate-500">{fmtMoney(g.amount_actual??0)}</span><span className={diff<0?"text-red-600 font-bold":"text-green-600"}>{diff<0?"פער!":"✓"}</span></div>;
-                    })
-                  )}
-                </div>
+              {/* Guarantees */}
+              <div className="rounded-xl border border-slate-200 bg-white shadow-sm p-4">
+                <div className="text-xs font-bold text-slate-500 mb-2">🏦 ערבויות ({(selContract.guarantees??[]).filter(function(g:any){return g.status==="active";}).length})</div>
+                {(selContract.guarantees??[]).filter(function(g:any){return g.status==="active";}).length===0 ? <div className="text-xs text-slate-400">אין</div> : (
+                  selContract.guarantees.filter(function(g:any){return g.status==="active";}).map(function(g:any){
+                    const diff=(g.amount_actual??0)-(g.amount_required??0);
+                    return <div key={g.id} className="text-xs py-0.5 flex justify-between"><span className="text-slate-500">{fmtMoney(g.amount_actual??0)}</span><span className={diff<0?"text-red-600 font-bold":"text-green-600"}>{diff<0?"פער!":"✓"}</span></div>;
+                  })
+                )}
               </div>
             </div>
           )}
