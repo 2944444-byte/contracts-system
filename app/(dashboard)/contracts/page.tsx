@@ -119,44 +119,57 @@ export default function ContractsPage() {
 
     setCpiLoading(true);
 
-    // Fetch just the two records we need: base and current
-    Promise.all([
-      supabase.from("cpi_records").select("year,month,value,base_year").eq("year", baseYr).eq("month", baseMonth).single(),
-      supabase.from("cpi_records").select("year,month,value,base_year").eq("year", toYear).eq("month", toMonth).single(),
-    ]).then(function([baseRes, currentRes]) {
-      const baseRec = baseRes.data;
-      const currentRec = currentRes.data;
+    // Fetch ALL records from base month onward to chain percent_change values
+    // This handles base-year transitions correctly (2018→2020→2022→2024)
+    supabase.from("cpi_records")
+      .select("year,month,value,base_year,percent_change")
+      .or(`year.gt.${baseYr},and(year.eq.${baseYr},month.gte.${baseMonth})`)
+      .order("year").order("month")
+      .then(function({ data: records }) {
+        if (!records || records.length < 2) {
+          console.warn("[CPI] Not enough records:", records?.length);
+          setCpiResult(null); setCpiLoading(false); return;
+        }
 
-      if (!baseRec || !currentRec) {
-        console.warn("[CPI] Missing records:", { base: baseRec, current: currentRec, baseDate, toDate: `${toMonth}-${toYear}` });
-        setCpiResult(null);
+        // Find base record
+        const baseRec = records.find(function(r) { return r.year === baseYr && r.month === baseMonth; });
+        if (!baseRec) {
+          console.warn("[CPI] Base record not found:", baseYr, baseMonth);
+          setCpiResult(null); setCpiLoading(false); return;
+        }
+
+        // Chain cumulative percent changes from base+1 to t-2
+        // percent_change is month-over-month %, independent of base year
+        let cumulative = 1.0;
+        let lastRec = baseRec;
+        for (let i = 0; i < records.length; i++) {
+          const r = records[i];
+          const isAfterBase = (r.year > baseYr) || (r.year === baseYr && r.month > baseMonth);
+          const isPastTarget = (r.year > toYear) || (r.year === toYear && r.month > toMonth);
+          if (isPastTarget) break;
+          if (isAfterBase && r.percent_change != null) {
+            cumulative *= (1 + Number(r.percent_change) / 100);
+            lastRec = r;
+          }
+        }
+
+        const adjustedRent = Math.round(totalRentPerSqm * cumulative * 100) / 100;
+        const changePct = Math.round((cumulative - 1) * 1000) / 10;
+
+        setCpiResult({
+          success: true,
+          baseRentPerSqm: Math.round(totalRentPerSqm * 100) / 100,
+          adjustedRentPerSqm: adjustedRent,
+          changePct: changePct,
+          fromDate: `${baseMonth}/${baseYr}`,
+          toDate: `${lastRec.month}/${lastRec.year}`,
+          fromIndexValue: Number(baseRec.value),
+          toIndexValue: Number(lastRec.value),
+          baseYear: baseRec.base_year || null,
+          verificationUrl: `https://api.cbs.gov.il/index/data/calculator/120010?value=${totalRentPerSqm}&date=${bMM}-01-${bYYYY}&toDate=${String(toMonth).padStart(2,'0')}-01-${toYear}&format=json`,
+        });
         setCpiLoading(false);
-        return;
-      }
-
-      const baseVal = Number(baseRec.value);
-      const currentVal = Number(currentRec.value);
-
-      if (!baseVal || baseVal === 0) { setCpiResult(null); setCpiLoading(false); return; }
-
-      const ratio = currentVal / baseVal;
-      const adjustedRent = Math.round(totalRentPerSqm * ratio * 100) / 100;
-      const changePct = Math.round((ratio - 1) * 1000) / 10;
-
-      setCpiResult({
-        success: true,
-        baseRentPerSqm: Math.round(totalRentPerSqm * 100) / 100,
-        adjustedRentPerSqm: adjustedRent,
-        changePct: changePct,
-        fromDate: `${baseMonth}/${baseYr}`,
-        toDate: `${toMonth}/${toYear}`,
-        fromIndexValue: baseVal,
-        toIndexValue: currentVal,
-        baseYear: baseRec.base_year || null,
-        verificationUrl: `https://api.cbs.gov.il/index/data/calculator/120010?value=${totalRentPerSqm}&date=${bMM}-01-${bYYYY}&toDate=${String(toMonth).padStart(2,'0')}-01-${toYear}&format=json`,
       });
-      setCpiLoading(false);
-    });
   }, [selected]);
 
   async function handleSync() {
