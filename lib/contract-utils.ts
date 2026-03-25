@@ -311,11 +311,16 @@ export function buildPriceTimeline(params: {
 
     if (opt.price_schedule_type === "custom" && opt.price_tiers.length > 0) {
       const optPreviews = calculateTierPreviews(opt.price_tiers, optionBaseRent);
+      const optStart = new Date(opt.start_date);
       optPreviews.forEach((tier) => {
+        const tierStart = new Date(optStart);
+        tierStart.setFullYear(tierStart.getFullYear() + tier.from_year - 1);
+        const tierEnd = new Date(optStart);
+        tierEnd.setFullYear(tierEnd.getFullYear() + tier.to_year);
         timeline.push({
           label: `אופציה ${i + 1} — שנים ${tier.from_year}-${tier.to_year}`,
-          startDate: opt.start_date,
-          endDate: opt.end_date,
+          startDate: format(tierStart, "yyyy-MM-dd"),
+          endDate: format(tierEnd, "yyyy-MM-dd"),
           rentPerSqm: tier.increase_type === "fixed_total" ? null : tier.calculated_rent_per_sqm,
           fixedAmount: tier.increase_type === "fixed_total" ? tier.increase_value : null,
           source: `option_${i + 1}`,

@@ -1037,7 +1037,7 @@ export default function ContractEditPage() {
                   {opt.duration_years > 1 && (
                     <div className="rounded-xl border border-blue-200 bg-blue-50/30 p-3 space-y-3">
                       <div className="flex items-center gap-2">
-                        <label className="text-xs font-bold text-blue-800">מנגנון מחיר פנימי:</label>
+                        <label className="text-xs font-bold text-blue-800">מנגנון עליית מחיר בתקופת אופציה:</label>
                         <div className="flex gap-1">
                           <button type="button" onClick={() => updateOption(idx, "price_schedule_type", "inherit")}
                             className={"rounded border px-2.5 py-1 text-xs transition-all " + ((opt.price_schedule_type ?? "inherit") === "inherit" ? "border-blue-500 bg-blue-100 font-bold text-blue-700" : "border-slate-200 bg-white")}>
@@ -1122,6 +1122,30 @@ export default function ContractEditPage() {
                           }} className="rounded border border-dashed border-blue-300 px-3 py-2 text-xs font-bold text-blue-600 hover:bg-blue-50 w-full">
                             + שלב נוסף
                           </button>
+
+                          {/* Price preview */}
+                          {(() => {
+                            let optBase = Number(rentPerSqm) || 0;
+                            if (priceTiers.length > 0) {
+                              const mainPrev = calculateTierPreviews(priceTiers, optBase);
+                              optBase = mainPrev[mainPrev.length - 1]?.calculated_rent_per_sqm ?? optBase;
+                            }
+                            if (opt.rent_mechanism === "increase_pct" && opt.rent_increase_pct) optBase = optBase * (1 + opt.rent_increase_pct / 100);
+                            else if (opt.rent_mechanism === "new_value" && opt.new_rent_value) optBase = opt.new_rent_value;
+                            const previews = calculateTierPreviews(opt.price_tiers || [], optBase);
+                            if (previews.length === 0) return null;
+                            return (
+                              <div className="rounded-lg bg-green-50 border border-green-200 p-3 mt-2">
+                                <div className="text-xs font-bold text-green-700 mb-1">📊 תצוגת מחירים מחושבת</div>
+                                {previews.map((p, pi) => (
+                                  <div key={pi} className="flex justify-between text-xs text-green-800 py-1 border-b border-green-100 last:border-0">
+                                    <span>שנים {p.from_year}–{p.to_year}: {p.increase_type === "none" ? "ללא שינוי" : p.increase_type === "pct" ? `+${p.increase_value}%` : `+₪${p.increase_value}`}</span>
+                                    <span className="font-black">{fmtMoney(p.calculated_rent_per_sqm)}/מ&quot;ר</span>
+                                  </div>
+                                ))}
+                              </div>
+                            );
+                          })()}
                         </div>
                       )}
                       {(opt.price_schedule_type ?? "inherit") === "inherit" && (
