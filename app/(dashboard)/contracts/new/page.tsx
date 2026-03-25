@@ -9,8 +9,12 @@ import {
   calculateDepositAmount,
   emptyOption,
   emptyIncreaseStep,
+  emptyPriceTier,
+  validatePriceTiers,
+  calculateTierPreviews,
   type ExtensionOption,
   type IncreaseStep,
+  type PriceTier,
 } from "@/lib/contract-utils";
 
 const ic =
@@ -63,9 +67,10 @@ const GUARANTEE_TYPES = [
   { v: "personal", l: "אישית", icon: "👤" },
 ];
 const INCREASE_TYPES = [
-  { v: "pct", l: "אחוז קבוע" },
-  { v: "fixed", l: 'סכום קבוע (₪/מ"ר)' },
-  { v: "none", l: "ללא עלייה" },
+  { v: "pct", l: "אחוז (%)", icon: "📈" },
+  { v: "fixed_sqm", l: '₪/מ"ר', icon: "📐" },
+  { v: "fixed_total", l: "סכום קבוע (₪)", icon: "💰" },
+  { v: "none", l: "הקפאה", icon: "❄️" },
 ];
 const NOTICE_TYPES = [
   { v: "exercise", l: "הודעת מימוש" },
@@ -126,11 +131,7 @@ export default function ContractsNewPage() {
   const [graceType, setGraceType] = useState("full");
   const [graceDiscountPct, setGraceDiscountPct] = useState("50");
   const [hasIncrease, setHasIncrease] = useState(false);
-  const [increaseType, setIncreaseType] = useState("pct");
-  const [increaseValue, setIncreaseValue] = useState("");
-  const [increaseFreqMo, setIncreaseFreqMo] = useState("12");
-  const [increaseUntilYr, setIncreaseUntilYr] = useState("");
-  const [increaseSteps, setIncreaseSteps] = useState<IncreaseStep[]>([]);
+  const [priceTiers, setPriceTiers] = useState<PriceTier[]>([]);
 
   // CBS fetch state
   const [cbsFetching, setCbsFetching] = useState(false);
@@ -311,23 +312,12 @@ export default function ContractsNewPage() {
           graceType === "partial" ? Number(graceDiscountPct) || null : null;
       }
 
-      // Annual increase — multi-tiered steps
-      if (hasIncrease) {
-        if (increaseSteps.length > 0) {
-          insertPayload.increase_steps = increaseSteps;
-          // Also save legacy fields from first step for backward compat
-          const first = increaseSteps[0];
-          insertPayload.price_increase_type = first.type;
-          insertPayload.price_increase_value = first.value || null;
-          insertPayload.price_increase_freq_months = Number(increaseFreqMo) || 12;
-        } else {
-          insertPayload.price_increase_type = increaseType;
-          insertPayload.price_increase_value = Number(increaseValue) || null;
-          insertPayload.price_increase_freq_months = Number(increaseFreqMo) || 12;
-          insertPayload.price_increase_until_year = increaseUntilYr
-            ? Number(increaseUntilYr)
-            : null;
-        }
+      // Annual increase — save legacy fields from first tier for backward compat
+      if (hasIncrease && priceTiers.length > 0) {
+        const first = priceTiers[0];
+        insertPayload.price_increase_type = first.increase_type;
+        insertPayload.price_increase_value = first.increase_value || null;
+        insertPayload.increase_steps = priceTiers; // full tiers in JSONB for backup
       }
 
       // Deposit fields
@@ -389,6 +379,36 @@ export default function ContractsNewPage() {
           end_date: guaranteeEnd || null,
           status: "active",
         });
+      }
+
+      // Price Tiers → contract_price_tiers
+      if (hasIncrease && priceTiers.length > 0) {
+        const tiersWithPreviews = calculateTierPreviews(priceTiers, Number(rentPerSqm) || 0);
+        const contractStart = new Date(startDate);
+        await supabase.from("contract_price_tiers").insert(
+          tiersWithPreviews.map((tier, i) => {
+            const tierStart = new Date(contractStart);
+            tierStart.setFullYear(tierStart.getFullYear() + tier.from_year - 1);
+            const tierEnd = new Date(contractStart);
+            tierEnd.setFullYear(tierEnd.getFullYear() + tier.to_year);
+            return {
+              contract_id: contract.id,
+              tier_number: i + 1,
+              start_date: tierStart.toISOString().split("T")[0],
+              end_date: tierEnd.toISOString().split("T")[0],
+              increase_type: tier.increase_type,
+              increase_value: tier.increase_value || 0,
+              is_recurring: tier.is_recurring,
+              recurring_every_years: tier.recurring_every_years,
+              from_year: tier.from_year,
+              to_year: tier.to_year,
+              price_per_sqm: tier.increase_type === "fixed_total" ? null : tier.calculated_rent_per_sqm,
+              fixed_amount: tier.increase_type === "fixed_total" ? tier.increase_value : null,
+              calculated_rent_per_sqm: tier.calculated_rent_per_sqm,
+              notes: tier.notes || null,
+            };
+          })
+        );
       }
 
       await logAudit({
@@ -986,147 +1006,169 @@ export default function ContractsNewPage() {
               )}
             </div>
 
-            {/* Annual increase — multi-tiered */}
+            {/* Dynamic Step-Rent Builder */}
             <div className="rounded-xl border border-slate-200 p-4">
-              <div className="flex items-center gap-2 mb-3">
-                <input
-                  type="checkbox"
-                  id="increase"
-                  checked={hasIncrease}
-                  onChange={(e) => {
-                    setHasIncrease(e.target.checked);
-                    if (e.target.checked && increaseSteps.length === 0) {
-                      setIncreaseSteps([emptyIncreaseStep(1)]);
-                    }
-                  }}
-                  className="w-4 h-4"
-                />
-                <label
-                  htmlFor="increase"
-                  className="text-sm font-bold text-slate-700"
-                >
-                  עלייה שנתית בשכ&quot;ד
-                </label>
-              </div>
-              {hasIncrease && (
-                <div className="space-y-3">
-                  {/* Frequency */}
-                  <div>
-                    <label className="mb-1 block text-xs font-semibold text-slate-700">
-                      עלייה כל X שנים
-                    </label>
-                    <select
-                      value={increaseFreqMo}
-                      onChange={(e) => setIncreaseFreqMo(e.target.value)}
-                      className={ic + " max-w-xs"}
-                    >
-                      <option value="12">כל שנה</option>
-                      <option value="24">כל 2 שנים</option>
-                      <option value="36">כל 3 שנים</option>
-                      <option value="48">כל 4 שנים</option>
-                      <option value="60">כל 5 שנים</option>
-                    </select>
-                  </div>
-
-                  {/* Steps repeater */}
-                  <div className="text-xs font-bold text-slate-600 mb-1">שלבי עלייה</div>
-                  {increaseSteps.map((step, idx) => (
-                    <div key={idx} className="rounded-lg border border-slate-100 bg-slate-50 p-3 space-y-2">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-bold text-slate-600">שלב {idx + 1}</span>
-                        {increaseSteps.length > 1 && (
-                          <button
-                            type="button"
-                            onClick={() => setIncreaseSteps(prev => prev.filter((_, i) => i !== idx))}
-                            className="text-xs text-red-500 hover:text-red-700"
-                          >
-                            הסר
-                          </button>
-                        )}
-                      </div>
-                      <div className="grid grid-cols-4 gap-2">
-                        <div>
-                          <label className="mb-1 block text-xs text-slate-500">סוג עלייה</label>
-                          <div className="flex gap-1">
-                            {INCREASE_TYPES.map((it) => (
-                              <button
-                                key={it.v}
-                                type="button"
-                                onClick={() => setIncreaseSteps(prev => prev.map((s, i) => i === idx ? { ...s, type: it.v as any } : s))}
-                                className={
-                                  "rounded border px-2 py-1 text-xs transition-all " +
-                                  (step.type === it.v
-                                    ? "border-blue-500 bg-blue-50 font-bold text-blue-700"
-                                    : "border-slate-200 hover:bg-white")
-                                }
-                              >
-                                {it.l}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                        {step.type !== "none" && (
-                          <div>
-                            <label className="mb-1 block text-xs text-slate-500">
-                              {step.type === "pct" ? "אחוז (%)" : 'סכום (₪/מ"ר)'}
-                            </label>
-                            <input
-                              type="number"
-                              value={step.value || ""}
-                              onChange={(e) => setIncreaseSteps(prev => prev.map((s, i) => i === idx ? { ...s, value: Number(e.target.value) || 0 } : s))}
-                              className={ic}
-                            />
-                          </div>
-                        )}
-                        <div>
-                          <label className="mb-1 block text-xs text-slate-500">משנה</label>
-                          <input
-                            type="number"
-                            min="1"
-                            value={step.from_year}
-                            onChange={(e) => setIncreaseSteps(prev => prev.map((s, i) => i === idx ? { ...s, from_year: Number(e.target.value) || 1 } : s))}
-                            className={ic}
-                          />
-                        </div>
-                        <div>
-                          <label className="mb-1 block text-xs text-slate-500">עד שנה</label>
-                          <input
-                            type="number"
-                            min="1"
-                            value={step.to_year}
-                            onChange={(e) => setIncreaseSteps(prev => prev.map((s, i) => i === idx ? { ...s, to_year: Number(e.target.value) || 1 } : s))}
-                            className={ic}
-                          />
-                        </div>
-                      </div>
-                      {/* Preview */}
-                      <div className="text-xs text-slate-400">
-                        {step.type === "none"
-                          ? `שנים ${step.from_year}-${step.to_year}: ללא עלייה`
-                          : step.type === "pct"
-                            ? `שנים ${step.from_year}-${step.to_year}: עלייה של ${step.value}%`
-                            : `שנים ${step.from_year}-${step.to_year}: עלייה של ₪${step.value}/מ"ר`
-                        }
-                      </div>
-                    </div>
-                  ))}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const lastStep = increaseSteps[increaseSteps.length - 1];
-                      const nextFrom = lastStep ? lastStep.to_year + 1 : 1;
-                      setIncreaseSteps(prev => [...prev, emptyIncreaseStep(nextFrom)]);
-                    }}
-                    className="rounded-lg border border-dashed border-blue-300 px-4 py-2 text-xs font-bold text-blue-600 hover:bg-blue-50 w-full"
-                  >
-                    + הוסף שלב עלייה
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <input type="checkbox" id="increase" checked={hasIncrease}
+                    onChange={(e) => { setHasIncrease(e.target.checked); if (e.target.checked && priceTiers.length === 0) setPriceTiers([emptyPriceTier(1)]); }}
+                    className="w-4 h-4" />
+                  <label htmlFor="increase" className="text-sm font-bold text-slate-700">עלייה מדורגת בשכ&quot;ד (Step-Rent)</label>
+                </div>
+                {hasIncrease && (
+                  <button type="button" onClick={() => {
+                    const last = priceTiers[priceTiers.length - 1];
+                    setPriceTiers(prev => [...prev, emptyPriceTier(last ? last.to_year + 1 : 1)]);
+                  }} className="rounded-lg bg-blue-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-blue-800">
+                    + הוסף שלב
                   </button>
-                </div>
-              )}
+                )}
+              </div>
+
+              {hasIncrease && (() => {
+                const contractYears = leasePeriodUnit === "years" ? leasePeriodValue : Math.ceil(leasePeriodValue / 12);
+                const errors = validatePriceTiers(priceTiers, contractYears);
+                const previews = calculateTierPreviews(priceTiers, Number(rentPerSqm) || 0);
+                return (
+                  <div className="space-y-3">
+                    {/* Validation errors */}
+                    {errors.length > 0 && (
+                      <div className="rounded-lg bg-red-50 border border-red-200 p-3 space-y-1">
+                        {errors.map((err, i) => (
+                          <div key={i} className="text-xs text-red-600 flex items-center gap-1">
+                            <span>⚠️</span> {err}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Tier rows */}
+                    {priceTiers.map((tier, idx) => {
+                      const preview = previews.find(p => p.from_year === tier.from_year);
+                      const hasError = errors.some(e => e.includes(`שלב ${idx + 1}`));
+                      return (
+                        <div key={idx} className={"rounded-lg border p-4 space-y-3 " + (hasError ? "border-red-300 bg-red-50/50" : "border-slate-100 bg-slate-50")}>
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm font-bold text-slate-700">שלב {idx + 1}</span>
+                            {priceTiers.length > 1 && (
+                              <button type="button" onClick={() => setPriceTiers(prev => prev.filter((_, i) => i !== idx))}
+                                className="text-xs text-red-500 hover:text-red-700 font-semibold">🗑 הסר</button>
+                            )}
+                          </div>
+
+                          {/* Duration type: Range vs Recurring */}
+                          <div className="flex gap-2 mb-2">
+                            <button type="button" onClick={() => setPriceTiers(prev => prev.map((t, i) => i === idx ? { ...t, is_recurring: false } : t))}
+                              className={"rounded-lg border px-3 py-1.5 text-xs transition-all " +
+                                (!tier.is_recurring ? "border-blue-500 bg-blue-50 font-bold text-blue-700" : "border-slate-200 hover:bg-white")}>
+                              📅 טווח שנים
+                            </button>
+                            <button type="button" onClick={() => setPriceTiers(prev => prev.map((t, i) => i === idx ? { ...t, is_recurring: true } : t))}
+                              className={"rounded-lg border px-3 py-1.5 text-xs transition-all " +
+                                (tier.is_recurring ? "border-blue-500 bg-blue-50 font-bold text-blue-700" : "border-slate-200 hover:bg-white")}>
+                              🔁 חוזר כל X שנים
+                            </button>
+                          </div>
+
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                            {/* Duration fields */}
+                            {!tier.is_recurring ? (
+                              <>
+                                <div>
+                                  <label className="mb-1 block text-xs text-slate-500">משנה</label>
+                                  <input type="number" min="1" value={tier.from_year}
+                                    onChange={(e) => setPriceTiers(prev => prev.map((t, i) => i === idx ? { ...t, from_year: Number(e.target.value) || 1 } : t))}
+                                    className={ic} />
+                                </div>
+                                <div>
+                                  <label className="mb-1 block text-xs text-slate-500">עד שנה</label>
+                                  <input type="number" min="1" value={tier.to_year}
+                                    onChange={(e) => setPriceTiers(prev => prev.map((t, i) => i === idx ? { ...t, to_year: Number(e.target.value) || 1 } : t))}
+                                    className={ic} />
+                                </div>
+                              </>
+                            ) : (
+                              <>
+                                <div>
+                                  <label className="mb-1 block text-xs text-slate-500">כל X שנים</label>
+                                  <input type="number" min="1" max="10" value={tier.recurring_every_years ?? 1}
+                                    onChange={(e) => setPriceTiers(prev => prev.map((t, i) => i === idx ? { ...t, recurring_every_years: Number(e.target.value) || 1 } : t))}
+                                    className={ic} />
+                                </div>
+                                <div>
+                                  <label className="mb-1 block text-xs text-slate-500">עד שנה</label>
+                                  <input type="number" min="1" value={tier.to_year}
+                                    onChange={(e) => setPriceTiers(prev => prev.map((t, i) => i === idx ? { ...t, to_year: Number(e.target.value) || 1 } : t))}
+                                    className={ic} />
+                                </div>
+                              </>
+                            )}
+
+                            {/* Increase type */}
+                            <div className="col-span-2">
+                              <label className="mb-1 block text-xs text-slate-500">סוג עלייה</label>
+                              <div className="flex gap-1 flex-wrap">
+                                {INCREASE_TYPES.map((it) => (
+                                  <button key={it.v} type="button"
+                                    onClick={() => setPriceTiers(prev => prev.map((t, i) => i === idx ? { ...t, increase_type: it.v as any } : t))}
+                                    className={"rounded border px-2.5 py-1.5 text-xs transition-all " +
+                                      (tier.increase_type === it.v ? "border-blue-500 bg-blue-50 font-bold text-blue-700" : "border-slate-200 hover:bg-white")}>
+                                    {it.icon} {it.l}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Value input */}
+                          {tier.increase_type !== "none" && (
+                            <div className="max-w-xs">
+                              <label className="mb-1 block text-xs text-slate-500">
+                                {tier.increase_type === "pct" ? "שיעור עלייה (%)" :
+                                 tier.increase_type === "fixed_sqm" ? 'תוספת למ"ר (₪)' :
+                                 "סכום חודשי קבוע (₪)"}
+                              </label>
+                              <input type="number" step="0.1" value={tier.increase_value || ""}
+                                onChange={(e) => setPriceTiers(prev => prev.map((t, i) => i === idx ? { ...t, increase_value: Number(e.target.value) || 0 } : t))}
+                                className={ic} />
+                            </div>
+                          )}
+
+                          {/* Notes */}
+                          <div>
+                            <input type="text" value={tier.notes} placeholder="הערות (אופציונלי)"
+                              onChange={(e) => setPriceTiers(prev => prev.map((t, i) => i === idx ? { ...t, notes: e.target.value } : t))}
+                              className={ic + " text-xs"} />
+                          </div>
+
+                          {/* Preview */}
+                          {preview?.calculated_rent_per_sqm && Number(rentPerSqm) > 0 && (
+                            <div className={"rounded-lg px-3 py-2 text-xs font-semibold " + (hasError ? "bg-red-100 text-red-700" : "bg-green-50 border border-green-200 text-green-700")}>
+                              {tier.increase_type === "none"
+                                ? `שנים ${tier.from_year}-${tier.to_year}: מחיר קפוא — ${fmtMoney(Number(rentPerSqm))}/מ"ר`
+                                : tier.increase_type === "fixed_total"
+                                  ? `שנים ${tier.from_year}-${tier.to_year}: סכום קבוע ${fmtMoney(tier.increase_value)}/חודש`
+                                  : `שנים ${tier.from_year}-${tier.to_year}: ${fmtMoney(preview.calculated_rent_per_sqm)}/מ"ר`
+                                    + (tier.is_recurring ? ` (חוזר כל ${tier.recurring_every_years} שנים)` : "")}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+
+                    {/* Add step button */}
+                    <button type="button" onClick={() => {
+                      const last = priceTiers[priceTiers.length - 1];
+                      setPriceTiers(prev => [...prev, emptyPriceTier(last ? last.to_year + 1 : 1)]);
+                    }} className="rounded-lg border-2 border-dashed border-blue-300 px-4 py-3 text-xs font-bold text-blue-600 hover:bg-blue-50 w-full transition-all">
+                      + הוסף שלב עלייה נוסף
+                    </button>
+                  </div>
+                );
+              })()}
+
               {!hasIncrease && (
-                <div className="text-xs text-slate-400 mt-1">
-                  ללא עלייה שנתית (מעבר להצמדה)
-                </div>
+                <div className="text-xs text-slate-400 mt-1">ללא עלייה שנתית (מעבר להצמדה)</div>
               )}
             </div>
           </div>
@@ -1567,11 +1609,9 @@ export default function ContractsNewPage() {
                     : "לא",
                 },
                 {
-                  l: "עלייה",
-                  v: hasIncrease
-                    ? increaseSteps.length > 0
-                      ? `${increaseSteps.length} שלבים`
-                      : `${increaseValue}${increaseType === "pct" ? "%" : "₪"} כל ${Number(increaseFreqMo) / 12} שנים`
+                  l: "עלייה מדורגת",
+                  v: hasIncrease && priceTiers.length > 0
+                    ? `${priceTiers.length} שלבים`
                     : "לא",
                 },
                 {

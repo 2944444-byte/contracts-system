@@ -8,9 +8,11 @@ import {
   calculateOptionDates,
   calculateDepositAmount,
   emptyOption,
-  emptyIncreaseStep,
+  emptyPriceTier,
+  validatePriceTiers,
+  calculateTierPreviews,
   type ExtensionOption,
-  type IncreaseStep,
+  type PriceTier,
 } from "@/lib/contract-utils";
 
 const ic =
@@ -63,9 +65,10 @@ const GUARANTEE_TYPES = [
   { v: "personal", l: "אישית", icon: "👤" },
 ];
 const INCREASE_TYPES = [
-  { v: "pct", l: "אחוז קבוע" },
-  { v: "fixed", l: 'סכום קבוע (₪/מ"ר)' },
-  { v: "none", l: "ללא עלייה" },
+  { v: "pct", l: "אחוז (%)", icon: "📈" },
+  { v: "fixed_sqm", l: '₪/מ"ר', icon: "📐" },
+  { v: "fixed_total", l: "סכום קבוע (₪)", icon: "💰" },
+  { v: "none", l: "הקפאה", icon: "❄️" },
 ];
 const NOTICE_TYPES = [
   { v: "exercise", l: "הודעת מימוש" },
@@ -131,11 +134,7 @@ export default function ContractEditPage() {
   const [graceType, setGraceType] = useState("full");
   const [graceDiscountPct, setGraceDiscountPct] = useState("50");
   const [hasIncrease, setHasIncrease] = useState(false);
-  const [increaseType, setIncreaseType] = useState("pct");
-  const [increaseValue, setIncreaseValue] = useState("");
-  const [increaseFreqMo, setIncreaseFreqMo] = useState("12");
-  const [increaseUntilYr, setIncreaseUntilYr] = useState("");
-  const [increaseSteps, setIncreaseSteps] = useState<IncreaseStep[]>([]);
+  const [priceTiers, setPriceTiers] = useState<PriceTier[]>([]);
   const [cbsFetching, setCbsFetching] = useState(false);
 
   // Step 4
@@ -266,15 +265,46 @@ export default function ContractEditPage() {
       setGraceType(c.grace_type ?? "full");
       setGraceDiscountPct(c.grace_discount_pct?.toString() ?? "50");
     }
-    if (c.price_increase_type || (c.increase_steps && c.increase_steps.length > 0)) {
+    // Load price tiers from contract_price_tiers table
+    const { data: tiers } = await supabase.from("contract_price_tiers")
+      .select("*").eq("contract_id", id).order("tier_number");
+    if (tiers && tiers.length > 0) {
       setHasIncrease(true);
-      setIncreaseType(c.price_increase_type ?? "pct");
-      setIncreaseValue(c.price_increase_value?.toString() ?? "");
-      setIncreaseFreqMo(c.price_increase_freq_months?.toString() ?? "12");
-      setIncreaseUntilYr(c.price_increase_until_year?.toString() ?? "");
-      if (c.increase_steps && Array.isArray(c.increase_steps) && c.increase_steps.length > 0) {
-        setIncreaseSteps(c.increase_steps);
-      }
+      setPriceTiers(tiers.map((t: any) => ({
+        increase_type: t.increase_type ?? "pct",
+        increase_value: t.increase_value ?? 0,
+        from_year: t.from_year ?? 1,
+        to_year: t.to_year ?? 3,
+        is_recurring: t.is_recurring ?? false,
+        recurring_every_years: t.recurring_every_years,
+        calculated_rent_per_sqm: t.calculated_rent_per_sqm,
+        notes: t.notes ?? "",
+      })));
+    } else if (c.increase_steps && Array.isArray(c.increase_steps) && c.increase_steps.length > 0) {
+      // Fallback: load from legacy JSONB field
+      setHasIncrease(true);
+      setPriceTiers(c.increase_steps.map((s: any) => ({
+        increase_type: s.increase_type ?? s.type ?? "pct",
+        increase_value: s.increase_value ?? s.value ?? 0,
+        from_year: s.from_year ?? 1,
+        to_year: s.to_year ?? 3,
+        is_recurring: s.is_recurring ?? false,
+        recurring_every_years: s.recurring_every_years ?? null,
+        calculated_rent_per_sqm: null,
+        notes: s.notes ?? "",
+      })));
+    } else if (c.price_increase_type) {
+      setHasIncrease(true);
+      setPriceTiers([{
+        increase_type: c.price_increase_type === "fixed" ? "fixed_sqm" : c.price_increase_type,
+        increase_value: c.price_increase_value ?? 0,
+        from_year: 1,
+        to_year: Math.ceil((c.lease_period_value ?? 12) / (c.lease_period_unit === "years" ? 1 : 12)),
+        is_recurring: true,
+        recurring_every_years: Math.ceil((c.price_increase_freq_months ?? 12) / 12),
+        calculated_rent_per_sqm: null,
+        notes: "",
+      }]);
     }
 
     // Populate Step 4
@@ -384,20 +414,12 @@ export default function ContractEditPage() {
         updatePayload.grace_discount_pct = null;
       }
 
-      // Increase
-      if (hasIncrease) {
-        if (increaseSteps.length > 0) {
-          updatePayload.increase_steps = increaseSteps;
-          const first = increaseSteps[0];
-          updatePayload.price_increase_type = first.type;
-          updatePayload.price_increase_value = first.value || null;
-          updatePayload.price_increase_freq_months = Number(increaseFreqMo) || 12;
-        } else {
-          updatePayload.price_increase_type = increaseType;
-          updatePayload.price_increase_value = Number(increaseValue) || null;
-          updatePayload.price_increase_freq_months = Number(increaseFreqMo) || 12;
-          updatePayload.price_increase_until_year = increaseUntilYr ? Number(increaseUntilYr) : null;
-        }
+      // Increase — save legacy fields from first tier
+      if (hasIncrease && priceTiers.length > 0) {
+        const first = priceTiers[0];
+        updatePayload.price_increase_type = first.increase_type;
+        updatePayload.price_increase_value = first.increase_value || null;
+        updatePayload.increase_steps = priceTiers; // backup in JSONB
       } else {
         updatePayload.price_increase_type = null;
         updatePayload.price_increase_value = null;
@@ -464,6 +486,37 @@ export default function ContractEditPage() {
           end_date: guaranteeEnd || null,
           status: "active",
         });
+      }
+
+      // Delete + re-insert price tiers
+      await supabase.from("contract_price_tiers").delete().eq("contract_id", id);
+      if (hasIncrease && priceTiers.length > 0) {
+        const tiersWithPreviews = calculateTierPreviews(priceTiers, Number(rentPerSqm) || 0);
+        const contractStart = new Date(startDate);
+        await supabase.from("contract_price_tiers").insert(
+          tiersWithPreviews.map((tier, i) => {
+            const tierStart = new Date(contractStart);
+            tierStart.setFullYear(tierStart.getFullYear() + tier.from_year - 1);
+            const tierEnd = new Date(contractStart);
+            tierEnd.setFullYear(tierEnd.getFullYear() + tier.to_year);
+            return {
+              contract_id: id,
+              tier_number: i + 1,
+              start_date: tierStart.toISOString().split("T")[0],
+              end_date: tierEnd.toISOString().split("T")[0],
+              increase_type: tier.increase_type,
+              increase_value: tier.increase_value || 0,
+              is_recurring: tier.is_recurring,
+              recurring_every_years: tier.recurring_every_years,
+              from_year: tier.from_year,
+              to_year: tier.to_year,
+              price_per_sqm: tier.increase_type === "fixed_total" ? null : tier.calculated_rent_per_sqm,
+              fixed_amount: tier.increase_type === "fixed_total" ? tier.increase_value : null,
+              calculated_rent_per_sqm: tier.calculated_rent_per_sqm,
+              notes: tier.notes || null,
+            };
+          })
+        );
       }
 
       await logAudit({ entity_type: "contract", entity_id: id, action: "update" });
@@ -744,80 +797,135 @@ export default function ContractEditPage() {
                 </div>
               )}
             </div>
-            {/* Annual increase — multi-tiered */}
+            {/* Dynamic Step-Rent Builder */}
             <div className="rounded-xl border border-slate-200 p-4">
-              <div className="flex items-center gap-2 mb-3">
-                <input type="checkbox" id="increase" checked={hasIncrease}
-                  onChange={(e) => { setHasIncrease(e.target.checked); if (e.target.checked && increaseSteps.length === 0) setIncreaseSteps([emptyIncreaseStep(1)]); }}
-                  className="w-4 h-4" />
-                <label htmlFor="increase" className="text-sm font-bold text-slate-700">עלייה שנתית בשכ&quot;ד</label>
-              </div>
-              {hasIncrease && (
-                <div className="space-y-3">
-                  <div>
-                    <label className="mb-1 block text-xs font-semibold text-slate-700">עלייה כל X שנים</label>
-                    <select value={increaseFreqMo} onChange={(e) => setIncreaseFreqMo(e.target.value)} className={ic + " max-w-xs"}>
-                      <option value="12">כל שנה</option>
-                      <option value="24">כל 2 שנים</option>
-                      <option value="36">כל 3 שנים</option>
-                      <option value="48">כל 4 שנים</option>
-                      <option value="60">כל 5 שנים</option>
-                    </select>
-                  </div>
-                  <div className="text-xs font-bold text-slate-600 mb-1">שלבי עלייה</div>
-                  {increaseSteps.map((st, idx) => (
-                    <div key={idx} className="rounded-lg border border-slate-100 bg-slate-50 p-3 space-y-2">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-bold text-slate-600">שלב {idx + 1}</span>
-                        {increaseSteps.length > 1 && (
-                          <button type="button" onClick={() => setIncreaseSteps(prev => prev.filter((_, i) => i !== idx))}
-                            className="text-xs text-red-500 hover:text-red-700">הסר</button>
-                        )}
-                      </div>
-                      <div className="grid grid-cols-4 gap-2">
-                        <div>
-                          <label className="mb-1 block text-xs text-slate-500">סוג עלייה</label>
-                          <div className="flex gap-1">
-                            {INCREASE_TYPES.map((it) => (
-                              <button key={it.v} type="button"
-                                onClick={() => setIncreaseSteps(prev => prev.map((s, i) => i === idx ? { ...s, type: it.v as any } : s))}
-                                className={"rounded border px-2 py-1 text-xs transition-all " +
-                                  (st.type === it.v ? "border-blue-500 bg-blue-50 font-bold text-blue-700" : "border-slate-200 hover:bg-white")}>
-                                {it.l}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                        {st.type !== "none" && (
-                          <div>
-                            <label className="mb-1 block text-xs text-slate-500">{st.type === "pct" ? "אחוז (%)" : 'סכום (₪/מ"ר)'}</label>
-                            <input type="number" value={st.value || ""}
-                              onChange={(e) => setIncreaseSteps(prev => prev.map((s, i) => i === idx ? { ...s, value: Number(e.target.value) || 0 } : s))}
-                              className={ic} />
-                          </div>
-                        )}
-                        <div>
-                          <label className="mb-1 block text-xs text-slate-500">משנה</label>
-                          <input type="number" min="1" value={st.from_year}
-                            onChange={(e) => setIncreaseSteps(prev => prev.map((s, i) => i === idx ? { ...s, from_year: Number(e.target.value) || 1 } : s))}
-                            className={ic} />
-                        </div>
-                        <div>
-                          <label className="mb-1 block text-xs text-slate-500">עד שנה</label>
-                          <input type="number" min="1" value={st.to_year}
-                            onChange={(e) => setIncreaseSteps(prev => prev.map((s, i) => i === idx ? { ...s, to_year: Number(e.target.value) || 1 } : s))}
-                            className={ic} />
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                  <button type="button"
-                    onClick={() => { const last = increaseSteps[increaseSteps.length - 1]; setIncreaseSteps(prev => [...prev, emptyIncreaseStep(last ? last.to_year + 1 : 1)]); }}
-                    className="rounded-lg border border-dashed border-blue-300 px-4 py-2 text-xs font-bold text-blue-600 hover:bg-blue-50 w-full">
-                    + הוסף שלב עלייה
-                  </button>
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <input type="checkbox" id="increase" checked={hasIncrease}
+                    onChange={(e) => { setHasIncrease(e.target.checked); if (e.target.checked && priceTiers.length === 0) setPriceTiers([emptyPriceTier(1)]); }}
+                    className="w-4 h-4" />
+                  <label htmlFor="increase" className="text-sm font-bold text-slate-700">עלייה מדורגת בשכ&quot;ד (Step-Rent)</label>
                 </div>
-              )}
+                {hasIncrease && (
+                  <button type="button" onClick={() => {
+                    const last = priceTiers[priceTiers.length - 1];
+                    setPriceTiers(prev => [...prev, emptyPriceTier(last ? last.to_year + 1 : 1)]);
+                  }} className="rounded-lg bg-blue-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-blue-800">
+                    + הוסף שלב
+                  </button>
+                )}
+              </div>
+
+              {hasIncrease && (() => {
+                const contractYears = leasePeriodUnit === "years" ? leasePeriodValue : Math.ceil(leasePeriodValue / 12);
+                const errors = validatePriceTiers(priceTiers, contractYears);
+                const previews = calculateTierPreviews(priceTiers, Number(rentPerSqm) || 0);
+                return (
+                  <div className="space-y-3">
+                    {errors.length > 0 && (
+                      <div className="rounded-lg bg-red-50 border border-red-200 p-3 space-y-1">
+                        {errors.map((err, i) => (
+                          <div key={i} className="text-xs text-red-600 flex items-center gap-1"><span>⚠️</span> {err}</div>
+                        ))}
+                      </div>
+                    )}
+                    {priceTiers.map((tier, idx) => {
+                      const preview = previews.find(p => p.from_year === tier.from_year);
+                      const hasError = errors.some(e => e.includes(`שלב ${idx + 1}`));
+                      return (
+                        <div key={idx} className={"rounded-lg border p-4 space-y-3 " + (hasError ? "border-red-300 bg-red-50/50" : "border-slate-100 bg-slate-50")}>
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm font-bold text-slate-700">שלב {idx + 1}</span>
+                            {priceTiers.length > 1 && (
+                              <button type="button" onClick={() => setPriceTiers(prev => prev.filter((_, i) => i !== idx))}
+                                className="text-xs text-red-500 hover:text-red-700 font-semibold">🗑 הסר</button>
+                            )}
+                          </div>
+                          <div className="flex gap-2 mb-2">
+                            <button type="button" onClick={() => setPriceTiers(prev => prev.map((t, i) => i === idx ? { ...t, is_recurring: false } : t))}
+                              className={"rounded-lg border px-3 py-1.5 text-xs transition-all " + (!tier.is_recurring ? "border-blue-500 bg-blue-50 font-bold text-blue-700" : "border-slate-200 hover:bg-white")}>
+                              📅 טווח שנים
+                            </button>
+                            <button type="button" onClick={() => setPriceTiers(prev => prev.map((t, i) => i === idx ? { ...t, is_recurring: true } : t))}
+                              className={"rounded-lg border px-3 py-1.5 text-xs transition-all " + (tier.is_recurring ? "border-blue-500 bg-blue-50 font-bold text-blue-700" : "border-slate-200 hover:bg-white")}>
+                              🔁 חוזר כל X שנים
+                            </button>
+                          </div>
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                            {!tier.is_recurring ? (
+                              <>
+                                <div>
+                                  <label className="mb-1 block text-xs text-slate-500">משנה</label>
+                                  <input type="number" min="1" value={tier.from_year}
+                                    onChange={(e) => setPriceTiers(prev => prev.map((t, i) => i === idx ? { ...t, from_year: Number(e.target.value) || 1 } : t))} className={ic} />
+                                </div>
+                                <div>
+                                  <label className="mb-1 block text-xs text-slate-500">עד שנה</label>
+                                  <input type="number" min="1" value={tier.to_year}
+                                    onChange={(e) => setPriceTiers(prev => prev.map((t, i) => i === idx ? { ...t, to_year: Number(e.target.value) || 1 } : t))} className={ic} />
+                                </div>
+                              </>
+                            ) : (
+                              <>
+                                <div>
+                                  <label className="mb-1 block text-xs text-slate-500">כל X שנים</label>
+                                  <input type="number" min="1" max="10" value={tier.recurring_every_years ?? 1}
+                                    onChange={(e) => setPriceTiers(prev => prev.map((t, i) => i === idx ? { ...t, recurring_every_years: Number(e.target.value) || 1 } : t))} className={ic} />
+                                </div>
+                                <div>
+                                  <label className="mb-1 block text-xs text-slate-500">עד שנה</label>
+                                  <input type="number" min="1" value={tier.to_year}
+                                    onChange={(e) => setPriceTiers(prev => prev.map((t, i) => i === idx ? { ...t, to_year: Number(e.target.value) || 1 } : t))} className={ic} />
+                                </div>
+                              </>
+                            )}
+                            <div className="col-span-2">
+                              <label className="mb-1 block text-xs text-slate-500">סוג עלייה</label>
+                              <div className="flex gap-1 flex-wrap">
+                                {INCREASE_TYPES.map((it) => (
+                                  <button key={it.v} type="button"
+                                    onClick={() => setPriceTiers(prev => prev.map((t, i) => i === idx ? { ...t, increase_type: it.v as any } : t))}
+                                    className={"rounded border px-2.5 py-1.5 text-xs transition-all " +
+                                      (tier.increase_type === it.v ? "border-blue-500 bg-blue-50 font-bold text-blue-700" : "border-slate-200 hover:bg-white")}>
+                                    {it.icon} {it.l}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                          {tier.increase_type !== "none" && (
+                            <div className="max-w-xs">
+                              <label className="mb-1 block text-xs text-slate-500">
+                                {tier.increase_type === "pct" ? "שיעור עלייה (%)" : tier.increase_type === "fixed_sqm" ? 'תוספת למ"ר (₪)' : "סכום חודשי קבוע (₪)"}
+                              </label>
+                              <input type="number" step="0.1" value={tier.increase_value || ""}
+                                onChange={(e) => setPriceTiers(prev => prev.map((t, i) => i === idx ? { ...t, increase_value: Number(e.target.value) || 0 } : t))} className={ic} />
+                            </div>
+                          )}
+                          <input type="text" value={tier.notes} placeholder="הערות (אופציונלי)"
+                            onChange={(e) => setPriceTiers(prev => prev.map((t, i) => i === idx ? { ...t, notes: e.target.value } : t))} className={ic + " text-xs"} />
+                          {preview?.calculated_rent_per_sqm && Number(rentPerSqm) > 0 && (
+                            <div className={"rounded-lg px-3 py-2 text-xs font-semibold " + (hasError ? "bg-red-100 text-red-700" : "bg-green-50 border border-green-200 text-green-700")}>
+                              {tier.increase_type === "none"
+                                ? `שנים ${tier.from_year}-${tier.to_year}: מחיר קפוא — ${fmtMoney(Number(rentPerSqm))}/מ"ר`
+                                : tier.increase_type === "fixed_total"
+                                  ? `שנים ${tier.from_year}-${tier.to_year}: סכום קבוע ${fmtMoney(tier.increase_value)}/חודש`
+                                  : `שנים ${tier.from_year}-${tier.to_year}: ${fmtMoney(preview.calculated_rent_per_sqm)}/מ"ר`
+                                    + (tier.is_recurring ? ` (חוזר כל ${tier.recurring_every_years} שנים)` : "")}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                    <button type="button" onClick={() => {
+                      const last = priceTiers[priceTiers.length - 1];
+                      setPriceTiers(prev => [...prev, emptyPriceTier(last ? last.to_year + 1 : 1)]);
+                    }} className="rounded-lg border-2 border-dashed border-blue-300 px-4 py-3 text-xs font-bold text-blue-600 hover:bg-blue-50 w-full transition-all">
+                      + הוסף שלב עלייה נוסף
+                    </button>
+                  </div>
+                );
+              })()}
               {!hasIncrease && <div className="text-xs text-slate-400 mt-1">ללא עלייה שנתית (מעבר להצמדה)</div>}
             </div>
           </div>
@@ -999,7 +1107,7 @@ export default function ContractEditPage() {
                 { l: "הצמדה", v: INDEX_METHODS.find((m) => m.v === indexMethod)?.l },
                 { l: 'מע"מ', v: vatType === "taxable" ? `${currentVatPct}%` : "פטור" },
                 { l: "גרייס", v: hasGrace ? `${graceMonths} חודשים` : "לא" },
-                { l: "עלייה", v: hasIncrease ? (increaseSteps.length > 0 ? `${increaseSteps.length} שלבים` : "כן") : "לא" },
+                { l: "עלייה מדורגת", v: hasIncrease && priceTiers.length > 0 ? `${priceTiers.length} שלבים` : "לא" },
                 { l: "אופציות", v: extensionOptions.length > 0 ? `${extensionOptions.length} אופציות` : "לא" },
                 { l: "ערבות", v: addGuarantee ? fmtMoney(Number(guaranteeAmt) || 0) : "לא" },
               ].map((r) =>

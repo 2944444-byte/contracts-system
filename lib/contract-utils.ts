@@ -44,6 +44,97 @@ export type IncreaseStep = {
   to_year: number;
 };
 
+// ── New: Dynamic Price Tier for Step-Rent Builder ──
+export type PriceTier = {
+  increase_type: "pct" | "fixed_sqm" | "fixed_total" | "none";
+  increase_value: number;
+  from_year: number;
+  to_year: number;
+  is_recurring: boolean;
+  recurring_every_years: number | null;
+  calculated_rent_per_sqm: number | null; // preview only, computed client-side
+  notes: string;
+};
+
+export function emptyPriceTier(fromYear: number = 1): PriceTier {
+  return {
+    increase_type: "pct",
+    increase_value: 0,
+    from_year: fromYear,
+    to_year: fromYear + 2,
+    is_recurring: false,
+    recurring_every_years: null,
+    calculated_rent_per_sqm: null,
+    notes: "",
+  };
+}
+
+/**
+ * Validate price tiers: no year overlaps, within contract duration.
+ * Returns array of error strings (empty = valid).
+ */
+export function validatePriceTiers(
+  tiers: PriceTier[],
+  contractYears: number
+): string[] {
+  const errors: string[] = [];
+  for (let i = 0; i < tiers.length; i++) {
+    const t = tiers[i];
+    if (t.from_year > t.to_year) {
+      errors.push(`שלב ${i + 1}: שנת התחלה גדולה משנת סיום`);
+    }
+    if (t.to_year > contractYears && contractYears > 0) {
+      errors.push(`שלב ${i + 1}: חורג מתקופת החוזה (${contractYears} שנים)`);
+    }
+    if (t.increase_type !== "none" && (!t.increase_value || t.increase_value <= 0)) {
+      errors.push(`שלב ${i + 1}: חסר ערך עלייה`);
+    }
+    // Check overlaps with other tiers
+    for (let j = i + 1; j < tiers.length; j++) {
+      const o = tiers[j];
+      if (t.from_year <= o.to_year && t.to_year >= o.from_year) {
+        errors.push(`שלבים ${i + 1} ו-${j + 1}: חפיפה בשנים`);
+      }
+    }
+  }
+  return errors;
+}
+
+/**
+ * Calculate preview rent for each tier based on base rent.
+ * Returns tiers with calculated_rent_per_sqm filled in.
+ */
+export function calculateTierPreviews(
+  tiers: PriceTier[],
+  baseRentPerSqm: number
+): PriceTier[] {
+  // Sort by from_year for sequential calculation
+  const sorted = [...tiers].sort((a, b) => a.from_year - b.from_year);
+  let currentRent = baseRentPerSqm;
+
+  return sorted.map((tier) => {
+    let calcRent: number;
+    switch (tier.increase_type) {
+      case "pct":
+        calcRent = currentRent * (1 + (tier.increase_value || 0) / 100);
+        break;
+      case "fixed_sqm":
+        calcRent = currentRent + (tier.increase_value || 0);
+        break;
+      case "fixed_total":
+        calcRent = tier.increase_value || currentRent;
+        break;
+      case "none":
+        calcRent = currentRent;
+        break;
+      default:
+        calcRent = currentRent;
+    }
+    currentRent = calcRent;
+    return { ...tier, calculated_rent_per_sqm: Math.round(calcRent * 100) / 100 };
+  });
+}
+
 /**
  * Chain-calculate option start/end dates.
  * Option[0] starts at contractEndDate, option[1] starts at option[0] end, etc.
