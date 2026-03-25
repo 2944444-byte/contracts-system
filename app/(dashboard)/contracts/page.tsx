@@ -36,22 +36,15 @@ function getT2Date(): string {
 }
 
 function getBaseIndexDate(indexBaseDate: string|null, startDate: string|null): string|null {
-  // Use index_base_date if available, else month before start_date
-  if (indexBaseDate) {
-    const d = new Date(indexBaseDate);
-    if (!isNaN(d.getTime())) {
-      return `${String(d.getMonth() + 1).padStart(2, "0")}-${d.getFullYear()}`;
-    }
-  }
-  if (startDate) {
-    const d = new Date(startDate);
-    if (!isNaN(d.getTime())) {
-      // Base = month before contract start
-      d.setMonth(d.getMonth() - 1);
-      return `${String(d.getMonth() + 1).padStart(2, "0")}-${d.getFullYear()}`;
-    }
-  }
-  return null;
+  // t-2 rule: base index = 2 months before the index_base_date (or start_date)
+  // Example: index_base_date=2020-06-15 → t-2 = April 2020 → "04-2020"
+  const refDate = indexBaseDate || startDate;
+  if (!refDate) return null;
+  const d = new Date(refDate);
+  if (isNaN(d.getTime())) return null;
+  // Apply t-2: subtract 2 months
+  d.setMonth(d.getMonth() - 2);
+  return `${String(d.getMonth() + 1).padStart(2, "0")}-${d.getFullYear()}`;
 }
 
 const STATUS_MAP: Record<string,{label:string;color:string;dot:string}> = {
@@ -374,12 +367,12 @@ export default function ContractsPage() {
                     <div className="grid grid-cols-2 gap-2">
                       {/* CPI-adjusted rent per sqm */}
                       <div className="rounded-lg bg-white border border-amber-200 p-2.5 text-center">
-                        <div className="text-lg font-black text-amber-900">{fmtMoney(cpiResult.adjustedRentPerSqm)}/מ&quot;ר</div>
+                        <div className="text-lg font-black text-amber-900">₪{cpiResult.adjustedRentPerSqm.toFixed(2)}/מ&quot;ר</div>
                         <div className="text-[10px] text-amber-600">שכ&quot;ד צמוד למדד היום</div>
                       </div>
                       {/* Total monthly CPI-adjusted */}
                       <div className="rounded-lg bg-white border border-amber-200 p-2.5 text-center">
-                        <div className="text-lg font-black text-amber-900">{fmtMoney(cpiResult.adjustedRentPerSqm * (selContract.charged_area ?? 0))}</div>
+                        <div className="text-lg font-black text-amber-900">₪{Math.round(cpiResult.adjustedRentPerSqm * (Number(selContract.charged_area) ?? 0)).toLocaleString()}</div>
                         <div className="text-[10px] text-amber-600">סה&quot;כ הכנסה צמודה לחודש</div>
                       </div>
                     </div>
@@ -387,7 +380,7 @@ export default function ContractsPage() {
                     <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-[10px] text-amber-600">
                       <div className="flex justify-between"><span>מדד בסיס ({cpiResult.fromDate}):</span><span className="font-semibold">{cpiResult.fromIndexValue}</span></div>
                       <div className="flex justify-between"><span>מדד נוכחי ({cpiResult.toDate}):</span><span className="font-semibold">{cpiResult.toIndexValue}</span></div>
-                      <div className="flex justify-between"><span>שכ&quot;ד בסיס:</span><span className="font-semibold">{fmtMoney(cpiResult.baseRentPerSqm)}/מ&quot;ר</span></div>
+                      <div className="flex justify-between"><span>שכ&quot;ד בסיס:</span><span className="font-semibold">₪{cpiResult.baseRentPerSqm.toFixed(2)}/מ&quot;ר</span></div>
                       <div className="flex justify-between"><span>שינוי מצטבר:</span><span className="font-semibold">{cpiResult.changePct != null ? cpiResult.changePct + "%" : "—"}</span></div>
                       <div className="flex justify-between"><span>שנת בסיס מדד:</span><span className="font-semibold">{cpiResult.baseYear}</span></div>
                       <div className="flex justify-between"><span>שטח מחויב:</span><span className="font-semibold">{selContract.charged_area} מ&quot;ר</span></div>
