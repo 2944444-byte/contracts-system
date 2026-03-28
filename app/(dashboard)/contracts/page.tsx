@@ -113,7 +113,9 @@ export default function ContractsPage() {
             contractEnd: selContract.end_date,
             baseRentPerSqm: Number(selContract.rent_per_sqm) || 0,
             mainTiers: loadedTiers,
-            options: selContract.contract_options ?? [],
+            options: (selContract.contract_options ?? []).map(function(o: any) {
+              return { ...o, price_schedule_type: o.price_schedule_type || "inherit", price_tiers: o.price_tiers || [] };
+            }),
           });
           setPriceTimeline(tl);
         }
@@ -121,22 +123,35 @@ export default function ContractsPage() {
   }, [selected]);
 
   // Load CPI-adjusted price via CBS calculator (server action — no CORS/auth issues).
-  // CBS determines the "מדד ידוע" (known index) based on the actual date including day.
+  // Uses CURRENT rent per sqm (after step-rent) as the base for CPI.
+  // Depends on priceTimeline to determine current-year rent.
   useEffect(function() {
     if (!selContract) { setCpiResult(null); return; }
     if (selContract.indexation_method === "none") { setCpiResult(null); return; }
-    const rentPerSqm = Number(selContract.rent_per_sqm);
-    if (!rentPerSqm) { setCpiResult(null); return; }
+    const origRent = Number(selContract.rent_per_sqm);
+    if (!origRent) { setCpiResult(null); return; }
+
+    // Determine current rent from step-rent timeline
+    var currentRent = origRent;
+    if (priceTimeline.length > 0) {
+      var now = new Date();
+      for (var i = 0; i < priceTimeline.length; i++) {
+        if (new Date(priceTimeline[i].startDate) <= now && new Date(priceTimeline[i].endDate) > now) {
+          currentRent = priceTimeline[i].rentPerSqm ?? origRent;
+          break;
+        }
+      }
+    }
 
     const refDateStr = selContract.index_base_date || selContract.start_date;
     const baseDate = formatDateForCbs(refDateStr);
     if (!baseDate) { setCpiResult(null); return; }
 
-    // True rent = base + investment per sqm
-    const investPerSqm = selContract.charged_area > 0 && selContract.investment_addition
+    // True rent = current step-rent + investment per sqm
+    const cpiInvestPerSqm = selContract.charged_area > 0 && selContract.investment_addition
       ? Number(selContract.investment_addition) / Number(selContract.charged_area)
       : 0;
-    const totalRentPerSqm = rentPerSqm + investPerSqm;
+    const totalRentPerSqm = currentRent + cpiInvestPerSqm;
 
     // Today's full date for CBS calculator (day matters for known-index)
     const todayForCbs = formatDateForCbs(new Date().toISOString());
@@ -205,7 +220,7 @@ export default function ContractsPage() {
           setCpiLoading(false);
         }).catch(function() { setCpiResult(null); setCpiLoading(false); });
       });
-  }, [selected]);
+  }, [selected, priceTimeline.length]);
 
   async function handleSync() {
     setSyncing(true);
