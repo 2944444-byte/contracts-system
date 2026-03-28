@@ -17,6 +17,8 @@ import {
   type IncreaseStep,
   type PriceTier,
 } from "@/lib/contract-utils";
+import TenantForm from '@/components/TenantForm';
+import PropertyForm from '@/components/PropertyForm';
 
 const ic =
   "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
@@ -108,6 +110,11 @@ export default function ContractsNewPage() {
   const [propertyId, setPropertyId] = useState("");
   const [selSpaces, setSelSpaces] = useState<string[]>([]);
   const [contractType, setContractType] = useState("regular");
+  const [showNewTenant, setShowNewTenant] = useState(false);
+  const [showNewProperty, setShowNewProperty] = useState(false);
+  const [showNewUnit, setShowNewUnit] = useState(false);
+  const [aiExtracting, setAiExtracting] = useState(false);
+  const [aiResult, setAiResult] = useState<string | null>(null);
 
   // Step 2 — Dates & Terms
   const [startDate, setStartDate] = useState("");
@@ -245,6 +252,121 @@ export default function ContractsNewPage() {
     setProperties(p ?? []);
     setCpiRecords(cpi ?? []);
     if (vat && vat.length > 0) setCurrentVatPct(Number(vat[0].rate_pct));
+  }
+
+  async function handleNewTenant(data: any) {
+    const { data: inserted, error } = await supabase.from("tenants").insert({
+      name: data.legal_name || data.name,
+      company_name: data.legal_name || data.name,
+      id_number: data.id_number,
+      phone: data.phone,
+      primary_email: data.primary_email,
+      address: data.address,
+      notes: data.notes,
+    }).select().single();
+    if (error) { alert("שגיאה ביצירת שוכר: " + error.message); return; }
+    setShowNewTenant(false);
+    const { data: list } = await supabase.from("tenants").select("id,name,company_name").order("name");
+    setTenants(list ?? []);
+    if (inserted) setTenantId(inserted.id);
+  }
+
+  async function handleNewProperty(data: any) {
+    const { data: inserted, error } = await supabase.from("properties").insert({
+      name: data.name,
+      address: data.address,
+      property_type: data.property_type,
+      total_rentable_area: data.total_rentable_area || null,
+      floors: data.floors || null,
+      parking_spaces: data.parking_spaces || null,
+      description: data.description || null,
+    }).select().single();
+    if (error) { alert("שגיאה ביצירת נכס: " + error.message); return; }
+    setShowNewProperty(false);
+    const { data: list } = await supabase.from("properties").select("id,name,city").order("name");
+    setProperties(list ?? []);
+    if (inserted) setPropertyId(inserted.id);
+  }
+
+  async function handleNewUnit() {
+    const name = prompt("שם היחידה:");
+    if (!name) return;
+    const area = prompt("שטח (מ\"ר):");
+    const { error } = await supabase.from("spaces").insert({
+      property_id: propertyId,
+      space_name: name,
+      area: area ? Number(area) : null,
+      status: "vacant",
+    });
+    if (error) { alert("שגיאה: " + error.message); return; }
+    // Refresh spaces
+    const { data: sp } = await supabase.from("spaces").select("id,space_name,area,status").eq("property_id", propertyId);
+    setSpaces(sp ?? []);
+  }
+
+  async function handleAiExtract(file: File) {
+    setAiExtracting(true);
+    setAiResult(null);
+    try {
+      let text = "";
+      if (file.name.endsWith(".pdf")) {
+        const pdfjsLib = await import("pdfjs-dist");
+        pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
+        const arrayBuffer = await file.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+        const pages: string[] = [];
+        for (let i = 1; i <= pdf.numPages; i++) {
+          const page = await pdf.getPage(i);
+          const content = await page.getTextContent();
+          pages.push(content.items.map((item: any) => item.str).join(" "));
+        }
+        text = pages.join("\n");
+      } else if (file.name.match(/\.docx?$/i)) {
+        const mammoth = await import("mammoth");
+        const arrayBuffer = await file.arrayBuffer();
+        const result = await mammoth.extractRawText({ arrayBuffer });
+        text = result.value;
+      } else {
+        alert("נתמכים רק קבצי PDF או Word");
+        setAiExtracting(false);
+        return;
+      }
+
+      const res = await fetch("/api/extract-contract", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      if (!res.ok) throw new Error("API error " + res.status);
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+
+      // Auto-fill fields
+      let filled = 0;
+      if (data.tenant_name) {
+        const match = tenants.find(function(t) {
+          return t.name?.includes(data.tenant_name) || t.company_name?.includes(data.tenant_name) ||
+                 data.tenant_name.includes(t.name) || data.tenant_name.includes(t.company_name);
+        });
+        if (match) { setTenantId(match.id); filled++; }
+      }
+      if (data.start_date) { setStartDate(data.start_date); filled++; }
+      if (data.duration_months) { setLeasePeriodValue(data.duration_months); setLeasePeriodUnit("months"); filled++; }
+      if (data.rent_per_sqm) { setRentPerSqm(String(data.rent_per_sqm)); filled++; }
+      if (data.charged_area) { setChargedArea(String(data.charged_area)); filled++; }
+      if (data.investment_addition) { setInvestAdd(String(data.investment_addition)); filled++; }
+      if (data.payment_frequency) { setPaymentFreq(data.payment_frequency); filled++; }
+      if (data.index_base_date) { setBaseCPIDate(data.index_base_date + "-15"); filled++; }
+      if (data.index_base_value) { setBaseCPI(String(data.index_base_value)); filled++; }
+      if (data.guarantee_type) { setAddGuarantee(true); setGuaranteeType(data.guarantee_type); filled++; }
+      if (data.guarantee_amount) { setGuaranteeAmt(String(data.guarantee_amount)); filled++; }
+
+      setAiResult("מולאו " + filled + " שדות מהחוזה");
+    } catch (e: any) {
+      setAiResult("שגיאה: " + (e.message || "לא ניתן לקרוא את הקובץ"));
+    } finally {
+      setAiExtracting(false);
+    }
   }
 
   function toggleSpace(id: string) {
@@ -516,6 +638,24 @@ export default function ContractsNewPage() {
         })}
       </div>
 
+      {/* AI Contract Reader */}
+        <div className="rounded-2xl border border-dashed border-blue-300 bg-blue-50/50 p-4 mb-4">
+          <div className="flex items-center gap-3">
+            <label className="flex-1 cursor-pointer">
+              <input type="file" accept=".pdf,.doc,.docx" className="hidden"
+                onChange={function(e) { var f = e.target.files?.[0]; if (f) handleAiExtract(f); }}
+                disabled={aiExtracting} />
+              <div className="flex items-center gap-2 text-blue-700 hover:text-blue-800">
+                <span className="text-xl">📄</span>
+                <span className="font-bold text-sm">קרא חוזה (PDF / Word)</span>
+                <span className="text-xs text-blue-500">— מילוי אוטומטי בעזרת AI</span>
+              </div>
+            </label>
+            {aiExtracting && <span className="text-xs text-blue-600 animate-pulse">קורא...</span>}
+            {aiResult && <span className={"text-xs font-semibold " + (aiResult.startsWith("שגיאה") ? "text-red-600" : "text-green-600")}>{aiResult}</span>}
+          </div>
+        </div>
+
       <div className="rounded-2xl border border-slate-200 bg-white shadow-sm p-6">
         {/* STEP 1 — שוכר ונכס */}
         {step === 1 && (
@@ -551,45 +691,63 @@ export default function ContractsNewPage() {
               <label className="mb-1 block text-xs font-semibold text-slate-700">
                 שוכר *
               </label>
-              <select
-                value={tenantId}
-                onChange={(e) => setTenantId(e.target.value)}
-                className={ic}
-              >
-                <option value="">-- בחר שוכר --</option>
-                {tenants.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}
-                    {t.company_name ? " — " + t.company_name : ""}
-                  </option>
-                ))}
-              </select>
+              <div className="flex gap-2">
+                <select
+                  value={tenantId}
+                  onChange={(e) => setTenantId(e.target.value)}
+                  className={ic + " flex-1"}
+                >
+                  <option value="">-- בחר שוכר --</option>
+                  {tenants.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name}
+                      {t.company_name ? " — " + t.company_name : ""}
+                    </option>
+                  ))}
+                </select>
+                <button type="button" onClick={() => setShowNewTenant(true)}
+                  className="rounded-lg bg-green-600 text-white px-3 py-2 text-xs font-bold hover:bg-green-700 whitespace-nowrap">
+                  + שוכר חדש
+                </button>
+              </div>
             </div>
 
             <div>
               <label className="mb-1 block text-xs font-semibold text-slate-700">
                 נכס *
               </label>
-              <select
-                value={propertyId}
-                onChange={(e) => setPropertyId(e.target.value)}
-                className={ic}
-              >
-                <option value="">-- בחר נכס --</option>
-                {properties.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                    {p.city ? " — " + p.city : ""}
-                  </option>
-                ))}
-              </select>
+              <div className="flex gap-2">
+                <select
+                  value={propertyId}
+                  onChange={(e) => setPropertyId(e.target.value)}
+                  className={ic + " flex-1"}
+                >
+                  <option value="">-- בחר נכס --</option>
+                  {properties.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                      {p.city ? " — " + p.city : ""}
+                    </option>
+                  ))}
+                </select>
+                <button type="button" onClick={() => setShowNewProperty(true)}
+                  className="rounded-lg bg-green-600 text-white px-3 py-2 text-xs font-bold hover:bg-green-700 whitespace-nowrap">
+                  + נכס חדש
+                </button>
+              </div>
             </div>
 
-            {spaces.length > 0 && (
+            {propertyId && (
               <div>
-                <label className="mb-2 block text-xs font-semibold text-slate-700">
-                  שטחים משויכים לחוזה
-                </label>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="block text-xs font-semibold text-slate-700">
+                    שטחים משויכים לחוזה
+                  </label>
+                  <button type="button" onClick={handleNewUnit}
+                    className="rounded-lg bg-green-600 text-white px-3 py-1.5 text-xs font-bold hover:bg-green-700">
+                    + יחידה חדשה
+                  </button>
+                </div>
                 <div className="grid grid-cols-3 gap-2">
                   {spaces.map((s) => {
                     const sel = selSpaces.includes(s.id);
@@ -1777,6 +1935,24 @@ export default function ContractsNewPage() {
           )}
         </div>
       </div>
+
+        {/* Inline creation modals */}
+        {showNewTenant && (
+          <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+            <div className="bg-white rounded-2xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
+              <h3 className="text-lg font-bold text-slate-800 mb-4">שוכר חדש</h3>
+              <TenantForm onSubmit={handleNewTenant} onCancel={() => setShowNewTenant(false)} />
+            </div>
+          </div>
+        )}
+        {showNewProperty && (
+          <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+            <div className="bg-white rounded-2xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
+              <h3 className="text-lg font-bold text-slate-800 mb-4">נכס חדש</h3>
+              <PropertyForm onSubmit={handleNewProperty} onCancel={() => setShowNewProperty(false)} />
+            </div>
+          </div>
+        )}
     </div>
   );
 }
