@@ -115,6 +115,12 @@ export default function ContractsNewPage() {
   const [showNewUnit, setShowNewUnit] = useState(false);
   const [aiExtracting, setAiExtracting] = useState(false);
   const [aiResult, setAiResult] = useState<string | null>(null);
+  const [parkingSpots, setParkingSpots] = useState<any[]>([]);
+  const [selParking, setSelParking] = useState<string[]>([]);
+  const [showNewParking, setShowNewParking] = useState(false);
+  const [newParkingSpot, setNewParkingSpot] = useState("");
+  const [newParkingFee, setNewParkingFee] = useState("");
+  const [newParkingVehicle, setNewParkingVehicle] = useState("");
 
   // Step 2 — Dates & Terms
   const [startDate, setStartDate] = useState("");
@@ -241,6 +247,16 @@ export default function ContractsNewPage() {
     }
   }, [propertyId]);
 
+  useEffect(function() {
+    if (propertyId) {
+      supabase.from("parking_subscriptions").select("id,spot_number,monthly_fee,vehicle_number,status,tenant_id")
+        .eq("property_id", propertyId).order("spot_number")
+        .then(function({ data }) { setParkingSpots(data ?? []); });
+    } else {
+      setParkingSpots([]);
+    }
+  }, [propertyId]);
+
   async function loadRef() {
     const [{ data: t }, { data: p }, { data: cpi }, { data: vat }] = await Promise.all([
       supabase.from("tenants").select("id,name,company_name").order("name"),
@@ -304,6 +320,25 @@ export default function ContractsNewPage() {
     setSpaces(sp ?? []);
   }
 
+  async function handleNewParking() {
+    if (!newParkingSpot) return;
+    const { error } = await supabase.from("parking_subscriptions").insert({
+      property_id: propertyId,
+      tenant_id: tenantId || null,
+      spot_number: newParkingSpot,
+      monthly_fee: Number(newParkingFee) || 0,
+      vehicle_number: newParkingVehicle || null,
+      subscription_type: "monthly",
+      status: "active",
+    });
+    if (error) { alert("שגיאה: " + error.message); return; }
+    setShowNewParking(false);
+    setNewParkingSpot(""); setNewParkingFee(""); setNewParkingVehicle("");
+    const { data } = await supabase.from("parking_subscriptions").select("id,spot_number,monthly_fee,vehicle_number,status,tenant_id")
+      .eq("property_id", propertyId).order("spot_number");
+    setParkingSpots(data ?? []);
+  }
+
   async function handleAiExtract(file: File) {
     setAiExtracting(true);
     setAiResult(null);
@@ -343,13 +378,34 @@ export default function ContractsNewPage() {
 
       // Auto-fill fields
       let filled = 0;
+
+      // Tenant: match existing or offer to create new with extracted details
       if (data.tenant_name) {
         const match = tenants.find(function(t) {
           return t.name?.includes(data.tenant_name) || t.company_name?.includes(data.tenant_name) ||
                  data.tenant_name.includes(t.name) || data.tenant_name.includes(t.company_name);
         });
-        if (match) { setTenantId(match.id); filled++; }
+        if (match) {
+          setTenantId(match.id); filled++;
+        } else if (confirm("שוכר \"" + data.tenant_name + "\" לא נמצא במערכת.\nליצור שוכר חדש?")) {
+          const { data: inserted } = await supabase.from("tenants").insert({
+            name: data.tenant_name,
+            company_name: data.tenant_name,
+            id_number: data.tenant_id_number || null,
+            phone: data.tenant_phone || null,
+            primary_email: data.tenant_email || null,
+            address: data.tenant_address || null,
+          }).select().single();
+          if (inserted) {
+            const { data: tList } = await supabase.from("tenants").select("id,name,company_name").order("name");
+            setTenants(tList ?? []);
+            setTenantId(inserted.id);
+            filled++;
+          }
+        }
       }
+
+      // Contract fields
       if (data.start_date) { setStartDate(data.start_date); filled++; }
       if (data.duration_months) { setLeasePeriodValue(data.duration_months); setLeasePeriodUnit("months"); filled++; }
       if (data.rent_per_sqm) { setRentPerSqm(String(data.rent_per_sqm)); filled++; }
@@ -361,7 +417,7 @@ export default function ContractsNewPage() {
       if (data.guarantee_type) { setAddGuarantee(true); setGuaranteeType(data.guarantee_type); filled++; }
       if (data.guarantee_amount) { setGuaranteeAmt(String(data.guarantee_amount)); filled++; }
 
-      setAiResult("מולאו " + filled + " שדות מהחוזה");
+      setAiResult("מולאו " + filled + " שדות מהחוזה" + (data.tenant_name ? " | שוכר: " + data.tenant_name : ""));
     } catch (e: any) {
       setAiResult("שגיאה: " + (e.message || "לא ניתן לקרוא את הקובץ"));
     } finally {
@@ -1104,6 +1160,67 @@ export default function ContractsNewPage() {
                 dir="ltr"
               />
             </div>
+
+            {/* Parking */}
+            {propertyId && (
+              <div className="mt-6 pt-4 border-t border-slate-200">
+                <div className="flex items-center justify-between mb-3">
+                  <label className="text-xs font-semibold text-slate-700">חניות</label>
+                  <button type="button" onClick={() => setShowNewParking(!showNewParking)}
+                    className="rounded-lg bg-green-600 text-white px-3 py-1.5 text-xs font-bold hover:bg-green-700">
+                    + חניה חדשה
+                  </button>
+                </div>
+                {showNewParking && (
+                  <div className="rounded-lg border border-green-200 bg-green-50 p-3 mb-3 space-y-2">
+                    <div className="grid grid-cols-3 gap-2">
+                      <input placeholder="מספר חניה *" value={newParkingSpot}
+                        onChange={(e) => setNewParkingSpot(e.target.value)} className={ic} />
+                      <input placeholder="דמי חניה חודשיים" type="number" value={newParkingFee}
+                        onChange={(e) => setNewParkingFee(e.target.value)} className={ic} />
+                      <input placeholder="מספר רכב" value={newParkingVehicle}
+                        onChange={(e) => setNewParkingVehicle(e.target.value)} className={ic} />
+                    </div>
+                    <div className="flex gap-2">
+                      <button type="button" onClick={handleNewParking}
+                        className="rounded-lg bg-green-600 text-white px-4 py-1.5 text-xs font-bold hover:bg-green-700">
+                        שמור
+                      </button>
+                      <button type="button" onClick={() => setShowNewParking(false)}
+                        className="rounded-lg border border-slate-300 px-4 py-1.5 text-xs hover:bg-slate-50">
+                        ביטול
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {parkingSpots.length > 0 ? (
+                  <div className="grid grid-cols-3 gap-2">
+                    {parkingSpots.map(function(p) {
+                      var sel = selParking.includes(p.id);
+                      var occupied = p.tenant_id && p.tenant_id !== tenantId;
+                      return (
+                        <button key={p.id} type="button" disabled={occupied}
+                          onClick={function() {
+                            setSelParking(function(prev) {
+                              return prev.includes(p.id) ? prev.filter(function(x){return x!==p.id;}) : [...prev, p.id];
+                            });
+                          }}
+                          className={"rounded-lg border p-2 text-center text-xs transition-all " +
+                            (sel ? "border-blue-500 bg-blue-50 font-bold text-blue-700" :
+                             occupied ? "border-slate-100 bg-slate-50 opacity-50 cursor-not-allowed" :
+                             "border-slate-200 hover:bg-slate-50")}>
+                          <div className="font-semibold">חניה {p.spot_number}</div>
+                          {p.monthly_fee > 0 && <div className="text-slate-400">₪{p.monthly_fee}/חודש</div>}
+                          {p.vehicle_number && <div className="text-slate-400">{p.vehicle_number}</div>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="text-xs text-slate-400 text-center py-2">אין חניות לנכס זה</div>
+                )}
+              </div>
+            )}
           </div>
         )}
 

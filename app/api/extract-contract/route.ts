@@ -17,9 +17,24 @@ export async function POST(req: NextRequest) {
 חלץ את כל הנתונים הבאים מהחוזה והחזר JSON בלבד, ללא שום טקסט נוסף, ללא backticks, ללא הסברים.
 
 שדות לחילוץ:
+
+פרטי שוכר:
 - tenant_name: שם השוכר המלא או שם החברה השוכרת
+- tenant_id_number: מספר ח.פ. / ת.ז. של השוכר (null אם אין)
+- tenant_phone: טלפון השוכר (null אם אין)
+- tenant_email: אימייל השוכר (null אם אין)
+- tenant_address: כתובת השוכר (null אם אין)
+- tenant_contact_name: שם איש קשר של השוכר (null אם אין)
+- tenant_contact_phone: טלפון איש קשר (null אם אין)
+
+פרטי נכס ויחידה:
+- property_name: שם הנכס או הבניין (null אם אין)
+- property_address: כתובת הנכס (null אם אין)
+- unit_name: שם/מספר היחידה המושכרת (null אם אין)
+
+פרטי חוזה:
 - start_date: תאריך תחילת השכירות בפורמט YYYY-MM-DD
-- end_date: תאריך סיום השכירות בפורמט YYYY-MM-DD  
+- end_date: תאריך סיום השכירות בפורמט YYYY-MM-DD
 - duration_months: מספר חודשי השכירות (מספר שלם)
 - rent_per_sqm: דמי שכירות לכל מטר רבוע לחודש (מספר בלבד, בשקלים)
 - charged_area: שטח מחויב במטרים רבועים (מספר בלבד)
@@ -32,12 +47,15 @@ export async function POST(req: NextRequest) {
 - index_base_date: חודש מדד הבסיס בפורמט YYYY-MM (null אם אין)
 - index_base_value: ערך מדד הבסיס (מספר עשרוני, null אם אין)
 - payment_frequency: תדירות תשלום - החזר אחד מ: monthly/quarterly/other
+- parking_spots: מספר חניות (null אם אין)
+- parking_monthly_fee: דמי חניה חודשיים (null אם אין)
 
 הנחיות חשובות:
 1. אם לא מצאת שדה — החזר null
 2. תאריכים חייבים להיות בפורמט YYYY-MM-DD בלבד
 3. סכומים כספיים — מספרים בלבד ללא סימני מטבע
 4. אם הדיירת היא חברה — החזר את שם החברה המלא
+5. חפש פרטי שוכר בכל מקום בחוזה — כולל כותרת, צדדים להסכם, נספחים
 
 טקסט החוזה (${Math.round(text.length/1000)}K תווים):
 ${text.substring(0, 20000)}`

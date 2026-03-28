@@ -15,6 +15,8 @@ import {
   type ExtensionOption,
   type PriceTier,
 } from "@/lib/contract-utils";
+import TenantForm from '@/components/TenantForm';
+import PropertyForm from '@/components/PropertyForm';
 
 const ic =
   "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
@@ -111,6 +113,8 @@ export default function ContractEditPage() {
   const [propertyId, setPropertyId] = useState("");
   const [selSpaces, setSelSpaces] = useState<string[]>([]);
   const [contractType, setContractType] = useState("regular");
+  const [showNewTenant, setShowNewTenant] = useState(false);
+  const [showNewProperty, setShowNewProperty] = useState(false);
 
   // Step 2
   const [startDate, setStartDate] = useState("");
@@ -359,6 +363,40 @@ export default function ContractEditPage() {
     if (sp?.area && !selSpaces.includes(sid)) {
       setChargedArea((prev) => (prev ? prev : sp.area.toString()));
     }
+  }
+
+  async function handleNewTenant(data: any) {
+    const { data: inserted, error } = await supabase.from("tenants").insert({
+      name: data.legal_name || data.name,
+      company_name: data.legal_name || data.name,
+      id_number: data.id_number,
+      phone: data.phone,
+      primary_email: data.primary_email,
+      address: data.address,
+      notes: data.notes,
+    }).select().single();
+    if (error) { alert("שגיאה ביצירת שוכר: " + error.message); return; }
+    setShowNewTenant(false);
+    const { data: list } = await supabase.from("tenants").select("id,name,company_name").order("name");
+    setTenants(list ?? []);
+    if (inserted) setTenantId(inserted.id);
+  }
+
+  async function handleNewProperty(data: any) {
+    const { data: inserted, error } = await supabase.from("properties").insert({
+      name: data.name,
+      address: data.address,
+      property_type: data.property_type,
+      total_rentable_area: data.total_rentable_area || null,
+      floors: data.floors || null,
+      parking_spaces: data.parking_spaces || null,
+      description: data.description || null,
+    }).select().single();
+    if (error) { alert("שגיאה ביצירת נכס: " + error.message); return; }
+    setShowNewProperty(false);
+    const { data: list } = await supabase.from("properties").select("id,name,city").order("name");
+    setProperties(list ?? []);
+    if (inserted) setPropertyId(inserted.id);
   }
 
   function updateOption(idx: number, field: string, value: any) {
@@ -635,21 +673,33 @@ export default function ContractEditPage() {
             </div>
             <div>
               <label className="mb-1 block text-xs font-semibold text-slate-700">שוכר *</label>
-              <select value={tenantId} onChange={(e) => setTenantId(e.target.value)} className={ic}>
-                <option value="">-- בחר שוכר --</option>
-                {tenants.map((t) => (
-                  <option key={t.id} value={t.id}>{t.name}{t.company_name ? " — " + t.company_name : ""}</option>
-                ))}
-              </select>
+              <div className="flex gap-2">
+                <select value={tenantId} onChange={(e) => setTenantId(e.target.value)} className={ic + " flex-1"}>
+                  <option value="">-- בחר שוכר --</option>
+                  {tenants.map((t) => (
+                    <option key={t.id} value={t.id}>{t.name}{t.company_name ? " — " + t.company_name : ""}</option>
+                  ))}
+                </select>
+                <button type="button" onClick={() => setShowNewTenant(true)}
+                  className="rounded-lg bg-green-600 text-white px-3 py-2 text-xs font-bold hover:bg-green-700 whitespace-nowrap">
+                  + שוכר חדש
+                </button>
+              </div>
             </div>
             <div>
               <label className="mb-1 block text-xs font-semibold text-slate-700">נכס *</label>
-              <select value={propertyId} onChange={(e) => setPropertyId(e.target.value)} className={ic}>
-                <option value="">-- בחר נכס --</option>
-                {properties.map((p) => (
-                  <option key={p.id} value={p.id}>{p.name}{p.city ? " — " + p.city : ""}</option>
-                ))}
-              </select>
+              <div className="flex gap-2">
+                <select value={propertyId} onChange={(e) => setPropertyId(e.target.value)} className={ic + " flex-1"}>
+                  <option value="">-- בחר נכס --</option>
+                  {properties.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}{p.city ? " — " + p.city : ""}</option>
+                  ))}
+                </select>
+                <button type="button" onClick={() => setShowNewProperty(true)}
+                  className="rounded-lg bg-green-600 text-white px-3 py-2 text-xs font-bold hover:bg-green-700 whitespace-nowrap">
+                  + נכס חדש
+                </button>
+              </div>
             </div>
             {spaces.length > 0 && (
               <div>
@@ -1352,6 +1402,24 @@ export default function ContractEditPage() {
           )}
         </div>
       </div>
+
+        {/* Inline creation modals */}
+        {showNewTenant && (
+          <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+            <div className="bg-white rounded-2xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
+              <h3 className="text-lg font-bold text-slate-800 mb-4">שוכר חדש</h3>
+              <TenantForm onSubmit={handleNewTenant} onCancel={() => setShowNewTenant(false)} />
+            </div>
+          </div>
+        )}
+        {showNewProperty && (
+          <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+            <div className="bg-white rounded-2xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
+              <h3 className="text-lg font-bold text-slate-800 mb-4">נכס חדש</h3>
+              <PropertyForm onSubmit={handleNewProperty} onCancel={() => setShowNewProperty(false)} />
+            </div>
+          </div>
+        )}
     </div>
   );
 }
