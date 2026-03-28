@@ -108,32 +108,63 @@ export default function ContractsPage() {
 
     setCpiLoading(true);
 
-    // CBS calculator via Server Action (runs server-side, bypasses Vercel auth)
+    // Known index months for fallback
+    const knownFrom = getKnownIndexMonth(new Date(refDateStr));
+    const knownTo = getKnownIndexMonth(new Date());
+
+    // Primary: CBS calculator via Server Action (server-side, bypasses Vercel auth)
+    // Fallback: cumulative % chain from Supabase cpi_records
     fetchCpiAdjusted({ value: totalRentPerSqm, fromDate: baseDate, toDate: todayForCbs })
       .then(function(data) {
-        if (!data.success) {
-          console.warn("CBS server action failed:", data.error);
-          setCpiResult(null);
-        } else {
-          setCpiResult({
-            success: true, source: "cbs",
-            baseRentPerSqm: data.baseRentPerSqm,
-            adjustedRentPerSqm: data.adjustedRentPerSqm,
-            changePct: data.changePct,
-            fromDate: data.fromDate,
-            toDate: data.toDate,
-            fromIndexValue: data.fromIndexValue,
-            toIndexValue: data.toIndexValue,
-            baseYear: data.baseYear,
-            verificationUrl: data.verificationUrl,
-          });
-        }
+        if (!data.success) throw new Error(data.error || "CBS failed");
+        setCpiResult({
+          success: true, source: "cbs",
+          baseRentPerSqm: data.baseRentPerSqm,
+          adjustedRentPerSqm: data.adjustedRentPerSqm,
+          changePct: data.changePct,
+          fromDate: data.fromDate,
+          toDate: data.toDate,
+          fromIndexValue: data.fromIndexValue,
+          toIndexValue: data.toIndexValue,
+          baseYear: data.baseYear,
+          verificationUrl: data.verificationUrl,
+        });
         setCpiLoading(false);
       })
-      .catch(function(e) {
-        console.warn("CBS call error:", e);
-        setCpiResult(null);
-        setCpiLoading(false);
+      .catch(function() {
+        // Fallback: cumulative % chain from Supabase cpi_records
+        supabase.from("cpi_records")
+          .select("year,month,value,base_year,percent_change")
+          .or(`year.gt.${knownFrom.year},and(year.eq.${knownFrom.year},month.gte.${knownFrom.month})`)
+          .order("year").order("month")
+          .then(function({ data: records }) {
+            if (!records || records.length < 2) { setCpiResult(null); setCpiLoading(false); return; }
+            const baseRec = records.find(function(r) { return r.year === knownFrom.year && r.month === knownFrom.month; });
+            if (!baseRec) { setCpiResult(null); setCpiLoading(false); return; }
+            let cumulative = 1.0;
+            let lastRec = baseRec;
+            for (let i = 0; i < records.length; i++) {
+              const r = records[i];
+              if ((r.year > knownTo.year) || (r.year === knownTo.year && r.month > knownTo.month)) break;
+              if (((r.year > knownFrom.year) || (r.year === knownFrom.year && r.month > knownFrom.month)) && r.percent_change != null) {
+                cumulative *= (1 + Number(r.percent_change) / 100);
+                lastRec = r;
+              }
+            }
+            setCpiResult({
+              success: true, source: "local",
+              baseRentPerSqm: Math.round(totalRentPerSqm * 100) / 100,
+              adjustedRentPerSqm: Math.round(totalRentPerSqm * cumulative * 100) / 100,
+              changePct: Math.round((cumulative - 1) * 10000) / 100,
+              fromDate: `${knownFrom.month}/${knownFrom.year}`,
+              toDate: `${lastRec.month}/${lastRec.year}`,
+              fromIndexValue: Number(baseRec.value),
+              toIndexValue: Number(lastRec.value),
+              baseYear: baseRec.base_year || null,
+              verificationUrl: null,
+            });
+            setCpiLoading(false);
+          });
       });
   }, [selected]);
 
