@@ -781,7 +781,7 @@ export default function ContractEditPage() {
                 </div>
               </div>
               <div>
-                <label className="mb-1 block text-xs font-semibold text-slate-700">תאריך מדד בסיס</label>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">תאריך פרסום מדד הבסיס (מדד ידוע)</label>
                 <input type="date" value={baseCPIDate} onChange={(e) => setBaseCPIDate(e.target.value)} className={ic} />
               </div>
               <div>

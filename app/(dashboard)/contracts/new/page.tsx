@@ -909,7 +909,7 @@ export default function ContractsNewPage() {
               </div>
               <div>
                 <label className="mb-1 block text-xs font-semibold text-slate-700">
-                  תאריך מדד בסיס
+                  תאריך פרסום מדד הבסיס (מדד ידוע)
                 </label>
                 <input
                   type="date"

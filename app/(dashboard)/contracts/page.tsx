@@ -4,7 +4,8 @@ import { useRouter } from "next/navigation";
 import { supabase } from '@/lib/supabase';
 import { syncContractStatuses } from '@/lib/contractSync';
 import { logAudit } from '@/lib/audit-log';
-// CPI calculated client-side from cpi_records (cumulative % chain)
+import { fetchCpiAdjusted } from '@/lib/cpi-server';
+// CPI: primary = CBS calculator (server action), fallback = local cpi_records
 
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
 function fmtMoney(n: number) { return "₪"+Math.round(n??0).toLocaleString(); }
@@ -82,10 +83,8 @@ export default function ContractsPage() {
 
   const selContract = contracts.find(function(c){return c.id===selected;});
 
-  // Load CPI-adjusted price.
-  // "מדד ידוע" rule: CPI for month X is published ~15th of month X+1.
-  // Contract's index_base_date is the date when the known index was recorded.
-  // CBS calculator handles known-index logic internally — send raw dates.
+  // Load CPI-adjusted price via CBS calculator (server action — no CORS/auth issues).
+  // CBS determines the "מדד ידוע" (known index) based on the actual date including day.
   useEffect(function() {
     if (!selContract) { setCpiResult(null); return; }
     if (selContract.indexation_method === "none") { setCpiResult(null); return; }
@@ -102,74 +101,38 @@ export default function ContractsPage() {
       : 0;
     const totalRentPerSqm = rentPerSqm + investPerSqm;
 
-    // Known index months for fallback
-    const baseDateObj = new Date(refDateStr);
-    const knownFrom = getKnownIndexMonth(baseDateObj);
-    const knownTo = getKnownIndexMonth(new Date());
-
-    // Today's full date for CBS calculator (day matters for known-index determination)
+    // Today's full date for CBS calculator (day matters for known-index)
     const todayForCbs = formatDateForCbs(new Date().toISOString());
+    if (!todayForCbs) { setCpiResult(null); return; }
 
     setCpiLoading(true);
-    const cbsUrl = `/api/cpi-calc?value=${totalRentPerSqm}&from=${baseDate}&to=${todayForCbs}`;
 
-    // Primary: CBS Calculator via API route (exact result)
-    // Fallback: cumulative % chain from cpi_records (close approximation)
-    fetch(cbsUrl)
-      .then(function(r) { if (!r.ok) throw new Error("API " + r.status); return r.json(); })
+    // CBS calculator via Server Action (runs server-side, bypasses Vercel auth)
+    fetchCpiAdjusted({ value: totalRentPerSqm, fromDate: baseDate, toDate: todayForCbs })
       .then(function(data) {
-        if (!data.to_value) throw new Error("No to_value");
-        setCpiResult({
-          success: true, source: "cbs",
-          baseRentPerSqm: Math.round(totalRentPerSqm * 100) / 100,
-          adjustedRentPerSqm: Math.round(data.to_value * 100) / 100,
-          changePct: data.change_percent ?? null,
-          fromDate: data.from_index_date || baseDate,
-          toDate: data.to_index_date || todayMM,
-          fromIndexValue: data.from_index_value ?? null,
-          toIndexValue: data.to_index_value ?? null,
-          baseYear: data.base_year ?? null,
-          verificationUrl: data.verification_url ?? null,
-        });
+        if (!data.success) {
+          console.warn("CBS server action failed:", data.error);
+          setCpiResult(null);
+        } else {
+          setCpiResult({
+            success: true, source: "cbs",
+            baseRentPerSqm: data.baseRentPerSqm,
+            adjustedRentPerSqm: data.adjustedRentPerSqm,
+            changePct: data.changePct,
+            fromDate: data.fromDate,
+            toDate: data.toDate,
+            fromIndexValue: data.fromIndexValue,
+            toIndexValue: data.toIndexValue,
+            baseYear: data.baseYear,
+            verificationUrl: data.verificationUrl,
+          });
+        }
         setCpiLoading(false);
       })
-      .catch(function() {
-        // Fallback: cumulative % chain from Supabase cpi_records.
-        // percent_change is base-year independent, so chaining works across base transitions.
-        supabase.from("cpi_records")
-          .select("year,month,value,base_year,percent_change")
-          .or(`year.gt.${knownFrom.year},and(year.eq.${knownFrom.year},month.gte.${knownFrom.month})`)
-          .order("year").order("month")
-          .then(function({ data: records }) {
-            if (!records || records.length < 2) { setCpiResult(null); setCpiLoading(false); return; }
-            const baseRec = records.find(function(r) { return r.year === knownFrom.year && r.month === knownFrom.month; });
-            if (!baseRec) { setCpiResult(null); setCpiLoading(false); return; }
-            let cumulative = 1.0;
-            let lastRec = baseRec;
-            for (let i = 0; i < records.length; i++) {
-              const r = records[i];
-              if ((r.year > knownTo.year) || (r.year === knownTo.year && r.month > knownTo.month)) break;
-              if (((r.year > knownFrom.year) || (r.year === knownFrom.year && r.month > knownFrom.month)) && r.percent_change != null) {
-                cumulative *= (1 + Number(r.percent_change) / 100);
-                lastRec = r;
-              }
-            }
-            const cbsFromDate = `${String(knownFrom.month).padStart(2,'0')}-01-${knownFrom.year}`;
-            const cbsToDate = `${String(knownTo.month).padStart(2,'0')}-01-${knownTo.year}`;
-            setCpiResult({
-              success: true, source: "local",
-              baseRentPerSqm: Math.round(totalRentPerSqm * 100) / 100,
-              adjustedRentPerSqm: Math.round(totalRentPerSqm * cumulative * 100) / 100,
-              changePct: Math.round((cumulative - 1) * 10000) / 100,
-              fromDate: `${knownFrom.month}/${knownFrom.year}`,
-              toDate: `${lastRec.month}/${lastRec.year}`,
-              fromIndexValue: Number(baseRec.value),
-              toIndexValue: Number(lastRec.value),
-              baseYear: baseRec.base_year || null,
-              verificationUrl: `https://api.cbs.gov.il/index/data/calculator/120010?value=${totalRentPerSqm}&date=${cbsFromDate}&toDate=${cbsToDate}&format=json`,
-            });
-            setCpiLoading(false);
-          });
+      .catch(function(e) {
+        console.warn("CBS call error:", e);
+        setCpiResult(null);
+        setCpiLoading(false);
       });
   }, [selected]);
 

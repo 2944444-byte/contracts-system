@@ -4,34 +4,36 @@ const CBS_CALC_URL = "https://api.cbs.gov.il/index/data/calculator/120010";
 
 /**
  * Server Action: Fetch CPI-adjusted value from CBS calculator.
- * Runs server-side — no CORS issues.
+ * Runs server-side — no CORS or Vercel auth issues.
  * CBS index 120010 = CPI. The calculator handles base-year conversions automatically.
  *
- * @param fromMM - Base date in MM-YYYY format
- * @param toMM   - Target date in MM-YYYY format
- * @param value  - Rent per sqm to adjust
+ * CBS determines the "מדד ידוע" (known index) based on the date:
+ * - The day matters: CPI for month X is published ~15th of month X+1.
+ *
+ * @param fromDate - Base date as MM-DD-YYYY (full date with day for CBS known-index logic)
+ * @param toDate   - Target date as MM-DD-YYYY
+ * @param value    - Rent per sqm to adjust
  */
 export async function fetchCpiAdjusted(params: {
   value: number;
-  fromMM: string;
-  toMM: string;
+  fromDate: string;  // MM-DD-YYYY
+  toDate: string;    // MM-DD-YYYY
 }): Promise<any> {
-  const { value, fromMM, toMM } = params;
+  const { value, fromDate: fromDateRaw, toDate: toDateRaw } = params;
 
-  if (!value || !fromMM || !toMM) {
+  if (!value || !fromDateRaw || !toDateRaw) {
     return { success: false, error: "Missing params" };
   }
 
-  // Convert MM-YYYY → MM-DD-YYYY for CBS API
-  const [fMM, fYYYY] = fromMM.split("-");
-  const [tMM, tYYYY] = toMM.split("-");
-
-  if (!fMM || !fYYYY || !tMM || !tYYYY) {
-    return { success: false, error: `Invalid date format: from=${fromMM} to=${toMM}` };
+  // Ensure MM-DD-YYYY format. Accept MM-DD-YYYY or MM-YYYY (default to 15th)
+  function ensureFullDate(d: string): string {
+    const parts = d.split("-");
+    if (parts.length === 3) return d;
+    return `${parts[0]}-15-${parts[1]}`;
   }
 
-  const fromDate = `${fMM}-01-${fYYYY}`;
-  const toDate = `${tMM}-01-${tYYYY}`;
+  const fromDate = ensureFullDate(fromDateRaw);
+  const toDate = ensureFullDate(toDateRaw);
 
   const cbsUrl = `${CBS_CALC_URL}?value=${value}&date=${fromDate}&toDate=${toDate}&format=json&download=false`;
 
