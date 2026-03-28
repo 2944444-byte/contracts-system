@@ -6,7 +6,8 @@ import { syncContractStatuses } from '@/lib/contractSync';
 import { logAudit } from '@/lib/audit-log';
 import { fetchCpiAdjusted } from '@/lib/cpi-server';
 import { calcChainingCoefficient } from '@/lib/cpi-utils';
-// CPI: primary = CBS calculator (server action), fallback = local with chaining coefficient
+import { buildPriceTimeline, calculateTierPreviews, type PriceTier } from '@/lib/contract-utils';
+// CPI + price timeline
 
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
 function fmtMoney(n: number) { return "₪"+(n??0).toLocaleString("he-IL",{minimumFractionDigits:2,maximumFractionDigits:2}); }
@@ -69,6 +70,8 @@ export default function ContractsPage() {
   const [search,    setSearch]    = useState("");
   const [cpiResult, setCpiResult] = useState<any>(null);
   const [cpiLoading, setCpiLoading] = useState(false);
+  const [priceTiers, setPriceTiers] = useState<PriceTier[]>([]);
+  const [priceTimeline, setPriceTimeline] = useState<any[]>([]);
 
   useEffect(function() { loadContracts(); }, []);
 
@@ -84,6 +87,38 @@ export default function ContractsPage() {
   }
 
   const selContract = contracts.find(function(c){return c.id===selected;});
+
+  // Load price tiers and build timeline when contract selected
+  useEffect(function() {
+    if (!selContract) { setPriceTiers([]); setPriceTimeline([]); return; }
+    supabase.from("contract_price_tiers").select("*")
+      .eq("contract_id", selContract.id).order("tier_number")
+      .then(function({ data: tiers }) {
+        var loadedTiers: PriceTier[] = (tiers ?? []).map(function(t: any) {
+          return {
+            increase_type: t.increase_type ?? "pct",
+            increase_value: Number(t.increase_value) || 0,
+            from_year: t.from_year ?? 1,
+            to_year: t.to_year ?? 3,
+            is_recurring: t.is_recurring ?? false,
+            recurring_every_years: t.recurring_every_years ?? (t.is_recurring ? 1 : null),
+            calculated_rent_per_sqm: null,
+            notes: t.notes ?? "",
+          };
+        });
+        setPriceTiers(loadedTiers);
+        if (selContract.start_date && selContract.end_date) {
+          var tl = buildPriceTimeline({
+            contractStart: selContract.start_date,
+            contractEnd: selContract.end_date,
+            baseRentPerSqm: Number(selContract.rent_per_sqm) || 0,
+            mainTiers: loadedTiers,
+            options: selContract.contract_options ?? [],
+          });
+          setPriceTimeline(tl);
+        }
+      });
+  }, [selected]);
 
   // Load CPI-adjusted price via CBS calculator (server action — no CORS/auth issues).
   // CBS determines the "מדד ידוע" (known index) based on the actual date including day.
@@ -195,10 +230,26 @@ export default function ContractsPage() {
   });
 
   // selContract already defined above
-  const baseRent    = selContract ? (selContract.rent_per_sqm??0)*(selContract.charged_area??0)+(selContract.investment_addition??0) : 0;
   const investPerSqm = selContract && selContract.charged_area > 0 && selContract.investment_addition
     ? Math.round(selContract.investment_addition / selContract.charged_area * 100) / 100 : 0;
-  const trueRentPerSqm = (selContract?.rent_per_sqm ?? 0) + investPerSqm;
+  const originalRentPerSqm = (selContract?.rent_per_sqm ?? 0);
+
+  // Current rent per sqm based on contract year (step-rent mechanism)
+  var currentRentPerSqm = originalRentPerSqm;
+  var currentContractYear = 0;
+  if (selContract?.start_date && priceTimeline.length > 0) {
+    var now = new Date();
+    for (var i = 0; i < priceTimeline.length; i++) {
+      var entry = priceTimeline[i];
+      if (new Date(entry.startDate) <= now && new Date(entry.endDate) > now) {
+        currentRentPerSqm = entry.rentPerSqm ?? originalRentPerSqm;
+        currentContractYear = i + 1;
+        break;
+      }
+    }
+  }
+  const trueRentPerSqm = currentRentPerSqm + investPerSqm;
+  const baseRent    = selContract ? trueRentPerSqm*(selContract.charged_area??0) : 0;
   const vat         = selContract?.vat_type==="taxable" ? baseRent*0.18 : 0;
   const remaining   = selContract?.end_date ? yearsMonthsLeft(selContract.end_date) : null;
 
@@ -353,13 +404,23 @@ export default function ContractsPage() {
                   </div>
                 </div>
 
-                {/* True rent per sqm (base + investment) */}
-                {investPerSqm > 0 && (
-                  <div className="rounded-lg bg-slate-50 border border-slate-200 px-3 py-2 mb-2 flex items-center justify-between text-xs">
-                    <span className="text-slate-500">שכ&quot;ד אמיתי למ&quot;ר (בסיס {fmtMoney(selContract.rent_per_sqm)} + תוספת {fmtMoney(investPerSqm)})</span>
+                {/* Current rent per sqm (with step-rent + investment) */}
+                <div className="rounded-lg bg-slate-50 border border-slate-200 px-3 py-2 mb-2 text-xs space-y-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-500">
+                      שכ&quot;ד נוכחי למ&quot;ר
+                      {currentContractYear > 0 && <span className="text-blue-500"> (שנה {currentContractYear})</span>}
+                      {investPerSqm > 0 && <span> + תוספת {fmtMoney(investPerSqm)}</span>}
+                    </span>
                     <span className="font-black text-slate-800">{fmtMoney(trueRentPerSqm)}/מ&quot;ר</span>
                   </div>
-                )}
+                  {currentRentPerSqm !== originalRentPerSqm && (
+                    <div className="flex items-center justify-between text-slate-400">
+                      <span>שכ&quot;ד מקורי (שנה 1)</span>
+                      <span>₪{originalRentPerSqm.toFixed(2)}/מ&quot;ר</span>
+                    </div>
+                  )}
+                </div>
 
                 {/* CPI-adjusted price via CBS calculator */}
                 {cpiLoading && (
@@ -402,6 +463,48 @@ export default function ContractsPage() {
                       <a href={cpiResult.verificationUrl} target="_blank" rel="noopener noreferrer"
                         className="text-[10px] text-blue-500 hover:underline block">🔗 אימות מול מחשבון הלמ&quot;ס</a>
                     )}
+                  </div>
+                )}
+
+                {/* Price Timeline Table */}
+                {priceTimeline.length > 1 && (
+                  <div className="rounded-lg border border-blue-200 bg-blue-50/30 p-3 mb-3">
+                    <div className="text-xs font-bold text-blue-800 mb-2">📊 ציר זמן מחירים</div>
+                    <table className="w-full text-[10px]">
+                      <thead>
+                        <tr className="text-blue-600 border-b border-blue-200">
+                          <th className="py-1 text-right font-semibold">תקופה</th>
+                          <th className="py-1 text-right font-semibold">שכ&quot;ד בסיס</th>
+                          {cpiResult && <th className="py-1 text-right font-semibold">צמוד למדד</th>}
+                          <th className="py-1 text-center font-semibold w-6"></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {priceTimeline.map(function(entry: any, idx: number) {
+                          var now = new Date();
+                          var isCurrent = new Date(entry.startDate) <= now && new Date(entry.endDate) > now;
+                          var startD = new Date(entry.startDate);
+                          var isNotCalendar = startD.getMonth() !== 0 || startD.getDate() !== 1;
+                          var changeMonth = isNotCalendar ? startD.toLocaleDateString("he-IL", { month: "short" }) : "";
+                          var rentSqm = entry.rentPerSqm ?? 0;
+                          var rentWithInvest = rentSqm + investPerSqm;
+                          // CPI adjustment ratio applied to each year
+                          var cpiRatio = cpiResult ? (cpiResult.adjustedRentPerSqm / cpiResult.baseRentPerSqm) : 1;
+                          var cpiRent = rentWithInvest * cpiRatio;
+                          return (
+                            <tr key={idx} className={"border-b border-blue-100 " + (isCurrent ? "bg-blue-100 font-bold" : "")}>
+                              <td className="py-1 text-right">
+                                <span>{entry.label}</span>
+                                {changeMonth && <span className="text-blue-400 mr-1">({changeMonth})</span>}
+                              </td>
+                              <td className="py-1 text-right">₪{rentWithInvest.toFixed(2)}/מ&quot;ר</td>
+                              {cpiResult && <td className="py-1 text-right text-amber-700">₪{cpiRent.toFixed(2)}/מ&quot;ר</td>}
+                              <td className="py-1 text-center">{isCurrent ? "◀" : ""}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
                   </div>
                 )}
 
