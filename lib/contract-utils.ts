@@ -111,8 +111,8 @@ export function validatePriceTiers(
 export function expandRecurringTiers(tiers: PriceTier[]): PriceTier[] {
   const expanded: PriceTier[] = [];
   for (const tier of tiers) {
-    if (tier.is_recurring && tier.recurring_every_years && tier.recurring_every_years > 0) {
-      const step = tier.recurring_every_years;
+    if (tier.is_recurring) {
+      const step = tier.recurring_every_years || 1;
       for (let y = tier.from_year; y < tier.to_year; y += step) {
         expanded.push({
           ...tier,

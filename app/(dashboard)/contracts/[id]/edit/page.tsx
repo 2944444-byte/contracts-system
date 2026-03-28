@@ -282,7 +282,7 @@ export default function ContractEditPage() {
         from_year: t.from_year ?? 1,
         to_year: t.to_year ?? 3,
         is_recurring: t.is_recurring ?? false,
-        recurring_every_years: t.recurring_every_years,
+        recurring_every_years: t.recurring_every_years ?? (t.is_recurring ? 1 : null),
         calculated_rent_per_sqm: t.calculated_rent_per_sqm,
         notes: t.notes ?? "",
       })));
