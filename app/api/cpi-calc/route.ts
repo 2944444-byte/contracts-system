@@ -1,23 +1,28 @@
 import { NextRequest, NextResponse } from "next/server";
 
 // API חישוב הצמדה — עוטף את מחשבון הלמ"ס
-// GET /api/cpi-calc?value=55000&from=09-2020&to=10-2025
+// GET /api/cpi-calc?value=55000&from=06-15-2020&to=03-28-2026
+// Accepts MM-DD-YYYY (full date) or MM-YYYY (day defaults to 15).
+// The day matters: CBS determines "מדד ידוע" based on whether the date
+// is before/after the ~15th (CPI for month X is published mid-month X+1).
 // מחזיר: { from_value, to_value, change_percent, base_year, verification_url }
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const value = searchParams.get("value");
-  const from  = searchParams.get("from");  // MM-YYYY
-  const to    = searchParams.get("to");    // MM-YYYY
+  const from  = searchParams.get("from");  // MM-DD-YYYY or MM-YYYY
+  const to    = searchParams.get("to");    // MM-DD-YYYY or MM-YYYY
 
   if (!value || !from || !to) {
     return NextResponse.json({ error: "חסרים פרמטרים: value, from, to" }, { status: 400 });
   }
 
-  // המר MM-YYYY ל-MM-DD-YYYY שנדרש ב-API
-  function toApiDate(mmYyyy: string): string {
-    const [mm, yyyy] = mmYyyy.split("-");
-    return `${mm}-01-${yyyy}`;
+  // Ensure MM-DD-YYYY format. If MM-YYYY is passed, default to 15th (known-index cutoff)
+  function toApiDate(input: string): string {
+    const parts = input.split("-");
+    if (parts.length === 3) return input; // already MM-DD-YYYY
+    // MM-YYYY → default to 15th
+    return `${parts[0]}-15-${parts[1]}`;
   }
 
   const fromDate = toApiDate(from);

@@ -45,7 +45,6 @@ export async function fetchHighestCPI(fromYear: number, fromMonth: number, toYea
 
 /**
  * חישוב שכ"ד מוצמד
- * כלל t-2: מדד קובע = 2 חודשים לפני תאריך התשלום
  */
 export function calcIndexedRent(baseRent: number, baseCPI: number, currentCPI: number): number {
   if (!baseCPI || !currentCPI) return baseRent;
@@ -53,12 +52,23 @@ export function calcIndexedRent(baseRent: number, baseCPI: number, currentCPI: n
 }
 
 /**
- * קבלת חודש t-2 לפי תאריך תשלום
+ * "מדד ידוע" — המדד שפורסם נכון לתאריך נתון.
+ * מדד בגין חודש X מתפרסם ב-15 לחודש X+1.
+ * אם התאריך מה-15 והלאה → מדד ידוע = חודש קודם.
+ * אם התאריך לפני ה-15 → מדד ידוע = 2 חודשים אחורה.
+ */
+export function getKnownIndexMonth(date: Date): { year: number; month: number } {
+  const d = new Date(date);
+  const monthsBack = d.getDate() >= 15 ? 1 : 2;
+  d.setMonth(d.getMonth() - monthsBack);
+  return { year: d.getFullYear(), month: d.getMonth() + 1 };
+}
+
+/**
+ * @deprecated Use getKnownIndexMonth instead
  */
 export function getT2Month(paymentDate: Date): { year: number; month: number } {
-  const d = new Date(paymentDate);
-  d.setMonth(d.getMonth() - 2);
-  return { year: d.getFullYear(), month: d.getMonth() + 1 };
+  return getKnownIndexMonth(paymentDate);
 }
 
 /**

@@ -26,25 +26,26 @@ function yearsMonthsLeft(endDate: string) {
   return { years, months, text, isExpired: false };
 }
 
-// t-2 rule: current billing month minus 2 → that's the known index month
-function getT2Date(): string {
-  const now = new Date();
-  now.setMonth(now.getMonth() - 2);
-  const mm = String(now.getMonth() + 1).padStart(2, "0");
-  const yyyy = now.getFullYear();
-  return `${mm}-${yyyy}`;
+// "מדד ידוע" — the CPI index KNOWN at a given date.
+// CPI for month X is published around the 15th of month X+1.
+// On 15th+ of month Y → known index = month Y-1
+// Before 15th of month Y → known index = month Y-2
+function getKnownIndexMonth(date: Date): { year: number; month: number } {
+  const d = new Date(date);
+  const monthsBack = d.getDate() >= 15 ? 1 : 2;
+  d.setMonth(d.getMonth() - monthsBack);
+  return { year: d.getFullYear(), month: d.getMonth() + 1 };
 }
 
-function getBaseIndexDate(indexBaseDate: string|null, startDate: string|null): string|null {
-  // t-2 rule: base index = 2 months before the index_base_date (or start_date)
-  // Example: index_base_date=2020-06-15 → t-2 = April 2020 → "04-2020"
-  const refDate = indexBaseDate || startDate;
-  if (!refDate) return null;
-  const d = new Date(refDate);
+// Format date as MM-DD-YYYY for CBS calculator.
+// CBS uses the day to determine which index is "known" (published by ~15th of next month).
+// Do NOT pre-apply t-2 — CBS handles known-index logic internally.
+function formatDateForCbs(dateStr: string): string | null {
+  const d = new Date(dateStr);
   if (isNaN(d.getTime())) return null;
-  // Apply t-2: subtract 2 months
-  d.setMonth(d.getMonth() - 2);
-  return `${String(d.getMonth() + 1).padStart(2, "0")}-${d.getFullYear()}`;
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${mm}-${dd}-${d.getFullYear()}`;
 }
 
 const STATUS_MAP: Record<string,{label:string;color:string;dot:string}> = {
@@ -81,16 +82,18 @@ export default function ContractsPage() {
 
   const selContract = contracts.find(function(c){return c.id===selected;});
 
-  // Load CPI-adjusted price from cpi_records table
-  // Uses simple ratio: adjusted = base_rent * (current_index / base_index)
-  // All records in our DB share the same base_year so ratio is valid
+  // Load CPI-adjusted price.
+  // "מדד ידוע" rule: CPI for month X is published ~15th of month X+1.
+  // Contract's index_base_date is the date when the known index was recorded.
+  // CBS calculator handles known-index logic internally — send raw dates.
   useEffect(function() {
     if (!selContract) { setCpiResult(null); return; }
     if (selContract.indexation_method === "none") { setCpiResult(null); return; }
     const rentPerSqm = Number(selContract.rent_per_sqm);
     if (!rentPerSqm) { setCpiResult(null); return; }
 
-    const baseDate = getBaseIndexDate(selContract.index_base_date, selContract.start_date);
+    const refDateStr = selContract.index_base_date || selContract.start_date;
+    const baseDate = formatDateForCbs(refDateStr);
     if (!baseDate) { setCpiResult(null); return; }
 
     // True rent = base + investment per sqm
@@ -99,21 +102,16 @@ export default function ContractsPage() {
       : 0;
     const totalRentPerSqm = rentPerSqm + investPerSqm;
 
-    // Parse base date MM-YYYY
-    const [bMM, bYYYY] = baseDate.split("-");
-    const baseMonth = Number(bMM);
-    const baseYr = Number(bYYYY);
+    // Known index months for fallback
+    const baseDateObj = new Date(refDateStr);
+    const knownFrom = getKnownIndexMonth(baseDateObj);
+    const knownTo = getKnownIndexMonth(new Date());
 
-    // t-2: current index = 2 months before today
-    const today = new Date();
-    const t2 = new Date(today.getFullYear(), today.getMonth() - 2, 1);
-    const toMonth = t2.getMonth() + 1;
-    const toYear = t2.getFullYear();
+    // Today's full date for CBS calculator (day matters for known-index determination)
+    const todayForCbs = formatDateForCbs(new Date().toISOString());
 
     setCpiLoading(true);
-    const cbsFromDate = `${bMM}-01-${bYYYY}`;
-    const cbsToDate = `${String(toMonth).padStart(2,'0')}-01-${toYear}`;
-    const cbsUrl = `/api/cpi-calc?value=${totalRentPerSqm}&from=${baseDate}&to=${String(toMonth).padStart(2,'0')}-${toYear}`;
+    const cbsUrl = `/api/cpi-calc?value=${totalRentPerSqm}&from=${baseDate}&to=${todayForCbs}`;
 
     // Primary: CBS Calculator via API route (exact result)
     // Fallback: cumulative % chain from cpi_records (close approximation)
@@ -127,7 +125,7 @@ export default function ContractsPage() {
           adjustedRentPerSqm: Math.round(data.to_value * 100) / 100,
           changePct: data.change_percent ?? null,
           fromDate: data.from_index_date || baseDate,
-          toDate: data.to_index_date || `${toMonth}/${toYear}`,
+          toDate: data.to_index_date || todayMM,
           fromIndexValue: data.from_index_value ?? null,
           toIndexValue: data.to_index_value ?? null,
           baseYear: data.base_year ?? null,
@@ -136,31 +134,34 @@ export default function ContractsPage() {
         setCpiLoading(false);
       })
       .catch(function() {
-        // Fallback: cumulative % from Supabase cpi_records
+        // Fallback: cumulative % chain from Supabase cpi_records.
+        // percent_change is base-year independent, so chaining works across base transitions.
         supabase.from("cpi_records")
           .select("year,month,value,base_year,percent_change")
-          .or(`year.gt.${baseYr},and(year.eq.${baseYr},month.gte.${baseMonth})`)
+          .or(`year.gt.${knownFrom.year},and(year.eq.${knownFrom.year},month.gte.${knownFrom.month})`)
           .order("year").order("month")
           .then(function({ data: records }) {
             if (!records || records.length < 2) { setCpiResult(null); setCpiLoading(false); return; }
-            const baseRec = records.find(function(r) { return r.year === baseYr && r.month === baseMonth; });
+            const baseRec = records.find(function(r) { return r.year === knownFrom.year && r.month === knownFrom.month; });
             if (!baseRec) { setCpiResult(null); setCpiLoading(false); return; }
             let cumulative = 1.0;
             let lastRec = baseRec;
             for (let i = 0; i < records.length; i++) {
               const r = records[i];
-              if ((r.year > toYear) || (r.year === toYear && r.month > toMonth)) break;
-              if (((r.year > baseYr) || (r.year === baseYr && r.month > baseMonth)) && r.percent_change != null) {
+              if ((r.year > knownTo.year) || (r.year === knownTo.year && r.month > knownTo.month)) break;
+              if (((r.year > knownFrom.year) || (r.year === knownFrom.year && r.month > knownFrom.month)) && r.percent_change != null) {
                 cumulative *= (1 + Number(r.percent_change) / 100);
                 lastRec = r;
               }
             }
+            const cbsFromDate = `${String(knownFrom.month).padStart(2,'0')}-01-${knownFrom.year}`;
+            const cbsToDate = `${String(knownTo.month).padStart(2,'0')}-01-${knownTo.year}`;
             setCpiResult({
               success: true, source: "local",
               baseRentPerSqm: Math.round(totalRentPerSqm * 100) / 100,
               adjustedRentPerSqm: Math.round(totalRentPerSqm * cumulative * 100) / 100,
-              changePct: Math.round((cumulative - 1) * 1000) / 10,
-              fromDate: `${baseMonth}/${baseYr}`,
+              changePct: Math.round((cumulative - 1) * 10000) / 100,
+              fromDate: `${knownFrom.month}/${knownFrom.year}`,
               toDate: `${lastRec.month}/${lastRec.year}`,
               fromIndexValue: Number(baseRec.value),
               toIndexValue: Number(lastRec.value),

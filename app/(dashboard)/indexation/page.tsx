@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import { supabase } from '@/lib/supabase';
-import { fetchCPI, fetchHighestCPI, calcIndexedRent, getT2Month, formatPeriod } from '@/lib/cpi-utils';
+import { fetchCPI, fetchHighestCPI, calcIndexedRent, getKnownIndexMonth, formatPeriod } from '@/lib/cpi-utils';
 
 function fmtMoney(n: number) { return "₪" + Math.round(n ?? 0).toLocaleString(); }
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
@@ -31,7 +31,7 @@ export default function IndexationPage() {
     setCpiLoading(true);
     try {
       const now = new Date();
-      const { year, month } = getT2Month(now);
+      const { year, month } = getKnownIndexMonth(now);
       const val = await fetchCPI(year, month);
       setCurrentCPI(val);
       setCpiPeriod(formatPeriod(year, month) + " (t-2)");
@@ -43,7 +43,7 @@ export default function IndexationPage() {
     setCalculating(c.id);
     try {
       const date = new Date(paymentDate);
-      const { year, month } = getT2Month(date);
+      const { year, month } = getKnownIndexMonth(date);
       let currentIdx: number | null;
 
       if (c.index_mechanism === "highest_in_period" && c.index_base_date) {
