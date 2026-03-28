@@ -2,6 +2,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from '@/lib/supabase';
+import { fetchCpiAdjusted } from '@/lib/cpi-server';
 
 function fmtMoney(n: number) { return "₪" + (n ?? 0).toLocaleString("he-IL",{minimumFractionDigits:2,maximumFractionDigits:2}); }
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
@@ -52,7 +53,33 @@ export default function DashboardPage() {
       supabase.from("properties").select("id",{count:"exact",head:true}),
     ]);
 
-    const monthly = (contracts??[]).reduce(function(s,c){return s+(c.rent_per_sqm??0)*(c.charged_area??0)+(c.investment_addition??0);},0);
+    // Calculate base monthly, then apply CPI adjustment
+    const monthlyBase = (contracts??[]).reduce(function(s,c){return s+(c.rent_per_sqm??0)*(c.charged_area??0)+(c.investment_addition??0);},0);
+    // Fetch CPI ratio to convert base to indexed revenue
+    var monthly = monthlyBase;
+    try {
+      // Use first active contract's index date as representative
+      var repContract = (contracts??[]).find(function(c: any){return c.index_base_date;});
+      if (repContract) {
+        var now = new Date();
+        var fromDate = (function(d: string) {
+          var dt = new Date(d); if (dt.getDate() === 15) dt.setDate(16);
+          var mm = String(dt.getMonth()+1).padStart(2,"0");
+          var dd = String(dt.getDate()).padStart(2,"0");
+          return mm+"-"+dd+"-"+dt.getFullYear();
+        })(repContract.index_base_date);
+        var toDate = (function() {
+          var mm = String(now.getMonth()+1).padStart(2,"0");
+          var dd = String(now.getDate()).padStart(2,"0");
+          return mm+"-"+dd+"-"+now.getFullYear();
+        })();
+        var cpiData = await fetchCpiAdjusted({ value: 100, fromDate: fromDate, toDate: toDate });
+        if (cpiData.success && cpiData.adjustedRentPerSqm) {
+          var cpiRatio = cpiData.adjustedRentPerSqm / 100;
+          monthly = monthlyBase * cpiRatio;
+        }
+      }
+    } catch(e) { /* fallback to base */ }
     const total   = (spaces??[]).length;
     const occ     = (spaces??[]).filter(function(s){return s.status==="occupied";}).length;
     const overdue = (charges??[]).filter(function(c){return c.due_date&&new Date(c.due_date)<new Date();}).length;
@@ -104,7 +131,7 @@ export default function DashboardPage() {
           {/* Row 1 — 4 KPI ראשיים */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
             {[
-              {label:"הכנסה חודשית",    value:fmtMoney(kpi.monthlyRevenue), sub:"חוזים פעילים",         icon:"💰", color:"text-emerald-700", bg:"bg-emerald-50",  border:"border-emerald-100", href:"/cashflow"},
+              {label:"הכנסה חודשית צמודה", value:fmtMoney(kpi.monthlyRevenue), sub:"חוזים פעילים",         icon:"💰", color:"text-emerald-700", bg:"bg-emerald-50",  border:"border-emerald-100", href:"/cashflow"},
               {label:"תפוסה",           value:kpi.occupancyRate+"%",         sub:kpi.occupiedSpaces+"/"+kpi.totalSpaces+" יחידות", icon:"🏢", color:"text-blue-700",    bg:"bg-blue-50",     border:"border-blue-100",    href:"/units"},
               {label:"חוזים פעילים",   value:String(kpi.activeContracts),   sub:kpi.expiringContracts+" פוגים",     icon:"📄", color:"text-slate-800",  bg:"bg-white",       border:"border-slate-200",   href:"/contracts"},
               {label:"התראות פתוחות",  value:String(kpi.openAlerts),        sub:kpi.urgentAlerts+" דחופות",         icon:"🔔", color:kpi.openAlerts>0?"text-red-700":"text-slate-400", bg:kpi.openAlerts>0?"bg-red-50":"bg-white", border:kpi.openAlerts>0?"border-red-100":"border-slate-200", href:"/alerts"},

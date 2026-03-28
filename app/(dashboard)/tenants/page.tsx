@@ -3,6 +3,7 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit-log';
+import { fetchCpiAdjusted } from '@/lib/cpi-server';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 
@@ -30,6 +31,7 @@ export default function TenantsPage() {
   const [fContactPhone, setFContactPhone] = useState("");
   const [fNotes, setFNotes] = useState("");
   const [fContacts, setFContacts] = useState<{name:string;role:string;email:string;phone:string}[]>([]);
+  const [cpiRatio, setCpiRatio] = useState(1);
 
   useEffect(() => { loadAll(); }, []);
 
@@ -37,13 +39,25 @@ export default function TenantsPage() {
     const [{ data: t }, { data: c }] = await Promise.all([
       supabase.from("tenants").select("*").order("name"),
       supabase.from("contracts")
-        .select("id, status, start_date, end_date, rent_per_sqm, charged_area, investment_addition, tenant_id, properties(name)")
+        .select("id, status, start_date, end_date, rent_per_sqm, charged_area, investment_addition, tenant_id, index_base_date, properties(name)")
         .in("status", ["active","expiring","extended","upcoming"]).order("end_date"),
     ]);
     setTenants(t ?? []);
     setContracts(c ?? []);
     setLoading(false);
     if (!selected && (t ?? []).length > 0) setSelected((t ?? [])[0].id);
+    // Calculate CPI ratio for indexed revenue display
+    try {
+      var rep = (c ?? []).find(function(ct: any) { return ct.index_base_date; });
+      if (rep) {
+        var now = new Date();
+        var dt = new Date(rep.index_base_date); if (dt.getDate() === 15) dt.setDate(16);
+        var fromD = String(dt.getMonth()+1).padStart(2,"0")+"-"+String(dt.getDate()).padStart(2,"0")+"-"+dt.getFullYear();
+        var toD = String(now.getMonth()+1).padStart(2,"0")+"-"+String(now.getDate()).padStart(2,"0")+"-"+now.getFullYear();
+        var cpiData = await fetchCpiAdjusted({ value: 100, fromDate: fromD, toDate: toD });
+        if (cpiData.success && cpiData.adjustedRentPerSqm) setCpiRatio(cpiData.adjustedRentPerSqm / 100);
+      }
+    } catch(e) {}
   }
 
   function openNew() {
@@ -113,7 +127,8 @@ export default function TenantsPage() {
   );
   const selTenant = tenants.find(t => t.id === selected);
   const selContracts = contracts.filter(c => c.tenant_id === selected);
-  const selRevenue = selContracts.reduce((s, c) => s + (c.rent_per_sqm ?? 0) * (c.charged_area ?? 0) + (c.investment_addition ?? 0), 0);
+  const selRevenueBase = selContracts.reduce((s, c) => s + (c.rent_per_sqm ?? 0) * (c.charged_area ?? 0) + (c.investment_addition ?? 0), 0);
+  const selRevenue = selRevenueBase * cpiRatio;
 
   const STATUS_MAP: Record<string, {label: string; color: string}> = {
     active:   { label: "פעיל",    color: "bg-green-100 text-green-700"   },
@@ -193,7 +208,7 @@ export default function TenantsPage() {
                 <div className="grid grid-cols-3 gap-3 mb-4">
                   {[
                     { label: "חוזים פעילים",    value: String(selContracts.length),  color: "text-slate-800", bg: "bg-slate-50"  },
-                    { label: "הכנסה חודשית",    value: fmtMoney(selRevenue),          color: "text-green-700", bg: "bg-green-50"  },
+                    { label: "הכנסה חודשית צמודה", value: fmtMoney(selRevenue),          color: "text-green-700", bg: "bg-green-50"  },
                     { label: "נכסים",            value: String(new Set(selContracts.map(c => c.properties?.name)).size), color: "text-blue-700", bg: "bg-blue-50" },
                   ].map(k => (
                     <div key={k.label} className={"rounded-xl p-3 text-center " + k.bg}>
@@ -229,7 +244,7 @@ export default function TenantsPage() {
                   </div>
                   <div className="divide-y divide-slate-100">
                     {selContracts.map(c => {
-                      const mon = (c.rent_per_sqm ?? 0) * (c.charged_area ?? 0) + (c.investment_addition ?? 0);
+                      const mon = ((c.rent_per_sqm ?? 0) * (c.charged_area ?? 0) + (c.investment_addition ?? 0)) * cpiRatio;
                       const days = c.end_date ? Math.ceil((new Date(c.end_date).getTime() - Date.now()) / 86400000) : null;
                       const si = STATUS_MAP[c.status] ?? { label: c.status, color: "bg-slate-100 text-slate-600" };
                       return (
