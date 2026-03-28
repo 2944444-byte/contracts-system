@@ -1000,16 +1000,25 @@ export default function ContractEditPage() {
                           )}
                           <input type="text" value={tier.notes} placeholder="הערות (אופציונלי)"
                             onChange={(e) => setPriceTiers(prev => prev.map((t, i) => i === idx ? { ...t, notes: e.target.value } : t))} className={ic + " text-xs"} />
-                          {preview?.calculated_rent_per_sqm && Number(rentPerSqm) > 0 && (
-                            <div className={"rounded-lg px-3 py-2 text-xs font-semibold " + (hasError ? "bg-red-100 text-red-700" : "bg-green-50 border border-green-200 text-green-700")}>
-                              {tier.increase_type === "none"
-                                ? `שנים ${tier.from_year}-${tier.to_year}: מחיר קפוא — ${fmtMoney(Number(rentPerSqm))}/מ"ר`
-                                : tier.increase_type === "fixed_total"
-                                  ? `שנים ${tier.from_year}-${tier.to_year}: סכום קבוע ${fmtMoney(tier.increase_value)}/חודש`
-                                  : `שנים ${tier.from_year}-${tier.to_year}: ${fmtMoney(preview.calculated_rent_per_sqm)}/מ"ר`
-                                    + (tier.is_recurring ? ` (חוזר כל ${tier.recurring_every_years} שנים)` : "")}
-                            </div>
-                          )}
+                          {Number(rentPerSqm) > 0 && (function() {
+                            var expanded = calculateTierPreviews([tier], idx === 0 ? Number(rentPerSqm) : (previews[idx-1]?.calculated_rent_per_sqm ?? Number(rentPerSqm)));
+                            if (!expanded.length) return null;
+                            return (
+                              <div className={"rounded-lg px-3 py-2 text-xs font-semibold space-y-0.5 " + (hasError ? "bg-red-100 text-red-700" : "bg-green-50 border border-green-200 text-green-700")}>
+                                {expanded.map(function(exp, ei) {
+                                  return (
+                                    <div key={ei}>
+                                      שנים {exp.from_year}-{exp.to_year}: {exp.increase_type === "none"
+                                        ? `מחיר קפוא — ${fmtMoney(Number(rentPerSqm))}/מ"ר`
+                                        : exp.increase_type === "fixed_total"
+                                          ? `סכום קבוע ${fmtMoney(exp.increase_value)}/חודש`
+                                          : `${fmtMoney(exp.calculated_rent_per_sqm)}/מ"ר`}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            );
+                          })()}
                         </div>
                       );
                     })}
