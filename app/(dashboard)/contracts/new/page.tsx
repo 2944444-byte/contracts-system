@@ -64,6 +64,7 @@ const GRACE_TYPES = [
 ];
 const GUARANTEE_TYPES = [
   { v: "bank", l: "ערבות בנקאית", icon: "🏦" },
+  { v: "promissory_note", l: "שטר חוב", icon: "📜" },
   { v: "check", l: "שיקים", icon: "📝" },
   { v: "cash", l: "מזומן", icon: "💵" },
   { v: "insurance", l: "ביטוח", icon: "🛡️" },
@@ -160,6 +161,7 @@ export default function ContractsNewPage() {
   const [guaranteeActual, setGuaranteeActual] = useState("");
   const [guaranteeBank, setGuaranteeBank] = useState("");
   const [guaranteeEnd, setGuaranteeEnd] = useState("");
+  const [guaranteeDocUrl, setGuaranteeDocUrl] = useState("");
   const [depositCalcMethod, setDepositCalcMethod] = useState<"months_based" | "fixed_amount">("months_based");
   const [depositMonths, setDepositMonths] = useState(3);
   const [depositIncludesMgmt, setDepositIncludesMgmt] = useState(false);
@@ -587,6 +589,7 @@ export default function ContractsNewPage() {
           amount_actual: guaranteeActual ? Number(guaranteeActual) : null,
           bank: guaranteeBank || null,
           end_date: guaranteeEnd || null,
+          document_url: guaranteeDocUrl || null,
           status: "active",
         });
       }
@@ -1888,6 +1891,19 @@ export default function ContractsNewPage() {
                       className={ic}
                     />
                   </div>
+                </div>
+                <div className="mt-3">
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">
+                    קישור למסמך ערבות (URL)
+                  </label>
+                  <input
+                    type="url"
+                    placeholder="https://dropbox.com/... או קישור אחר"
+                    value={guaranteeDocUrl}
+                    onChange={(e) => setGuaranteeDocUrl(e.target.value)}
+                    className={ic}
+                    dir="ltr"
+                  />
                 </div>
               </div>
             )}

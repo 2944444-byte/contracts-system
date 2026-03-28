@@ -62,6 +62,7 @@ const GRACE_TYPES = [
 ];
 const GUARANTEE_TYPES = [
   { v: "bank", l: "ערבות בנקאית", icon: "🏦" },
+  { v: "promissory_note", l: "שטר חוב", icon: "📜" },
   { v: "check", l: "שיקים", icon: "📝" },
   { v: "cash", l: "מזומן", icon: "💵" },
   { v: "insurance", l: "ביטוח", icon: "🛡️" },

@@ -104,15 +104,42 @@ export function validatePriceTiers(
 }
 
 /**
+ * Expand recurring tiers into individual year-by-year tiers.
+ * Example: { is_recurring: true, recurring_every_years: 1, from_year: 1, to_year: 10 }
+ * → 10 individual tiers: year 1-2, 2-3, 3-4, ..., 9-10
+ */
+export function expandRecurringTiers(tiers: PriceTier[]): PriceTier[] {
+  const expanded: PriceTier[] = [];
+  for (const tier of tiers) {
+    if (tier.is_recurring && tier.recurring_every_years && tier.recurring_every_years > 0) {
+      const step = tier.recurring_every_years;
+      for (let y = tier.from_year; y < tier.to_year; y += step) {
+        expanded.push({
+          ...tier,
+          from_year: y,
+          to_year: Math.min(y + step, tier.to_year),
+          is_recurring: false,
+          recurring_every_years: null,
+        });
+      }
+    } else {
+      expanded.push(tier);
+    }
+  }
+  return expanded;
+}
+
+/**
  * Calculate preview rent for each tier based on base rent.
+ * Expands recurring tiers first, then calculates sequential increases.
  * Returns tiers with calculated_rent_per_sqm filled in.
  */
 export function calculateTierPreviews(
   tiers: PriceTier[],
   baseRentPerSqm: number
 ): PriceTier[] {
-  // Sort by from_year for sequential calculation
-  const sorted = [...tiers].sort((a, b) => a.from_year - b.from_year);
+  const expanded = expandRecurringTiers(tiers);
+  const sorted = [...expanded].sort((a, b) => a.from_year - b.from_year);
   let currentRent = baseRentPerSqm;
 
   return sorted.map((tier) => {
