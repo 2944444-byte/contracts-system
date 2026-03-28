@@ -132,39 +132,53 @@ export default function ContractsPage() {
         setCpiLoading(false);
       })
       .catch(function() {
-        // Fallback: cumulative % chain from Supabase cpi_records
-        supabase.from("cpi_records")
-          .select("year,month,value,base_year,percent_change")
-          .or(`year.gt.${knownFrom.year},and(year.eq.${knownFrom.year},month.gte.${knownFrom.month})`)
-          .order("year").order("month")
-          .then(function({ data: records }) {
-            if (!records || records.length < 2) { setCpiResult(null); setCpiLoading(false); return; }
-            const baseRec = records.find(function(r) { return r.year === knownFrom.year && r.month === knownFrom.month; });
-            if (!baseRec) { setCpiResult(null); setCpiLoading(false); return; }
-            let cumulative = 1.0;
-            let lastRec = baseRec;
-            for (let i = 0; i < records.length; i++) {
-              const r = records[i];
-              if ((r.year > knownTo.year) || (r.year === knownTo.year && r.month > knownTo.month)) break;
-              if (((r.year > knownFrom.year) || (r.year === knownFrom.year && r.month > knownFrom.month)) && r.percent_change != null) {
-                cumulative *= (1 + Number(r.percent_change) / 100);
-                lastRec = r;
-              }
+        // Fallback: index ratio with chaining coefficient (same formula as CBS calculator)
+        // Formula: adjusted = baseRent × (currentIndex × chainingCoeff) / baseIndex
+        Promise.all([
+          supabase.from("cpi_records").select("year,month,value,base_year")
+            .eq("year", knownFrom.year).eq("month", knownFrom.month).single(),
+          supabase.from("cpi_records").select("year,month,value,base_year")
+            .eq("year", knownTo.year).eq("month", knownTo.month).single(),
+          supabase.from("cpi_link_coefficients").select("from_base_year,to_base_year,coefficient")
+        ]).then(function(results) {
+          var baseRec = results[0].data;
+          var currentRec = results[1].data;
+          var coefficients = results[2].data;
+          if (!baseRec || !currentRec || !coefficients) { setCpiResult(null); setCpiLoading(false); return; }
+          var baseIdx = Number(baseRec.value);
+          var currentIdx = Number(currentRec.value);
+          // Extract base years: "2018 ממוצע" → 2018, "2024 ממוצע" → 2024
+          var fromBaseYear = parseInt(String(currentRec.base_year));
+          var toBaseYear = parseInt(String(baseRec.base_year));
+          // Calculate chaining coefficient by multiplying link coefficients
+          var chainingCoeff = 1.0;
+          if (fromBaseYear !== toBaseYear) {
+            var year = fromBaseYear;
+            var maxSteps = 20;
+            while (year !== toBaseYear && maxSteps-- > 0) {
+              var link = coefficients.find(function(c) { return c.from_base_year === year; });
+              if (!link) break;
+              chainingCoeff *= Number(link.coefficient);
+              year = link.to_base_year;
             }
-            setCpiResult({
-              success: true, source: "local",
-              baseRentPerSqm: Math.round(totalRentPerSqm * 100) / 100,
-              adjustedRentPerSqm: Math.round(totalRentPerSqm * cumulative * 100) / 100,
-              changePct: Math.round((cumulative - 1) * 10000) / 100,
-              fromDate: `${knownFrom.month}/${knownFrom.year}`,
-              toDate: `${lastRec.month}/${lastRec.year}`,
-              fromIndexValue: Number(baseRec.value),
-              toIndexValue: Number(lastRec.value),
-              baseYear: baseRec.base_year || null,
-              verificationUrl: null,
-            });
-            setCpiLoading(false);
+          }
+          // CBS formula: adjusted = baseRent × (currentIndex × chainingCoeff) / baseIndex
+          var adjustedRent = totalRentPerSqm * (currentIdx * chainingCoeff) / baseIdx;
+          var changePct = ((currentIdx * chainingCoeff) / baseIdx - 1) * 100;
+          setCpiResult({
+            success: true, source: "local",
+            baseRentPerSqm: Math.round(totalRentPerSqm * 100) / 100,
+            adjustedRentPerSqm: Math.round(adjustedRent * 100) / 100,
+            changePct: Math.round(changePct * 100) / 100,
+            fromDate: `${knownFrom.month}/${knownFrom.year}`,
+            toDate: `${knownTo.month}/${knownTo.year}`,
+            fromIndexValue: baseIdx,
+            toIndexValue: currentIdx,
+            baseYear: baseRec.base_year || null,
+            verificationUrl: null,
           });
+          setCpiLoading(false);
+        }).catch(function() { setCpiResult(null); setCpiLoading(false); });
       });
   }, [selected]);
 
