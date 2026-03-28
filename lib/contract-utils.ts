@@ -289,12 +289,13 @@ export function buildPriceTimeline(params: {
       type: "base",
     });
   } else {
-    // Add base period before first tier
-    if (mainTiers[0]?.from_year > 1) {
+    // Always add base year (year 1) at base price
+    const firstPreviewYear = mainPreviews[0]?.from_year ?? 2;
+    if (firstPreviewYear >= 1) {
       const baseEnd = new Date(contractStart);
-      baseEnd.setFullYear(baseEnd.getFullYear() + mainTiers[0].from_year - 1);
+      baseEnd.setFullYear(baseEnd.getFullYear() + 1);
       timeline.push({
-        label: `שנים 1-${mainTiers[0].from_year - 1}`,
+        label: "שנה 1",
         startDate: contractStart,
         endDate: format(baseEnd, "yyyy-MM-dd"),
         rentPerSqm: baseRentPerSqm,
@@ -303,13 +304,17 @@ export function buildPriceTimeline(params: {
         type: "base",
       });
     }
+    // Add each expanded tier as individual year
     mainPreviews.forEach((tier) => {
       const tStart = new Date(contractStart);
-      tStart.setFullYear(tStart.getFullYear() + tier.from_year - 1);
+      tStart.setFullYear(tStart.getFullYear() + tier.from_year);
       const tEnd = new Date(contractStart);
       tEnd.setFullYear(tEnd.getFullYear() + tier.to_year);
+      const yearLabel = (tier.to_year - tier.from_year === 1)
+        ? `שנה ${tier.to_year}`
+        : `שנים ${tier.from_year + 1}-${tier.to_year}`;
       timeline.push({
-        label: `שנים ${tier.from_year}-${tier.to_year}`,
+        label: yearLabel,
         startDate: format(tStart, "yyyy-MM-dd"),
         endDate: format(tEnd, "yyyy-MM-dd"),
         rentPerSqm: tier.increase_type === "fixed_total" ? null : tier.calculated_rent_per_sqm,
