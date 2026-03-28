@@ -39,11 +39,12 @@ function getKnownIndexMonth(date: Date): { year: number; month: number } {
 }
 
 // Format date as MM-DD-YYYY for CBS calculator.
-// CBS uses the day to determine which index is "known" (published by ~15th of next month).
-// Do NOT pre-apply t-2 — CBS handles known-index logic internally.
+// CBS publishes CPI on the 15th but considers it "known" from the 16th.
+// Users always enter 15 as the day for index dates, so we bump to 16 automatically.
 function formatDateForCbs(dateStr: string): string | null {
   const d = new Date(dateStr);
   if (isNaN(d.getTime())) return null;
+  if (d.getDate() === 15) d.setDate(16);
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   const dd = String(d.getDate()).padStart(2, "0");
   return `${mm}-${dd}-${d.getFullYear()}`;
