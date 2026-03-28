@@ -44,11 +44,37 @@ export async function fetchHighestCPI(fromYear: number, fromMonth: number, toYea
 }
 
 /**
- * חישוב שכ"ד מוצמד
+ * חישוב שכ"ד מוצמד — נוסחת הלמ"ס עם מקדם קשר
+ * adjusted = baseRent × (currentCPI × chainingCoeff) / baseCPI
+ * מקדם הקשר מגשר בין שנות בסיס שונות (למשל 2018→2024)
  */
-export function calcIndexedRent(baseRent: number, baseCPI: number, currentCPI: number): number {
+export function calcIndexedRent(baseRent: number, baseCPI: number, currentCPI: number, chainingCoeff: number = 1): number {
   if (!baseCPI || !currentCPI) return baseRent;
-  return baseRent * (currentCPI / baseCPI);
+  return baseRent * (currentCPI * chainingCoeff) / baseCPI;
+}
+
+/**
+ * חישוב מקדם קשר מצטבר בין שנות בסיס
+ * @param fromBaseYear - שנת בסיס של המדד הנוכחי (למשל 2024)
+ * @param toBaseYear - שנת בסיס של מדד הבסיס (למשל 2018)
+ * @param coefficients - רשימת מקדמי קשר מה-DB
+ */
+export function calcChainingCoefficient(
+  fromBaseYear: number,
+  toBaseYear: number,
+  coefficients: Array<{ from_base_year: number; to_base_year: number; coefficient: string | number }>
+): number {
+  if (fromBaseYear === toBaseYear) return 1;
+  var result = 1.0;
+  var year = fromBaseYear;
+  var maxSteps = 20;
+  while (year !== toBaseYear && maxSteps-- > 0) {
+    var link = coefficients.find(function(c) { return c.from_base_year === year; });
+    if (!link) break;
+    result *= Number(link.coefficient);
+    year = link.to_base_year;
+  }
+  return result;
 }
 
 /**

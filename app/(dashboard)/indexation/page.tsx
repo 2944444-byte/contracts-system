@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import { supabase } from '@/lib/supabase';
-import { fetchCPI, fetchHighestCPI, calcIndexedRent, getKnownIndexMonth, formatPeriod } from '@/lib/cpi-utils';
+import { fetchCPI, fetchHighestCPI, calcIndexedRent, calcChainingCoefficient, getKnownIndexMonth, formatPeriod } from '@/lib/cpi-utils';
 
 function fmtMoney(n: number) { return "₪" + Math.round(n ?? 0).toLocaleString(); }
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
@@ -57,9 +57,28 @@ export default function IndexationPage() {
 
       if (!currentIdx) { alert("לא ניתן לשלוף מדד מה-CBS"); return; }
 
+      // Get base index record and current index record to determine base years
+      const knownBase = getKnownIndexMonth(new Date(c.index_base_date));
+      const { data: baseRec } = await supabase.from("cpi_records").select("base_year")
+        .eq("year", knownBase.year).eq("month", knownBase.month).single();
+      const { data: currentRec } = await supabase.from("cpi_records").select("base_year")
+        .eq("year", year).eq("month", month).single();
+
+      // Calculate chaining coefficient between base years
+      var chainingCoeff = 1;
+      if (baseRec && currentRec) {
+        var fromBase = parseInt(String(currentRec.base_year));
+        var toBase = parseInt(String(baseRec.base_year));
+        if (fromBase !== toBase) {
+          const { data: coeffs } = await supabase.from("cpi_link_coefficients")
+            .select("from_base_year,to_base_year,coefficient");
+          if (coeffs) chainingCoeff = calcChainingCoefficient(fromBase, toBase, coeffs);
+        }
+      }
+
       const baseRent    = (c.rent_per_sqm??0)*(c.charged_area??0)+(c.investment_addition??0);
-      const indexedRent = calcIndexedRent(baseRent, c.index_base_value, currentIdx);
-      const change      = ((currentIdx / c.index_base_value) - 1) * 100;
+      const indexedRent = calcIndexedRent(baseRent, c.index_base_value, currentIdx, chainingCoeff);
+      const change      = ((currentIdx * chainingCoeff / c.index_base_value) - 1) * 100;
       const vat         = c.vat_type==="taxable" ? indexedRent*0.18 : 0;
 
       setResults(function(prev) {

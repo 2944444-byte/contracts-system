@@ -5,7 +5,8 @@ import { supabase } from '@/lib/supabase';
 import { syncContractStatuses } from '@/lib/contractSync';
 import { logAudit } from '@/lib/audit-log';
 import { fetchCpiAdjusted } from '@/lib/cpi-server';
-// CPI: primary = CBS calculator (server action), fallback = local cpi_records
+import { calcChainingCoefficient } from '@/lib/cpi-utils';
+// CPI: primary = CBS calculator (server action), fallback = local with chaining coefficient
 
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
 function fmtMoney(n: number) { return "₪"+Math.round(n??0).toLocaleString(); }
@@ -147,21 +148,10 @@ export default function ContractsPage() {
           if (!baseRec || !currentRec || !coefficients) { setCpiResult(null); setCpiLoading(false); return; }
           var baseIdx = Number(baseRec.value);
           var currentIdx = Number(currentRec.value);
-          // Extract base years: "2018 ממוצע" → 2018, "2024 ממוצע" → 2024
+          // Calculate chaining coefficient between base years
           var fromBaseYear = parseInt(String(currentRec.base_year));
           var toBaseYear = parseInt(String(baseRec.base_year));
-          // Calculate chaining coefficient by multiplying link coefficients
-          var chainingCoeff = 1.0;
-          if (fromBaseYear !== toBaseYear) {
-            var year = fromBaseYear;
-            var maxSteps = 20;
-            while (year !== toBaseYear && maxSteps-- > 0) {
-              var link = coefficients.find(function(c) { return c.from_base_year === year; });
-              if (!link) break;
-              chainingCoeff *= Number(link.coefficient);
-              year = link.to_base_year;
-            }
-          }
+          var chainingCoeff = calcChainingCoefficient(fromBaseYear, toBaseYear, coefficients);
           // CBS formula: adjusted = baseRent × (currentIndex × chainingCoeff) / baseIndex
           var adjustedRent = totalRentPerSqm * (currentIdx * chainingCoeff) / baseIdx;
           var changePct = ((currentIdx * chainingCoeff) / baseIdx - 1) * 100;
@@ -395,7 +385,7 @@ export default function ContractsPage() {
                       {/* Total monthly CPI-adjusted */}
                       <div className="rounded-lg bg-white border border-amber-200 p-2.5 text-center">
                         <div className="text-lg font-black text-amber-900">₪{Math.round(cpiResult.adjustedRentPerSqm * (Number(selContract.charged_area) ?? 0)).toLocaleString()}</div>
-                        <div className="text-[10px] text-amber-600">סה&quot;כ הכנסה צמודה לחודש</div>
+                        <div className="text-[10px] text-amber-600">סה&quot;כ שכ&quot;ד צמוד לחודש (לפני מע&quot;מ)</div>
                       </div>
                     </div>
 
