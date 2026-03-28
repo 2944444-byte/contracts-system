@@ -9,7 +9,7 @@ import { calcChainingCoefficient } from '@/lib/cpi-utils';
 // CPI: primary = CBS calculator (server action), fallback = local with chaining coefficient
 
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
-function fmtMoney(n: number) { return "₪"+Math.round(n??0).toLocaleString(); }
+function fmtMoney(n: number) { return "₪"+(n??0).toLocaleString("he-IL",{minimumFractionDigits:2,maximumFractionDigits:2}); }
 
 function yearsMonthsLeft(endDate: string) {
   const now = new Date();

@@ -3,7 +3,7 @@ import { useState, useEffect } from "react";
 import { supabase } from '@/lib/supabase';
 import { fetchCPI, fetchHighestCPI, calcIndexedRent, calcChainingCoefficient, getKnownIndexMonth, formatPeriod } from '@/lib/cpi-utils';
 
-function fmtMoney(n: number) { return "₪" + Math.round(n ?? 0).toLocaleString(); }
+function fmtMoney(n: number) { return "₪" + (n ?? 0).toLocaleString("he-IL",{minimumFractionDigits:2,maximumFractionDigits:2}); }
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
 
 export default function IndexationPage() {

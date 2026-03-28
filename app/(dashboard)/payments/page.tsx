@@ -7,7 +7,7 @@ const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-
 const CHARGE_TYPES = [{v:"rent",l:'שכ"ד',icon:"🏢"},{v:"management",l:"דמי ניהול",icon:"🔧"},{v:"parking",l:"חניה",icon:"🅿️"},{v:"water",l:"מים",icon:"💧"},{v:"electricity",l:"חשמל",icon:"⚡"},{v:"other",l:"אחר",icon:"📋"}];
 
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
-function fmtMoney(n: number) { return "₪"+Math.round(n??0).toLocaleString(); }
+function fmtMoney(n: number) { return "₪"+(n??0).toLocaleString("he-IL",{minimumFractionDigits:2,maximumFractionDigits:2}); }
 
 export default function PaymentsPage() {
   const [charges,   setCharges]   = useState<any[]>([]);

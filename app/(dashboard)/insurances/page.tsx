@@ -7,7 +7,7 @@ const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-
 
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
 function daysLeft(d: string) { return Math.ceil((new Date(d).getTime()-Date.now())/86400000); }
-function fmtMoney(n: number) { return n ? "₪"+Math.round(n).toLocaleString() : "—"; }
+function fmtMoney(n: number) { return n ? "₪"+n.toLocaleString("he-IL",{minimumFractionDigits:2,maximumFractionDigits:2}) : "—"; }
 
 export default function InsurancesPage() {
   const [buildingIns, setBuildingIns] = useState<any[]>([]);

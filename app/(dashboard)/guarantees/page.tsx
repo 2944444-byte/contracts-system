@@ -8,7 +8,7 @@ const GUARANTEE_TYPES = [{v:"bank",l:"ערבות בנקאית",icon:"🏦"},{v:"
 
 function daysLeft(d: string) { return Math.ceil((new Date(d).getTime()-Date.now())/86400000); }
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
-function fmtMoney(n: number) { return n ? "₪"+Math.round(n).toLocaleString() : "—"; }
+function fmtMoney(n: number) { return n ? "₪"+n.toLocaleString("he-IL",{minimumFractionDigits:2,maximumFractionDigits:2}) : "—"; }
 
 export default function GuaranteesPage() {
   const [guarantees,setGuarantees]=useState<any[]>([]);

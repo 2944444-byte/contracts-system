@@ -15,7 +15,7 @@ const PROP_TYPES = [
   {v:"other",     l:"אחר",       icon:"🏗️"},
 ];
 
-function fmtMoney(n: number) { return n ? "₪"+Math.round(n).toLocaleString() : "—"; }
+function fmtMoney(n: number) { return n ? "₪"+n.toLocaleString("he-IL",{minimumFractionDigits:2,maximumFractionDigits:2}) : "—"; }
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
 
 export default function PropertiesPage() {

@@ -9,7 +9,7 @@ function fmtDate(d: string) {
   if (!d) return "—";
   return new Date(d).toLocaleDateString("he-IL", { month:"long", year:"numeric" });
 }
-function fmtMoney(n: number) { return "₪" + Math.round(n ?? 0).toLocaleString(); }
+function fmtMoney(n: number) { return "₪" + (n ?? 0).toLocaleString("he-IL",{minimumFractionDigits:2,maximumFractionDigits:2}); }
 
 export default function ManagementPage() {
   const [fees,       setFees]       = useState<any[]>([]);

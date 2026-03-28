@@ -90,7 +90,7 @@ const DEPOSIT_METHODS = [
 ];
 
 function fmtMoney(n: number) {
-  return "₪" + Math.round(n).toLocaleString("he-IL");
+  return "₪" + (n ?? 0).toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 export default function ContractEditPage() {
