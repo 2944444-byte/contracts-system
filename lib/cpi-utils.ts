@@ -59,7 +59,9 @@ export function calcIndexedRent(baseRent: number, baseCPI: number, currentCPI: n
  */
 export function getKnownIndexMonth(date: Date): { year: number; month: number } {
   const d = new Date(date);
-  const monthsBack = d.getDate() >= 15 ? 1 : 2;
+  // CBS publishes CPI for month X on the 15th of month X+1.
+  // The index is considered "known" starting from the 16th (not the 15th).
+  const monthsBack = d.getDate() >= 16 ? 1 : 2;
   d.setMonth(d.getMonth() - monthsBack);
   return { year: d.getFullYear(), month: d.getMonth() + 1 };
 }
