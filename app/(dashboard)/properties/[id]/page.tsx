@@ -4,8 +4,8 @@ import { useEffect, useState } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { supabase } from "../../../../lib/supabase";
 
-const PROPERTY_TYPES = ["משרדים", "מסחר", "מחסן", "תעשיה", "מעורב", "חצר פתוחה", "אחר"];
-const UNIT_TYPES = ["משרדים", "מסחר", "מחסן", "תעשיה", "חצר פתוחה", "אחר"];
+const PROPERTY_TYPES = ["משרדים", "מסחר", "חנות", "מחסן", "תעשיה", "מעורב", "חצר פתוחה", "אחר"];
+const UNIT_TYPES = ["משרדים", "מסחר", "חנות", "מחסן", "תעשיה", "חצר פתוחה", "אחר"];
 
 export default function EditPropertyPage() {
   const router = useRouter();

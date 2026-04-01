@@ -4,7 +4,7 @@ import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit-log';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
-const SPACE_TYPES = [{v:"office",l:"משרדים",icon:"💼"},{v:"retail",l:"מסחר",icon:"🏪"},{v:"warehouse",l:"מחסן",icon:"📦"},{v:"industrial",l:"תעשיה",icon:"🏭"},{v:"yard",l:"חצר פתוחה",icon:"🌳"},{v:"other",l:"אחר",icon:"🚪"}];
+const SPACE_TYPES = [{v:"office",l:"משרדים",icon:"💼"},{v:"retail",l:"מסחר",icon:"🏪"},{v:"store",l:"חנות",icon:"🏬"},{v:"warehouse",l:"מחסן",icon:"📦"},{v:"industrial",l:"תעשיה",icon:"🏭"},{v:"yard",l:"חצר פתוחה",icon:"🌳"},{v:"other",l:"אחר",icon:"🚪"}];
 
 export default function UnitsPage() {
   const [spaces,     setSpaces]     = useState<any[]>([]);

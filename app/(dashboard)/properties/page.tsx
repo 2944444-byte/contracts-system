@@ -10,6 +10,7 @@ const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-
 const PROP_TYPES = [
   {v:"office",    l:"משרדים",      icon:"💼"},
   {v:"retail",    l:"מסחר",        icon:"🏪"},
+  {v:"store",     l:"חנות",        icon:"🏬"},
   {v:"warehouse", l:"מחסן",        icon:"📦"},
   {v:"industrial",l:"תעשיה",      icon:"🏭"},
   {v:"mixed",     l:"מעורב",       icon:"🏢"},

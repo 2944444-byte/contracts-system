@@ -7,6 +7,7 @@ import { supabase } from "../../../lib/supabase";
 const SPACE_TYPES = [
   { v: "office", l: "משרדים", icon: "💼" },
   { v: "retail", l: "מסחר", icon: "🏪" },
+  { v: "store", l: "חנות", icon: "🏬" },
   { v: "warehouse", l: "מחסן", icon: "📦" },
   { v: "industrial", l: "תעשיה", icon: "🏭" },
   { v: "yard", l: "חצר פתוחה", icon: "🌳" },

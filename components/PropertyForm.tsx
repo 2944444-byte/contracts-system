@@ -1,7 +1,7 @@
 "use client";
 import { useState } from "react";
 
-const PROPERTY_TYPES = ["משרדים", "מסחר", "מחסן", "תעשיה", "מעורב", "חצר פתוחה", "אחר"];
+const PROPERTY_TYPES = ["משרדים", "מסחר", "חנות", "מחסן", "תעשיה", "מעורב", "חצר פתוחה", "אחר"];
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 
 interface Props { property?: any; onSubmit: (data: any) => void; onCancel: () => void; }
