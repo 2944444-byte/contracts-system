@@ -47,6 +47,7 @@ export default function PropertiesPage() {
   const [fInsurPolicy,setFInsurPolicy]= useState("");
   const [fMgmtBudget, setFMgmtBudget] = useState("");
   const [fWasteCost,  setFWasteCost]  = useState("");
+  const [fMgmtType,   setFMgmtType]   = useState("internal");
 
   useEffect(function() { loadAll(); }, []);
 
@@ -80,6 +81,7 @@ export default function PropertiesPage() {
     setFInsurCost(p.annual_insurance_cost?.toString()??""); setFInsurDate(p.insurance_renewal_date??"");
     setFInsurPolicy(p.insurance_policy_number??""); setFMgmtBudget(p.annual_management_budget?.toString()??"");
     setFWasteCost(p.annual_waste_cost?.toString()??"");
+    setFMgmtType(p.management_type??"internal");
   }
 
   async function handleSave() {
@@ -98,6 +100,7 @@ export default function PropertiesPage() {
         insurance_policy_number: fInsurPolicy||null,
         annual_management_budget: fMgmtBudget ? Number(fMgmtBudget) : null,
         annual_waste_cost: fWasteCost ? Number(fWasteCost) : null,
+        management_type: fMgmtType,
       };
       if (isNew) {
         const { data, error: _ie } = await supabase.from("properties").insert(payload).select().single();
@@ -342,6 +345,21 @@ export default function PropertiesPage() {
                         className={"rounded-lg border p-2 text-center " + (fType===t.v?"border-blue-500 bg-blue-50":"border-slate-200 hover:bg-slate-50")}>
                         <div className="text-lg">{t.icon}</div>
                         <div className={"text-xs " + (fType===t.v?"text-blue-700 font-bold":"text-slate-500")}>{t.l}</div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <div>
+                <label className="mb-2 block text-xs font-semibold text-slate-700">סוג ניהול</label>
+                <div className="flex gap-2">
+                  {[{v:"internal",l:"ניהול פנימי",icon:"🏠",desc:"המערכת מנהלת חיובים"},{v:"external",l:"ניהול חיצוני",icon:"🏢",desc:"חברת ניהול חיצונית"}].map(function(m) {
+                    return (
+                      <button key={m.v} type="button" onClick={function(){setFMgmtType(m.v);}}
+                        className={"flex-1 rounded-lg border p-2.5 text-center " + (fMgmtType===m.v?"border-blue-500 bg-blue-50":"border-slate-200 hover:bg-slate-50")}>
+                        <div className="text-lg">{m.icon}</div>
+                        <div className={"text-xs font-semibold " + (fMgmtType===m.v?"text-blue-700":"text-slate-500")}>{m.l}</div>
+                        <div className="text-[10px] text-slate-400">{m.desc}</div>
                       </button>
                     );
                   })}
