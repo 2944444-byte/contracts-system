@@ -3,8 +3,8 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 
-const PROPERTY_TYPES = ["משרדים", "מסחרי", "תעשייתי", "לוגיסטי", "מעורב", "אחר"];
-const UNIT_TYPES = ["משרד", "מסחרי", "מחסן", "לוגיסטי", "תעשייתי", "אחר"];
+const PROPERTY_TYPES = ["משרדים", "מסחר", "מחסן", "תעשיה", "מעורב", "חצר פתוחה", "אחר"];
+const UNIT_TYPES = ["משרדים", "מסחר", "מחסן", "תעשיה", "חצר פתוחה", "אחר"];
 
 export default function NewPropertyPage() {
   const router = useRouter();
