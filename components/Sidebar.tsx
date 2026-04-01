@@ -17,6 +17,7 @@ const NAV: NavItem[] = [
   {href:"/tenants",      label:"שוכרים",         icon:"👤"},
   {href:"/contracts",    label:"חוזים",          icon:"📄"},
   {section:"כספים"},
+  {href:"/billing",      label:"חיובי נכס",      icon:"🧾"},
   {href:"/payments",     label:"חיובים",         icon:"💳"},
   {href:"/management",   label:"דמי ניהול",      icon:"🔧"},
   {href:"/indexation",   label:'הצמדה CBS',     icon:"📈"},
