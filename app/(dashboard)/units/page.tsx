@@ -4,7 +4,7 @@ import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit-log';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
-const SPACE_TYPES = [{v:"office",l:"משרד",icon:"💼"},{v:"store",l:"חנות",icon:"🏪"},{v:"warehouse",l:"מחסן",icon:"📦"},{v:"clinic",l:"קליניקה",icon:"🏥"},{v:"other",l:"אחר",icon:"🚪"}];
+const SPACE_TYPES = [{v:"office",l:"משרדים",icon:"💼"},{v:"retail",l:"מסחר",icon:"🏪"},{v:"warehouse",l:"מחסן",icon:"📦"},{v:"industrial",l:"תעשיה",icon:"🏭"},{v:"yard",l:"חצר פתוחה",icon:"🌳"},{v:"other",l:"אחר",icon:"🚪"}];
 
 export default function UnitsPage() {
   const [spaces,     setSpaces]     = useState<any[]>([]);
@@ -37,7 +37,7 @@ export default function UnitsPage() {
   }
 
   function openNew() { setIsNew(true); setEditingId("new"); setFPropertyId(""); setFName(""); setFType("office"); setFArea(""); setFFloor(""); setFStatus("vacant"); setFNotes(""); }
-  function openEdit(s: any) { setIsNew(false); setEditingId(s.id); setFPropertyId(s.property_id??""); setFName(s.name??""); setFType(s.space_type??"office"); setFArea(s.area?.toString()??""); setFFloor(s.floor?.toString()??""); setFStatus(s.status??"vacant"); setFNotes(s.notes??""); }
+  function openEdit(s: any) { setIsNew(false); setEditingId(s.id); setFPropertyId(s.property_id??""); setFName(s.space_name??""); setFType(s.space_type??"office"); setFArea(s.area?.toString()??""); setFFloor(s.floor?.toString()??""); setFStatus(s.status??"vacant"); setFNotes(s.notes??""); }
 
   async function handleSave() {
     if (!fPropertyId||!fName.trim()) { alert("חובה: נכס + שם"); return; }
@@ -51,6 +51,25 @@ export default function UnitsPage() {
       setEditingId(""); await loadAll();
     } catch(e:any) { alert("שגיאה: "+e?.message); }
     finally { setSaving(false); }
+  }
+
+  async function handleDelete(id: string) {
+    if (!confirm("למחוק יחידה זו? פעולה זו תמחק גם חוזים מקושרים!")) return;
+    const { data: linked } = await supabase.from("contract_spaces").select("contract_id").eq("space_id", id);
+    const cIds = [...new Set((linked||[]).map((r:any)=>r.contract_id))];
+    for (const cId of cIds) {
+      await supabase.from("charges").delete().eq("contract_id", cId);
+      await supabase.from("contract_spaces").delete().eq("contract_id", cId);
+      await supabase.from("contract_options").delete().eq("contract_id", cId);
+      await supabase.from("contract_price_tiers").delete().eq("contract_id", cId);
+      await supabase.from("guarantees").delete().eq("contract_id", cId);
+      await supabase.from("insurances_tenant").delete().eq("contract_id", cId);
+      await supabase.from("letters").delete().eq("contract_id", cId);
+      await supabase.from("contracts").delete().eq("id", cId);
+    }
+    await supabase.from("contract_spaces").delete().eq("space_id", id);
+    await supabase.from("spaces").delete().eq("id", id);
+    await loadAll();
   }
 
   function tenantForSpace(spaceId: string) {
@@ -89,11 +108,14 @@ export default function UnitsPage() {
             const ti=typeInfo(s.space_type), tenant=tenantForSpace(s.id), isOcc=s.status==="occupied";
             return (
               <div key={s.id} className={"rounded-xl border p-4 transition-all hover:shadow-md "+(isOcc?"border-green-200 bg-green-50":"border-blue-100 bg-blue-50 border-dashed")}>
-                <div className="flex items-center justify-between mb-2"><div className="flex items-center gap-2"><span className="text-xl">{ti.icon}</span><span className="font-bold text-slate-800 text-sm">{s.name}</span></div><span className={"text-xs px-1.5 py-0.5 rounded-full font-semibold "+(isOcc?"bg-green-100 text-green-700":"bg-blue-100 text-blue-700")}>{isOcc?"מושכר":"פנוי"}</span></div>
-                <div className="text-xs text-slate-400 mb-1">{s.properties?.name}</div>
+                <div className="flex items-center justify-between mb-2"><div className="flex items-center gap-2"><span className="text-xl">{ti.icon}</span><span className="font-bold text-slate-800 text-sm">{s.space_name}</span></div><span className={"text-xs px-1.5 py-0.5 rounded-full font-semibold "+(isOcc?"bg-green-100 text-green-700":"bg-blue-100 text-blue-700")}>{isOcc?"מושכר":"פנוי"}</span></div>
+                <div className="text-xs text-slate-400 mb-1">{s.properties?.name} | {ti.l}</div>
                 {s.area&&<div className="text-xs text-slate-500">{s.area} מ"ר{s.floor?" | קומה "+s.floor:""}</div>}
                 {tenant&&<div className="text-xs text-green-700 font-semibold mt-1">👤 {tenant}</div>}
-                <button onClick={function(){openEdit(s);}} className="mt-2 w-full text-xs border border-slate-200 rounded py-1 text-slate-600 hover:bg-slate-50">עריכה</button>
+                <div className="mt-2 flex gap-1">
+                  <button onClick={function(){openEdit(s);}} className="flex-1 text-xs border border-slate-200 rounded py-1 text-slate-600 hover:bg-slate-50">עריכה</button>
+                  <button onClick={function(){handleDelete(s.id);}} className="text-xs border border-red-200 rounded py-1 px-2 text-red-500 hover:bg-red-50">🗑</button>
+                </div>
               </div>
             );
           })}
@@ -107,7 +129,7 @@ export default function UnitsPage() {
             <div className="p-6 space-y-3">
               <div><label className="mb-1 block text-xs font-semibold text-slate-700">נכס *</label><select value={fPropertyId} onChange={function(e){setFPropertyId(e.target.value);}} className={ic}><option value="">-- בחר --</option>{properties.map(function(p){return <option key={p.id} value={p.id}>{p.name}</option>;})}</select></div>
               <div><label className="mb-1 block text-xs font-semibold text-slate-700">שם *</label><input type="text" value={fName} onChange={function(e){setFName(e.target.value);}} className={ic}/></div>
-              <div><div className="grid grid-cols-5 gap-1.5">{SPACE_TYPES.map(function(t){return <button key={t.v} type="button" onClick={function(){setFType(t.v);}} className={"rounded-lg border p-1.5 text-center "+(fType===t.v?"border-blue-500 bg-blue-50":"border-slate-200")}><div>{t.icon}</div><div className={"text-xs "+(fType===t.v?"text-blue-700 font-bold":"text-slate-500")}>{t.l}</div></button>;})}</div></div>
+              <div><label className="mb-1 block text-xs font-semibold text-slate-700">סוג יחידה</label><div className="grid grid-cols-3 gap-1.5">{SPACE_TYPES.map(function(t){return <button key={t.v} type="button" onClick={function(){setFType(t.v);}} className={"rounded-lg border p-1.5 text-center "+(fType===t.v?"border-blue-500 bg-blue-50":"border-slate-200")}><div>{t.icon}</div><div className={"text-xs "+(fType===t.v?"text-blue-700 font-bold":"text-slate-500")}>{t.l}</div></button>;})}</div></div>
               <div className="grid grid-cols-2 gap-3">
                 <div><label className="mb-1 block text-xs font-semibold text-slate-700">שטח (מ"ר)</label><input type="number" value={fArea} onChange={function(e){setFArea(e.target.value);}} className={ic}/></div>
                 <div><label className="mb-1 block text-xs font-semibold text-slate-700">קומה</label><input type="number" value={fFloor} onChange={function(e){setFFloor(e.target.value);}} className={ic}/></div>
