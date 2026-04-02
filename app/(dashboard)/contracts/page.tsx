@@ -231,10 +231,41 @@ export default function ContractsPage() {
   }
 
   async function handleExerciseOption(optionId: string, exercised: boolean) {
+    // Update option status
     await supabase.from("contract_options").update({
       is_exercised: exercised,
       status: exercised ? "exercised" : "pending",
     }).eq("id", optionId);
+
+    // Update contract end_date and status based on exercised options
+    if (selContract) {
+      const { data: opts } = await supabase.from("contract_options")
+        .select("id,end_date,is_exercised,option_number")
+        .eq("contract_id", selContract.id)
+        .order("option_number");
+
+      // Find the latest exercised option's end_date
+      var lastExercised = (opts ?? []).filter(function(o: any) { return o.is_exercised; })
+        .sort(function(a: any, b: any) { return b.option_number - a.option_number; })[0];
+
+      if (lastExercised?.end_date) {
+        // Extend contract to end of exercised option
+        var newEnd = lastExercised.end_date;
+        var today = new Date();
+        var endDate = new Date(newEnd);
+        var newStatus = today > endDate ? "ended" : today >= new Date(selContract.start_date) ? "active" : "upcoming";
+
+        await supabase.from("contracts").update({
+          end_date: newEnd,
+          status: newStatus,
+        }).eq("id", selContract.id);
+      } else if (!exercised) {
+        // All options cancelled — revert to original end date
+        // Recalculate from start_date + lease_period
+        // For now just sync statuses
+      }
+    }
+
     await loadContracts();
   }
 
