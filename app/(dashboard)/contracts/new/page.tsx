@@ -365,6 +365,12 @@ export default function ContractsNewPage() {
           pages.push(content.items.map((item: any) => item.str).join(" "));
         }
         text = pages.join("\n");
+        // Check if text is mostly gibberish (scanned PDF without real text)
+        if (text.length < 100 || text.replace(/[^א-תa-zA-Z0-9]/g, "").length < text.length * 0.2) {
+          alert("ה-PDF נראה סרוק (תמונה) ולא מכיל טקסט אמיתי.\nנא להשתמש בקובץ Word (.docx) או PDF עם טקסט מוטבע.");
+          setAiExtracting(false);
+          return;
+        }
       } else if (file.name.match(/\.docx$/i)) {
         const mammoth = await import("mammoth");
         const arrayBuffer = await file.arrayBuffer();
