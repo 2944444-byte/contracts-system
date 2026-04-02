@@ -1408,6 +1408,70 @@ export default function ContractEditPage() {
                     </div>
                   )}
 
+                  {/* Year-by-year price forecast */}
+                  {opt.duration_years > 0 && Number(rentPerSqm) > 0 && (function() {
+                    // Calculate base rent at option start (chain from main → previous options → this)
+                    var forecastBase = Number(rentPerSqm) || 0;
+                    if (priceTiers.length > 0) {
+                      var mp = calculateTierPreviews(priceTiers, forecastBase);
+                      forecastBase = mp[mp.length - 1]?.calculated_rent_per_sqm ?? forecastBase;
+                    }
+                    // For alternatives, use contract last rent
+                    if (!opt.option_group) {
+                      for (var pi = 0; pi < idx; pi++) {
+                        var prev = extensionOptions[pi];
+                        if (prev.rent_mechanism === "increase_pct" && prev.rent_increase_pct) forecastBase = forecastBase * (1 + prev.rent_increase_pct / 100);
+                        else if (prev.rent_mechanism === "new_value" && prev.new_rent_value) forecastBase = prev.new_rent_value;
+                        if (prev.price_schedule_type === "custom" && prev.price_tiers?.length > 0) {
+                          var pp = calculateTierPreviews(prev.price_tiers, forecastBase);
+                          forecastBase = pp[pp.length - 1]?.calculated_rent_per_sqm ?? forecastBase;
+                        }
+                      }
+                    }
+                    // Apply this option's exercise jump
+                    if (opt.rent_mechanism === "increase_pct" && opt.rent_increase_pct) forecastBase = forecastBase * (1 + opt.rent_increase_pct / 100);
+                    else if (opt.rent_mechanism === "new_value" && opt.new_rent_value) forecastBase = opt.new_rent_value;
+                    forecastBase = Math.round(forecastBase * 100) / 100;
+
+                    // Build year-by-year forecast
+                    var years = Math.ceil(opt.duration_years);
+                    var forecast: Array<{year: number; rent: number; label: string}> = [];
+                    var currentRent = forecastBase;
+
+                    if (opt.price_schedule_type === "custom" && opt.price_tiers?.length > 0) {
+                      var expanded = calculateTierPreviews(opt.price_tiers, forecastBase);
+                      forecast.push({ year: 1, rent: forecastBase, label: "בסיס" });
+                      expanded.forEach(function(t) { forecast.push({ year: t.to_year, rent: t.calculated_rent_per_sqm ?? currentRent, label: t.increase_type === "pct" ? "+" + t.increase_value + "%" : t.increase_type === "fixed_sqm" ? "+₪" + t.increase_value : "" }); });
+                    } else if (priceTiers.length > 0) {
+                      // Inherit — apply main tiers pattern
+                      forecast.push({ year: 1, rent: forecastBase, label: "בסיס (מימוש)" });
+                      var virtualTiers = priceTiers.map(function(mt) { return { ...mt, from_year: Math.min(mt.from_year, years), to_year: Math.min(mt.to_year, years) }; }).filter(function(t) { return t.from_year < t.to_year; });
+                      if (virtualTiers.length > 0) {
+                        var vp = calculateTierPreviews(virtualTiers, forecastBase);
+                        vp.forEach(function(t) { forecast.push({ year: t.to_year, rent: t.calculated_rent_per_sqm ?? currentRent, label: t.increase_type === "pct" ? "+" + t.increase_value + "%" : "" }); });
+                      }
+                    } else {
+                      forecast.push({ year: 1, rent: forecastBase, label: "קבוע" });
+                    }
+
+                    if (forecast.length === 0) return null;
+                    return (
+                      <div className="rounded-lg border border-blue-200 bg-blue-50/30 p-3">
+                        <div className="text-xs font-bold text-blue-800 mb-2">📊 תחזית שכ&quot;ד באופציה</div>
+                        <div className="space-y-1">
+                          {forecast.map(function(f, fi) {
+                            return (
+                              <div key={fi} className="flex justify-between text-xs">
+                                <span className="text-blue-700">שנה {f.year}: <span className="text-blue-500">{f.label}</span></span>
+                                <span className="font-bold text-blue-900">₪{f.rent.toFixed(2)}/מ&quot;ר</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })()}
+
                   <div>
                     <label className="mb-1 block text-xs font-semibold text-slate-700">הערות</label>
                     <input type="text" value={opt.notes} onChange={(e) => updateOption(idx, "notes", e.target.value)}
