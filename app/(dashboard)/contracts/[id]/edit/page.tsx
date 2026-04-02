@@ -330,6 +330,7 @@ export default function ContractEditPage() {
         notes: o.notes ?? "",
         price_schedule_type: o.price_schedule_type ?? "inherit",
         price_tiers: o.price_tiers && Array.isArray(o.price_tiers) ? o.price_tiers : [],
+        option_group: o.option_group ?? null,
       })));
     }
 
@@ -522,6 +523,7 @@ export default function ContractEditPage() {
             notes: opt.notes || null,
             price_schedule_type: opt.price_schedule_type || "inherit",
             price_tiers: opt.price_schedule_type === "custom" ? opt.price_tiers : [],
+            option_group: opt.option_group || null,
           }))
         ).select("id,option_number");
 

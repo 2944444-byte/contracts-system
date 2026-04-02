@@ -50,6 +50,8 @@ export type ExtensionOption = {
   // Price schedule within the option period
   price_schedule_type: "inherit" | "custom";
   price_tiers: PriceTier[];
+  // Alternative options: same group = choose one (A or B)
+  option_group: string | null; // null = sequential, "A"/"B" = alternatives
 };
 
 export type IncreaseStep = {
@@ -224,7 +226,7 @@ export function calculateDepositAmount(params: {
   return Math.round((monthlyRent + mgmt) * depositMonths * vatMultiplier);
 }
 
-export function emptyOption(): ExtensionOption {
+export function emptyOption(group: string | null = null): ExtensionOption {
   return {
     duration_months: 12,
     duration_years: 1,
@@ -239,6 +241,7 @@ export function emptyOption(): ExtensionOption {
     notes: "",
     price_schedule_type: "inherit",
     price_tiers: [],
+    option_group: group,
   };
 }
 

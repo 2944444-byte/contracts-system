@@ -554,6 +554,7 @@ export default function ContractsNewPage() {
           notes: opt.notes || null,
           price_schedule_type: opt.price_schedule_type || "inherit",
           price_tiers: opt.price_schedule_type === "custom" ? opt.price_tiers : [],
+          option_group: opt.option_group || null,
         }));
         const { data: insertedOpts } = await supabase.from("contract_options").insert(optionsToInsert).select("id,option_number");
 
@@ -1540,8 +1541,30 @@ export default function ContractsNewPage() {
           <div className="space-y-4">
             <div className="flex items-center justify-between mb-4">
               <h2 className="font-bold text-slate-800 text-lg">🔄 אופציות להארכת חוזה</h2>
-              <button type="button" onClick={() => setExtensionOptions((prev) => [...prev, emptyOption()])}
-                className="rounded-lg bg-blue-700 px-4 py-2 text-xs font-bold text-white hover:bg-blue-800">+ הוסף אופציה</button>
+              <div className="flex gap-2">
+                <button type="button" onClick={() => setExtensionOptions((prev) => [...prev, emptyOption()])}
+                  className="rounded-lg bg-blue-700 px-4 py-2 text-xs font-bold text-white hover:bg-blue-800">+ אופציה רציפה</button>
+                <button type="button" onClick={() => {
+                  // Find existing groups to determine next letter
+                  var groups = extensionOptions.map(function(o) { return o.option_group; }).filter(Boolean);
+                  var nextGroup = "A";
+                  if (groups.length > 0) {
+                    var lastGroup = groups.sort().pop() || "A";
+                    nextGroup = String.fromCharCode(lastGroup.charCodeAt(0) + 1);
+                  }
+                  // If no group exists yet, mark the last option as group A and add B
+                  if (groups.length === 0 && extensionOptions.length > 0) {
+                    setExtensionOptions(function(prev) {
+                      var updated = [...prev];
+                      updated[updated.length - 1] = { ...updated[updated.length - 1], option_group: "A" };
+                      return [...updated, emptyOption("B")];
+                    });
+                  } else {
+                    setExtensionOptions(function(prev) { return [...prev, emptyOption(nextGroup)]; });
+                  }
+                }}
+                  className="rounded-lg border border-purple-400 bg-purple-50 px-4 py-2 text-xs font-bold text-purple-700 hover:bg-purple-100">+ אופציה חלופית (A/B)</button>
+              </div>
             </div>
 
             {extensionOptions.length === 0 ? (
@@ -1551,9 +1574,16 @@ export default function ContractsNewPage() {
               </div>
             ) : (
               extensionOptions.map((opt, idx) => (
-                <div key={idx} className="rounded-xl border border-slate-200 p-4 space-y-3">
+                <div key={idx} className={"rounded-xl border p-4 space-y-3 " + (opt.option_group ? "border-purple-300 bg-purple-50/30" : "border-slate-200")}>
                   <div className="flex items-center justify-between">
-                    <span className="font-bold text-slate-700 text-sm">אופציה {idx + 1}</span>
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-slate-700 text-sm">אופציה {idx + 1}</span>
+                      {opt.option_group && (
+                        <span className="rounded-full bg-purple-100 text-purple-700 px-2 py-0.5 text-[10px] font-bold">
+                          חלופה {opt.option_group}
+                        </span>
+                      )}
+                    </div>
                     <button type="button" onClick={() => removeOption(idx)} className="text-xs text-red-500 hover:text-red-700 font-semibold">🗑 הסר</button>
                   </div>
 
