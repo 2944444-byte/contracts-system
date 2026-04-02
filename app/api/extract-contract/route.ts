@@ -5,10 +5,14 @@ export async function POST(req: NextRequest) {
   try {
     const { text } = await req.json();
 
-    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) {
+      return NextResponse.json({ error: "ANTHROPIC_API_KEY not configured" }, { status: 500 });
+    }
+    const client = new Anthropic({ apiKey });
     const message = await client.messages.create({
-      model: "claude-opus-4-5",
-      max_tokens: 2048,
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 4096,
       messages: [{
         role: "user",
         content: `אתה מומחה לניתוח חוזי שכירות מסחריים בישראל.
