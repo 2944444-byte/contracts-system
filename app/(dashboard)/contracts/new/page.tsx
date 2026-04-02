@@ -325,24 +325,41 @@ export default function ContractsNewPage() {
     setSpaces(sp ?? []);
   }
 
+  const [savingParking, setSavingParking] = useState(false);
+
   async function handleNewParking() {
+    if (savingParking) return; // prevent double-click
     if (!newParkingMarked && !Number(newParkingQty)) { alert("חובה: כמות מקומות"); return; }
     if (newParkingMarked && !newParkingSpot) { alert("חובה: מספרי חניות"); return; }
-    const { error } = await supabase.from("parking_subscriptions").insert({
-      property_id: propertyId,
-      tenant_id: tenantId || null,
-      spot_number: newParkingMarked ? newParkingSpot : null,
-      quantity: Number(newParkingQty) || 1,
-      is_marked: newParkingMarked,
-      monthly_fee: Number(newParkingFee) || 0,
-      vehicle_number: newParkingVehicle || null,
-      is_included_in_rent: newParkingIncluded,
-      subscription_type: "monthly",
-      status: "active",
-    });
-    if (error) { alert("שגיאה: " + error.message); return; }
-    setShowNewParking(false);
-    setNewParkingSpot(""); setNewParkingQty("1"); setNewParkingMarked(false); setNewParkingFee(""); setNewParkingVehicle(""); setNewParkingIncluded(false);
+    setSavingParking(true);
+    try {
+      const { error } = await supabase.from("parking_subscriptions").insert({
+        property_id: propertyId,
+        tenant_id: tenantId || null,
+        spot_number: newParkingMarked ? newParkingSpot : null,
+        quantity: Number(newParkingQty) || 1,
+        is_marked: newParkingMarked,
+        monthly_fee: Number(newParkingFee) || 0,
+        vehicle_number: newParkingVehicle || null,
+        is_included_in_rent: newParkingIncluded,
+        subscription_type: "monthly",
+        status: "active",
+      });
+      if (error) { alert("שגיאה: " + error.message); return; }
+      setShowNewParking(false);
+      setNewParkingSpot(""); setNewParkingQty("1"); setNewParkingMarked(false); setNewParkingFee(""); setNewParkingVehicle(""); setNewParkingIncluded(false);
+    } finally { setSavingParking(false); }
+    await reloadParking();
+  }
+
+  async function handleDeleteParking(parkingId: string) {
+    if (!confirm("למחוק הקצאת חניה?")) return;
+    await supabase.from("parking_subscriptions").delete().eq("id", parkingId);
+    await reloadParking();
+  }
+
+  async function reloadParking() {
+    if (!propertyId) return;
     const { data } = await supabase.from("parking_subscriptions").select("id,spot_number,quantity,monthly_fee,vehicle_number,status,tenant_id,is_marked,is_included_in_rent,tenants(name)")
       .eq("property_id", propertyId).order("created_at");
     setParkingSpots(data ?? []);
@@ -1259,8 +1276,8 @@ export default function ContractsNewPage() {
                     <input placeholder="מספר רכב (אופציונלי)" value={newParkingVehicle}
                       onChange={(e) => setNewParkingVehicle(e.target.value)} className={ic} />
                     <div className="flex gap-2">
-                      <button type="button" onClick={handleNewParking}
-                        className="rounded-lg bg-green-600 text-white px-4 py-1.5 text-xs font-bold hover:bg-green-700">
+                      <button type="button" onClick={handleNewParking} disabled={savingParking}
+                        className="rounded-lg bg-green-600 text-white px-4 py-1.5 text-xs font-bold hover:bg-green-700 disabled:opacity-50">
                         שמור
                       </button>
                       <button type="button" onClick={() => setShowNewParking(false)}
@@ -1290,6 +1307,8 @@ export default function ContractsNewPage() {
                             {occupied && <span className="text-red-600 font-semibold">🔴 תפוס — {p.tenants?.name}</span>}
                             {ownedByMe && <span className="text-green-600 font-semibold">✓ שלי</span>}
                             {!occupied && !ownedByMe && <span className="text-blue-500">פנוי</span>}
+                            <button type="button" onClick={function() { handleDeleteParking(p.id); }}
+                              className="text-red-400 hover:text-red-600 text-xs">🗑</button>
                           </div>
                         </div>
                       );
