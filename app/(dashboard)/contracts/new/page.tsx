@@ -365,11 +365,15 @@ export default function ContractsNewPage() {
           pages.push(content.items.map((item: any) => item.str).join(" "));
         }
         text = pages.join("\n");
-      } else if (file.name.match(/\.docx?$/i)) {
+      } else if (file.name.match(/\.docx$/i)) {
         const mammoth = await import("mammoth");
         const arrayBuffer = await file.arrayBuffer();
         const result = await mammoth.extractRawText({ arrayBuffer });
         text = result.value;
+      } else if (file.name.match(/\.doc$/i)) {
+        alert("קבצי .doc (פורמט ישן) אינם נתמכים.\nנא לשמור את הקובץ כ-.docx ב-Word ולנסות שוב.");
+        setAiExtracting(false);
+        return;
       } else {
         alert("נתמכים רק קבצי PDF או Word");
         setAiExtracting(false);
