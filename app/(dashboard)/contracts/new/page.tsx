@@ -254,8 +254,8 @@ export default function ContractsNewPage() {
 
   useEffect(function() {
     if (propertyId) {
-      supabase.from("parking_subscriptions").select("id,spot_number,monthly_fee,vehicle_number,status,tenant_id")
-        .eq("property_id", propertyId).order("spot_number")
+      supabase.from("parking_subscriptions").select("id,spot_number,quantity,monthly_fee,vehicle_number,status,tenant_id,is_marked,is_included_in_rent,tenants(name)")
+        .eq("property_id", propertyId).order("created_at")
         .then(function({ data }) { setParkingSpots(data ?? []); });
     } else {
       setParkingSpots([]);
@@ -342,9 +342,9 @@ export default function ContractsNewPage() {
     });
     if (error) { alert("שגיאה: " + error.message); return; }
     setShowNewParking(false);
-    setNewParkingSpot(""); setNewParkingFee(""); setNewParkingVehicle("");
-    const { data } = await supabase.from("parking_subscriptions").select("id,spot_number,monthly_fee,vehicle_number,status,tenant_id")
-      .eq("property_id", propertyId).order("spot_number");
+    setNewParkingSpot(""); setNewParkingQty("1"); setNewParkingMarked(false); setNewParkingFee(""); setNewParkingVehicle(""); setNewParkingIncluded(false);
+    const { data } = await supabase.from("parking_subscriptions").select("id,spot_number,quantity,monthly_fee,vehicle_number,status,tenant_id,is_marked,is_included_in_rent,tenants(name)")
+      .eq("property_id", propertyId).order("created_at");
     setParkingSpots(data ?? []);
   }
 
@@ -1271,25 +1271,27 @@ export default function ContractsNewPage() {
                   </div>
                 )}
                 {parkingSpots.length > 0 ? (
-                  <div className="grid grid-cols-3 gap-2">
+                  <div className="space-y-1">
                     {parkingSpots.map(function(p) {
-                      var sel = selParking.includes(p.id);
+                      var qty = p.quantity || 1;
                       var occupied = p.tenant_id && p.tenant_id !== tenantId;
+                      var ownedByMe = p.tenant_id === tenantId;
                       return (
-                        <button key={p.id} type="button" disabled={occupied}
-                          onClick={function() {
-                            setSelParking(function(prev) {
-                              return prev.includes(p.id) ? prev.filter(function(x){return x!==p.id;}) : [...prev, p.id];
-                            });
-                          }}
-                          className={"rounded-lg border p-2 text-center text-xs transition-all " +
-                            (sel ? "border-blue-500 bg-blue-50 font-bold text-blue-700" :
-                             occupied ? "border-slate-100 bg-slate-50 opacity-50 cursor-not-allowed" :
-                             "border-slate-200 hover:bg-slate-50")}>
-                          <div className="font-semibold">חניה {p.spot_number}</div>
-                          {p.monthly_fee > 0 && <div className="text-slate-400">₪{p.monthly_fee}/חודש</div>}
-                          {p.vehicle_number && <div className="text-slate-400">{p.vehicle_number}</div>}
-                        </button>
+                        <div key={p.id} className={"rounded-lg border p-2 flex items-center justify-between text-xs " +
+                          (ownedByMe ? "border-green-300 bg-green-50" : occupied ? "border-red-200 bg-red-50" : "border-slate-200")}>
+                          <div>
+                            <span className="font-semibold">
+                              {p.is_marked && p.spot_number ? "🔒 חניות " + p.spot_number : qty + " מקומות"}
+                            </span>
+                            {p.monthly_fee > 0 && <span className="text-slate-400 mr-2">₪{(p.monthly_fee * qty).toFixed(2)}/חודש</span>}
+                            {p.is_included_in_rent && <span className="text-orange-500 mr-1">(כלול)</span>}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {occupied && <span className="text-red-600 font-semibold">🔴 תפוס — {p.tenants?.name}</span>}
+                            {ownedByMe && <span className="text-green-600 font-semibold">✓ שלי</span>}
+                            {!occupied && !ownedByMe && <span className="text-blue-500">פנוי</span>}
+                          </div>
+                        </div>
                       );
                     })}
                   </div>
