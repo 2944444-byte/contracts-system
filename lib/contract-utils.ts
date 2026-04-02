@@ -418,19 +418,37 @@ export function buildPriceTimeline(params: {
       });
       lastMainRent = sortedTiers[sortedTiers.length - 1]?.calculated_rent_per_sqm ?? optionBaseRent;
     } else {
-      // "Inherit from main contract" — apply main contract's increase tiers to option period
+      // "Inherit from main contract" — continue main contract's recurring increase pattern
       const optYears = opt.duration_years || (opt.duration_months ? opt.duration_months / 12 : 0);
       const roundedYears = Math.ceil(optYears);
 
       if (mainTiers.length > 0 && roundedYears > 1) {
-        // Build virtual tiers mirroring main contract's increase pattern
-        const virtualTiers: PriceTier[] = mainTiers.map(function(mt) {
-          return {
-            ...mt,
-            from_year: mt.from_year > roundedYears ? roundedYears : mt.from_year,
-            to_year: Math.min(mt.to_year, roundedYears),
-          };
-        }).filter(function(t) { return t.from_year < t.to_year; });
+        // For each recurring mainTier, generate tiers covering the option period
+        // E.g. mainTier "every 5 years 4%" → option of 14 years gets: year 5, year 10 increases
+        const virtualTiers: PriceTier[] = [];
+        mainTiers.forEach(function(mt) {
+          if (mt.is_recurring && mt.recurring_every_years) {
+            // Recurring: generate for entire option period
+            var step = mt.recurring_every_years;
+            for (var y = step; y < roundedYears; y += step) {
+              virtualTiers.push({
+                ...mt,
+                from_year: y,
+                to_year: Math.min(y + step, roundedYears),
+                is_recurring: false,
+                recurring_every_years: null,
+              });
+            }
+          } else {
+            // Non-recurring: apply if within option period
+            if (mt.from_year < roundedYears) {
+              virtualTiers.push({
+                ...mt,
+                to_year: Math.min(mt.to_year, roundedYears),
+              });
+            }
+          }
+        });
 
         if (virtualTiers.length > 0) {
           const optPreviews = calculateTierPreviews(virtualTiers, optionBaseRent);
