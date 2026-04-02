@@ -1591,10 +1591,19 @@ export default function ContractsNewPage() {
 
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="mb-1 block text-xs font-semibold text-slate-700">תקופה (שנים) *</label>
-                      <input type="number" min="1" value={opt.duration_years}
-                        onChange={(e) => { const y = Number(e.target.value) || 0; updateOption(idx, "duration_years", y); updateOption(idx, "duration_months", y * 12); }}
-                        className={ic} />
+                      <label className="mb-1 block text-xs font-semibold text-slate-700">תקופה *</label>
+                      <div className="flex gap-1">
+                        <input type="number" min="0" step="any" value={opt.duration_years || ""}
+                          onChange={(e) => { const v = Number(e.target.value) || 0; updateOption(idx, "duration_years", v); updateOption(idx, "duration_months", Math.round(v * 12)); }}
+                          placeholder="שנים" className={ic + " flex-1"} />
+                        <span className="flex items-center text-xs text-slate-400 px-1">או</span>
+                        <input type="number" min="0" value={opt.duration_months || ""}
+                          onChange={(e) => { const m = Number(e.target.value) || 0; updateOption(idx, "duration_months", m); updateOption(idx, "duration_years", Math.round(m / 12 * 100) / 100); }}
+                          placeholder="חודשים" className={ic + " flex-1"} />
+                      </div>
+                      <div className="text-[10px] text-slate-400 mt-0.5">
+                        {opt.duration_years ? `${opt.duration_years} שנים` : ""}{opt.duration_years && opt.duration_months ? " = " : ""}{opt.duration_months ? `${opt.duration_months} חודשים` : ""}
+                      </div>
                     </div>
                     <div>
                       <label className="mb-1 block text-xs font-semibold text-slate-700">סוג הודעה</label>
