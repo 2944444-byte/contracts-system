@@ -6,15 +6,13 @@ import { logAudit } from '@/lib/audit-log';
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 
 const PARKING_TYPES = [
-  { v:"monthly",    l:"חודשי",           icon:"📅" },
-  { v:"occasional", l:"מזדמן",           icon:"🎫" },
-  { v:"reserved",   l:"שמורה",           icon:"🔒" },
-  { v:"disabled",   l:"נכים",            icon:"♿" },
+  { v:"monthly",    l:"חודשי",    icon:"📅" },
+  { v:"occasional", l:"מזדמן",    icon:"🎫" },
+  { v:"reserved",   l:"שמורה",    icon:"🔒" },
+  { v:"disabled",   l:"נכים",     icon:"♿" },
 ];
 
-function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
 function fmtMoney(n: number) { return n ? "₪"+n.toLocaleString("he-IL",{minimumFractionDigits:2,maximumFractionDigits:2}) : "—"; }
-function daysLeft(d: string) { return Math.ceil((new Date(d).getTime()-Date.now())/86400000); }
 
 export default function ParkingPage() {
   const [subs,       setSubs]       = useState<any[]>([]);
@@ -24,7 +22,8 @@ export default function ParkingPage() {
   const [editingId,  setEditingId]  = useState("");
   const [isNew,      setIsNew]      = useState(false);
   const [saving,     setSaving]     = useState(false);
-  const [filterType, setFilterType] = useState("all");
+  const [filterProp, setFilterProp] = useState("all");
+  const [filterSt,   setFilterSt]   = useState("all");
 
   const [fPropertyId,  setFPropertyId]  = useState("");
   const [fTenantId,    setFTenantId]    = useState("");
@@ -35,175 +34,210 @@ export default function ParkingPage() {
   const [fStartDate,   setFStartDate]   = useState("");
   const [fEndDate,     setFEndDate]     = useState("");
   const [fStatus,      setFStatus]      = useState("active");
+  const [fIncluded,    setFIncluded]    = useState(false);
   const [fNotes,       setFNotes]       = useState("");
 
   useEffect(function() { loadAll(); }, []);
 
   async function loadAll() {
     const [{ data: s }, { data: p }, { data: t }] = await Promise.all([
-      supabase.from("parking_subscriptions")
-        .select("*, properties(name), tenants(name)")
-        .order("created_at", { ascending: false }),
-      supabase.from("properties").select("id,name").order("name"),
+      supabase.from("parking_subscriptions").select("*, properties(name), tenants(name)").order("spot_number"),
+      supabase.from("properties").select("id,name,parking_spaces").order("name"),
       supabase.from("tenants").select("id,name").order("name"),
     ]);
-    setSubs(s ?? []);
-    setProperties(p ?? []);
-    setTenants(t ?? []);
-    setLoading(false);
+    setSubs(s ?? []); setProperties(p ?? []); setTenants(t ?? []); setLoading(false);
   }
 
   function openNew() {
     setIsNew(true); setEditingId("new");
     setFPropertyId(""); setFTenantId(""); setFType("monthly"); setFSpotNum("");
-    setFFee(""); setFVehicle(""); setFStartDate(""); setFEndDate(""); setFStatus("active"); setFNotes("");
+    setFFee(""); setFVehicle(""); setFStartDate(""); setFEndDate("");
+    setFStatus("active"); setFIncluded(false); setFNotes("");
   }
 
   function openEdit(s: any) {
     setIsNew(false); setEditingId(s.id);
-    setFPropertyId(s.property_id??""); setFTenantId(s.tenant_id??""); setFType(s.subscription_type??"monthly");
-    setFSpotNum(s.spot_number??""); setFFee(s.monthly_fee?.toString()??""); setFVehicle(s.vehicle_number??"");
-    setFStartDate(s.start_date?.split("T")[0]??""); setFEndDate(s.end_date?.split("T")[0]??"");
-    setFStatus(s.status??"active"); setFNotes(s.notes??"");
+    setFPropertyId(s.property_id??""); setFTenantId(s.tenant_id??"");
+    setFType(s.subscription_type??"monthly"); setFSpotNum(s.spot_number??"");
+    setFFee(s.monthly_fee?.toString()??""); setFVehicle(s.vehicle_number??"");
+    setFStartDate(s.start_date??""); setFEndDate(s.end_date??"");
+    setFStatus(s.status??"active"); setFIncluded(s.is_included_in_rent??false);
+    setFNotes(s.notes??"");
   }
 
   async function handleSave() {
-    if (!fPropertyId) { alert("חובה: נכס"); return; }
+    if (!fPropertyId || !fSpotNum.trim()) { alert("חובה: נכס + מספר חניה"); return; }
     setSaving(true);
     try {
-      const payload = {
-        property_id:       fPropertyId,
-        tenant_id:         fTenantId||null,
+      var payload: any = {
+        property_id: fPropertyId,
+        tenant_id: fTenantId || null,
         subscription_type: fType,
-        spot_number:       fSpotNum||null,
-        monthly_fee:       fFee ? Number(fFee) : null,
-        vehicle_number:    fVehicle||null,
-        start_date:        fStartDate||null,
-        end_date:          fEndDate||null,
-        status:            fStatus,
-        notes:             fNotes||null,
+        spot_number: fSpotNum.trim(),
+        monthly_fee: fFee ? Number(fFee) : 0,
+        vehicle_number: fVehicle || null,
+        start_date: fStartDate || null,
+        end_date: fEndDate || null,
+        status: fStatus,
+        is_included_in_rent: fIncluded,
+        notes: fNotes || null,
       };
       if (isNew) {
-        const { data, error: _ie } = await supabase.from("parking_subscriptions").insert(payload).select().single();
-      if (_ie) throw new Error(_ie.message);
-      if (!data?.id) throw new Error("שגיאה בשמירה");
-        await logAudit({ entity_type:"parking", entity_id:data.id, action:"create" });
+        var { data, error } = await supabase.from("parking_subscriptions").insert(payload).select().single();
+        if (error) throw new Error(error.message);
+        await logAudit({ entity_type: "parking", entity_id: data.id, action: "create" });
       } else {
         await supabase.from("parking_subscriptions").update(payload).eq("id", editingId);
-        await logAudit({ entity_type:"parking", entity_id:editingId, action:"update" });
       }
       setEditingId(""); await loadAll();
-    } catch(e:any) { alert("שגיאה: "+e?.message); }
+    } catch (e: any) { alert("שגיאה: " + e?.message); }
     finally { setSaving(false); }
   }
 
   async function handleDelete(id: string) {
-    if (!confirm("למחוק מנוי חניה?")) return;
+    if (!confirm("למחוק חניה זו?")) return;
     await supabase.from("parking_subscriptions").delete().eq("id", id);
     await loadAll();
   }
 
-  const filtered = subs.filter(function(s) {
-    return filterType==="all" || s.subscription_type===filterType;
+  var filtered = subs.filter(function(s) {
+    return (filterProp === "all" || s.property_id === filterProp) &&
+           (filterSt === "all" || s.status === filterSt);
   });
 
-  const active   = subs.filter(function(s) { return s.status==="active"; });
-  const monthlyRev = active.filter(function(s){return s.subscription_type==="monthly";}).reduce(function(t,s){return t+(s.monthly_fee??0);},0);
-  const expiring = subs.filter(function(s) { return s.end_date && daysLeft(s.end_date)<=30 && s.status==="active"; });
+  var totalSpots = subs.length;
+  var rented = subs.filter(function(s) { return s.tenant_id; }).length;
+  var free = totalSpots - rented;
+  var monthlyIncome = subs.filter(function(s) { return s.status === "active" && !s.is_included_in_rent; })
+    .reduce(function(sum, s) { return sum + (Number(s.monthly_fee) || 0); }, 0);
 
-  const typeInfo = function(v: string) {
-    return PARKING_TYPES.find(function(t){return t.v===v;}) ?? PARKING_TYPES[0];
-  };
+  var typeLabel = function(v: string) { return PARKING_TYPES.find(function(t) { return t.v === v; })?.l ?? v; };
+  var typeIcon = function(v: string) { return PARKING_TYPES.find(function(t) { return t.v === v; })?.icon ?? "🅿️"; };
+
+  // Group by property
+  var propGroups: Record<string, { prop: any; spots: any[] }> = {};
+  filtered.forEach(function(s) {
+    var pid = s.property_id;
+    if (!propGroups[pid]) {
+      var prop = properties.find(function(p) { return p.id === pid; });
+      propGroups[pid] = { prop: prop || { id: pid, name: "לא ידוע" }, spots: [] };
+    }
+    propGroups[pid].spots.push(s);
+  });
 
   return (
     <div dir="rtl">
       <div className="mb-6 flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-slate-800">חניה</h1>
-          <p className="text-sm text-slate-500 mt-1">
-            {active.length} פעילים | הכנסה חודשית: <strong className="text-green-700">{fmtMoney(monthlyRev)}</strong>
-            {expiring.length>0 && <span className="text-red-600 font-semibold"> | {expiring.length} פגות ב-30י</span>}
-          </p>
+          <h1 className="text-3xl font-bold text-slate-800">חניות</h1>
+          <p className="text-sm text-slate-500 mt-1">{totalSpots} חניות | {rented} מושכרות | {free} פנויות</p>
         </div>
-        <button onClick={openNew} className="rounded-lg bg-blue-700 px-5 py-2.5 font-bold text-white hover:bg-blue-800">
-          + מנוי חניה
-        </button>
+        <button onClick={openNew} className="rounded-lg bg-blue-700 px-5 py-2.5 font-bold text-white hover:bg-blue-800">+ חניה חדשה</button>
       </div>
 
-      {/* KPI */}
+      {/* Global stats */}
       <div className="grid grid-cols-4 gap-3 mb-5">
-        {PARKING_TYPES.map(function(pt) {
-          const cnt = subs.filter(function(s){return s.subscription_type===pt.v && s.status==="active";}).length;
-          const rev = subs.filter(function(s){return s.subscription_type===pt.v && s.status==="active";}).reduce(function(t,s){return t+(s.monthly_fee??0);},0);
-          return (
-            <button key={pt.v} onClick={function(){setFilterType(filterType===pt.v?"all":pt.v);}}
-              className={"rounded-xl border p-3 text-center transition-all " +
-                (filterType===pt.v?"border-blue-500 bg-blue-50 ring-2 ring-blue-300":"border-slate-200 bg-white hover:shadow-sm")}>
-              <div className="text-2xl mb-0.5">{pt.icon}</div>
-              <div className="text-xl font-black text-slate-800">{cnt}</div>
-              <div className="text-xs text-slate-500">{pt.l}</div>
-              {rev>0 && <div className="text-xs text-green-600 font-semibold">{fmtMoney(rev)}/חודש</div>}
-            </button>
-          );
+        {[
+          { label: "מושכרות", value: String(rented), color: "text-green-700", bg: "bg-green-50" },
+          { label: "פנויות", value: String(free), color: "text-blue-700", bg: "bg-blue-50" },
+          { label: "הכנסה חודשית", value: fmtMoney(monthlyIncome), color: "text-emerald-700", bg: "bg-emerald-50" },
+          { label: 'סה"כ חניות', value: String(totalSpots), color: "text-slate-500", bg: "bg-white" },
+        ].map(function(k) {
+          return <div key={k.label} className={"rounded-xl border border-slate-200 p-3 text-center " + k.bg}>
+            <div className={"text-xl font-black " + k.color}>{k.value}</div>
+            <div className="text-xs text-slate-400">{k.label}</div>
+          </div>;
         })}
       </div>
 
-      {/* פילטר */}
-      <div className="flex gap-2 mb-4">
-        {[{v:"all",l:"הכל"},{v:"active",l:"פעילים"},{v:"inactive",l:"לא פעיל"}].map(function(s) {
-          return (
-            <button key={s.v} onClick={function(){setFilterType(s.v);}}
-              className={"rounded-xl border px-3 py-1.5 text-xs font-semibold " +
-                (filterType===s.v?"border-blue-500 bg-blue-50 text-blue-700":"border-slate-200 text-slate-600")}>
-              {s.l}
-            </button>
-          );
+      {/* Filters */}
+      <div className="flex gap-2 mb-4 flex-wrap">
+        <select value={filterProp} onChange={function(e) { setFilterProp(e.target.value); }} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">
+          <option value="all">כל הנכסים</option>
+          {properties.map(function(p) { return <option key={p.id} value={p.id}>{p.name}</option>; })}
+        </select>
+        {[{ v: "all", l: "הכל" }, { v: "active", l: "🟢 פעיל" }, { v: "inactive", l: "⚪ לא פעיל" }].map(function(s) {
+          return <button key={s.v} onClick={function() { setFilterSt(s.v); }}
+            className={"rounded-xl border px-3 py-1.5 text-xs font-semibold " + (filterSt === s.v ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-200 text-slate-600")}>{s.l}</button>;
         })}
       </div>
 
-      {loading ? (
-        <div className="text-center py-12 text-slate-400">טוען...</div>
-      ) : filtered.length === 0 ? (
+      {/* Content grouped by property */}
+      {loading ? <div className="text-center py-12 text-slate-400">טוען...</div> : Object.keys(propGroups).length === 0 ? (
         <div className="rounded-xl border-2 border-dashed border-slate-200 bg-white p-12 text-center text-slate-400">
-          <div className="text-5xl mb-3">🅿️</div><div>אין מנויי חניה</div>
-          <button onClick={openNew} className="mt-3 text-blue-600 hover:underline text-sm">+ הוסף מנוי</button>
+          <div className="text-5xl mb-3">🅿️</div>
+          <div>אין חניות</div>
+          <button onClick={openNew} className="mt-3 text-blue-600 hover:underline text-sm">+ הוסף חניה</button>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-          {filtered.map(function(s) {
-            const ti = typeInfo(s.subscription_type);
-            const d  = s.end_date ? daysLeft(s.end_date) : null;
-            const isExp = d!==null && d<=30 && s.status==="active";
+        <div className="space-y-6">
+          {Object.values(propGroups).map(function(group) {
+            var propRented = group.spots.filter(function(s) { return s.tenant_id; }).length;
+            var propFree = group.spots.length - propRented;
+            var propIncome = group.spots.filter(function(s) { return s.status === "active" && !s.is_included_in_rent; })
+              .reduce(function(sum, s) { return sum + (Number(s.monthly_fee) || 0); }, 0);
+            var declaredSpots = Number(group.prop.parking_spaces) || 0;
+
             return (
-              <div key={s.id} className={"rounded-xl border p-4 transition-all hover:shadow-md " +
-                (isExp?"border-red-200 bg-red-50":s.status==="active"?"border-slate-200 bg-white":"border-slate-100 bg-slate-50 opacity-60")}>
-                <div className="flex items-center justify-between mb-3">
-                  <div className="flex items-center gap-2">
-                    <span className="text-2xl">{ti.icon}</span>
-                    <div>
-                      <div className="font-bold text-slate-800 text-sm">{ti.l}</div>
-                      {s.spot_number && <div className="text-xs text-slate-400">מקום #{s.spot_number}</div>}
+              <div key={group.prop.id} className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+                {/* Property header */}
+                <div className="bg-slate-50 border-b border-slate-200 px-5 py-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <h3 className="text-lg font-bold text-slate-800">🅿️ {group.prop.name}</h3>
+                    <span className="text-xs text-slate-400">
+                      {group.spots.length} חניות{declaredSpots > 0 ? " (מוגדרות: " + declaredSpots + ")" : ""}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="rounded-lg bg-green-50 border border-green-100 p-2 text-center">
+                      <div className="text-sm font-black text-green-700">{propRented}</div>
+                      <div className="text-[10px] text-green-600">מושכרות</div>
+                    </div>
+                    <div className="rounded-lg bg-blue-50 border border-blue-100 p-2 text-center">
+                      <div className="text-sm font-black text-blue-700">{propFree}</div>
+                      <div className="text-[10px] text-blue-600">פנויות</div>
+                    </div>
+                    <div className="rounded-lg bg-white border border-slate-100 p-2 text-center">
+                      <div className="text-sm font-black text-emerald-700">{fmtMoney(propIncome)}</div>
+                      <div className="text-[10px] text-slate-400">הכנסה/חודש</div>
                     </div>
                   </div>
-                  <span className={"text-xs px-2 py-0.5 rounded-full font-semibold " +
-                    (s.status==="active"?"bg-green-100 text-green-700":"bg-slate-100 text-slate-500")}>
-                    {s.status==="active"?"פעיל":"לא פעיל"}
-                  </span>
                 </div>
-                <div className="space-y-1 text-xs text-slate-600">
-                  <div>🏢 {s.properties?.name}</div>
-                  {s.tenants?.name && <div>👤 {s.tenants.name}</div>}
-                  {s.vehicle_number && <div>🚗 {s.vehicle_number}</div>}
-                  {s.monthly_fee && <div className="font-semibold text-green-700">💰 {fmtMoney(s.monthly_fee)}/חודש</div>}
-                  {s.end_date && (
-                    <div className={isExp?"text-red-600 font-semibold":"text-slate-400"}>
-                      📅 {fmtDate(s.end_date)} {isExp && "("+d+"י)"}
-                    </div>
-                  )}
-                </div>
-                <div className="flex gap-2 mt-3">
-                  <button onClick={function(){openEdit(s);}} className="flex-1 text-xs border border-slate-200 rounded-lg py-1.5 text-slate-600 hover:bg-slate-50">✏️ עריכה</button>
-                  <button onClick={function(){handleDelete(s.id);}} className="text-xs border border-red-100 rounded-lg px-3 py-1.5 text-red-400 hover:bg-red-50">🗑</button>
+
+                {/* Parking spots grid */}
+                <div className="p-4 grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3">
+                  {group.spots.map(function(s) {
+                    var hasT = !!s.tenant_id;
+                    var isActive = s.status === "active";
+                    return (
+                      <div key={s.id} className={"rounded-xl border p-3 transition-all hover:shadow-md " +
+                        (hasT ? "border-green-200 bg-green-50" : "border-blue-100 bg-blue-50/50 border-dashed")}>
+                        <div className="flex items-center justify-between mb-1">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-lg">{typeIcon(s.subscription_type)}</span>
+                            <span className="font-bold text-slate-800 text-sm">חניה {s.spot_number}</span>
+                          </div>
+                          <span className={"text-[10px] px-1.5 py-0.5 rounded-full font-semibold " +
+                            (hasT ? "bg-green-100 text-green-700" : "bg-blue-100 text-blue-700")}>
+                            {hasT ? "מושכרת" : "פנויה"}
+                          </span>
+                        </div>
+                        <div className="text-[10px] text-slate-400">{typeLabel(s.subscription_type)}</div>
+                        {s.monthly_fee > 0 && (
+                          <div className="text-xs text-slate-600 mt-0.5">
+                            {fmtMoney(s.monthly_fee)}/חודש
+                            {s.is_included_in_rent && <span className="text-orange-500 mr-1">(כלול בשכ"ד)</span>}
+                          </div>
+                        )}
+                        {s.vehicle_number && <div className="text-[10px] text-slate-500 mt-0.5">🚗 {s.vehicle_number}</div>}
+                        {hasT && <div className="text-xs text-green-700 font-semibold mt-1">👤 {s.tenants?.name}</div>}
+                        <div className="mt-2 flex gap-1">
+                          <button onClick={function() { openEdit(s); }} className="flex-1 text-[10px] border border-slate-200 rounded py-1 text-slate-600 hover:bg-slate-50">עריכה</button>
+                          <button onClick={function() { handleDelete(s.id); }} className="text-[10px] border border-red-200 rounded py-1 px-2 text-red-500 hover:bg-red-50">🗑</button>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             );
@@ -211,81 +245,83 @@ export default function ParkingPage() {
         </div>
       )}
 
-      {/* מודל */}
+      {/* Edit/Create modal */}
       {editingId && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={function(){setEditingId("");}}>
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={function(e){e.stopPropagation();}} dir="rtl">
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={function() { setEditingId(""); }}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto" onClick={function(e) { e.stopPropagation(); }} dir="rtl">
             <div className="sticky top-0 bg-white border-b px-6 py-4 flex items-center justify-between">
-              <h2 className="font-bold text-slate-800 text-lg">{isNew?"מנוי חניה חדש":"עריכת מנוי"}</h2>
-              <button onClick={function(){setEditingId("");}} className="text-2xl text-slate-400">×</button>
+              <h2 className="font-bold text-slate-800 text-lg">{isNew ? "חניה חדשה" : "עריכת חניה"}</h2>
+              <button onClick={function() { setEditingId(""); }} className="text-2xl text-slate-400">×</button>
             </div>
             <div className="p-6 space-y-3">
               <div>
-                <label className="mb-2 block text-xs font-semibold text-slate-700">סוג חניה</label>
-                <div className="grid grid-cols-4 gap-2">
-                  {PARKING_TYPES.map(function(pt) {
-                    return (
-                      <button key={pt.v} type="button" onClick={function(){setFType(pt.v);}}
-                        className={"rounded-xl border p-2 text-center " + (fType===pt.v?"border-blue-500 bg-blue-50":"border-slate-200 hover:bg-slate-50")}>
-                        <div className="text-xl">{pt.icon}</div>
-                        <div className={"text-xs font-semibold " + (fType===pt.v?"text-blue-700":"text-slate-600")}>{pt.l}</div>
-                      </button>
-                    );
+                <label className="mb-1 block text-xs font-semibold text-slate-700">נכס *</label>
+                <select value={fPropertyId} onChange={function(e) { setFPropertyId(e.target.value); }} className={ic}>
+                  <option value="">-- בחר נכס --</option>
+                  {properties.map(function(p) { return <option key={p.id} value={p.id}>{p.name}</option>; })}
+                </select>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">מספר חניה *</label>
+                <input type="text" value={fSpotNum} onChange={function(e) { setFSpotNum(e.target.value); }} className={ic} placeholder="לדוגמה: 5, A-12" />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">סוג</label>
+                <div className="grid grid-cols-4 gap-1.5">
+                  {PARKING_TYPES.map(function(t) {
+                    return <button key={t.v} type="button" onClick={function() { setFType(t.v); }}
+                      className={"rounded-lg border p-1.5 text-center " + (fType === t.v ? "border-blue-500 bg-blue-50" : "border-slate-200")}>
+                      <div>{t.icon}</div>
+                      <div className={"text-[10px] " + (fType === t.v ? "text-blue-700 font-bold" : "text-slate-500")}>{t.l}</div>
+                    </button>;
                   })}
                 </div>
               </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">שוכר</label>
+                <select value={fTenantId} onChange={function(e) { setFTenantId(e.target.value); }} className={ic}>
+                  <option value="">-- פנויה --</option>
+                  {tenants.map(function(t) { return <option key={t.id} value={t.id}>{t.name}</option>; })}
+                </select>
+              </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-700">נכס *</label>
-                  <select value={fPropertyId} onChange={function(e){setFPropertyId(e.target.value);}} className={ic}>
-                    <option value="">-- בחר נכס --</option>
-                    {properties.map(function(p){return <option key={p.id} value={p.id}>{p.name}</option>;})}
-                  </select>
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">דמי חניה חודשיים</label>
+                  <input type="number" value={fFee} onChange={function(e) { setFFee(e.target.value); }} className={ic} />
                 </div>
                 <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-700">שוכר</label>
-                  <select value={fTenantId} onChange={function(e){setFTenantId(e.target.value);}} className={ic}>
-                    <option value="">-- ללא שוכר --</option>
-                    {tenants.map(function(t){return <option key={t.id} value={t.id}>{t.name}</option>;})}
-                  </select>
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">מספר רכב</label>
+                  <input type="text" value={fVehicle} onChange={function(e) { setFVehicle(e.target.value); }} className={ic} />
                 </div>
-                <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-700">מספר מקום</label>
-                  <input type="text" value={fSpotNum} onChange={function(e){setFSpotNum(e.target.value);}} className={ic} placeholder="A-15" />
-                </div>
-                <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-700">תשלום חודשי (₪)</label>
-                  <input type="number" value={fFee} onChange={function(e){setFFee(e.target.value);}} className={ic} />
-                </div>
-                <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-700">לוחית רישוי</label>
-                  <input type="text" value={fVehicle} onChange={function(e){setFVehicle(e.target.value);}} className={ic} dir="ltr" placeholder="12-345-67" />
-                </div>
-                <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-700">סטטוס</label>
-                  <select value={fStatus} onChange={function(e){setFStatus(e.target.value);}} className={ic}>
-                    <option value="active">פעיל</option>
-                    <option value="inactive">לא פעיל</option>
-                  </select>
-                </div>
+              </div>
+              <div className="flex items-center gap-2 py-1">
+                <input type="checkbox" id="included" checked={fIncluded} onChange={function(e) { setFIncluded(e.target.checked); }} className="w-4 h-4" />
+                <label htmlFor="included" className="text-xs font-semibold text-slate-700">כלול בדמי השכירות (ללא חיוב נפרד)</label>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="mb-1 block text-xs font-semibold text-slate-700">תחילה</label>
-                  <input type="date" value={fStartDate} onChange={function(e){setFStartDate(e.target.value);}} className={ic} />
+                  <input type="date" value={fStartDate} onChange={function(e) { setFStartDate(e.target.value); }} className={ic} />
                 </div>
                 <div>
                   <label className="mb-1 block text-xs font-semibold text-slate-700">סיום</label>
-                  <input type="date" value={fEndDate} onChange={function(e){setFEndDate(e.target.value);}} className={ic} />
+                  <input type="date" value={fEndDate} onChange={function(e) { setFEndDate(e.target.value); }} className={ic} />
                 </div>
               </div>
               <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">סטטוס</label>
+                <select value={fStatus} onChange={function(e) { setFStatus(e.target.value); }} className={ic}>
+                  <option value="active">פעיל</option>
+                  <option value="inactive">לא פעיל</option>
+                </select>
+              </div>
+              <div>
                 <label className="mb-1 block text-xs font-semibold text-slate-700">הערות</label>
-                <input type="text" value={fNotes} onChange={function(e){setFNotes(e.target.value);}} className={ic} />
+                <textarea value={fNotes} onChange={function(e) { setFNotes(e.target.value); }} rows={2} className={ic} placeholder="הערות..." />
               </div>
               <div className="flex gap-3 pt-2">
-                <button onClick={function(){setEditingId("");}} className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm text-slate-600">ביטול</button>
-                <button onClick={handleSave} disabled={saving} className="flex-1 rounded-xl bg-blue-700 py-2.5 text-sm font-bold text-white disabled:opacity-50">
-                  {saving?"שומר...":"שמור"}
-                </button>
+                <button onClick={function() { setEditingId(""); }} className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm text-slate-600">ביטול</button>
+                <button onClick={handleSave} disabled={saving} className="flex-1 rounded-xl bg-blue-700 py-2.5 text-sm font-bold text-white disabled:opacity-50">{saving ? "שומר..." : "שמור"}</button>
               </div>
             </div>
           </div>
