@@ -175,24 +175,57 @@ export function calculateTierPreviews(
  */
 /**
  * Chain-calculate option start/end dates.
- * Uses duration_years as primary (falls back to duration_months for legacy).
+ * Sequential options chain after previous. Alternative options (same group)
+ * start from the same point (contract end or previous sequential option end).
  */
 export function calculateOptionDates(
   contractEndDate: string,
   options: ExtensionOption[]
 ): ExtensionOption[] {
   if (!contractEndDate || options.length === 0) return options;
-  let prevEnd = contractEndDate;
-  return options.map((opt) => {
-    const start = prevEnd;
+
+  // Track the "anchor" point for each group level
+  let sequentialEnd = contractEndDate; // end of last sequential or first-in-group option
+  let groupAnchor = contractEndDate;   // start point for alternatives in current group
+  let lastGroup: string | null = null;
+
+  return options.map((opt, idx) => {
+    let start: string;
+
+    if (opt.option_group) {
+      // Alternative option: check if this is a NEW group or same group as previous
+      const prevOpt = idx > 0 ? options[idx - 1] : null;
+      if (prevOpt?.option_group && prevOpt.option_group !== opt.option_group && lastGroup === prevOpt.option_group) {
+        // Different group letter but same "family" — start from same anchor
+        start = groupAnchor;
+      } else if (!prevOpt?.option_group || prevOpt.option_group !== opt.option_group) {
+        // First option in a new alternative group — anchor = contract end or last sequential end
+        groupAnchor = sequentialEnd;
+        start = groupAnchor;
+      } else {
+        // Same group as previous — start from same anchor
+        start = groupAnchor;
+      }
+      lastGroup = opt.option_group;
+    } else {
+      // Sequential option
+      start = sequentialEnd;
+      lastGroup = null;
+    }
+
     let end = start;
     if (opt.duration_years > 0) {
       end = format(addYears(new Date(start), opt.duration_years), "yyyy-MM-dd");
     } else if (opt.duration_months > 0) {
       end = format(addMonths(new Date(start), opt.duration_months), "yyyy-MM-dd");
     }
-    prevEnd = end;
-    return { ...opt, start_date: start, end_date: end, duration_months: (opt.duration_years || 0) * 12 || opt.duration_months };
+
+    // Only advance sequentialEnd for non-alternative options (or first in group)
+    if (!opt.option_group) {
+      sequentialEnd = end;
+    }
+
+    return { ...opt, start_date: start, end_date: end, duration_months: Math.round((opt.duration_years || 0) * 12) || opt.duration_months };
   });
 }
 
