@@ -370,13 +370,32 @@ export function buildPriceTimeline(params: {
     : baseRentPerSqm;
   const contractLastRent = lastMainRent; // save for alternatives
 
+  // Track option numbering per group for naming (1A, 1B instead of 1, 2)
+  var optionGroupCount: Record<string, number> = {};
+  var sequentialNum = 0;
+
   options.forEach((opt, i) => {
     if (!opt.start_date || !opt.end_date) return;
+
+    // Generate label: "אופציה 1" for sequential, "אופציה 1A" / "אופציה 1B" for alternatives
+    var optLabel: string;
+    if (opt.option_group) {
+      // All alternatives share the same number, differentiated by letter
+      if (Object.keys(optionGroupCount).length === 0) sequentialNum++;
+      if (!optionGroupCount[opt.option_group]) {
+        optionGroupCount[opt.option_group] = sequentialNum;
+      }
+      optLabel = `אופציה ${optionGroupCount[opt.option_group]}${opt.option_group}`;
+    } else {
+      sequentialNum++;
+      optionGroupCount = {}; // reset for next group
+      optLabel = `אופציה ${sequentialNum}`;
+    }
 
     // Alternatives start from contract end rent, not from previous option
     let optionBaseRent = opt.option_group ? contractLastRent : lastMainRent;
     if (opt.rent_mechanism === "increase_pct" && opt.rent_increase_pct) {
-      optionBaseRent = lastMainRent * (1 + opt.rent_increase_pct / 100);
+      optionBaseRent = optionBaseRent * (1 + opt.rent_increase_pct / 100);
     } else if (opt.rent_mechanism === "new_value" && opt.new_rent_value) {
       optionBaseRent = opt.new_rent_value;
     }
@@ -391,7 +410,7 @@ export function buildPriceTimeline(params: {
         const baseEnd = new Date(optStart);
         baseEnd.setFullYear(baseEnd.getFullYear() + sortedTiers[0].from_year - 1);
         timeline.push({
-          label: `אופציה ${i + 1} — שנים 1-${sortedTiers[0].from_year - 1}`,
+          label: `${optLabel} — שנים 1-${sortedTiers[0].from_year - 1}`,
           startDate: opt.start_date,
           endDate: format(baseEnd, "yyyy-MM-dd"),
           rentPerSqm: optionBaseRent,
@@ -407,7 +426,7 @@ export function buildPriceTimeline(params: {
         const tierEnd = new Date(optStart);
         tierEnd.setFullYear(tierEnd.getFullYear() + tier.to_year);
         timeline.push({
-          label: `אופציה ${i + 1} — שנים ${tier.from_year}-${tier.to_year}`,
+          label: `${optLabel} — שנים ${tier.from_year}-${tier.to_year}`,
           startDate: format(tierStart, "yyyy-MM-dd"),
           endDate: format(tierEnd, "yyyy-MM-dd"),
           rentPerSqm: tier.increase_type === "fixed_total" ? null : tier.calculated_rent_per_sqm,
@@ -458,7 +477,7 @@ export function buildPriceTimeline(params: {
           const baseEnd = new Date(optStart);
           baseEnd.setFullYear(baseEnd.getFullYear() + 1);
           timeline.push({
-            label: `אופציה ${i + 1} — שנה 1`,
+            label: `${optLabel} — שנה 1`,
             startDate: opt.start_date,
             endDate: format(baseEnd, "yyyy-MM-dd"),
             rentPerSqm: optionBaseRent,
@@ -473,8 +492,8 @@ export function buildPriceTimeline(params: {
             const tierEnd = new Date(optStart);
             tierEnd.setFullYear(tierEnd.getFullYear() + tier.to_year);
             const yearLabel = (tier.to_year - tier.from_year === 1)
-              ? `אופציה ${i + 1} — שנה ${tier.to_year}`
-              : `אופציה ${i + 1} — שנים ${tier.from_year + 1}-${tier.to_year}`;
+              ? `${optLabel} — שנה ${tier.to_year}`
+              : `${optLabel} — שנים ${tier.from_year + 1}-${tier.to_year}`;
             timeline.push({
               label: yearLabel,
               startDate: format(tierStart, "yyyy-MM-dd"),
@@ -489,7 +508,7 @@ export function buildPriceTimeline(params: {
         } else {
           // No applicable tiers — show single entry
           timeline.push({
-            label: `אופציה ${i + 1}`,
+            label: `${optLabel}`,
             startDate: opt.start_date,
             endDate: opt.end_date,
             rentPerSqm: optionBaseRent,
@@ -502,7 +521,7 @@ export function buildPriceTimeline(params: {
       } else {
         // No main tiers or single year option — show single entry
         timeline.push({
-          label: `אופציה ${i + 1}`,
+          label: `${optLabel}`,
           startDate: opt.start_date,
           endDate: opt.end_date,
           rentPerSqm: optionBaseRent,
