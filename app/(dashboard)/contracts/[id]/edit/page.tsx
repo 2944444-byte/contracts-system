@@ -1197,10 +1197,23 @@ export default function ContractEditPage() {
 
                           {/* Price preview */}
                           {(() => {
+                            // Chain from main → previous options → this option
                             let optBase = Number(rentPerSqm) || 0;
                             if (priceTiers.length > 0) {
                               const mainPrev = calculateTierPreviews(priceTiers, optBase);
                               optBase = mainPrev[mainPrev.length - 1]?.calculated_rent_per_sqm ?? optBase;
+                            }
+                            for (let pi = 0; pi < idx; pi++) {
+                              const prevOpt = extensionOptions[pi];
+                              if (prevOpt.rent_mechanism === "increase_pct" && prevOpt.rent_increase_pct) {
+                                optBase = optBase * (1 + prevOpt.rent_increase_pct / 100);
+                              } else if (prevOpt.rent_mechanism === "new_value" && prevOpt.new_rent_value) {
+                                optBase = prevOpt.new_rent_value;
+                              }
+                              if (prevOpt.price_schedule_type === "custom" && prevOpt.price_tiers?.length > 0) {
+                                const prevPreviews = calculateTierPreviews(prevOpt.price_tiers, optBase);
+                                optBase = prevPreviews[prevPreviews.length - 1]?.calculated_rent_per_sqm ?? optBase;
+                              }
                             }
                             if (opt.rent_mechanism === "increase_pct" && opt.rent_increase_pct) optBase = optBase * (1 + opt.rent_increase_pct / 100);
                             else if (opt.rent_mechanism === "new_value" && opt.new_rent_value) optBase = opt.new_rent_value;
