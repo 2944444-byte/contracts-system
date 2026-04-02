@@ -519,21 +519,21 @@ export default function ContractEditPage() {
             return {
               contract_id: id,
               option_number: i + 1,
-              duration_months: opt.duration_months,
+              duration_months: opt.duration_months || null,
               duration_years: opt.duration_years || null,
-              start_date: opt.start_date,
-              end_date: opt.end_date,
-              notice_type: opt.notice_type,
-              notice_days_before_end: opt.notice_days_before_end,
-              rent_mechanism: opt.rent_mechanism,
-              new_rent_value: opt.new_rent_value,
-              rent_increase_pct: opt.rent_increase_pct,
-              auto_extend: opt.auto_renewal,
+              start_date: opt.start_date || null,
+              end_date: opt.end_date || null,
+              notice_type: opt.notice_type || "exercise",
+              notice_days_before_end: opt.notice_days_before_end || 90,
+              rent_mechanism: opt.rent_mechanism || "no_change",
+              new_rent_value: opt.new_rent_value || null,
+              rent_increase_pct: opt.rent_increase_pct || null,
+              auto_extend: opt.auto_renewal || false,
               status: existing?.status ?? "pending",
               is_exercised: existing?.is_exercised ?? false,
               notes: opt.notes || null,
               price_schedule_type: opt.price_schedule_type || "inherit",
-              price_tiers: opt.price_schedule_type === "custom" ? opt.price_tiers : [],
+              price_tiers: opt.price_schedule_type === "custom" ? (opt.price_tiers || []) : [],
               option_group: opt.option_group || null,
               exit_points: opt.exit_points?.length > 0 ? opt.exit_points : [],
             };
@@ -584,13 +584,17 @@ export default function ContractEditPage() {
         });
       }
 
-      // Delete + re-insert price tiers
+      // Delete + re-insert price tiers (save ORIGINAL tiers, not expanded)
       await supabase.from("contract_price_tiers").delete().eq("contract_id", id);
       if (hasIncrease && priceTiers.length > 0) {
+        // Save original tiers (with is_recurring intact) for reload
+        // calculateTierPreviews only for computed fields
         const tiersWithPreviews = calculateTierPreviews(priceTiers, Number(rentPerSqm) || 0);
         const contractStart = new Date(startDate);
+        // Use original priceTiers for structure, previews for calculated values
         await supabase.from("contract_price_tiers").insert(
-          tiersWithPreviews.map((tier, i) => {
+          priceTiers.map((tier, i) => {
+            const preview = tiersWithPreviews.find(function(t) { return t.from_year === tier.from_year && t.to_year === tier.to_year; }) || tiersWithPreviews[i];
             const tierStart = new Date(contractStart);
             tierStart.setFullYear(tierStart.getFullYear() + tier.from_year - 1);
             const tierEnd = new Date(contractStart);
@@ -602,8 +606,8 @@ export default function ContractEditPage() {
               end_date: tierEnd.toISOString().split("T")[0],
               increase_type: tier.increase_type,
               increase_value: tier.increase_value || 0,
-              is_recurring: tier.is_recurring,
-              recurring_every_years: tier.recurring_every_years,
+              is_recurring: tier.is_recurring ?? false,
+              recurring_every_years: tier.recurring_every_years ?? null,
               from_year: tier.from_year,
               to_year: tier.to_year,
               price_per_sqm: tier.increase_type === "fixed_total" ? null : tier.calculated_rent_per_sqm,

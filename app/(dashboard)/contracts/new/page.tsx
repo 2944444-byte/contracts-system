@@ -603,12 +603,13 @@ export default function ContractsNewPage() {
         });
       }
 
-      // Price Tiers → contract_price_tiers
+      // Price Tiers → save ORIGINAL tiers (with is_recurring intact)
       if (hasIncrease && priceTiers.length > 0) {
         const tiersWithPreviews = calculateTierPreviews(priceTiers, Number(rentPerSqm) || 0);
         const contractStart = new Date(startDate);
         await supabase.from("contract_price_tiers").insert(
-          tiersWithPreviews.map((tier, i) => {
+          priceTiers.map((tier, i) => {
+            const preview = tiersWithPreviews.find(function(t) { return t.from_year === tier.from_year && t.to_year === tier.to_year; }) || tiersWithPreviews[i];
             const tierStart = new Date(contractStart);
             tierStart.setFullYear(tierStart.getFullYear() + tier.from_year - 1);
             const tierEnd = new Date(contractStart);
@@ -620,13 +621,13 @@ export default function ContractsNewPage() {
               end_date: tierEnd.toISOString().split("T")[0],
               increase_type: tier.increase_type,
               increase_value: tier.increase_value || 0,
-              is_recurring: tier.is_recurring,
-              recurring_every_years: tier.recurring_every_years,
+              is_recurring: tier.is_recurring ?? false,
+              recurring_every_years: tier.recurring_every_years ?? null,
               from_year: tier.from_year,
               to_year: tier.to_year,
-              price_per_sqm: tier.increase_type === "fixed_total" ? null : tier.calculated_rent_per_sqm,
+              price_per_sqm: tier.increase_type === "fixed_total" ? null : (preview?.calculated_rent_per_sqm ?? null),
               fixed_amount: tier.increase_type === "fixed_total" ? tier.increase_value : null,
-              calculated_rent_per_sqm: tier.calculated_rent_per_sqm,
+              calculated_rent_per_sqm: preview?.calculated_rent_per_sqm ?? null,
               notes: tier.notes || null,
             };
           })
