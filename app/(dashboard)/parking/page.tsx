@@ -116,6 +116,19 @@ export default function ParkingPage() {
   var typeIcon = function(v: string) { return PARKING_TYPES.find(function(t) { return t.v === v; })?.icon ?? "🅿️"; };
 
   // Group by property
+  // Generate parking spots from property.parking_spaces if none exist
+  async function generateSpots(propId: string, count: number) {
+    if (!confirm("ליצור " + count + " חניות פנויות לנכס זה?")) return;
+    var rows = [];
+    for (var i = 1; i <= count; i++) {
+      rows.push({ property_id: propId, spot_number: String(i), subscription_type: "monthly", status: "active" });
+    }
+    var { error } = await supabase.from("parking_subscriptions").insert(rows);
+    if (error) { alert("שגיאה: " + error.message); return; }
+    await loadAll();
+  }
+
+  // Group filtered spots by property, and include properties with declared parking but no spots
   var propGroups: Record<string, { prop: any; spots: any[] }> = {};
   filtered.forEach(function(s) {
     var pid = s.property_id;
@@ -124,6 +137,14 @@ export default function ParkingPage() {
       propGroups[pid] = { prop: prop || { id: pid, name: "לא ידוע" }, spots: [] };
     }
     propGroups[pid].spots.push(s);
+  });
+  // Add properties that have parking_spaces declared but no spots created yet
+  properties.forEach(function(p) {
+    if (p.parking_spaces > 0 && !propGroups[p.id]) {
+      if (filterPropIds.length === 0 || filterPropIds.includes(p.id)) {
+        propGroups[p.id] = { prop: p, spots: [] };
+      }
+    }
   });
 
   return (
@@ -182,9 +203,17 @@ export default function ParkingPage() {
                 <div className="bg-slate-50 border-b border-slate-200 px-5 py-3">
                   <div className="flex items-center justify-between mb-2">
                     <h3 className="text-lg font-bold text-slate-800">🅿️ {group.prop.name}</h3>
-                    <span className="text-xs text-slate-400">
-                      {group.spots.length} חניות{declaredSpots > 0 ? " (מוגדרות: " + declaredSpots + ")" : ""}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-slate-400">
+                        {group.spots.length} חניות{declaredSpots > 0 ? " (מוגדרות: " + declaredSpots + ")" : ""}
+                      </span>
+                      {declaredSpots > 0 && group.spots.length === 0 && (
+                        <button onClick={function() { generateSpots(group.prop.id, declaredSpots); }}
+                          className="rounded-lg bg-green-600 text-white px-3 py-1 text-xs font-bold hover:bg-green-700">
+                          צור {declaredSpots} חניות
+                        </button>
+                      )}
+                    </div>
                   </div>
                   <div className="grid grid-cols-3 gap-2">
                     <div className="rounded-lg bg-green-50 border border-green-100 p-2 text-center">
@@ -203,6 +232,16 @@ export default function ParkingPage() {
                 </div>
 
                 {/* Parking spots grid */}
+                {group.spots.length === 0 ? (
+                  <div className="p-6 text-center text-slate-400 text-sm">
+                    <div className="text-3xl mb-2">🅿️</div>
+                    {declaredSpots > 0 ? (
+                      <div>בנכס מוגדרות {declaredSpots} חניות — לחץ "צור חניות" ליצירה</div>
+                    ) : (
+                      <div>אין חניות מוגדרות לנכס זה</div>
+                    )}
+                  </div>
+                ) : (
                 <div className="p-4 grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3">
                   {group.spots.map(function(s) {
                     var hasT = !!s.tenant_id;
@@ -237,6 +276,7 @@ export default function ParkingPage() {
                     );
                   })}
                 </div>
+                )}
               </div>
             );
           })}
