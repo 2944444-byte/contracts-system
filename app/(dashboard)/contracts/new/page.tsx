@@ -555,6 +555,7 @@ export default function ContractsNewPage() {
           price_schedule_type: opt.price_schedule_type || "inherit",
           price_tiers: opt.price_schedule_type === "custom" ? opt.price_tiers : [],
           option_group: opt.option_group || null,
+          exit_points: opt.exit_points?.length > 0 ? opt.exit_points : [],
         }));
         const { data: insertedOpts } = await supabase.from("contract_options").insert(optionsToInsert).select("id,option_number");
 
@@ -1789,6 +1790,55 @@ export default function ContractsNewPage() {
                       )}
                       {opt.price_schedule_type === "inherit" && (
                         <div className="text-xs text-blue-600">ממשיך את מנגנון העלייה של החוזה הראשי</div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Exit points */}
+                  {opt.duration_years > 1 && (
+                    <div className="rounded-lg border border-orange-200 bg-orange-50/30 p-3 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <label className="text-xs font-bold text-orange-800">🚪 נקודות יציאה</label>
+                        <button type="button" onClick={() => {
+                          var exits = opt.exit_points || [];
+                          updateOption(idx, "exit_points", [...exits, { year: 1, notice_days: 180, penalty_months: 0 }]);
+                        }} className="text-[10px] text-orange-600 hover:text-orange-800 font-semibold">+ נקודת יציאה</button>
+                      </div>
+                      {(opt.exit_points || []).length === 0 ? (
+                        <div className="text-[10px] text-orange-500">אין נקודות יציאה</div>
+                      ) : (
+                        (opt.exit_points || []).map(function(ep: any, epIdx: number) {
+                          return (
+                            <div key={epIdx} className="rounded border border-orange-200 bg-white p-2 flex items-center gap-2 text-xs">
+                              <span className="text-orange-700">שנה</span>
+                              <input type="number" min="1" max={opt.duration_years} value={ep.year}
+                                onChange={(e) => {
+                                  var exits = [...(opt.exit_points || [])];
+                                  exits[epIdx] = { ...exits[epIdx], year: Number(e.target.value) };
+                                  updateOption(idx, "exit_points", exits);
+                                }} className="w-16 rounded border border-slate-200 px-2 py-1 text-center text-xs" />
+                              <span className="text-orange-700">הודעה (ימים)</span>
+                              <input type="number" min="0" value={ep.notice_days}
+                                onChange={(e) => {
+                                  var exits = [...(opt.exit_points || [])];
+                                  exits[epIdx] = { ...exits[epIdx], notice_days: Number(e.target.value) };
+                                  updateOption(idx, "exit_points", exits);
+                                }} className="w-16 rounded border border-slate-200 px-2 py-1 text-center text-xs" />
+                              <span className="text-orange-700">קנס (חודשים)</span>
+                              <input type="number" min="0" value={ep.penalty_months}
+                                onChange={(e) => {
+                                  var exits = [...(opt.exit_points || [])];
+                                  exits[epIdx] = { ...exits[epIdx], penalty_months: Number(e.target.value) };
+                                  updateOption(idx, "exit_points", exits);
+                                }} className="w-16 rounded border border-slate-200 px-2 py-1 text-center text-xs" />
+                              <button type="button" onClick={() => {
+                                var exits = [...(opt.exit_points || [])];
+                                exits.splice(epIdx, 1);
+                                updateOption(idx, "exit_points", exits);
+                              }} className="text-red-400 hover:text-red-600">✕</button>
+                            </div>
+                          );
+                        })
                       )}
                     </div>
                   )}

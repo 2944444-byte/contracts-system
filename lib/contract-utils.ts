@@ -52,6 +52,8 @@ export type ExtensionOption = {
   price_tiers: PriceTier[];
   // Alternative options: same group = choose one (A or B)
   option_group: string | null; // null = sequential, "A"/"B" = alternatives
+  // Exit points: tenant can exit early at specific years
+  exit_points: Array<{ year: number; notice_days: number; penalty_months: number }>;
 };
 
 export type IncreaseStep = {
@@ -242,6 +244,7 @@ export function emptyOption(group: string | null = null): ExtensionOption {
     price_schedule_type: "inherit",
     price_tiers: [],
     option_group: group,
+    exit_points: [],
   };
 }
 

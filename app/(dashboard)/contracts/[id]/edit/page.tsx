@@ -331,6 +331,7 @@ export default function ContractEditPage() {
         price_schedule_type: o.price_schedule_type ?? "inherit",
         price_tiers: o.price_tiers && Array.isArray(o.price_tiers) ? o.price_tiers : [],
         option_group: o.option_group ?? null,
+        exit_points: o.exit_points && Array.isArray(o.exit_points) ? o.exit_points : [],
       })));
     }
 
@@ -524,6 +525,7 @@ export default function ContractEditPage() {
             price_schedule_type: opt.price_schedule_type || "inherit",
             price_tiers: opt.price_schedule_type === "custom" ? opt.price_tiers : [],
             option_group: opt.option_group || null,
+            exit_points: opt.exit_points?.length > 0 ? opt.exit_points : [],
           }))
         ).select("id,option_number");
 
@@ -1101,8 +1103,28 @@ export default function ContractEditPage() {
           <div className="space-y-4">
             <div className="flex items-center justify-between mb-4">
               <h2 className="font-bold text-slate-800 text-lg">🔄 אופציות להארכת חוזה</h2>
-              <button type="button" onClick={() => setExtensionOptions((prev) => [...prev, emptyOption()])}
-                className="rounded-lg bg-blue-700 px-4 py-2 text-xs font-bold text-white hover:bg-blue-800">+ הוסף אופציה</button>
+              <div className="flex gap-2">
+                <button type="button" onClick={() => setExtensionOptions((prev) => [...prev, emptyOption()])}
+                  className="rounded-lg bg-blue-700 px-4 py-2 text-xs font-bold text-white hover:bg-blue-800">+ אופציה רציפה</button>
+                <button type="button" onClick={() => {
+                  var groups = extensionOptions.map(function(o) { return o.option_group; }).filter(Boolean);
+                  var nextGroup = "A";
+                  if (groups.length > 0) {
+                    var lastGroup = groups.sort().pop() || "A";
+                    nextGroup = String.fromCharCode(lastGroup.charCodeAt(0) + 1);
+                  }
+                  if (groups.length === 0 && extensionOptions.length > 0) {
+                    setExtensionOptions(function(prev) {
+                      var updated = [...prev];
+                      updated[updated.length - 1] = { ...updated[updated.length - 1], option_group: "A" };
+                      return [...updated, emptyOption("B")];
+                    });
+                  } else {
+                    setExtensionOptions(function(prev) { return [...prev, emptyOption(nextGroup)]; });
+                  }
+                }}
+                  className="rounded-lg border border-purple-400 bg-purple-50 px-4 py-2 text-xs font-bold text-purple-700 hover:bg-purple-100">+ חלופית (A/B)</button>
+              </div>
             </div>
             {extensionOptions.length === 0 ? (
               <div className="rounded-xl border-2 border-dashed border-slate-200 p-8 text-center text-slate-400">
@@ -1111,9 +1133,14 @@ export default function ContractEditPage() {
               </div>
             ) : (
               extensionOptions.map((opt, idx) => (
-                <div key={idx} className="rounded-xl border border-slate-200 p-4 space-y-3">
+                <div key={idx} className={"rounded-xl border p-4 space-y-3 " + (opt.option_group ? "border-purple-300 bg-purple-50/30" : "border-slate-200")}>
                   <div className="flex items-center justify-between">
-                    <span className="font-bold text-slate-700 text-sm">אופציה {idx + 1}</span>
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-slate-700 text-sm">אופציה {idx + 1}</span>
+                      {opt.option_group && (
+                        <span className="rounded-full bg-purple-100 text-purple-700 px-2 py-0.5 text-[10px] font-bold">חלופה {opt.option_group}</span>
+                      )}
+                    </div>
                     <button type="button" onClick={() => removeOption(idx)} className="text-xs text-red-500 hover:text-red-700 font-semibold">🗑 הסר</button>
                   </div>
                   <div className="grid grid-cols-2 gap-3">
@@ -1307,6 +1334,55 @@ export default function ContractEditPage() {
                       )}
                     </div>
                   )}
+                  {/* Exit points */}
+                  {opt.duration_years > 1 && (
+                    <div className="rounded-lg border border-orange-200 bg-orange-50/30 p-3 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <label className="text-xs font-bold text-orange-800">🚪 נקודות יציאה</label>
+                        <button type="button" onClick={() => {
+                          var exits = opt.exit_points || [];
+                          updateOption(idx, "exit_points", [...exits, { year: 1, notice_days: 180, penalty_months: 0 }]);
+                        }} className="text-[10px] text-orange-600 hover:text-orange-800 font-semibold">+ נקודת יציאה</button>
+                      </div>
+                      {(opt.exit_points || []).length === 0 ? (
+                        <div className="text-[10px] text-orange-500">אין נקודות יציאה — השוכר מחויב לכל תקופת האופציה</div>
+                      ) : (
+                        (opt.exit_points || []).map(function(ep: any, epIdx: number) {
+                          return (
+                            <div key={epIdx} className="rounded border border-orange-200 bg-white p-2 flex items-center gap-2 text-xs">
+                              <span className="text-orange-700">שנה</span>
+                              <input type="number" min="1" max={opt.duration_years} value={ep.year}
+                                onChange={(e) => {
+                                  var exits = [...(opt.exit_points || [])];
+                                  exits[epIdx] = { ...exits[epIdx], year: Number(e.target.value) };
+                                  updateOption(idx, "exit_points", exits);
+                                }} className="w-16 rounded border border-slate-200 px-2 py-1 text-center text-xs" />
+                              <span className="text-orange-700">הודעה מראש (ימים)</span>
+                              <input type="number" min="0" value={ep.notice_days}
+                                onChange={(e) => {
+                                  var exits = [...(opt.exit_points || [])];
+                                  exits[epIdx] = { ...exits[epIdx], notice_days: Number(e.target.value) };
+                                  updateOption(idx, "exit_points", exits);
+                                }} className="w-16 rounded border border-slate-200 px-2 py-1 text-center text-xs" />
+                              <span className="text-orange-700">קנס (חודשים)</span>
+                              <input type="number" min="0" value={ep.penalty_months}
+                                onChange={(e) => {
+                                  var exits = [...(opt.exit_points || [])];
+                                  exits[epIdx] = { ...exits[epIdx], penalty_months: Number(e.target.value) };
+                                  updateOption(idx, "exit_points", exits);
+                                }} className="w-16 rounded border border-slate-200 px-2 py-1 text-center text-xs" />
+                              <button type="button" onClick={() => {
+                                var exits = [...(opt.exit_points || [])];
+                                exits.splice(epIdx, 1);
+                                updateOption(idx, "exit_points", exits);
+                              }} className="text-red-400 hover:text-red-600">✕</button>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  )}
+
                   <div>
                     <label className="mb-1 block text-xs font-semibold text-slate-700">הערות</label>
                     <input type="text" value={opt.notes} onChange={(e) => updateOption(idx, "notes", e.target.value)}
