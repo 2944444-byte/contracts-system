@@ -77,7 +77,7 @@ export default function ContractsPage() {
 
   async function loadContracts() {
     const { data } = await supabase.from("contracts")
-      .select("*, tenants(name,phone,primary_email,company_name), properties(name,city), contract_options(id,option_number,duration_months,duration_years,end_date,notice_days_before_end,notice_type,status,is_exercised,rent_mechanism,rent_increase_pct,new_rent_value), guarantees(id,guarantee_type,status,amount_required,amount_actual,end_date,bank), contract_spaces(space_id,spaces(space_name,area))")
+      .select("*, tenants(name,phone,primary_email,company_name), properties(name,city), contract_options(id,option_number,duration_months,duration_years,end_date,notice_days_before_end,notice_type,status,is_exercised,rent_mechanism,rent_increase_pct,new_rent_value,option_group,exit_points), guarantees(id,guarantee_type,status,amount_required,amount_actual,end_date,bank), contract_spaces(space_id,spaces(space_name,area))")
       .order("end_date");
     setContracts(data??[]);
     setLoading(false);
@@ -581,9 +581,12 @@ export default function ContractsPage() {
                       const isExercised = opt.is_exercised || opt.status === "exercised";
                       const needsAttention = noticePassed && !isExercised && opt.status !== "expired";
                       return (
-                        <div key={opt.id} className={"rounded-lg border p-3 " + (needsAttention ? "border-red-300 bg-red-50" : isExercised ? "border-green-200 bg-green-50" : "border-slate-100")}>
+                        <div key={opt.id} className={"rounded-lg border p-3 " + (needsAttention ? "border-red-300 bg-red-50" : isExercised ? "border-green-200 bg-green-50" : opt.option_group ? "border-purple-200 bg-purple-50/30" : "border-slate-100")}>
                           <div className="flex items-center justify-between mb-1">
-                            <span className="text-sm font-bold text-slate-700">אופציה {opt.option_number} — {optYears} שנים</span>
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-bold text-slate-700">אופציה {opt.option_number} — {optYears} שנים</span>
+                              {opt.option_group && <span className="rounded-full bg-purple-100 text-purple-700 px-2 py-0.5 text-[9px] font-bold">חלופה {opt.option_group}</span>}
+                            </div>
                             <div className="flex items-center gap-2">
                               <span className={"text-xs px-2 py-0.5 rounded-full font-semibold " +
                                 (isExercised ? "bg-green-100 text-green-700" : opt.status==="expired" ? "bg-red-100 text-red-600" : "bg-blue-100 text-blue-600")}>

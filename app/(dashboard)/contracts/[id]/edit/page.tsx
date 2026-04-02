@@ -503,31 +503,43 @@ export default function ContractEditPage() {
         );
       }
 
-      // Delete + re-insert options (cascade deletes option price tiers via FK)
+      // Save options: preserve status of existing options, delete removed ones
+      // First load existing option statuses to preserve exercised state
+      const { data: existingOpts } = await supabase.from("contract_options")
+        .select("option_number,status,is_exercised").eq("contract_id", id);
+      const existingStatusMap: Record<number, { status: string; is_exercised: boolean }> = {};
+      (existingOpts ?? []).forEach(function(o: any) { existingStatusMap[o.option_number] = { status: o.status, is_exercised: o.is_exercised }; });
+
       await supabase.from("contract_options").delete().eq("contract_id", id);
       if (extensionOptions.length > 0) {
-        const { data: insertedOpts } = await supabase.from("contract_options").insert(
-          extensionOptions.map((opt, i) => ({
-            contract_id: id,
-            option_number: i + 1,
-            duration_months: opt.duration_months,
-            duration_years: opt.duration_years || null,
-            start_date: opt.start_date,
-            end_date: opt.end_date,
-            notice_type: opt.notice_type,
-            notice_days_before_end: opt.notice_days_before_end,
-            rent_mechanism: opt.rent_mechanism,
-            new_rent_value: opt.new_rent_value,
-            rent_increase_pct: opt.rent_increase_pct,
-            auto_extend: opt.auto_renewal,
-            status: "pending",
-            notes: opt.notes || null,
-            price_schedule_type: opt.price_schedule_type || "inherit",
-            price_tiers: opt.price_schedule_type === "custom" ? opt.price_tiers : [],
-            option_group: opt.option_group || null,
-            exit_points: opt.exit_points?.length > 0 ? opt.exit_points : [],
-          }))
+        const { data: insertedOpts, error: optErr } = await supabase.from("contract_options").insert(
+          extensionOptions.map((opt, i) => {
+            // Preserve existing status (exercised, etc.)
+            const existing = existingStatusMap[i + 1];
+            return {
+              contract_id: id,
+              option_number: i + 1,
+              duration_months: opt.duration_months,
+              duration_years: opt.duration_years || null,
+              start_date: opt.start_date,
+              end_date: opt.end_date,
+              notice_type: opt.notice_type,
+              notice_days_before_end: opt.notice_days_before_end,
+              rent_mechanism: opt.rent_mechanism,
+              new_rent_value: opt.new_rent_value,
+              rent_increase_pct: opt.rent_increase_pct,
+              auto_extend: opt.auto_renewal,
+              status: existing?.status ?? "pending",
+              is_exercised: existing?.is_exercised ?? false,
+              notes: opt.notes || null,
+              price_schedule_type: opt.price_schedule_type || "inherit",
+              price_tiers: opt.price_schedule_type === "custom" ? opt.price_tiers : [],
+              option_group: opt.option_group || null,
+              exit_points: opt.exit_points?.length > 0 ? opt.exit_points : [],
+            };
+          })
         ).select("id,option_number");
+        if (optErr) console.error("Options save error:", optErr);
 
         // Save option-level price tiers
         if (insertedOpts) {
