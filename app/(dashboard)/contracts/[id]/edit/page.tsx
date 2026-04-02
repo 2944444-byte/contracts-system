@@ -519,7 +519,7 @@ export default function ContractEditPage() {
             return {
               contract_id: id,
               option_number: i + 1,
-              duration_months: opt.duration_months || (opt.duration_years ? Math.round(opt.duration_years * 12) : 12),
+              duration_months: Math.round(opt.duration_months || (opt.duration_years ? opt.duration_years * 12 : 12)),
               duration_years: opt.duration_years || null,
               start_date: opt.start_date || null,
               end_date: opt.end_date || null,
