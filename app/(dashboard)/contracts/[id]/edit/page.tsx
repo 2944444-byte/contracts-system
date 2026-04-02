@@ -142,6 +142,7 @@ export default function ContractEditPage() {
   const [hasIncrease, setHasIncrease] = useState(false);
   const [priceTiers, setPriceTiers] = useState<PriceTier[]>([]);
   const [cbsFetching, setCbsFetching] = useState(false);
+  const [editParkingSpots, setEditParkingSpots] = useState<any[]>([]);
 
   // Step 4
   const [extensionOptions, setExtensionOptions] = useState<ExtensionOption[]>([]);
@@ -344,6 +345,13 @@ export default function ContractEditPage() {
     }
     if (c.deposit_calculation_method) setDepositCalcMethod(c.deposit_calculation_method as any);
     if (c.deposit_includes_mgmt) setDepositIncludesMgmt(true);
+
+    // Load parking
+    if (c.property_id) {
+      const { data: pk } = await supabase.from("parking_subscriptions").select("id,spot_number,quantity,monthly_fee,is_marked,is_included_in_rent,tenants(name)")
+        .eq("property_id", c.property_id).order("spot_number");
+      setEditParkingSpots(pk ?? []);
+    }
 
     setLoading(false);
     setDataLoaded(true);
@@ -845,6 +853,56 @@ export default function ContractEditPage() {
               <input type="url" value={documentUrl} onChange={(e) => setDocumentUrl(e.target.value)}
                 placeholder="https://drive.google.com/..." className={ic} dir="ltr" />
             </div>
+
+            {/* Parking section */}
+            {propertyId && (
+              <div className="mt-6 pt-4 border-t border-slate-200">
+                <div className="flex items-center justify-between mb-3">
+                  <label className="text-xs font-semibold text-slate-700">🅿️ חניות</label>
+                  <button type="button" onClick={async function() {
+                    var spot = prompt("מספר מקומות:");
+                    if (!spot) return;
+                    var fee = prompt("דמי חניה למקום/חודש (0 אם כלול):");
+                    await supabase.from("parking_subscriptions").insert({
+                      property_id: propertyId, tenant_id: tenantId || null,
+                      quantity: Number(spot) || 1, monthly_fee: Number(fee) || 0,
+                      subscription_type: "monthly", status: "active",
+                    });
+                    var { data: pk } = await supabase.from("parking_subscriptions").select("id,spot_number,quantity,monthly_fee,is_marked,is_included_in_rent,tenants(name)")
+                      .eq("property_id", propertyId).order("spot_number");
+                    setEditParkingSpots(pk ?? []);
+                  }} className="rounded-lg bg-green-600 text-white px-3 py-1.5 text-xs font-bold hover:bg-green-700">
+                    + חניה
+                  </button>
+                </div>
+                {editParkingSpots.length > 0 ? (
+                  <div className="space-y-1">
+                    {editParkingSpots.map(function(p: any) {
+                      var qty = p.quantity || 1;
+                      return (
+                        <div key={p.id} className="rounded-lg border border-slate-200 p-2 flex items-center justify-between text-xs">
+                          <div>
+                            <span className="font-semibold">{p.is_marked && p.spot_number ? "חניות " + p.spot_number : qty + " מקומות"}</span>
+                            {p.monthly_fee > 0 && <span className="text-slate-400 mr-2">₪{(p.monthly_fee * qty).toLocaleString()}/חודש</span>}
+                            {p.is_included_in_rent && <span className="text-orange-500 mr-1">(כלול)</span>}
+                            {p.tenants?.name && <span className="text-green-600 mr-2">👤 {p.tenants.name}</span>}
+                          </div>
+                          <button onClick={async function() {
+                            if (!confirm("למחוק?")) return;
+                            await supabase.from("parking_subscriptions").delete().eq("id", p.id);
+                            var { data: pk } = await supabase.from("parking_subscriptions").select("id,spot_number,quantity,monthly_fee,is_marked,is_included_in_rent,tenants(name)")
+                              .eq("property_id", propertyId).order("spot_number");
+                            setEditParkingSpots(pk ?? []);
+                          }} className="text-red-500 hover:text-red-700">🗑</button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="text-xs text-slate-400 text-center py-2">אין חניות לנכס זה</div>
+                )}
+              </div>
+            )}
           </div>
         )}
 

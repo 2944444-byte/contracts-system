@@ -120,8 +120,11 @@ export default function ContractsNewPage() {
   const [selParking, setSelParking] = useState<string[]>([]);
   const [showNewParking, setShowNewParking] = useState(false);
   const [newParkingSpot, setNewParkingSpot] = useState("");
+  const [newParkingQty, setNewParkingQty] = useState("1");
+  const [newParkingMarked, setNewParkingMarked] = useState(false);
   const [newParkingFee, setNewParkingFee] = useState("");
   const [newParkingVehicle, setNewParkingVehicle] = useState("");
+  const [newParkingIncluded, setNewParkingIncluded] = useState(false);
 
   // Step 2 — Dates & Terms
   const [startDate, setStartDate] = useState("");
@@ -323,13 +326,17 @@ export default function ContractsNewPage() {
   }
 
   async function handleNewParking() {
-    if (!newParkingSpot) return;
+    if (!newParkingMarked && !Number(newParkingQty)) { alert("חובה: כמות מקומות"); return; }
+    if (newParkingMarked && !newParkingSpot) { alert("חובה: מספרי חניות"); return; }
     const { error } = await supabase.from("parking_subscriptions").insert({
       property_id: propertyId,
       tenant_id: tenantId || null,
-      spot_number: newParkingSpot,
+      spot_number: newParkingMarked ? newParkingSpot : null,
+      quantity: Number(newParkingQty) || 1,
+      is_marked: newParkingMarked,
       monthly_fee: Number(newParkingFee) || 0,
       vehicle_number: newParkingVehicle || null,
+      is_included_in_rent: newParkingIncluded,
       subscription_type: "monthly",
       status: "active",
     });
@@ -1176,14 +1183,36 @@ export default function ContractsNewPage() {
                 </div>
                 {showNewParking && (
                   <div className="rounded-lg border border-green-200 bg-green-50 p-3 mb-3 space-y-2">
-                    <div className="grid grid-cols-3 gap-2">
-                      <input placeholder="מספר חניה *" value={newParkingSpot}
-                        onChange={(e) => setNewParkingSpot(e.target.value)} className={ic} />
-                      <input placeholder="דמי חניה חודשיים" type="number" value={newParkingFee}
-                        onChange={(e) => setNewParkingFee(e.target.value)} className={ic} />
-                      <input placeholder="מספר רכב" value={newParkingVehicle}
-                        onChange={(e) => setNewParkingVehicle(e.target.value)} className={ic} />
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="mb-1 block text-[10px] font-semibold text-slate-600">כמות מקומות</label>
+                        <input type="number" min="1" value={newParkingQty}
+                          onChange={(e) => setNewParkingQty(e.target.value)} className={ic} />
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-[10px] font-semibold text-slate-600">דמי חניה (למקום/חודש)</label>
+                        <input type="number" value={newParkingFee}
+                          onChange={(e) => setNewParkingFee(e.target.value)} className={ic} />
+                      </div>
                     </div>
+                    <div className="flex items-center gap-3">
+                      <label className="flex items-center gap-1.5 text-xs">
+                        <input type="checkbox" checked={newParkingMarked}
+                          onChange={(e) => setNewParkingMarked(e.target.checked)} className="w-3.5 h-3.5" />
+                        מקומות מסומנים
+                      </label>
+                      <label className="flex items-center gap-1.5 text-xs">
+                        <input type="checkbox" checked={newParkingIncluded}
+                          onChange={(e) => setNewParkingIncluded(e.target.checked)} className="w-3.5 h-3.5" />
+                        כלול בשכ&quot;ד
+                      </label>
+                    </div>
+                    {newParkingMarked && (
+                      <input placeholder="מספרי חניות (לדוגמה: 9-15 או 25,30)" value={newParkingSpot}
+                        onChange={(e) => setNewParkingSpot(e.target.value)} className={ic} />
+                    )}
+                    <input placeholder="מספר רכב (אופציונלי)" value={newParkingVehicle}
+                      onChange={(e) => setNewParkingVehicle(e.target.value)} className={ic} />
                     <div className="flex gap-2">
                       <button type="button" onClick={handleNewParking}
                         className="rounded-lg bg-green-600 text-white px-4 py-1.5 text-xs font-bold hover:bg-green-700">
