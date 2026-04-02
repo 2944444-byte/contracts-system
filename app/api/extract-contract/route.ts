@@ -1,21 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 
-export async function POST(req: NextRequest) {
-  try {
-    const { text } = await req.json();
-
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) {
-      return NextResponse.json({ error: "ANTHROPIC_API_KEY not configured" }, { status: 500 });
-    }
-    const client = new Anthropic({ apiKey });
-    const message = await client.messages.create({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 4096,
-      messages: [{
-        role: "user",
-        content: `אתה מומחה לניתוח חוזי שכירות מסחריים בישראל.
+const PROMPT = `אתה מומחה לניתוח חוזי שכירות מסחריים בישראל.
 חלץ את כל הנתונים הבאים מהחוזה והחזר JSON בלבד, ללא שום טקסט נוסף, ללא backticks, ללא הסברים.
 
 שדות לחילוץ:
@@ -57,26 +43,64 @@ export async function POST(req: NextRequest) {
 2. תאריכים חייבים להיות בפורמט YYYY-MM-DD בלבד
 3. סכומים כספיים — מספרים בלבד ללא סימני מטבע
 4. אם הדיירת היא חברה — החזר את שם החברה המלא
-5. חפש פרטי שוכר בכל מקום בחוזה — כולל כותרת, צדדים להסכם, נספחים
+5. חפש פרטי שוכר בכל מקום בחוזה — כולל כותרת, צדדים להסכם, נספחים`;
 
-טקסט החוזה (${Math.round(text.length/1000)}K תווים):
-${text.substring(0, 20000)}`
-      }]
+export async function POST(req: NextRequest) {
+  try {
+    const body = await req.json();
+    const { text, images } = body;
+
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) {
+      return NextResponse.json({ error: "ANTHROPIC_API_KEY not configured" }, { status: 500 });
+    }
+    const client = new Anthropic({ apiKey });
+
+    let content: any[];
+
+    if (images && Array.isArray(images) && images.length > 0) {
+      // OCR mode: send page images to Claude Vision
+      content = [
+        { type: "text", text: PROMPT + `\n\nלהלן ${images.length} עמודים ראשונים מהחוזה הסרוק:` },
+      ];
+      for (const img of images.slice(0, 10)) { // max 10 pages
+        content.push({
+          type: "image",
+          source: {
+            type: "base64",
+            media_type: "image/png",
+            data: img,
+          },
+        });
+      }
+    } else if (text) {
+      // Text mode: send extracted text
+      content = [{
+        type: "text",
+        text: PROMPT + `\n\nטקסט החוזה (${Math.round(text.length / 1000)}K תווים):\n${text.substring(0, 20000)}`,
+      }];
+    } else {
+      return NextResponse.json({ error: "No text or images provided" }, { status: 400 });
+    }
+
+    const message = await client.messages.create({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 4096,
+      messages: [{ role: "user", content }],
     });
 
     const raw = message.content[0].type === "text" ? message.content[0].text : "";
     const clean = raw.replace(/```json|```/g, "").trim();
-    
+
     let data;
     try {
       data = JSON.parse(clean);
-    } catch(e) {
-      // נסה לחלץ JSON מתוך הטקסט
+    } catch (e) {
       const match = clean.match(/\{[\s\S]*\}/);
       if (match) data = JSON.parse(match[0]);
       else throw new Error("לא ניתן לפרס JSON: " + clean.substring(0, 200));
     }
-    
+
     return NextResponse.json(data);
   } catch (e: any) {
     return NextResponse.json({ error: e.message ?? String(e) }, { status: 500 });

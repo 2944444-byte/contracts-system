@@ -367,9 +367,31 @@ export default function ContractsNewPage() {
         text = pages.join("\n");
         // Check if text is mostly gibberish (scanned PDF without real text)
         if (text.length < 100 || text.replace(/[^א-תa-zA-Z0-9]/g, "").length < text.length * 0.2) {
-          alert("ה-PDF נראה סרוק (תמונה) ולא מכיל טקסט אמיתי.\nנא להשתמש בקובץ Word (.docx) או PDF עם טקסט מוטבע.");
-          setAiExtracting(false);
-          return;
+          // Scanned PDF — use OCR via Claude Vision
+          setAiResult("סורק PDF עם OCR...");
+          var imagePages: string[] = [];
+          var canvas = document.createElement("canvas");
+          var ctx = canvas.getContext("2d");
+          var maxOcrPages = Math.min(10, pdf.numPages);
+          for (var pi = 1; pi <= maxOcrPages; pi++) {
+            var ocrPage = await pdf.getPage(pi);
+            var viewport = ocrPage.getViewport({ scale: 1.5 });
+            canvas.width = viewport.width;
+            canvas.height = viewport.height;
+            await ocrPage.render({ canvasContext: ctx!, viewport: viewport }).promise;
+            var dataUrl = canvas.toDataURL("image/png");
+            imagePages.push(dataUrl.split(",")[1]); // base64 without prefix
+          }
+          var ocrRes = await fetch("/api/extract-contract", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ images: imagePages }),
+          });
+          if (!ocrRes.ok) throw new Error("OCR API error " + ocrRes.status);
+          var ocrData = await ocrRes.json();
+          if (ocrData.error) throw new Error(ocrData.error);
+          // Store OCR result for the main flow below
+          (globalThis as any).__ocrData = ocrData;
         }
       } else if (file.name.match(/\.docx$/i)) {
         const mammoth = await import("mammoth");
@@ -386,14 +408,24 @@ export default function ContractsNewPage() {
         return;
       }
 
-      const res = await fetch("/api/extract-contract", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text }),
-      });
-      if (!res.ok) throw new Error("API error " + res.status);
-      const data = await res.json();
-      if (data.error) throw new Error(data.error);
+      var data: any;
+      var skipApiCall = false;
+      // Check if OCR already set the data
+      if ((globalThis as any).__ocrData) {
+        data = (globalThis as any).__ocrData;
+        delete (globalThis as any).__ocrData;
+        skipApiCall = true;
+      }
+      if (!skipApiCall) {
+        const res = await fetch("/api/extract-contract", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text }),
+        });
+        if (!res.ok) throw new Error("API error " + res.status);
+        data = await res.json();
+        if (data.error) throw new Error(data.error);
+      }
 
       // Auto-fill fields
       let filled = 0;
