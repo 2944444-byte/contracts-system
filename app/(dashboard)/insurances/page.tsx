@@ -2,6 +2,7 @@
 import { useState, useEffect } from "react";
 import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit-log';
+import PropertyHierarchyFilter from '@/components/PropertyHierarchyFilter';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 
@@ -20,6 +21,8 @@ export default function InsurancesPage() {
   const [isNew,       setIsNew]       = useState(false);
   const [saving,      setSaving]      = useState(false);
 
+  const [filterPropIds, setFilterPropIds] = useState<string[]>([]);
+
   // form
   const [fRefId,      setFRefId]      = useState("");
   const [fInsurer,    setFInsurer]    = useState("");
@@ -36,7 +39,7 @@ export default function InsurancesPage() {
   async function loadAll() {
     const [{ data: b }, { data: t }, { data: p }, { data: c }] = await Promise.all([
       supabase.from("insurances_building").select("*, properties(name)").order("end_date"),
-      supabase.from("insurances_tenant").select("*, contracts(tenants(name), properties(name))").order("end_date"),
+      supabase.from("insurances_tenant").select("*, contracts(property_id, tenants(name), properties(name))").order("end_date"),
       supabase.from("properties").select("id,name").order("name"),
       supabase.from("contracts").select("id, tenants(name), properties(name)").in("status",["active","expiring","extended"]),
     ]);
@@ -100,7 +103,11 @@ export default function InsurancesPage() {
     await loadAll();
   }
 
-  const list     = activeTab==="building" ? buildingIns : tenantIns;
+  const allList  = activeTab==="building" ? buildingIns : tenantIns;
+  const list     = filterPropIds.length===0 ? allList : allList.filter(function(ins) {
+    const pid = activeTab==="building" ? ins.property_id : ins.contracts?.property_id;
+    return filterPropIds.includes(pid);
+  });
   const expiring = list.filter(function(ins) { return ins.end_date && daysLeft(ins.end_date)<=60 && ins.status==="active"; });
   const expired  = list.filter(function(ins) { return ins.status==="expired"; });
   const active   = list.filter(function(ins) { return ins.status==="active"; });
@@ -157,6 +164,10 @@ export default function InsurancesPage() {
         <button onClick={openNew} className="rounded-lg bg-blue-700 px-5 py-2.5 font-bold text-white hover:bg-blue-800">
           + ביטוח חדש
         </button>
+      </div>
+
+      <div className="mb-4">
+        <PropertyHierarchyFilter onChange={function(f) { setFilterPropIds(f.propertyIds); }} />
       </div>
 
       {/* Tabs */}

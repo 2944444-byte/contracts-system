@@ -2,6 +2,7 @@
 import { useState, useEffect } from "react";
 import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit-log';
+import PropertyHierarchyFilter from '@/components/PropertyHierarchyFilter';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 
@@ -34,7 +35,7 @@ export default function SafetyPage() {
   const [isNew,       setIsNew]       = useState(false);
   const [saving,      setSaving]      = useState(false);
   const [filterType,  setFilterType]  = useState("all");
-  const [filterProp,  setFilterProp]  = useState("all");
+  const [filterPropIds, setFilterPropIds] = useState<string[]>([]);
   const [filterScope, setFilterScope] = useState("all");
 
   // Form fields
@@ -152,7 +153,7 @@ export default function SafetyPage() {
 
   const filtered = inspections.filter(function(ins) {
     const mt = filterType==="all" || ins.inspection_type===filterType;
-    const mp = filterProp==="all" || ins.property_id===filterProp;
+    const mp = filterPropIds.length===0 || filterPropIds.includes(ins.property_id);
     const ms = filterScope==="all" || (ins.scope ?? "public")===filterScope;
     return mt && mp && ms;
   });
@@ -204,12 +205,10 @@ export default function SafetyPage() {
       </div>
 
       {/* Filters */}
+      <div className="mb-4">
+        <PropertyHierarchyFilter onChange={function(f) { setFilterPropIds(f.propertyIds); }} />
+      </div>
       <div className="flex gap-2 mb-4 flex-wrap">
-        <select value={filterProp} onChange={function(e){setFilterProp(e.target.value);}}
-          className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">
-          <option value="all">כל הנכסים</option>
-          {properties.map(function(p){return <option key={p.id} value={p.id}>{p.name}</option>;})}
-        </select>
         <select value={filterScope} onChange={function(e){setFilterScope(e.target.value);}}
           className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">
           <option value="all">כל הסוגים</option>

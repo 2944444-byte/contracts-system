@@ -2,6 +2,7 @@
 import { useState, useEffect } from "react";
 import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit-log';
+import PropertyHierarchyFilter from '@/components/PropertyHierarchyFilter';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 
@@ -22,7 +23,7 @@ export default function ParkingPage() {
   const [editingId,  setEditingId]  = useState("");
   const [isNew,      setIsNew]      = useState(false);
   const [saving,     setSaving]     = useState(false);
-  const [filterProp, setFilterProp] = useState("all");
+  const [filterPropIds, setFilterPropIds] = useState<string[]>([]);
   const [filterSt,   setFilterSt]   = useState("all");
 
   const [fPropertyId,  setFPropertyId]  = useState("");
@@ -101,7 +102,7 @@ export default function ParkingPage() {
   }
 
   var filtered = subs.filter(function(s) {
-    return (filterProp === "all" || s.property_id === filterProp) &&
+    return (filterPropIds.length === 0 || filterPropIds.includes(s.property_id)) &&
            (filterSt === "all" || s.status === filterSt);
   });
 
@@ -150,12 +151,9 @@ export default function ParkingPage() {
         })}
       </div>
 
-      {/* Filters */}
-      <div className="flex gap-2 mb-4 flex-wrap">
-        <select value={filterProp} onChange={function(e) { setFilterProp(e.target.value); }} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">
-          <option value="all">כל הנכסים</option>
-          {properties.map(function(p) { return <option key={p.id} value={p.id}>{p.name}</option>; })}
-        </select>
+      {/* Hierarchy filter + status filter */}
+      <div className="flex gap-2 mb-4 flex-wrap items-center">
+        <PropertyHierarchyFilter onChange={function(f) { setFilterPropIds(f.propertyIds); }} />
         {[{ v: "all", l: "הכל" }, { v: "active", l: "🟢 פעיל" }, { v: "inactive", l: "⚪ לא פעיל" }].map(function(s) {
           return <button key={s.v} onClick={function() { setFilterSt(s.v); }}
             className={"rounded-xl border px-3 py-1.5 text-xs font-semibold " + (filterSt === s.v ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-200 text-slate-600")}>{s.l}</button>;

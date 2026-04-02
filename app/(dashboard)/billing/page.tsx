@@ -2,6 +2,7 @@
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
 import { logAudit } from "@/lib/audit-log";
+import PropertyHierarchyFilter from '@/components/PropertyHierarchyFilter';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 
@@ -21,6 +22,7 @@ export default function BillingPage() {
   // shared
   const [properties, setProperties] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [filterPropIds, setFilterPropIds] = useState<string[]>([]);
 
   useEffect(function () { loadProperties(); }, []);
 
@@ -33,7 +35,8 @@ export default function BillingPage() {
     setLoading(false);
   }
 
-  const internalProps = properties.filter(function (p) { return p.management_type === "internal"; });
+  const filteredProperties = filterPropIds.length === 0 ? properties : properties.filter(function (p) { return filterPropIds.includes(p.id); });
+  const internalProps = filteredProperties.filter(function (p) { return p.management_type === "internal"; });
 
   const TABS: { v: Tab; l: string }[] = [
     { v: "management", l: "\u05D3\u05DE\u05D9 \u05E0\u05D9\u05D4\u05D5\u05DC" },
@@ -46,6 +49,10 @@ export default function BillingPage() {
       <div className="mb-6">
         <h1 className="text-3xl font-bold text-slate-800">{"\u05D7\u05D9\u05D5\u05D1\u05D9\u05DD \u05EA\u05E4\u05E2\u05D5\u05DC\u05D9\u05D9\u05DD"}</h1>
         <p className="text-sm text-slate-500 mt-1">{"\u05D3\u05DE\u05D9 \u05E0\u05D9\u05D4\u05D5\u05DC, \u05D1\u05D9\u05D8\u05D5\u05D7 \u05DE\u05D1\u05E0\u05D4 \u05D5\u05E4\u05D9\u05E0\u05D5\u05D9 \u05D0\u05E9\u05E4\u05D4"}</p>
+      </div>
+
+      <div className="mb-4">
+        <PropertyHierarchyFilter onChange={function(f) { setFilterPropIds(f.propertyIds); }} />
       </div>
 
       {/* Tabs */}
@@ -66,8 +73,8 @@ export default function BillingPage() {
       ) : (
         <>
           {activeTab === "management" && <ManagementTab properties={internalProps} allProperties={properties} />}
-          {activeTab === "insurance" && <InsuranceTab properties={properties} />}
-          {activeTab === "waste" && <WasteTab properties={properties} />}
+          {activeTab === "insurance" && <InsuranceTab properties={filteredProperties} />}
+          {activeTab === "waste" && <WasteTab properties={filteredProperties} />}
         </>
       )}
     </div>

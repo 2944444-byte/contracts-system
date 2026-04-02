@@ -2,6 +2,7 @@
 import { useState, useEffect } from "react";
 import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit-log';
+import PropertyHierarchyFilter from '@/components/PropertyHierarchyFilter';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 const GUARANTEE_TYPES = [{v:"bank",l:"ערבות בנקאית",icon:"🏦"},{v:"check",l:"שיקים",icon:"📝"},{v:"cash",l:"מזומן",icon:"💵"},{v:"insurance",l:"ביטוח",icon:"🛡️"},{v:"personal",l:"ערבות אישית",icon:"👤"},{v:"other",l:"אחר",icon:"📋"}];
@@ -18,6 +19,7 @@ export default function GuaranteesPage() {
   const [isNew,     setIsNew]     =useState(false);
   const [saving,    setSaving]    =useState(false);
   const [filterSt,  setFilterSt]  =useState("active");
+  const [filterPropIds, setFilterPropIds] = useState<string[]>([]);
 
   const [fContractId,setFContractId]=useState("");
   const [fType,      setFType]      =useState("bank");
@@ -34,7 +36,7 @@ export default function GuaranteesPage() {
 
   async function loadAll() {
     const [{ data: g }, { data: c }] = await Promise.all([
-      supabase.from("guarantees").select("*, contracts(tenants(name),properties(name))").order("end_date"),
+      supabase.from("guarantees").select("*, contracts(property_id,tenants(name),properties(name))").order("end_date"),
       supabase.from("contracts").select("id,tenants(name),properties(name)").in("status",["active","expiring","extended","upcoming"]),
     ]);
     setGuarantees(g??[]); setContracts(c??[]); setLoading(false);
@@ -60,7 +62,7 @@ export default function GuaranteesPage() {
   async function handleReturn(id: string) { if (!confirm("לסמן כהוחזרה?")) return; await supabase.from("guarantees").update({status:"returned",returned_at:new Date().toISOString()}).eq("id",id); await logAudit({entity_type:"guarantee",entity_id:id,action:"returned"}); await loadAll(); }
   async function handleForfeit(id: string) { if (!confirm("לסמן כמומשה?")) return; await supabase.from("guarantees").update({status:"forfeited"}).eq("id",id); await logAudit({entity_type:"guarantee",entity_id:id,action:"forfeited"}); await loadAll(); }
 
-  const filtered = guarantees.filter(function(g){ return filterSt==="all"||g.status===filterSt; });
+  const filtered = guarantees.filter(function(g){ return (filterSt==="all"||g.status===filterSt) && (filterPropIds.length===0||filterPropIds.includes(g.contracts?.property_id)); });
   const active=guarantees.filter(function(g){return g.status==="active";});
   const totalActive=active.reduce(function(s,g){return s+(g.amount_actual??0);},0);
   const expiring=active.filter(function(g){return g.end_date&&daysLeft(g.end_date)<=60;});
@@ -81,6 +83,10 @@ export default function GuaranteesPage() {
         {[{label:"פעילות",value:active.length,sub:fmtMoney(totalActive),color:"text-slate-800",bg:"bg-white",f:"active"},{label:"פגות ב-60",value:expiring.length,sub:"יש לחדש",color:expiring.length>0?"text-yellow-700":"text-slate-400",bg:expiring.length>0?"bg-yellow-50":"bg-white",f:"active"},{label:"עם פער",value:hasGap.length,sub:"סכום נמוך",color:hasGap.length>0?"text-red-700":"text-slate-400",bg:hasGap.length>0?"bg-red-50":"bg-white",f:"active"},{label:"הכל",value:guarantees.length,sub:"",color:"text-slate-600",bg:"bg-white",f:"all"}].map(function(k){
           return <button key={k.label} onClick={function(){setFilterSt(k.f);}} className={"rounded-xl border p-3 text-center transition-all "+k.bg+(filterSt===k.f?" border-blue-500 ring-2 ring-blue-300":" border-slate-200")}><div className={"text-2xl font-black "+k.color}>{k.value}</div><div className={"text-xs font-semibold "+k.color}>{k.label}</div>{k.sub&&<div className="text-xs text-slate-400">{k.sub}</div>}</button>;
         })}
+      </div>
+
+      <div className="mb-4">
+        <PropertyHierarchyFilter onChange={function(f) { setFilterPropIds(f.propertyIds); }} />
       </div>
 
       <div className="flex gap-2 mb-4">
