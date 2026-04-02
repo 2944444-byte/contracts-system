@@ -368,12 +368,13 @@ export function buildPriceTimeline(params: {
   let lastMainRent = mainPreviews.length > 0
     ? (mainPreviews[mainPreviews.length - 1].calculated_rent_per_sqm ?? baseRentPerSqm)
     : baseRentPerSqm;
+  const contractLastRent = lastMainRent; // save for alternatives
 
   options.forEach((opt, i) => {
     if (!opt.start_date || !opt.end_date) return;
 
-    // Exercise jump
-    let optionBaseRent = lastMainRent;
+    // Alternatives start from contract end rent, not from previous option
+    let optionBaseRent = opt.option_group ? contractLastRent : lastMainRent;
     if (opt.rent_mechanism === "increase_pct" && opt.rent_increase_pct) {
       optionBaseRent = lastMainRent * (1 + opt.rent_increase_pct / 100);
     } else if (opt.rent_mechanism === "new_value" && opt.new_rent_value) {
@@ -417,16 +418,82 @@ export function buildPriceTimeline(params: {
       });
       lastMainRent = sortedTiers[sortedTiers.length - 1]?.calculated_rent_per_sqm ?? optionBaseRent;
     } else {
-      timeline.push({
-        label: `אופציה ${i + 1}`,
-        startDate: opt.start_date,
-        endDate: opt.end_date,
-        rentPerSqm: optionBaseRent,
-        fixedAmount: null,
-        source: `option_${i + 1}`,
-        type: opt.rent_mechanism === "no_change" ? "none" : "jump",
-      });
-      lastMainRent = optionBaseRent;
+      // "Inherit from main contract" — apply main contract's increase tiers to option period
+      const optYears = opt.duration_years || (opt.duration_months ? opt.duration_months / 12 : 0);
+      const roundedYears = Math.ceil(optYears);
+
+      if (mainTiers.length > 0 && roundedYears > 1) {
+        // Build virtual tiers mirroring main contract's increase pattern
+        const virtualTiers: PriceTier[] = mainTiers.map(function(mt) {
+          return {
+            ...mt,
+            from_year: mt.from_year > roundedYears ? roundedYears : mt.from_year,
+            to_year: Math.min(mt.to_year, roundedYears),
+          };
+        }).filter(function(t) { return t.from_year < t.to_year; });
+
+        if (virtualTiers.length > 0) {
+          const optPreviews = calculateTierPreviews(virtualTiers, optionBaseRent);
+          const optStart = new Date(opt.start_date);
+
+          // Base year 1 at option exercise price
+          const baseEnd = new Date(optStart);
+          baseEnd.setFullYear(baseEnd.getFullYear() + 1);
+          timeline.push({
+            label: `אופציה ${i + 1} — שנה 1`,
+            startDate: opt.start_date,
+            endDate: format(baseEnd, "yyyy-MM-dd"),
+            rentPerSqm: optionBaseRent,
+            fixedAmount: null,
+            source: `option_${i + 1}`,
+            type: "base",
+          });
+
+          optPreviews.forEach(function(tier) {
+            const tierStart = new Date(optStart);
+            tierStart.setFullYear(tierStart.getFullYear() + tier.from_year);
+            const tierEnd = new Date(optStart);
+            tierEnd.setFullYear(tierEnd.getFullYear() + tier.to_year);
+            const yearLabel = (tier.to_year - tier.from_year === 1)
+              ? `אופציה ${i + 1} — שנה ${tier.to_year}`
+              : `אופציה ${i + 1} — שנים ${tier.from_year + 1}-${tier.to_year}`;
+            timeline.push({
+              label: yearLabel,
+              startDate: format(tierStart, "yyyy-MM-dd"),
+              endDate: format(tierEnd, "yyyy-MM-dd"),
+              rentPerSqm: tier.increase_type === "fixed_total" ? null : tier.calculated_rent_per_sqm,
+              fixedAmount: tier.increase_type === "fixed_total" ? tier.increase_value : null,
+              source: `option_${i + 1}`,
+              type: tier.increase_type,
+            });
+          });
+          lastMainRent = optPreviews[optPreviews.length - 1]?.calculated_rent_per_sqm ?? optionBaseRent;
+        } else {
+          // No applicable tiers — show single entry
+          timeline.push({
+            label: `אופציה ${i + 1}`,
+            startDate: opt.start_date,
+            endDate: opt.end_date,
+            rentPerSqm: optionBaseRent,
+            fixedAmount: null,
+            source: `option_${i + 1}`,
+            type: opt.rent_mechanism === "no_change" ? "none" : "jump",
+          });
+          lastMainRent = optionBaseRent;
+        }
+      } else {
+        // No main tiers or single year option — show single entry
+        timeline.push({
+          label: `אופציה ${i + 1}`,
+          startDate: opt.start_date,
+          endDate: opt.end_date,
+          rentPerSqm: optionBaseRent,
+          fixedAmount: null,
+          source: `option_${i + 1}`,
+          type: opt.rent_mechanism === "no_change" ? "none" : "jump",
+        });
+        lastMainRent = optionBaseRent;
+      }
     }
   });
 
