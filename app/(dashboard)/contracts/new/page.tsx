@@ -105,6 +105,7 @@ export default function ContractsNewPage() {
   const [cpiRecords, setCpiRecords] = useState<any[]>([]);
   const [currentVatPct, setCurrentVatPct] = useState(18);
   const [unitRentOverrides, setUnitRentOverrides] = useState<Record<string, string>>({});
+  const [unitRentTypes, setUnitRentTypes] = useState<Record<string, "per_sqm" | "fixed">>({});
 
   // Step 1 — Tenant & Property
   const [tenantId, setTenantId] = useState("");
@@ -592,15 +593,20 @@ export default function ContractsNewPage() {
       if (ce) throw new Error(ce.message);
       if (!contract?.id) throw new Error("שגיאה בשמירת חוזה");
 
-      // Contract ↔ Spaces (with per-unit rent overrides)
+      // Contract ↔ Spaces (with per-unit rent overrides — per_sqm or fixed)
       if (selSpaces.length > 0) {
         await supabase.from("contract_spaces").insert(
-          selSpaces.map((sid) => ({
-            contract_id: contract.id,
-            space_id: sid,
-            price_per_sqm: unitRentOverrides[sid] ? Number(unitRentOverrides[sid]) : Number(rentPerSqm) || null,
-            charge_method: "per_sqm",
-          }))
+          selSpaces.map((sid) => {
+            var rType = unitRentTypes[sid] || "per_sqm";
+            var rVal = unitRentOverrides[sid] ? Number(unitRentOverrides[sid]) : null;
+            return {
+              contract_id: contract.id,
+              space_id: sid,
+              price_per_sqm: rType === "per_sqm" ? (rVal ?? Number(rentPerSqm) ?? null) : null,
+              fixed_rent: rType === "fixed" ? rVal : null,
+              charge_method: rType,
+            };
+          })
         );
         await supabase.from("spaces").update({ status: "occupied" }).in("id", selSpaces);
       }
@@ -1135,31 +1141,64 @@ export default function ContractsNewPage() {
               </div>
             )}
 
-            {/* Per-unit rent overrides — shown when multiple spaces selected */}
+            {/* Per-unit rent — shown when multiple spaces selected */}
             {selSpaces.length > 1 && (
               <div className="rounded-xl border border-slate-200 p-4">
-                <div className="text-xs font-bold text-slate-700 mb-2">מחיר למ&quot;ר לפי יחידה (אופציונלי)</div>
-                <div className="text-xs text-slate-400 mb-3">השאר ריק להשתמש במחיר ברירת מחדל ({rentPerSqm || "0"} ₪)</div>
+                <div className="text-xs font-bold text-slate-700 mb-2">מחיר לפי יחידה</div>
+                <div className="text-xs text-slate-400 mb-3">בחר למ&quot;ר או סכום קבוע לכל יחידה. השאר ריק לברירת מחדל.</div>
                 <div className="space-y-2">
                   {selSpaces.map((sid) => {
                     const sp = spaces.find((s) => s.id === sid);
                     if (!sp) return null;
+                    const rType = unitRentTypes[sid] || "per_sqm";
+                    const rVal = unitRentOverrides[sid] || "";
+                    const unitTotal = rType === "fixed" ? (Number(rVal) || 0) : (Number(rVal || rentPerSqm) || 0) * (sp.area || 0);
                     return (
-                      <div key={sid} className="flex items-center gap-3">
-                        <span className="text-xs font-semibold text-slate-600 w-32 truncate">{sp.space_name}</span>
-                        <span className="text-xs text-slate-400">{sp.area} מ&quot;ר</span>
-                        <input
-                          type="number"
-                          value={unitRentOverrides[sid] || ""}
-                          onChange={(e) => setUnitRentOverrides((prev) => ({ ...prev, [sid]: e.target.value }))}
-                          placeholder={rentPerSqm || "מחיר ברירת מחדל"}
-                          className={ic + " flex-1 max-w-32"}
+                      <div key={sid} className="rounded-lg border border-slate-100 p-2 space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-semibold text-slate-600 flex-1 truncate">{sp.space_name}</span>
+                          <span className="text-xs text-slate-400">{sp.area} מ&quot;ר</span>
+                          <div className="flex gap-1">
+                            <button type="button" onClick={() => setUnitRentTypes(prev => ({...prev, [sid]: "per_sqm"}))}
+                              className={"rounded border px-2 py-0.5 text-[10px] " + (rType === "per_sqm" ? "border-blue-500 bg-blue-50 text-blue-700 font-bold" : "border-slate-200 text-slate-500")}>למ&quot;ר</button>
+                            <button type="button" onClick={() => setUnitRentTypes(prev => ({...prev, [sid]: "fixed"}))}
+                              className={"rounded border px-2 py-0.5 text-[10px] " + (rType === "fixed" ? "border-blue-500 bg-blue-50 text-blue-700 font-bold" : "border-slate-200 text-slate-500")}>סכום קבוע</button>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="number"
+                            value={rVal}
+                            onChange={(e) => setUnitRentOverrides((prev) => ({ ...prev, [sid]: e.target.value }))}
+                            placeholder={rType === "fixed" ? "סכום חודשי" : (rentPerSqm || "₪/מ\"ר")}
+                            className={ic + " flex-1 max-w-40"}
                         />
-                        <span className="text-xs text-slate-400">₪/מ&quot;ר</span>
+                          <span className="text-xs text-slate-400">{rType === "fixed" ? "₪/חודש" : "₪/מ\"ר"}</span>
+                          {unitTotal > 0 && <span className="text-xs font-semibold text-green-700 mr-2">= {fmtMoney(unitTotal)}/חודש</span>}
+                        </div>
                       </div>
                     );
                   })}
                 </div>
+                {/* Total all units */}
+                {(function() {
+                  var total = 0;
+                  selSpaces.forEach(function(sid) {
+                    var sp = spaces.find(function(s) { return s.id === sid; });
+                    if (!sp) return;
+                    var rType = unitRentTypes[sid] || "per_sqm";
+                    var rVal = Number(unitRentOverrides[sid]) || 0;
+                    if (rType === "fixed") total += rVal;
+                    else total += (rVal || Number(rentPerSqm) || 0) * (sp.area || 0);
+                  });
+                  if (total > 0) return (
+                    <div className="mt-3 rounded-lg bg-green-50 border border-green-200 p-3 text-center">
+                      <div className="text-lg font-black text-green-800">{fmtMoney(total)}/חודש</div>
+                      <div className="text-xs text-green-600">סה&quot;כ שכ&quot;ד כל היחידות</div>
+                    </div>
+                  );
+                  return null;
+                })()}
               </div>
             )}
 
@@ -2360,7 +2399,7 @@ export default function ContractsNewPage() {
               onClick={() => setStep(step + 1)}
               disabled={
                 (step === 1 && (!tenantId || !propertyId)) ||
-                (step === 2 && (!startDate || !rentPerSqm))
+                (step === 2 && (!startDate || (!rentPerSqm && Object.keys(unitRentOverrides).filter(function(k){return unitRentOverrides[k];}).length === 0)))
               }
               className="rounded-xl bg-blue-700 px-6 py-2.5 text-sm font-bold text-white hover:bg-blue-800 disabled:opacity-40"
             >
