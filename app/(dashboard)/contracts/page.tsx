@@ -72,6 +72,7 @@ export default function ContractsPage() {
   const [cpiLoading, setCpiLoading] = useState(false);
   const [priceTiers, setPriceTiers] = useState<PriceTier[]>([]);
   const [priceTimeline, setPriceTimeline] = useState<any[]>([]);
+  const [amendments, setAmendments] = useState<any[]>([]);
 
   useEffect(function() { loadContracts(); }, []);
 
@@ -87,6 +88,17 @@ export default function ContractsPage() {
   }
 
   const selContract = contracts.find(function(c){return c.id===selected;});
+
+  // Load amendments for selected contract
+  useEffect(function() {
+    if (!selContract) { setAmendments([]); return; }
+    supabase.from("contracts")
+      .select("id,amendment_number,amendment_date,amendment_notes,start_date,end_date,rent_per_sqm,charged_area,contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area))")
+      .eq("parent_contract_id", selContract.id)
+      .eq("is_amendment", true)
+      .order("amendment_number")
+      .then(function({ data }) { setAmendments(data ?? []); });
+  }, [selected]);
 
   // Load price tiers and build timeline when contract selected
   useEffect(function() {
@@ -270,6 +282,7 @@ export default function ContractsPage() {
   }
 
   const filtered = contracts.filter(function(c) {
+    if (c.is_amendment) return false; // Hide amendments from sidebar
     const ms = filterSt==="all" || c.status===filterSt;
     const mq = !search || c.tenants?.name?.includes(search) || c.properties?.name?.includes(search);
     return ms && mq;
@@ -313,7 +326,7 @@ export default function ContractsPage() {
   const remaining   = selContract?.end_date ? yearsMonthsLeft(selContract.end_date) : null;
 
   const counts: Record<string,number> = {};
-  contracts.forEach(function(c){counts[c.status]=(counts[c.status]??0)+1;});
+  contracts.filter(function(c) { return !c.is_amendment; }).forEach(function(c){counts[c.status]=(counts[c.status]??0)+1;});
 
   async function handleDeleteContract(contractId: string) {
     if (!confirm("למחוק חוזה? פעולה זו תמחק גם את כל החיובים, הערבויות, הביטוחים והמכתבים של החוזה!")) return;
@@ -453,6 +466,10 @@ export default function ContractsPage() {
                     {selContract.document_url && (
                       <a href={selContract.document_url} target="_blank" rel="noopener noreferrer"
                         className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-600 hover:bg-blue-100">📄 צפה בחוזה</a>
+                    )}
+                    {!selContract.is_amendment && (
+                      <button onClick={function(){router.push("/contracts/new?amendment_of="+selContract.id);}}
+                        className="rounded-lg border border-yellow-400 bg-yellow-50 px-3 py-1.5 text-xs font-semibold text-yellow-700 hover:bg-yellow-100">📝 תוספת להסכם</button>
                     )}
                     <button onClick={()=>selected && handleDeleteContract(selected)}
                       className="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs text-red-600 hover:bg-red-100 font-semibold">🗑 מחק</button>
@@ -640,6 +657,39 @@ export default function ContractsPage() {
                   </div>
                 )}
               </div>
+
+              {/* Amendments History */}
+              {amendments.length > 0 && (
+                <div className="rounded-xl border border-yellow-200 bg-yellow-50/30 shadow-sm p-4">
+                  <div className="text-xs font-bold text-yellow-700 mb-3">📝 תוספות להסכם ({amendments.length})</div>
+                  <div className="space-y-2">
+                    {amendments.map(function(am: any) {
+                      var spNames = (am.contract_spaces || []).map(function(cs: any) { return cs.spaces?.space_name; }).filter(Boolean).join(", ");
+                      var amRent = 0;
+                      (am.contract_spaces || []).forEach(function(cs: any) {
+                        if (cs.charge_method === "fixed" && cs.fixed_rent) amRent += Number(cs.fixed_rent);
+                        else amRent += (Number(cs.price_per_sqm) || Number(am.rent_per_sqm) || 0) * (cs.spaces?.area || 0);
+                      });
+                      if (amRent === 0) amRent = (Number(am.rent_per_sqm) || 0) * (Number(am.charged_area) || 0);
+                      return (
+                        <div key={am.id} onClick={function() { setSelected(am.id); }}
+                          className="rounded-lg border border-yellow-200 bg-white p-3 cursor-pointer hover:bg-yellow-50 transition-all">
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-sm font-bold text-yellow-800">תוספת {am.amendment_number || "—"}</span>
+                            <span className="text-xs text-yellow-600">{am.amendment_date ? fmtDate(am.amendment_date) : fmtDate(am.start_date)}</span>
+                          </div>
+                          {spNames && <div className="text-xs text-slate-600 mb-1">יחידות: {spNames}</div>}
+                          {amRent > 0 && <div className="text-xs text-green-700 font-semibold">{fmtMoney(amRent)}/חודש</div>}
+                          {am.amendment_notes && <div className="text-xs text-slate-400 mt-1">{am.amendment_notes}</div>}
+                          {am.end_date !== selContract.end_date && am.end_date && (
+                            <div className="text-xs text-blue-600 mt-1">תקופה עד: {fmtDate(am.end_date)}</div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
               {/* Options — enhanced */}
               <div className="rounded-xl border border-slate-200 bg-white shadow-sm p-4">

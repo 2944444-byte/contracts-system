@@ -1,6 +1,6 @@
 "use client";
-import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useEffect, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { logAudit } from "@/lib/audit-log";
 import {
@@ -97,6 +97,9 @@ function fmtMoney(n: number) {
 
 export default function ContractsNewPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const amendmentOfId = searchParams.get("amendment_of");
+  const [amendmentParent, setAmendmentParent] = useState<any>(null);
   const [step, setStep] = useState(1);
   const [saving, setSaving] = useState(false);
   const [tenants, setTenants] = useState<any[]>([]);
@@ -175,6 +178,7 @@ export default function ContractsNewPage() {
   const [depositCalcMethod, setDepositCalcMethod] = useState<"months_based" | "fixed_amount">("months_based");
   const [depositMonths, setDepositMonths] = useState(3);
   const [depositIncludesMgmt, setDepositIncludesMgmt] = useState(false);
+  const [amendmentNotes, setAmendmentNotes] = useState("");
 
   // === Auto-calculate end date from start + period ===
   useEffect(() => {
@@ -245,6 +249,122 @@ export default function ContractsNewPage() {
   useEffect(() => {
     loadRef();
   }, []);
+
+  // === Load parent contract for amendment pre-fill ===
+  useEffect(function() {
+    if (!amendmentOfId) return;
+    async function loadParent() {
+      var { data: c } = await supabase.from("contracts")
+        .select("*, tenants(name), properties(name), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area)), contract_options(id,option_number,duration_months,duration_years,notice_type,notice_days_before_end,rent_mechanism,rent_increase_pct,new_rent_value,option_group,exit_points,price_schedule_type,price_tiers), guarantees(id,guarantee_type,amount_required,amount_actual,bank,end_date,document_url)")
+        .eq("id", amendmentOfId).single();
+      if (!c) return;
+      setAmendmentParent(c);
+      // Count existing amendments to determine next number
+      var { count } = await supabase.from("contracts")
+        .select("id", { count: "exact", head: true })
+        .eq("parent_contract_id", amendmentOfId)
+        .eq("is_amendment", true);
+
+      // Pre-fill from parent
+      setTenantId(c.tenant_id || "");
+      setPropertyId(c.property_id || "");
+      setContractType(c.contract_type || "regular");
+      // Spaces
+      var spIds = (c.contract_spaces || []).map(function(cs: any) { return cs.space_id; });
+      setSelSpaces(spIds);
+      // Per-unit pricing
+      var overrides: Record<string, string> = {};
+      var types: Record<string, "per_sqm" | "fixed"> = {};
+      (c.contract_spaces || []).forEach(function(cs: any) {
+        if (cs.charge_method === "fixed" && cs.fixed_rent) {
+          types[cs.space_id] = "fixed";
+          overrides[cs.space_id] = String(cs.fixed_rent);
+        } else if (cs.price_per_sqm) {
+          types[cs.space_id] = "per_sqm";
+          overrides[cs.space_id] = String(cs.price_per_sqm);
+        }
+      });
+      setUnitRentOverrides(overrides);
+      setUnitRentTypes(types);
+      // Dates — amendment starts today, ends same as parent
+      setStartDate(new Date().toISOString().split("T")[0]);
+      setEndDate(c.end_date || "");
+      // Calculate period from today to parent end
+      if (c.end_date) {
+        var diffMs = new Date(c.end_date).getTime() - new Date().getTime();
+        var diffMonths = Math.round(diffMs / (30.44 * 24 * 60 * 60 * 1000));
+        if (diffMonths >= 12 && diffMonths % 12 === 0) {
+          setLeasePeriodValue(diffMonths / 12);
+          setLeasePeriodUnit("years");
+        } else {
+          setLeasePeriodValue(diffMonths);
+          setLeasePeriodUnit("months");
+        }
+      }
+      // Pricing
+      setRentPerSqm(c.rent_per_sqm ? String(c.rent_per_sqm) : "");
+      setChargedArea(c.charged_area ? String(c.charged_area) : "");
+      setInvestAdd(c.investment_addition ? String(c.investment_addition) : "");
+      setVatType(c.vat_type || "taxable");
+      setPaymentFreq(c.payment_frequency || "monthly");
+      setPaymentDay(c.payment_day ? String(c.payment_day) : "1");
+      setIndexMethod(c.indexation_method || "standard");
+      setBaseCPI(c.index_base_value ? String(c.index_base_value) : "");
+      setBaseCPIDate(c.index_base_date || "");
+      // Grace — typically no grace for amendment
+      setHasGrace(false);
+      // Load price tiers
+      var { data: tiers } = await supabase.from("contract_price_tiers")
+        .select("*").eq("contract_id", amendmentOfId).is("space_id", null).order("tier_number");
+      if (tiers && tiers.length > 0) {
+        setHasIncrease(true);
+        setPriceTiers(tiers.map(function(t: any) {
+          return {
+            increase_type: t.increase_type ?? "pct",
+            increase_value: t.increase_value ?? 0,
+            from_year: t.from_year ?? 1,
+            to_year: t.to_year ?? 3,
+            is_recurring: t.is_recurring ?? false,
+            recurring_every_years: t.recurring_every_years ?? null,
+            calculated_rent_per_sqm: null,
+            notes: t.notes ?? "",
+          };
+        }));
+      }
+      // Options
+      if (c.contract_options?.length > 0) {
+        setExtensionOptions(c.contract_options.map(function(o: any) {
+          return {
+            duration_years: o.duration_years || (o.duration_months ? o.duration_months / 12 : 0),
+            duration_months: o.duration_months || 0,
+            notice_type: o.notice_type || "exercise",
+            notice_days_before_end: o.notice_days_before_end || 90,
+            rent_mechanism: o.rent_mechanism || "no_change",
+            rent_increase_pct: o.rent_increase_pct || 0,
+            new_rent_value: o.new_rent_value || 0,
+            auto_extend: false,
+            notes: "",
+            option_group: o.option_group || null,
+            exit_points: o.exit_points || [],
+            price_schedule_type: o.price_schedule_type || "inherit",
+            price_tiers: o.price_tiers || [],
+          };
+        }));
+      }
+      // Guarantee
+      if (c.guarantees?.length > 0) {
+        var g = c.guarantees[0];
+        setAddGuarantee(true);
+        setGuaranteeType(g.guarantee_type || "bank");
+        setGuaranteeAmt(g.amount_required ? String(g.amount_required) : "");
+        setGuaranteeActual(g.amount_actual ? String(g.amount_actual) : "");
+        setGuaranteeBank(g.bank || "");
+        setGuaranteeEnd(g.end_date || "");
+        setGuaranteeDocUrl(g.document_url || "");
+      }
+    }
+    loadParent();
+  }, [amendmentOfId]);
 
   useEffect(() => {
     if (propertyId) {
@@ -564,7 +684,23 @@ export default function ContractsNewPage() {
         mgmt_fee_per_sqm: mgmtFeePct ? Number(mgmtFeePct) : null,
         document_url: documentUrl || null,
         status,
+        // Amendment fields
+        ...(amendmentOfId ? {
+          parent_contract_id: amendmentOfId,
+          is_amendment: true,
+          amendment_date: startDate,
+          amendment_notes: amendmentNotes || null,
+        } : {}),
       };
+
+      // Count amendments to set number
+      if (amendmentOfId) {
+        var { count: amCount } = await supabase.from("contracts")
+          .select("id", { count: "exact", head: true })
+          .eq("parent_contract_id", amendmentOfId)
+          .eq("is_amendment", true);
+        insertPayload.amendment_number = (amCount ?? 0) + 1;
+      }
 
       // Grace
       if (hasGrace) {
@@ -780,8 +916,27 @@ export default function ContractsNewPage() {
   return (
     <div dir="rtl" className="max-w-3xl mx-auto">
       <div className="mb-6">
-        <h1 className="text-3xl font-bold text-slate-800">חוזה חדש</h1>
+        <h1 className="text-3xl font-bold text-slate-800">{amendmentOfId ? "תוספת להסכם" : "חוזה חדש"}</h1>
       </div>
+
+      {/* Amendment banner */}
+      {amendmentOfId && amendmentParent && (
+        <div className="rounded-xl border-2 border-yellow-400 bg-yellow-50 p-4 mb-6">
+          <div className="flex items-center gap-3">
+            <span className="text-2xl">📝</span>
+            <div>
+              <div className="text-sm font-bold text-yellow-800">
+                תוספת להסכם של {amendmentParent.tenants?.name || tenants.find(function(t) { return t.id === tenantId; })?.name || ""}
+              </div>
+              <div className="text-xs text-yellow-600">
+                נכס: {amendmentParent.properties?.name || properties.find(function(p) { return p.id === propertyId; })?.name || ""}
+                {" | "}חוזה מקורי: {amendmentParent.start_date ? new Date(amendmentParent.start_date).toLocaleDateString("he-IL") : ""} — {amendmentParent.end_date ? new Date(amendmentParent.end_date).toLocaleDateString("he-IL") : ""}
+              </div>
+              <div className="text-xs text-yellow-700 mt-1">שנה את הנתונים הרלוונטיים — יחידות, מחירים, תקופה, אופציות</div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Steps */}
       <div className="flex gap-0 mb-8">
@@ -2548,8 +2703,22 @@ export default function ContractsNewPage() {
         {step === 6 && (
           <div className="space-y-4">
             <h2 className="font-bold text-slate-800 text-lg mb-4">
-              ✅ סיכום החוזה
+              {amendmentOfId ? "✅ סיכום התוספת להסכם" : "✅ סיכום החוזה"}
             </h2>
+
+            {/* Amendment notes */}
+            {amendmentOfId && (
+              <div className="rounded-xl border border-yellow-300 bg-yellow-50 p-4">
+                <label className="block text-xs font-bold text-yellow-800 mb-2">תיאור השינויים (תוספת להסכם)</label>
+                <textarea
+                  value={amendmentNotes}
+                  onChange={function(e) { setAmendmentNotes(e.target.value); }}
+                  placeholder="לדוגמה: נוספה קומה 3 בשטח 110 מ״ר, מחיר 42₪/מ״ר. שינוי מחיר קומה 1 ל-38₪/מ״ר"
+                  className="w-full rounded-lg border border-yellow-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-yellow-400 focus:outline-none focus:ring-2 focus:ring-yellow-400 min-h-[60px]"
+                  rows={3}
+                />
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-2 text-sm">
               {[
                 {
@@ -2733,7 +2902,7 @@ export default function ContractsNewPage() {
               disabled={saving}
               className="rounded-xl bg-green-700 px-6 py-2.5 text-sm font-bold text-white hover:bg-green-800 disabled:opacity-50"
             >
-              {saving ? "שומר..." : "✅ צור חוזה"}
+              {saving ? "שומר..." : amendmentOfId ? "✅ שמור תוספת" : "✅ צור חוזה"}
             </button>
           )}
         </div>
