@@ -416,8 +416,8 @@ export default function ContractsPage() {
               <div className="rounded-xl border border-slate-200 bg-white shadow-sm p-5">
                 <div className="flex items-start justify-between mb-4">
                   <div>
-                    <h2 className="text-xl font-bold text-slate-800">{selContract.tenants?.name}</h2>
-                    <div className="text-sm text-slate-500">{selContract.properties?.name}{selContract.properties?.city?" — "+selContract.properties.city:""}</div>
+                    <h2 className="text-xl font-bold text-slate-800 cursor-pointer hover:underline hover:text-blue-700" onClick={function(){router.push("/tenants");}}>{selContract.tenants?.name} <span className="text-sm font-normal text-blue-500">→</span></h2>
+                    <div className="text-sm text-slate-500 cursor-pointer hover:underline hover:text-blue-600" onClick={function(){router.push("/properties");}}>{selContract.properties?.name}{selContract.properties?.city?" — "+selContract.properties.city:""} <span className="text-blue-400">→</span></div>
                     {selContract.tenants?.company_name&&<div className="text-xs text-slate-400">{selContract.tenants.company_name}</div>}
                   </div>
                   <div className="flex gap-2 flex-wrap">

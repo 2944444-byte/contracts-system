@@ -1,5 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit-log';
 import PropertyHierarchyFilter from '@/components/PropertyHierarchyFilter';
@@ -8,6 +9,7 @@ const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-
 const SPACE_TYPES = [{v:"office",l:"משרדים",icon:"💼"},{v:"retail",l:"מסחר",icon:"🏪"},{v:"store",l:"חנות",icon:"🏬"},{v:"warehouse",l:"מחסן",icon:"📦"},{v:"industrial",l:"תעשיה",icon:"🏭"},{v:"yard",l:"חצר פתוחה",icon:"🌳"},{v:"other",l:"אחר",icon:"🚪"}];
 
 export default function UnitsPage() {
+  const router = useRouter();
   const [spaces,     setSpaces]     = useState<any[]>([]);
   const [properties, setProperties] = useState<any[]>([]);
   const [contracts,  setContracts]  = useState<any[]>([]);
@@ -179,7 +181,7 @@ export default function UnitsPage() {
                         </div>
                         <div className="text-[10px] text-slate-400 mb-1">{ti.l}</div>
                         {s.area&&<div className="text-xs text-slate-500">{s.area} מ"ר{s.floor?" | קומה "+s.floor:""}</div>}
-                        {tenant&&<div className="text-xs text-green-700 font-semibold mt-1">👤 {tenant}</div>}
+                        {tenant&&<div className="text-xs text-green-700 font-semibold mt-1 cursor-pointer hover:underline" onClick={function(e){e.stopPropagation();router.push("/contracts");}}>👤 {tenant} <span className="text-[10px] text-green-500">📄</span></div>}
                         <div className="mt-2 flex gap-1">
                           <button onClick={function(){openEdit(s);}} className="flex-1 text-[10px] border border-slate-200 rounded py-1 text-slate-600 hover:bg-slate-50">עריכה</button>
                           <button onClick={function(){handleDelete(s.id);}} className="text-[10px] border border-red-200 rounded py-1 px-2 text-red-500 hover:bg-red-50">🗑</button>

@@ -212,7 +212,7 @@ export default function PropertiesPage() {
                   <div>
                     <div className="flex items-center gap-2 mb-1">
                       <span className="text-2xl">{typeInfo(selProp.property_type).icon}</span>
-                      <h2 className="text-xl font-bold text-slate-800">{selProp.name}</h2>
+                      <h2 className="text-xl font-bold text-slate-800 cursor-pointer hover:underline hover:text-blue-700" onClick={function(){router.push("/units");}}>{selProp.name} <span className="text-sm font-normal text-blue-500">צפה ביחידות →</span></h2>
                     </div>
                     {selProp.companies?.company_name && <div className="text-sm text-slate-500">🏛️ {selProp.companies.company_name}</div>}
                     {selProp.city && <div className="text-sm text-slate-500">📍 {selProp.address ? selProp.address+", " : ""}{selProp.city}</div>}
@@ -228,13 +228,14 @@ export default function PropertiesPage() {
                   {[
                     {label:"הכנסה חודשית", value:fmtMoney(selRevenue),      color:"text-green-700", bg:"bg-green-50"},
                     {label:"תפוסה",         value:selOccPct+"%",              color:"text-blue-700",  bg:"bg-blue-50"},
-                    {label:"יחידות",        value:selSpaces.length+" יח'",   color:"text-slate-700", bg:"bg-slate-50"},
-                    {label:"חוזים פעילים", value:String(selContracts.length),color:"text-purple-700",bg:"bg-purple-50"},
+                    {label:"יחידות",        value:selSpaces.length+" יח'",   color:"text-slate-700", bg:"bg-slate-50", link:"/units"},
+                    {label:"חוזים פעילים", value:String(selContracts.length),color:"text-purple-700",bg:"bg-purple-50", link:"/contracts"},
                   ].map(function(k) {
                     return (
-                      <div key={k.label} className={"rounded-xl p-3 text-center " + k.bg}>
+                      <div key={k.label} className={"rounded-xl p-3 text-center " + k.bg + ((k as any).link ? " cursor-pointer hover:ring-2 hover:ring-blue-300 transition-all" : "")}
+                        onClick={(k as any).link ? function(){router.push((k as any).link);} : undefined}>
                         <div className={"text-lg font-black " + k.color}>{k.value}</div>
-                        <div className="text-xs text-slate-400">{k.label}</div>
+                        <div className="text-xs text-slate-400">{k.label}{(k as any).link ? " →" : ""}</div>
                       </div>
                     );
                   })}
