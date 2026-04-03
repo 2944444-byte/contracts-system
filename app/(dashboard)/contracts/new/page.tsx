@@ -73,7 +73,7 @@ const GUARANTEE_TYPES = [
 const INCREASE_TYPES = [
   { v: "pct", l: "אחוז (%)", icon: "📈" },
   { v: "fixed_sqm", l: '₪/מ"ר', icon: "📐" },
-  { v: "fixed_total", l: "סכום קבוע (₪)", icon: "💰" },
+  { v: "fixed_total", l: "תוספת קבועה (₪)", icon: "💰" },
   { v: "none", l: "הקפאה", icon: "❄️" },
 ];
 const NOTICE_TYPES = [
@@ -522,7 +522,8 @@ export default function ContractsNewPage() {
 
   // === Submit ===
   async function handleSubmit() {
-    if (!tenantId || !propertyId || !startDate || !endDate || !rentPerSqm) {
+    var hasAnyRent = rentPerSqm || Object.keys(unitRentOverrides).some(function(k) { return unitRentOverrides[k]; });
+    if (!tenantId || !propertyId || !startDate || !endDate || !hasAnyRent) {
       alert("נא מלא כל שדות חובה");
       return;
     }
@@ -665,7 +666,7 @@ export default function ContractsNewPage() {
                   recurring_every_years: tier.recurring_every_years,
                   from_year: tier.from_year,
                   to_year: tier.to_year,
-                  price_per_sqm: tier.increase_type === "fixed_total" ? null : tier.calculated_rent_per_sqm,
+                  price_per_sqm: tier.calculated_rent_per_sqm,
                   fixed_amount: tier.increase_type === "fixed_total" ? tier.increase_value : null,
                   calculated_rent_per_sqm: tier.calculated_rent_per_sqm,
                   notes: tier.notes || null,
@@ -719,7 +720,7 @@ export default function ContractsNewPage() {
                 recurring_every_years: tier.recurring_every_years ?? null,
                 from_year: tier.from_year,
                 to_year: tier.to_year,
-                price_per_sqm: tier.increase_type === "fixed_total" ? null : (preview?.calculated_rent_per_sqm ?? null),
+                price_per_sqm: preview?.calculated_rent_per_sqm ?? null,
                 fixed_amount: tier.increase_type === "fixed_total" ? tier.increase_value : null,
                 calculated_rent_per_sqm: preview?.calculated_rent_per_sqm ?? null,
                 notes: tier.notes || null,
@@ -1705,7 +1706,7 @@ export default function ContractsNewPage() {
                               <label className="mb-1 block text-xs text-slate-500">
                                 {tier.increase_type === "pct" ? "שיעור עלייה (%)" :
                                  tier.increase_type === "fixed_sqm" ? 'תוספת למ"ר (₪)' :
-                                 "סכום חודשי קבוע (₪)"}
+                                 "תוספת קבועה לחודש (₪)"}
                               </label>
                               <input type="number" step="0.1" value={tier.increase_value || ""}
                                 onChange={(e) => setPriceTiers(prev => prev.map((t, i) => i === idx ? { ...t, increase_value: Number(e.target.value) || 0 } : t))}
@@ -1730,7 +1731,7 @@ export default function ContractsNewPage() {
                                       שנים {exp.from_year}-{exp.to_year}: {exp.increase_type === "none"
                                         ? `מחיר קפוא — ${fmtMoney(Number(rentPerSqm))}/מ"ר`
                                         : exp.increase_type === "fixed_total"
-                                          ? `סכום קבוע ${fmtMoney(exp.increase_value)}/חודש`
+                                          ? `+${fmtMoney(exp.increase_value)} → ${fmtMoney(exp.calculated_rent_per_sqm)}/מ"ר`
                                           : `${fmtMoney(exp.calculated_rent_per_sqm)}/מ"ר`}
                                     </div>
                                   );
@@ -1939,7 +1940,7 @@ export default function ContractsNewPage() {
                                             שנים {exp.from_year}-{exp.to_year}: {exp.increase_type === "none"
                                               ? "הקפאה"
                                               : exp.increase_type === "fixed_total"
-                                                ? fmtMoney(exp.increase_value) + "/חודש"
+                                                ? "+" + fmtMoney(exp.increase_value) + " → " + fmtMoney(exp.calculated_rent_per_sqm) + (rType === "fixed" ? "/חודש" : '/מ"ר')
                                                 : fmtMoney(exp.calculated_rent_per_sqm) + (rType === "fixed" ? "/חודש" : '/מ"ר')}
                                           </div>
                                         );
@@ -2628,6 +2629,45 @@ export default function ContractsNewPage() {
 
             {/* ── Price Timeline ── */}
             {(() => {
+              // Per-unit mode: show timeline per space
+              if (increaseMode === "per_unit" && Object.keys(perUnitTiers).length > 0) {
+                return (
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                    <div className="text-sm font-bold text-slate-800 mb-3 flex items-center gap-2">📊 ציר זמן מחירים (לפי יחידה)</div>
+                    <div className="space-y-4">
+                      {selSpaces.map(function(sid) {
+                        var sp = spaces.find(function(s) { return s.id === sid; });
+                        if (!sp) return null;
+                        var rType = unitRentTypes[sid] || "per_sqm";
+                        var rVal = Number(unitRentOverrides[sid]) || Number(rentPerSqm) || 0;
+                        var uTiers = perUnitTiers[sid] || [];
+                        var previews = calculateTierPreviews(uTiers, rVal);
+                        var unit = rType === "fixed" ? "/חודש" : '/מ"ר';
+                        return (
+                          <div key={sid} className="space-y-1">
+                            <div className="text-xs font-bold text-orange-700 flex items-center gap-2">
+                              {sp.space_name} <span className="text-slate-400 font-normal">{sp.area} מ&quot;ר</span>
+                            </div>
+                            <div className="rounded-lg border border-green-200 bg-green-50 px-3 py-1.5 text-xs font-semibold text-green-700">
+                              שנה 1: {fmtMoney(rVal)}{unit} (בסיס)
+                            </div>
+                            {previews.map(function(p, pi) {
+                              return (
+                                <div key={pi} className="rounded-lg border border-slate-100 bg-white px-3 py-1.5 text-xs flex justify-between">
+                                  <span className="font-bold text-slate-700">שנים {p.from_year}-{p.to_year}</span>
+                                  <span className="font-black text-slate-800">{fmtMoney(p.calculated_rent_per_sqm)}{unit}</span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              }
+
+              // Unified mode: single timeline
               const timeline = buildPriceTimeline({
                 contractStart: startDate,
                 contractEnd: endDate,

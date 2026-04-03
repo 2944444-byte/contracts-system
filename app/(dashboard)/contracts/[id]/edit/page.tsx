@@ -71,7 +71,7 @@ const GUARANTEE_TYPES = [
 const INCREASE_TYPES = [
   { v: "pct", l: "אחוז (%)", icon: "📈" },
   { v: "fixed_sqm", l: '₪/מ"ר', icon: "📐" },
-  { v: "fixed_total", l: "סכום קבוע (₪)", icon: "💰" },
+  { v: "fixed_total", l: "תוספת קבועה (₪)", icon: "💰" },
   { v: "none", l: "הקפאה", icon: "❄️" },
 ];
 const NOTICE_TYPES = [
@@ -614,7 +614,7 @@ export default function ContractEditPage() {
                   is_recurring: tier.is_recurring,
                   from_year: tier.from_year,
                   to_year: tier.to_year,
-                  price_per_sqm: tier.increase_type === "fixed_total" ? null : tier.calculated_rent_per_sqm,
+                  price_per_sqm: tier.calculated_rent_per_sqm,
                   fixed_amount: tier.increase_type === "fixed_total" ? tier.increase_value : null,
                   calculated_rent_per_sqm: tier.calculated_rent_per_sqm,
                   notes: tier.notes || null,
@@ -668,7 +668,7 @@ export default function ContractEditPage() {
                 recurring_every_years: tier.recurring_every_years ?? null,
                 from_year: tier.from_year,
                 to_year: tier.to_year,
-                price_per_sqm: tier.increase_type === "fixed_total" ? null : (preview?.calculated_rent_per_sqm ?? null),
+                price_per_sqm: preview?.calculated_rent_per_sqm ?? null,
                 fixed_amount: tier.increase_type === "fixed_total" ? tier.increase_value : null,
                 calculated_rent_per_sqm: preview?.calculated_rent_per_sqm ?? null,
                 notes: tier.notes || null,
@@ -1212,7 +1212,7 @@ export default function ContractEditPage() {
                           {tier.increase_type !== "none" && (
                             <div className="max-w-xs">
                               <label className="mb-1 block text-xs text-slate-500">
-                                {tier.increase_type === "pct" ? "שיעור עלייה (%)" : tier.increase_type === "fixed_sqm" ? 'תוספת למ"ר (₪)' : "סכום חודשי קבוע (₪)"}
+                                {tier.increase_type === "pct" ? "שיעור עלייה (%)" : tier.increase_type === "fixed_sqm" ? 'תוספת למ"ר (₪)' : "תוספת קבועה לחודש (₪)"}
                               </label>
                               <input type="number" step="0.1" value={tier.increase_value || ""}
                                 onChange={(e) => setPriceTiers(prev => prev.map((t, i) => i === idx ? { ...t, increase_value: Number(e.target.value) || 0 } : t))} className={ic} />
@@ -1231,7 +1231,7 @@ export default function ContractEditPage() {
                                       שנים {exp.from_year}-{exp.to_year}: {exp.increase_type === "none"
                                         ? `מחיר קפוא — ${fmtMoney(Number(rentPerSqm))}/מ"ר`
                                         : exp.increase_type === "fixed_total"
-                                          ? `סכום קבוע ${fmtMoney(exp.increase_value)}/חודש`
+                                          ? `+${fmtMoney(exp.increase_value)} → ${fmtMoney(exp.calculated_rent_per_sqm)}/מ"ר`
                                           : `${fmtMoney(exp.calculated_rent_per_sqm)}/מ"ר`}
                                     </div>
                                   );
@@ -1386,7 +1386,7 @@ export default function ContractEditPage() {
                                             שנים {exp.from_year}-{exp.to_year}: {exp.increase_type === "none"
                                               ? "הקפאה"
                                               : exp.increase_type === "fixed_total"
-                                                ? fmtMoney(exp.increase_value) + "/חודש"
+                                                ? "+" + fmtMoney(exp.increase_value) + " → " + fmtMoney(exp.calculated_rent_per_sqm) + (rType === "fixed" ? "/חודש" : '/מ"ר')
                                                 : fmtMoney(exp.calculated_rent_per_sqm) + (rType === "fixed" ? "/חודש" : '/מ"ר')}
                                           </div>
                                         );

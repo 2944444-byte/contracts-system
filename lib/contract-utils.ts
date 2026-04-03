@@ -156,7 +156,7 @@ export function calculateTierPreviews(
         calcRent = currentRent + (tier.increase_value || 0);
         break;
       case "fixed_total":
-        calcRent = tier.increase_value || currentRent;
+        calcRent = currentRent + (tier.increase_value || 0);
         break;
       case "none":
         calcRent = currentRent;
@@ -356,8 +356,8 @@ export function buildPriceTimeline(params: {
         label: yearLabel,
         startDate: format(tStart, "yyyy-MM-dd"),
         endDate: format(tEnd, "yyyy-MM-dd"),
-        rentPerSqm: tier.increase_type === "fixed_total" ? null : tier.calculated_rent_per_sqm,
-        fixedAmount: tier.increase_type === "fixed_total" ? tier.increase_value : null,
+        rentPerSqm: tier.calculated_rent_per_sqm,
+        fixedAmount: null,
         source: "main",
         type: tier.increase_type,
       });

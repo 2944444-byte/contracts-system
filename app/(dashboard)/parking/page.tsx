@@ -36,7 +36,7 @@ export default function ParkingPage() {
 
   async function loadAll() {
     const [{ data: s }, { data: p }, { data: t }] = await Promise.all([
-      supabase.from("parking_subscriptions").select("*, properties(name,parking_spaces), tenants(name)").order("created_at"),
+      supabase.from("parking_subscriptions").select("*, properties(name,parking_spaces), tenants(name), contracts(id,contract_spaces(spaces(space_name)))").order("created_at"),
       supabase.from("properties").select("id,name,parking_spaces").order("name"),
       supabase.from("tenants").select("id,name").order("name"),
     ]);
@@ -227,7 +227,11 @@ export default function ParkingPage() {
                               </span>
                               <span className="text-[10px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full font-semibold">מושכר</span>
                             </div>
-                            <div className="text-xs text-green-700 font-semibold">👤 {a.tenants?.name}</div>
+                            <div className="text-xs text-green-700 font-semibold">👤 {a.tenants?.name}
+                              {a.contracts?.contract_spaces && a.contracts.contract_spaces.length > 0 && (
+                                <span className="text-slate-400 font-normal"> — {a.contracts.contract_spaces.map(function(cs: any) { return cs.spaces?.space_name; }).filter(Boolean).join(", ")}</span>
+                              )}
+                            </div>
                             {a.monthly_fee > 0 && (
                               <div className="text-xs text-slate-600 mt-0.5">
                                 {fmtMoney(a.monthly_fee * qty)}/חודש
