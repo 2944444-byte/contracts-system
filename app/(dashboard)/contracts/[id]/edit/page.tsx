@@ -428,17 +428,31 @@ export default function ContractEditPage() {
     try {
       const today = new Date();
       const start = new Date(startDate);
-      const end = new Date(endDate);
+
+      // Check if any exercised option extends the contract
+      var effectiveEnd = new Date(endDate);
+      for (var oi = 0; oi < extensionOptions.length; oi++) {
+        var eOpt = extensionOptions[oi];
+        if (eOpt.end_date) {
+          // Check if this option was exercised (from existing status map)
+          var existingOpt = (await supabase.from("contract_options").select("is_exercised").eq("contract_id", id).eq("option_number", oi + 1).single()).data;
+          if (existingOpt?.is_exercised && new Date(eOpt.end_date) > effectiveEnd) {
+            effectiveEnd = new Date(eOpt.end_date);
+          }
+        }
+      }
+      var effectiveEndStr = effectiveEnd.toISOString().split("T")[0];
+
       let status = "active";
       if (today < start) status = "future";
-      else if (today > end) status = "ended";
+      else if (today > effectiveEnd) status = "ended";
 
       const updatePayload: any = {
         tenant_id: tenantId,
         property_id: propertyId,
         contract_type: contractType,
         start_date: startDate,
-        end_date: endDate,
+        end_date: effectiveEndStr,
         lease_period_value: leasePeriodValue,
         lease_period_unit: leasePeriodUnit,
         rent_per_sqm: Number(rentPerSqm) || null,
