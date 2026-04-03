@@ -77,7 +77,7 @@ export default function ContractsPage() {
 
   async function loadContracts() {
     const { data } = await supabase.from("contracts")
-      .select("*, tenants(name,phone,primary_email,company_name), properties(name,city), contract_options(id,option_number,duration_months,duration_years,end_date,notice_days_before_end,notice_type,status,is_exercised,rent_mechanism,rent_increase_pct,new_rent_value,option_group,exit_points), guarantees(id,guarantee_type,status,amount_required,amount_actual,end_date,bank,document_url), contract_spaces(space_id,spaces(space_name,area))")
+      .select("*, tenants(name,phone,primary_email,company_name), properties(name,city), contract_options(id,option_number,duration_months,duration_years,end_date,notice_days_before_end,notice_type,status,is_exercised,rent_mechanism,rent_increase_pct,new_rent_value,option_group,exit_points), guarantees(id,guarantee_type,status,amount_required,amount_actual,end_date,bank,document_url), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area))")
       .order("end_date");
     setContracts(data??[]);
     setLoading(false);
@@ -295,7 +295,20 @@ export default function ContractsPage() {
     }
   }
   const trueRentPerSqm = currentRentPerSqm + investPerSqm;
-  const baseRent    = selContract ? trueRentPerSqm*(selContract.charged_area??0) : 0;
+  // Calculate baseRent: prefer per-unit breakdown when available
+  var baseRent = 0;
+  if (selContract) {
+    var hasPerUnitPricing = selContract.contract_spaces?.some(function(cs: any) { return cs.charge_method === "fixed" || cs.price_per_sqm; });
+    if (hasPerUnitPricing && (selContract.rent_per_sqm ?? 0) === 0) {
+      // Per-unit fixed pricing: sum each space
+      selContract.contract_spaces.forEach(function(cs: any) {
+        if (cs.charge_method === "fixed" && cs.fixed_rent) baseRent += Number(cs.fixed_rent);
+        else baseRent += (Number(cs.price_per_sqm) || 0) * (cs.spaces?.area || 0);
+      });
+    } else {
+      baseRent = trueRentPerSqm * (selContract.charged_area ?? 0);
+    }
+  }
   const vat         = selContract?.vat_type==="taxable" ? baseRent*0.18 : 0;
   const remaining   = selContract?.end_date ? yearsMonthsLeft(selContract.end_date) : null;
 
@@ -378,7 +391,16 @@ export default function ContractsPage() {
             </div>
           ) : filtered.map(function(c) {
             const si   = STATUS_MAP[c.status] ?? STATUS_MAP.ended;
-            const mon  = (c.rent_per_sqm??0)*(c.charged_area??0)+(c.investment_addition??0);
+            var mon = (c.rent_per_sqm??0)*(c.charged_area??0)+(c.investment_addition??0);
+            // If rent_per_sqm is 0 but has per-unit pricing, calculate from contract_spaces
+            if (mon === (c.investment_addition??0) && c.contract_spaces?.length > 0) {
+              var spTotal = 0;
+              c.contract_spaces.forEach(function(cs: any) {
+                if (cs.charge_method === "fixed" && cs.fixed_rent) spTotal += Number(cs.fixed_rent);
+                else spTotal += (Number(cs.price_per_sqm) || Number(c.rent_per_sqm) || 0) * (cs.spaces?.area || 0);
+              });
+              if (spTotal > 0) mon = spTotal + (c.investment_addition??0);
+            }
             const rem  = c.end_date ? yearsMonthsLeft(c.end_date) : null;
             const isSel = selected===c.id;
             return (
@@ -389,7 +411,12 @@ export default function ContractsPage() {
                   <div className="font-semibold text-slate-800 text-sm">{c.tenants?.name}</div>
                   <span className={"text-xs px-2 py-0.5 rounded-full font-semibold "+si.color}>{si.label}</span>
                 </div>
-                <div className="text-xs text-slate-400">{c.properties?.name}</div>
+                <div className="text-xs text-slate-400">
+                  {c.properties?.name}
+                  {c.contract_spaces?.length > 0 && (
+                    <span className="text-slate-300"> — {c.contract_spaces.map(function(cs: any) { return cs.spaces?.space_name; }).filter(Boolean).join(", ")}</span>
+                  )}
+                </div>
                 <div className="flex items-center justify-between mt-1.5">
                   <span className="text-xs font-semibold text-green-700">{fmtMoney(mon)}/חודש</span>
                   {rem && !rem.isExpired && (
@@ -455,22 +482,31 @@ export default function ContractsPage() {
                 </div>
 
                 {/* Current rent per sqm (with step-rent + investment) */}
-                <div className="rounded-lg bg-slate-50 border border-slate-200 px-3 py-2 mb-2 text-xs space-y-1">
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-500">
-                      שכ&quot;ד נוכחי למ&quot;ר
-                      {currentContractYear > 0 && <span className="text-blue-500"> (שנה {currentContractYear})</span>}
-                      {investPerSqm > 0 && <span> + תוספת {fmtMoney(investPerSqm)}</span>}
-                    </span>
-                    <span className="font-black text-slate-800">{fmtMoney(trueRentPerSqm)}/מ&quot;ר</span>
-                  </div>
-                  {currentRentPerSqm !== originalRentPerSqm && (
-                    <div className="flex items-center justify-between text-slate-400">
-                      <span>שכ&quot;ד מקורי (שנה 1)</span>
-                      <span>₪{originalRentPerSqm.toFixed(2)}/מ&quot;ר</span>
+                {trueRentPerSqm > 0 ? (
+                  <div className="rounded-lg bg-slate-50 border border-slate-200 px-3 py-2 mb-2 text-xs space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-500">
+                        שכ&quot;ד נוכחי למ&quot;ר
+                        {currentContractYear > 0 && <span className="text-blue-500"> (שנה {currentContractYear})</span>}
+                        {investPerSqm > 0 && <span> + תוספת {fmtMoney(investPerSqm)}</span>}
+                      </span>
+                      <span className="font-black text-slate-800">{fmtMoney(trueRentPerSqm)}/מ&quot;ר</span>
                     </div>
-                  )}
-                </div>
+                    {currentRentPerSqm !== originalRentPerSqm && (
+                      <div className="flex items-center justify-between text-slate-400">
+                        <span>שכ&quot;ד מקורי (שנה 1)</span>
+                        <span>₪{originalRentPerSqm.toFixed(2)}/מ&quot;ר</span>
+                      </div>
+                    )}
+                  </div>
+                ) : selContract.contract_spaces?.length > 0 ? (
+                  <div className="rounded-lg bg-slate-50 border border-slate-200 px-3 py-2 mb-2 text-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-500">שכ&quot;ד חודשי (מחיר לפי יחידה)</span>
+                      <span className="font-black text-slate-800">{fmtMoney(baseRent)}/חודש</span>
+                    </div>
+                  </div>
+                ) : null}
 
                 {/* CPI-adjusted price via CBS calculator */}
                 {cpiLoading && (
@@ -569,6 +605,40 @@ export default function ContractsPage() {
                     {l:'מע"מ',  v:selContract.vat_type==="taxable"?"18%":"פטור"},
                   ].map(function(r){return <div key={r.l} className="flex justify-between border-b border-slate-50 py-1"><span className="text-slate-400">{r.l}</span><span className="font-medium">{r.v}</span></div>;})}
                 </div>
+
+                {/* Per-unit breakdown when multiple spaces */}
+                {selContract.contract_spaces?.length > 1 && (
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 mt-3">
+                    <div className="text-xs font-bold text-slate-600 mb-2">📐 פירוט לפי יחידה</div>
+                    <div className="space-y-1">
+                      {selContract.contract_spaces.map(function(cs: any) {
+                        var spName = cs.spaces?.space_name || "—";
+                        var spArea = cs.spaces?.area || 0;
+                        var isFixed = cs.charge_method === "fixed";
+                        var monthlyRent = isFixed
+                          ? Number(cs.fixed_rent) || 0
+                          : (Number(cs.price_per_sqm) || Number(selContract.rent_per_sqm) || 0) * spArea;
+                        var rentLabel = isFixed
+                          ? fmtMoney(Number(cs.fixed_rent) || 0) + "/חודש (קבוע)"
+                          : fmtMoney(Number(cs.price_per_sqm) || Number(selContract.rent_per_sqm) || 0) + '/מ"ר';
+                        return (
+                          <div key={cs.space_id} className="rounded-lg border border-slate-100 bg-white px-3 py-2 flex items-center justify-between text-xs">
+                            <div className="flex items-center gap-2">
+                              <span className="font-semibold text-slate-700">{spName}</span>
+                              <span className="text-slate-400">{spArea} מ&quot;ר</span>
+                              <span className="text-slate-400">{rentLabel}</span>
+                            </div>
+                            <span className="font-bold text-green-700">{fmtMoney(monthlyRent)}/חודש</span>
+                          </div>
+                        );
+                      })}
+                      <div className="rounded-lg bg-green-50 border border-green-200 px-3 py-2 text-center">
+                        <span className="text-sm font-black text-green-800">{fmtMoney(baseRent)}/חודש</span>
+                        <span className="text-xs text-green-600 mr-2">סה&quot;כ כל היחידות</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Options — enhanced */}
