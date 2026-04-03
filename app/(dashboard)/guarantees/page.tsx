@@ -117,6 +117,7 @@ export default function GuaranteesPage() {
                     <td className="px-4 py-3 text-xs text-slate-500">{fmtDate(g.end_date)}{d!==null&&d<=60&&g.status==="active"&&<div className={"text-xs font-bold "+(d<=30?"text-red-600":"text-yellow-600")}>{d} יום</div>}</td>
                     <td className="px-4 py-3"><div className="flex gap-1">
                       <button onClick={function(){openEdit(g);}} className="text-xs border border-slate-200 rounded px-2 py-1 text-slate-600 hover:bg-slate-50">✏️</button>
+                      {g.document_url&&<a href={g.document_url} target="_blank" rel="noopener noreferrer" className="text-xs border border-blue-200 rounded px-2 py-1 text-blue-600 hover:bg-blue-50">📄</a>}
                       {g.status==="active"&&<><button onClick={function(){handleReturn(g.id);}} className="text-xs border border-green-200 rounded px-2 py-1 text-green-700 hover:bg-green-50">↩</button><button onClick={function(){handleForfeit(g.id);}} className="text-xs border border-red-200 rounded px-2 py-1 text-red-600 hover:bg-red-50">💸</button></>}
                     </div></td>
                   </tr>

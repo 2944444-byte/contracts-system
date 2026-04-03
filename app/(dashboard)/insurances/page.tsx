@@ -143,6 +143,7 @@ export default function InsurancesPage() {
         <td className="px-4 py-3">
           <div className="flex gap-1">
             <button onClick={function(){openEdit(ins);}} className="text-xs border border-slate-200 rounded px-2 py-1 text-slate-600 hover:bg-slate-50">✏️</button>
+            {ins.document_url&&<a href={ins.document_url} target="_blank" rel="noopener noreferrer" className="text-xs border border-blue-200 rounded px-2 py-1 text-blue-600 hover:bg-blue-50">📄</a>}
             <button onClick={function(){handleDelete(ins.id);}} className="text-xs border border-red-100 rounded px-2 py-1 text-red-400 hover:bg-red-50">🗑</button>
           </div>
         </td>

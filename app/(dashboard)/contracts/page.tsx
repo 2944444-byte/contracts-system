@@ -77,7 +77,7 @@ export default function ContractsPage() {
 
   async function loadContracts() {
     const { data } = await supabase.from("contracts")
-      .select("*, tenants(name,phone,primary_email,company_name), properties(name,city), contract_options(id,option_number,duration_months,duration_years,end_date,notice_days_before_end,notice_type,status,is_exercised,rent_mechanism,rent_increase_pct,new_rent_value,option_group,exit_points), guarantees(id,guarantee_type,status,amount_required,amount_actual,end_date,bank), contract_spaces(space_id,spaces(space_name,area))")
+      .select("*, tenants(name,phone,primary_email,company_name), properties(name,city), contract_options(id,option_number,duration_months,duration_years,end_date,notice_days_before_end,notice_type,status,is_exercised,rent_mechanism,rent_increase_pct,new_rent_value,option_group,exit_points), guarantees(id,guarantee_type,status,amount_required,amount_actual,end_date,bank,document_url), contract_spaces(space_id,spaces(space_name,area))")
       .order("end_date");
     setContracts(data??[]);
     setLoading(false);
@@ -423,6 +423,10 @@ export default function ContractsPage() {
                   <div className="flex gap-2 flex-wrap">
                     <button onClick={function(){router.push("/contracts/"+selContract.id+"/edit");}} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">✏️ עריכה</button>
                     <button onClick={function(){router.push("/contracts/"+selContract.id+"/print");}} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">🖨 הדפס</button>
+                    {selContract.document_url && (
+                      <a href={selContract.document_url} target="_blank" rel="noopener noreferrer"
+                        className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-600 hover:bg-blue-100">📄 צפה בחוזה</a>
+                    )}
                     <button onClick={()=>selected && handleDeleteContract(selected)}
                       className="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs text-red-600 hover:bg-red-100 font-semibold">🗑 מחק</button>
                   </div>
@@ -680,6 +684,10 @@ export default function ContractsPage() {
                           </div>
                           {diff < 0 && (
                             <div className="text-xs text-red-600 font-bold mt-1">⚠️ פער: {fmtMoney(Math.abs(diff))}</div>
+                          )}
+                          {g.document_url && (
+                            <a href={g.document_url} target="_blank" rel="noopener noreferrer"
+                              className="text-[10px] text-blue-500 hover:underline mt-1 block">📄 צפה במסמך ערבות</a>
                           )}
                         </div>
                       );
