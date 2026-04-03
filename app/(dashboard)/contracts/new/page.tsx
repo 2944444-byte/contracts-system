@@ -127,6 +127,10 @@ export default function ContractsNewPage() {
   const [newParkingIncluded, setNewParkingIncluded] = useState(false);
 
   // Step 2 — Dates & Terms
+  const [signingDate, setSigningDate] = useState("");
+  const [plannedHandover, setPlannedHandover] = useState("");
+  const [actualHandover, setActualHandover] = useState("");
+  const [hasFutureHandover, setHasFutureHandover] = useState(false);
   const [startDate, setStartDate] = useState("");
   const [leasePeriodValue, setLeasePeriodValue] = useState(12);
   const [leasePeriodUnit, setLeasePeriodUnit] = useState<"months" | "years">("months");
@@ -529,10 +533,17 @@ export default function ContractsNewPage() {
       if (today < start) status = "future";
       else if (today > end) status = "ended";
 
+      // For future handover: if not yet delivered, status = "upcoming"
+      if (hasFutureHandover && !actualHandover) status = "upcoming";
+
       const insertPayload: any = {
         tenant_id: tenantId,
         property_id: propertyId,
         contract_type: contractType,
+        signing_date: signingDate || null,
+        planned_handover_date: plannedHandover || null,
+        actual_handover_date: actualHandover || null,
+        handover_status: hasFutureHandover ? (actualHandover ? "delivered" : "pending") : "not_applicable",
         start_date: startDate,
         end_date: endDate,
         lease_period_value: leasePeriodValue,
@@ -924,11 +935,44 @@ export default function ContractsNewPage() {
               📋 תנאי שכירות
             </h2>
 
+            {/* Future handover toggle */}
+            <div className="flex items-center gap-2 mb-2">
+              <input type="checkbox" id="futureHandover" checked={hasFutureHandover}
+                onChange={(e) => setHasFutureHandover(e.target.checked)} className="w-4 h-4" />
+              <label htmlFor="futureHandover" className="text-xs font-semibold text-slate-700">חוזה עם תהליך מסירה (נכס בבניה / מסירה עתידית)</label>
+            </div>
+
+            {hasFutureHandover && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50/50 p-3 mb-3 space-y-3">
+                <div className="text-xs font-bold text-amber-800">📋 פרטי מסירה</div>
+                <div className="grid grid-cols-3 gap-3">
+                  <div>
+                    <label className="mb-1 block text-[10px] font-semibold text-slate-600">תאריך חתימה</label>
+                    <input type="date" value={signingDate} onChange={(e) => setSigningDate(e.target.value)} className={ic} />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[10px] font-semibold text-slate-600">יעד מסירה</label>
+                    <input type="date" value={plannedHandover} onChange={(e) => setPlannedHandover(e.target.value)} className={ic} />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[10px] font-semibold text-slate-600">מסירה בפועל</label>
+                    <input type="date" value={actualHandover}
+                      onChange={(e) => { setActualHandover(e.target.value); if (e.target.value && !startDate) setStartDate(e.target.value); }}
+                      className={ic} />
+                  </div>
+                </div>
+                <div className="text-[10px] text-amber-600">
+                  {!actualHandover ? "⏳ טרם נמסר — תקופת השכירות תתחיל ביום המסירה בפועל" :
+                    "✅ נמסר — תחילת השכירות: " + new Date(actualHandover).toLocaleDateString("he-IL")}
+                </div>
+              </div>
+            )}
+
             {/* Date + Period → auto end date */}
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="mb-1 block text-xs font-semibold text-slate-700">
-                  תחילת חוזה *
+                  {hasFutureHandover ? "תחילת שכירות (מיום מסירה) *" : "תחילת חוזה *"}
                 </label>
                 <input
                   type="date"

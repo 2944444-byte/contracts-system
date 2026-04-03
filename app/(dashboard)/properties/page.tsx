@@ -51,6 +51,7 @@ export default function PropertiesPage() {
   const [fMgmtBudget, setFMgmtBudget] = useState("");
   const [fWasteCost,  setFWasteCost]  = useState("");
   const [fMgmtType,   setFMgmtType]   = useState("internal");
+  const [fConstStatus, setFConstStatus] = useState("active");
 
   useEffect(function() { loadAll(); }, []);
 
@@ -85,6 +86,7 @@ export default function PropertiesPage() {
     setFInsurPolicy(p.insurance_policy_number??""); setFMgmtBudget(p.annual_management_budget?.toString()??"");
     setFWasteCost(p.annual_waste_cost?.toString()??"");
     setFMgmtType(p.management_type??"internal");
+    setFConstStatus(p.construction_status??"active");
   }
 
   async function handleSave() {
@@ -104,6 +106,7 @@ export default function PropertiesPage() {
         annual_management_budget: fMgmtBudget ? Number(fMgmtBudget) : null,
         annual_waste_cost: fWasteCost ? Number(fWasteCost) : null,
         management_type: fMgmtType,
+        construction_status: fConstStatus,
       };
       if (isNew) {
         const { data, error: _ie } = await supabase.from("properties").insert(payload).select().single();
