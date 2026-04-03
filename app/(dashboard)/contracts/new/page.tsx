@@ -611,6 +611,15 @@ export default function ContractsNewPage() {
         await supabase.from("spaces").update({ status: "occupied" }).in("id", selSpaces);
       }
 
+      // Link parking spots to this contract (ones created during wizard for this tenant+property)
+      if (tenantId && propertyId) {
+        await supabase.from("parking_subscriptions")
+          .update({ contract_id: contract.id })
+          .eq("property_id", propertyId)
+          .eq("tenant_id", tenantId)
+          .is("contract_id", null);
+      }
+
       // Extension Options
       if (extensionOptions.length > 0) {
         const optionsToInsert = extensionOptions.map((opt, i) => ({
@@ -1515,7 +1524,13 @@ export default function ContractsNewPage() {
               </div>
 
               {hasIncrease && (() => {
-                const contractYears = leasePeriodUnit === "years" ? leasePeriodValue : Math.ceil(leasePeriodValue / 12);
+                // Calculate years from actual dates (user may override end date manually)
+                var contractYears = leasePeriodUnit === "years" ? leasePeriodValue : Math.ceil(leasePeriodValue / 12);
+                if (startDate && endDate) {
+                  var diffMs = new Date(endDate).getTime() - new Date(startDate).getTime();
+                  var diffYears = Math.ceil(diffMs / (365.25 * 24 * 60 * 60 * 1000));
+                  if (diffYears > contractYears) contractYears = diffYears;
+                }
                 const errors = validatePriceTiers(priceTiers, contractYears);
                 const previews = calculateTierPreviews(priceTiers, Number(rentPerSqm) || 0);
                 return (
