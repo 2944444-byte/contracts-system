@@ -144,6 +144,8 @@ export default function ContractEditPage() {
   const [graceType, setGraceType] = useState("full");
   const [graceDiscountPct, setGraceDiscountPct] = useState("50");
   const [hasIncrease, setHasIncrease] = useState(false);
+  const [increaseMode, setIncreaseMode] = useState<"unified" | "per_unit">("unified");
+  const [perUnitTiers, setPerUnitTiers] = useState<Record<string, PriceTier[]>>({});
   const [priceTiers, setPriceTiers] = useState<PriceTier[]>([]);
   const [cbsFetching, setCbsFetching] = useState(false);
   const [editParkingSpots, setEditParkingSpots] = useState<any[]>([]);
@@ -285,16 +287,40 @@ export default function ContractEditPage() {
       .select("*").eq("contract_id", id).order("tier_number");
     if (tiers && tiers.length > 0) {
       setHasIncrease(true);
-      setPriceTiers(tiers.map((t: any) => ({
-        increase_type: t.increase_type ?? "pct",
-        increase_value: t.increase_value ?? 0,
-        from_year: t.from_year ?? 1,
-        to_year: t.to_year ?? 3,
-        is_recurring: t.is_recurring ?? false,
-        recurring_every_years: t.recurring_every_years ?? (t.is_recurring ? 1 : null),
-        calculated_rent_per_sqm: t.calculated_rent_per_sqm,
-        notes: t.notes ?? "",
-      })));
+      // Check if tiers have space_id → per-unit mode
+      var hasSpaceId = tiers.some((t: any) => t.space_id);
+      if (hasSpaceId) {
+        setIncreaseMode("per_unit");
+        var grouped: Record<string, PriceTier[]> = {};
+        tiers.forEach((t: any) => {
+          var sid = t.space_id;
+          if (!sid) return;
+          if (!grouped[sid]) grouped[sid] = [];
+          grouped[sid].push({
+            increase_type: t.increase_type ?? "pct",
+            increase_value: t.increase_value ?? 0,
+            from_year: t.from_year ?? 1,
+            to_year: t.to_year ?? 3,
+            is_recurring: t.is_recurring ?? false,
+            recurring_every_years: t.recurring_every_years ?? (t.is_recurring ? 1 : null),
+            calculated_rent_per_sqm: t.calculated_rent_per_sqm,
+            notes: t.notes ?? "",
+          });
+        });
+        setPerUnitTiers(grouped);
+      } else {
+        setIncreaseMode("unified");
+        setPriceTiers(tiers.map((t: any) => ({
+          increase_type: t.increase_type ?? "pct",
+          increase_value: t.increase_value ?? 0,
+          from_year: t.from_year ?? 1,
+          to_year: t.to_year ?? 3,
+          is_recurring: t.is_recurring ?? false,
+          recurring_every_years: t.recurring_every_years ?? (t.is_recurring ? 1 : null),
+          calculated_rent_per_sqm: t.calculated_rent_per_sqm,
+          notes: t.notes ?? "",
+        })));
+      }
     } else if (c.increase_steps && Array.isArray(c.increase_steps) && c.increase_steps.length > 0) {
       // Fallback: load from legacy JSONB field
       setHasIncrease(true);
@@ -615,20 +641,49 @@ export default function ContractEditPage() {
 
       // Delete + re-insert price tiers (save ORIGINAL tiers, not expanded)
       await supabase.from("contract_price_tiers").delete().eq("contract_id", id);
-      if (hasIncrease && priceTiers.length > 0) {
-        // Save original tiers (with is_recurring intact) for reload
-        // calculateTierPreviews only for computed fields
-        const tiersWithPreviews = calculateTierPreviews(priceTiers, Number(rentPerSqm) || 0);
+      if (hasIncrease) {
         const contractStart = new Date(startDate);
-        // Use original priceTiers for structure, previews for calculated values
-        await supabase.from("contract_price_tiers").insert(
-          priceTiers.map((tier, i) => {
-            const preview = tiersWithPreviews.find(function(t) { return t.from_year === tier.from_year && t.to_year === tier.to_year; }) || tiersWithPreviews[i];
-            const tierStart = new Date(contractStart);
+        var allTiersToInsert: any[] = [];
+
+        if (increaseMode === "per_unit" && Object.keys(perUnitTiers).length > 0) {
+          Object.entries(perUnitTiers).forEach(function([sid, uTiers]) {
+            if (!uTiers || uTiers.length === 0) return;
+            var rVal = Number(unitRentOverrides[sid]) || Number(rentPerSqm) || 0;
+            var uPreviews = calculateTierPreviews(uTiers, rVal);
+            uTiers.forEach(function(tier, i) {
+              var preview = uPreviews.find(function(t) { return t.from_year === tier.from_year && t.to_year === tier.to_year; }) || uPreviews[i];
+              var tierStart = new Date(contractStart);
+              tierStart.setFullYear(tierStart.getFullYear() + tier.from_year - 1);
+              var tierEnd = new Date(contractStart);
+              tierEnd.setFullYear(tierEnd.getFullYear() + tier.to_year);
+              allTiersToInsert.push({
+                contract_id: id,
+                space_id: sid,
+                tier_number: i + 1,
+                start_date: tierStart.toISOString().split("T")[0],
+                end_date: tierEnd.toISOString().split("T")[0],
+                increase_type: tier.increase_type,
+                increase_value: tier.increase_value || 0,
+                is_recurring: tier.is_recurring ?? false,
+                recurring_every_years: tier.recurring_every_years ?? null,
+                from_year: tier.from_year,
+                to_year: tier.to_year,
+                price_per_sqm: tier.increase_type === "fixed_total" ? null : (preview?.calculated_rent_per_sqm ?? null),
+                fixed_amount: tier.increase_type === "fixed_total" ? tier.increase_value : null,
+                calculated_rent_per_sqm: preview?.calculated_rent_per_sqm ?? null,
+                notes: tier.notes || null,
+              });
+            });
+          });
+        } else if (priceTiers.length > 0) {
+          var tiersWithPreviews = calculateTierPreviews(priceTiers, Number(rentPerSqm) || 0);
+          priceTiers.forEach(function(tier, i) {
+            var preview = tiersWithPreviews.find(function(t) { return t.from_year === tier.from_year && t.to_year === tier.to_year; }) || tiersWithPreviews[i];
+            var tierStart = new Date(contractStart);
             tierStart.setFullYear(tierStart.getFullYear() + tier.from_year - 1);
-            const tierEnd = new Date(contractStart);
+            var tierEnd = new Date(contractStart);
             tierEnd.setFullYear(tierEnd.getFullYear() + tier.to_year);
-            return {
+            allTiersToInsert.push({
               contract_id: id,
               tier_number: i + 1,
               start_date: tierStart.toISOString().split("T")[0],
@@ -639,13 +694,17 @@ export default function ContractEditPage() {
               recurring_every_years: tier.recurring_every_years ?? null,
               from_year: tier.from_year,
               to_year: tier.to_year,
-              price_per_sqm: tier.increase_type === "fixed_total" ? null : tier.calculated_rent_per_sqm,
+              price_per_sqm: tier.increase_type === "fixed_total" ? null : (preview?.calculated_rent_per_sqm ?? null),
               fixed_amount: tier.increase_type === "fixed_total" ? tier.increase_value : null,
-              calculated_rent_per_sqm: tier.calculated_rent_per_sqm,
+              calculated_rent_per_sqm: preview?.calculated_rent_per_sqm ?? null,
               notes: tier.notes || null,
-            };
-          })
-        );
+            });
+          });
+        }
+
+        if (allTiersToInsert.length > 0) {
+          await supabase.from("contract_price_tiers").insert(allTiersToInsert);
+        }
       }
 
       await logAudit({ entity_type: "contract", entity_id: id, action: "update" });
@@ -1028,7 +1087,7 @@ export default function ContractEditPage() {
                     className="w-4 h-4" />
                   <label htmlFor="increase" className="text-sm font-bold text-slate-700">עלייה מדורגת בשכ&quot;ד (Step-Rent)</label>
                 </div>
-                {hasIncrease && (
+                {hasIncrease && increaseMode === "unified" && (
                   <button type="button" onClick={() => {
                     const last = priceTiers[priceTiers.length - 1];
                     setPriceTiers(prev => [...prev, emptyPriceTier(last ? last.to_year + 1 : 1)]);
@@ -1038,7 +1097,31 @@ export default function ContractEditPage() {
                 )}
               </div>
 
-              {hasIncrease && (() => {
+              {/* Unified / Per-unit toggle */}
+              {hasIncrease && selSpaces.length > 1 && Object.keys(unitRentOverrides).some(k => unitRentOverrides[k]) && (
+                <div className="flex gap-2 mb-4">
+                  <button type="button" onClick={() => setIncreaseMode("unified")}
+                    className={"rounded-lg border px-4 py-2 text-xs font-bold transition-all " +
+                      (increaseMode === "unified" ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-200 text-slate-500 hover:bg-slate-50")}>
+                    מנגנון אחיד לכל היחידות
+                  </button>
+                  <button type="button" onClick={() => {
+                    setIncreaseMode("per_unit");
+                    setPerUnitTiers(prev => {
+                      const next = { ...prev };
+                      selSpaces.forEach(sid => { if (!next[sid] || next[sid].length === 0) next[sid] = [emptyPriceTier(1)]; });
+                      return next;
+                    });
+                  }}
+                    className={"rounded-lg border px-4 py-2 text-xs font-bold transition-all " +
+                      (increaseMode === "per_unit" ? "border-orange-500 bg-orange-50 text-orange-700" : "border-slate-200 text-slate-500 hover:bg-slate-50")}>
+                    מנגנון נפרד לכל יחידה
+                  </button>
+                </div>
+              )}
+
+              {/* UNIFIED MODE */}
+              {hasIncrease && increaseMode === "unified" && (() => {
                 const contractYears = leasePeriodUnit === "years" ? leasePeriodValue : Math.ceil(leasePeriodValue / 12);
                 const errors = validatePriceTiers(priceTiers, contractYears);
                 const previews = calculateTierPreviews(priceTiers, Number(rentPerSqm) || 0);
@@ -1051,7 +1134,6 @@ export default function ContractEditPage() {
                         ))}
                       </div>
                     )}
-                    {/* Base period before first tier */}
                     {priceTiers.length > 0 && (() => {
                       const sorted = [...priceTiers].sort((a, b) => a.from_year - b.from_year);
                       if (sorted[0]?.from_year > 1) {
@@ -1169,6 +1251,159 @@ export default function ContractEditPage() {
                   </div>
                 );
               })()}
+
+              {/* PER-UNIT MODE */}
+              {hasIncrease && increaseMode === "per_unit" && (() => {
+                var contractYears = leasePeriodUnit === "years" ? leasePeriodValue : Math.ceil(leasePeriodValue / 12);
+                return (
+                  <div className="space-y-4">
+                    {selSpaces.map(function(sid) {
+                      var sp = spaces.find(function(s: any) { return s.id === sid; });
+                      if (!sp) return null;
+                      var rType = (sp as any).charge_method || "per_sqm";
+                      var rVal = Number(unitRentOverrides[sid]) || Number(rentPerSqm) || 0;
+                      var unitTiers = perUnitTiers[sid] || [];
+                      var errors = validatePriceTiers(unitTiers, contractYears);
+                      var previews = calculateTierPreviews(unitTiers, rVal);
+                      return (
+                        <div key={sid} className="rounded-xl border border-orange-200 bg-orange-50/30 p-4 space-y-3">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <span className="font-bold text-sm text-slate-700">{sp.space_name}</span>
+                              <span className="text-xs text-slate-400">{sp.area} מ&quot;ר</span>
+                              <span className="text-xs font-semibold text-green-700">
+                                {rType === "fixed" ? fmtMoney(rVal) + "/חודש" : fmtMoney(rVal) + '/מ"ר'}
+                              </span>
+                            </div>
+                            <button type="button" onClick={function() {
+                              setPerUnitTiers(function(prev) {
+                                var next = { ...prev };
+                                var last = unitTiers[unitTiers.length - 1];
+                                next[sid] = [...unitTiers, emptyPriceTier(last ? last.to_year + 1 : 1)];
+                                return next;
+                              });
+                            }} className="rounded-lg bg-orange-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-orange-700">
+                              + שלב
+                            </button>
+                          </div>
+                          {errors.length > 0 && (
+                            <div className="rounded-lg bg-red-50 border border-red-200 p-2 space-y-1">
+                              {errors.map(function(err, i) { return (
+                                <div key={i} className="text-xs text-red-600">⚠️ {err}</div>
+                              ); })}
+                            </div>
+                          )}
+                          {unitTiers.map(function(tier, idx) {
+                            var hasError = errors.some(function(e) { return e.includes("שלב " + (idx + 1)); });
+                            return (
+                              <div key={idx} className={"rounded-lg border p-3 space-y-2 " + (hasError ? "border-red-300 bg-red-50/50" : "border-slate-100 bg-white")}>
+                                <div className="flex items-center justify-between">
+                                  <span className="text-xs font-bold text-slate-600">שלב {idx + 1}</span>
+                                  {unitTiers.length > 1 && (
+                                    <button type="button" onClick={function() {
+                                      setPerUnitTiers(function(prev) {
+                                        var next = { ...prev };
+                                        next[sid] = unitTiers.filter(function(_, i) { return i !== idx; });
+                                        return next;
+                                      });
+                                    }} className="text-xs text-red-500 hover:text-red-700 font-semibold">🗑</button>
+                                  )}
+                                </div>
+                                <div className="flex gap-2 mb-1">
+                                  <button type="button" onClick={function() {
+                                    setPerUnitTiers(function(prev) { var next = { ...prev }; next[sid] = unitTiers.map(function(t, i) { return i === idx ? { ...t, is_recurring: false } : t; }); return next; });
+                                  }} className={"rounded border px-2 py-1 text-[10px] " + (!tier.is_recurring ? "border-blue-500 bg-blue-50 font-bold text-blue-700" : "border-slate-200")}>
+                                    📅 טווח
+                                  </button>
+                                  <button type="button" onClick={function() {
+                                    setPerUnitTiers(function(prev) { var next = { ...prev }; next[sid] = unitTiers.map(function(t, i) { return i === idx ? { ...t, is_recurring: true } : t; }); return next; });
+                                  }} className={"rounded border px-2 py-1 text-[10px] " + (tier.is_recurring ? "border-blue-500 bg-blue-50 font-bold text-blue-700" : "border-slate-200")}>
+                                    🔁 חוזר
+                                  </button>
+                                </div>
+                                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                                  {!tier.is_recurring ? (
+                                    <>
+                                      <div>
+                                        <label className="mb-0.5 block text-[10px] text-slate-400">משנה</label>
+                                        <input type="number" min="1" value={tier.from_year}
+                                          onChange={function(e) { setPerUnitTiers(function(prev) { var next = { ...prev }; next[sid] = unitTiers.map(function(t, i) { return i === idx ? { ...t, from_year: Number(e.target.value) || 1 } : t; }); return next; }); }}
+                                          className={ic + " text-xs"} />
+                                      </div>
+                                      <div>
+                                        <label className="mb-0.5 block text-[10px] text-slate-400">עד שנה</label>
+                                        <input type="number" min="1" value={tier.to_year}
+                                          onChange={function(e) { setPerUnitTiers(function(prev) { var next = { ...prev }; next[sid] = unitTiers.map(function(t, i) { return i === idx ? { ...t, to_year: Number(e.target.value) || 1 } : t; }); return next; }); }}
+                                          className={ic + " text-xs"} />
+                                      </div>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <div>
+                                        <label className="mb-0.5 block text-[10px] text-slate-400">כל X שנים</label>
+                                        <input type="number" min="1" max="10" value={tier.recurring_every_years ?? 1}
+                                          onChange={function(e) { setPerUnitTiers(function(prev) { var next = { ...prev }; next[sid] = unitTiers.map(function(t, i) { return i === idx ? { ...t, recurring_every_years: Number(e.target.value) || 1 } : t; }); return next; }); }}
+                                          className={ic + " text-xs"} />
+                                      </div>
+                                      <div>
+                                        <label className="mb-0.5 block text-[10px] text-slate-400">עד שנה</label>
+                                        <input type="number" min="1" value={tier.to_year}
+                                          onChange={function(e) { setPerUnitTiers(function(prev) { var next = { ...prev }; next[sid] = unitTiers.map(function(t, i) { return i === idx ? { ...t, to_year: Number(e.target.value) || 1 } : t; }); return next; }); }}
+                                          className={ic + " text-xs"} />
+                                      </div>
+                                    </>
+                                  )}
+                                  <div className="col-span-2">
+                                    <label className="mb-0.5 block text-[10px] text-slate-400">סוג עלייה</label>
+                                    <div className="flex gap-1 flex-wrap">
+                                      {INCREASE_TYPES.map(function(it) { return (
+                                        <button key={it.v} type="button"
+                                          onClick={function() { setPerUnitTiers(function(prev) { var next = { ...prev }; next[sid] = unitTiers.map(function(t, i) { return i === idx ? { ...t, increase_type: it.v as PriceTier["increase_type"] } : t; }); return next; }); }}
+                                          className={"rounded border px-2 py-1 text-[10px] " +
+                                            (tier.increase_type === it.v ? "border-blue-500 bg-blue-50 font-bold text-blue-700" : "border-slate-200 hover:bg-white")}>
+                                          {it.icon} {it.l}
+                                        </button>
+                                      ); })}
+                                    </div>
+                                  </div>
+                                </div>
+                                {tier.increase_type !== "none" && (
+                                  <div className="max-w-40">
+                                    <input type="number" step="0.1" value={tier.increase_value || ""}
+                                      onChange={function(e) { setPerUnitTiers(function(prev) { var next = { ...prev }; next[sid] = unitTiers.map(function(t, i) { return i === idx ? { ...t, increase_value: Number(e.target.value) || 0 } : t; }); return next; }); }}
+                                      placeholder={tier.increase_type === "pct" ? "%" : "₪"}
+                                      className={ic + " text-xs"} />
+                                  </div>
+                                )}
+                                {rVal > 0 && (function() {
+                                  var expanded = calculateTierPreviews([tier], idx === 0 ? rVal : (previews[idx-1]?.calculated_rent_per_sqm ?? rVal));
+                                  if (!expanded.length) return null;
+                                  return (
+                                    <div className="rounded-lg px-2 py-1.5 text-[10px] font-semibold bg-green-50 border border-green-200 text-green-700 space-y-0.5">
+                                      {expanded.map(function(exp, ei) {
+                                        return (
+                                          <div key={ei}>
+                                            שנים {exp.from_year}-{exp.to_year}: {exp.increase_type === "none"
+                                              ? "הקפאה"
+                                              : exp.increase_type === "fixed_total"
+                                                ? fmtMoney(exp.increase_value) + "/חודש"
+                                                : fmtMoney(exp.calculated_rent_per_sqm) + (rType === "fixed" ? "/חודש" : '/מ"ר')}
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  );
+                                })()}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
+
               {!hasIncrease && <div className="text-xs text-slate-400 mt-1">ללא עלייה שנתית (מעבר להצמדה)</div>}
             </div>
           </div>
