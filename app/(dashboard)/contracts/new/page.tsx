@@ -1022,15 +1022,16 @@ export default function ContractsNewPage() {
               </div>
             </div>
 
-            {/* Auto-calculated end date display */}
+            {/* End date — auto-calculated OR manual override */}
             {endDate && (
               <div className="rounded-lg bg-green-50 border border-green-200 px-4 py-3 flex items-center justify-between">
-                <span className="text-sm text-green-700 font-semibold">
-                  תאריך סיום מחושב
-                </span>
-                <span className="text-lg font-black text-green-800">
-                  {new Date(endDate).toLocaleDateString("he-IL")}
-                </span>
+                <div>
+                  <span className="text-sm text-green-700 font-semibold">תאריך סיום</span>
+                  <span className="text-xs text-green-500 mr-2">(מחושב — ניתן לשנות ידנית)</span>
+                </div>
+                <input type="date" value={endDate}
+                  onChange={(e) => setEndDate(e.target.value)}
+                  className="rounded border border-green-300 bg-white px-3 py-1.5 text-sm font-bold text-green-800" />
               </div>
             )}
 
@@ -1388,7 +1389,7 @@ export default function ContractsNewPage() {
                           </div>
                           <div className="flex items-center gap-2">
                             {occupied && <span className="text-red-600 font-semibold">🔴 תפוס — {p.tenants?.name}</span>}
-                            {ownedByMe && <span className="text-green-600 font-semibold">✓ שלי</span>}
+                            {ownedByMe && <span className="text-green-600 font-semibold">✓ {p.tenants?.name || "חוזה נוכחי"}</span>}
                             {!occupied && !ownedByMe && <span className="text-blue-500">פנוי</span>}
                             <button type="button" onClick={function() { handleDeleteParking(p.id); }}
                               className="text-red-400 hover:text-red-600 text-xs">🗑</button>
