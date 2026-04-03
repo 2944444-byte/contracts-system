@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit-log';
 import PropertyHierarchyFilter from '@/components/PropertyHierarchyFilter';
@@ -10,6 +10,8 @@ const SPACE_TYPES = [{v:"office",l:"משרדים",icon:"💼"},{v:"retail",l:"מ
 
 export default function UnitsPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const urlPropertyId = searchParams.get("propertyId");
   const [spaces,     setSpaces]     = useState<any[]>([]);
   const [properties, setProperties] = useState<any[]>([]);
   const [contracts,  setContracts]  = useState<any[]>([]);
@@ -18,6 +20,11 @@ export default function UnitsPage() {
   const [isNew,      setIsNew]      = useState(false);
   const [saving,     setSaving]     = useState(false);
   const [filterPropIds, setFilterPropIds] = useState<string[]>([]);
+
+  // Auto-filter when navigating from properties page
+  useEffect(function() {
+    if (urlPropertyId) setFilterPropIds([urlPropertyId]);
+  }, [urlPropertyId]);
   const [filterSt,   setFilterSt]   = useState("all");
 
   const [fPropertyId,setFPropertyId]=useState("");
