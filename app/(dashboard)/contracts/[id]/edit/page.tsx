@@ -45,8 +45,14 @@ const PAYMENT_FREQS = [
   { v: "monthly", l: "חודשי" },
   { v: "quarterly", l: "רבעוני" },
   { v: "annual", l: "שנתי" },
-  { v: "checks_advance", l: "שיקים מראש" },
   { v: "one_time", l: "חד פעמי" },
+];
+const PAYMENT_METHODS = [
+  { v: "standing_order", l: "הוראת קבע", icon: "🏦" },
+  { v: "checks_advance", l: "שיקים מראש", icon: "📝" },
+  { v: "bank_transfer", l: "העברה בנקאית", icon: "💳" },
+  { v: "cash", l: "מזומן", icon: "💵" },
+  { v: "credit_card", l: "כרטיס אשראי", icon: "💳" },
 ];
 const CONTRACT_TYPES = [
   { v: "regular", l: "שכירות רגילה" },
@@ -131,6 +137,7 @@ export default function ContractEditPage() {
   const [investAdd, setInvestAdd] = useState("");
   const [vatType, setVatType] = useState("taxable");
   const [paymentFreq, setPaymentFreq] = useState("monthly");
+  const [paymentMethod, setPaymentMethod] = useState("standing_order");
   const [paymentDay, setPaymentDay] = useState("1");
   const [indexMethod, setIndexMethod] = useState("standard");
   const [baseCPI, setBaseCPI] = useState("");
@@ -268,6 +275,7 @@ export default function ContractEditPage() {
     setInvestAdd(c.investment_addition?.toString() ?? "");
     setVatType(c.vat_type ?? "taxable");
     setPaymentFreq(c.payment_frequency ?? "monthly");
+    setPaymentMethod(c.payment_method ?? "standing_order");
     setPaymentDay(c.payment_day?.toString() ?? "1");
     setIndexMethod(c.indexation_method ?? "standard");
     setBaseCPI(c.index_base_value?.toString() ?? "");
@@ -501,6 +509,7 @@ export default function ContractEditPage() {
         investment_addition: Number(investAdd) || null,
         vat_type: vatType,
         payment_frequency: paymentFreq,
+        payment_method: paymentMethod,
         payment_day: Number(paymentDay) || 1,
         indexation_method: indexMethod,
         index_base_value: baseCPI ? Number(baseCPI) : null,
@@ -923,6 +932,12 @@ export default function ContractEditPage() {
                 <label className="mb-1 block text-xs font-semibold text-slate-700">תדירות תשלום</label>
                 <select value={paymentFreq} onChange={(e) => setPaymentFreq(e.target.value)} className={ic}>
                   {PAYMENT_FREQS.map((v) => <option key={v.v} value={v.v}>{v.l}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">שיטת תשלום</label>
+                <select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)} className={ic}>
+                  {PAYMENT_METHODS.map((v) => <option key={v.v} value={v.v}>{v.icon} {v.l}</option>)}
                 </select>
               </div>
               <div>

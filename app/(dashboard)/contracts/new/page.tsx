@@ -47,8 +47,14 @@ const PAYMENT_FREQS = [
   { v: "monthly", l: "חודשי" },
   { v: "quarterly", l: "רבעוני" },
   { v: "annual", l: "שנתי" },
-  { v: "checks_advance", l: "שיקים מראש" },
   { v: "one_time", l: "חד פעמי" },
+];
+const PAYMENT_METHODS = [
+  { v: "standing_order", l: "הוראת קבע", icon: "🏦" },
+  { v: "checks_advance", l: "שיקים מראש", icon: "📝" },
+  { v: "bank_transfer", l: "העברה בנקאית", icon: "💳" },
+  { v: "cash", l: "מזומן", icon: "💵" },
+  { v: "credit_card", l: "כרטיס אשראי", icon: "💳" },
 ];
 const CONTRACT_TYPES = [
   { v: "regular", l: "שכירות רגילה" },
@@ -144,6 +150,7 @@ export default function ContractsNewPage() {
   const [investAdd, setInvestAdd] = useState("");
   const [vatType, setVatType] = useState("taxable");
   const [paymentFreq, setPaymentFreq] = useState("monthly");
+  const [paymentMethod, setPaymentMethod] = useState("standing_order");
   const [paymentDay, setPaymentDay] = useState("1");
   const [indexMethod, setIndexMethod] = useState("standard");
   const [baseCPI, setBaseCPI] = useState("");
@@ -307,6 +314,7 @@ export default function ContractsNewPage() {
       setInvestAdd(c.investment_addition ? String(c.investment_addition) : "");
       setVatType(c.vat_type || "taxable");
       setPaymentFreq(c.payment_frequency || "monthly");
+      setPaymentMethod(c.payment_method || "standing_order");
       setPaymentDay(c.payment_day ? String(c.payment_day) : "1");
       setIndexMethod(c.indexation_method || "standard");
       setBaseCPI(c.index_base_value ? String(c.index_base_value) : "");
@@ -677,6 +685,7 @@ export default function ContractsNewPage() {
         investment_addition: Number(investAdd) || null,
         vat_type: vatType,
         payment_frequency: paymentFreq,
+        payment_method: paymentMethod,
         payment_day: Number(paymentDay) || 1,
         indexation_method: indexMethod,
         index_base_value: baseCPI ? Number(baseCPI) : null,
@@ -1302,6 +1311,22 @@ export default function ContractsNewPage() {
                   {PAYMENT_FREQS.map((v) => (
                     <option key={v.v} value={v.v}>
                       {v.l}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">
+                  שיטת תשלום
+                </label>
+                <select
+                  value={paymentMethod}
+                  onChange={(e) => setPaymentMethod(e.target.value)}
+                  className={ic}
+                >
+                  {PAYMENT_METHODS.map((v) => (
+                    <option key={v.v} value={v.v}>
+                      {v.icon} {v.l}
                     </option>
                   ))}
                 </select>
@@ -2750,6 +2775,10 @@ export default function ContractsNewPage() {
                 {
                   l: "תדירות",
                   v: PAYMENT_FREQS.find((p) => p.v === paymentFreq)?.l,
+                },
+                {
+                  l: "שיטת תשלום",
+                  v: PAYMENT_METHODS.find((p) => p.v === paymentMethod)?.l,
                 },
                 {
                   l: "הצמדה",
