@@ -1110,11 +1110,11 @@ export default function ContractsNewPage() {
                           "rounded-lg border p-2 text-center text-xs transition-all " +
                           (sel
                             ? "border-blue-500 bg-blue-50 font-bold text-blue-700"
-                            : s.status === "occupied"
+                            : s.status === "occupied" && !amendmentOfId
                               ? "border-slate-100 bg-slate-50 opacity-50 cursor-not-allowed"
                               : "border-slate-200 hover:bg-slate-50")
                         }
-                        disabled={s.status === "occupied" && !sel}
+                        disabled={s.status === "occupied" && !sel && !amendmentOfId}
                       >
                         <div className="font-semibold">{s.space_name}</div>
                         {s.area && (
