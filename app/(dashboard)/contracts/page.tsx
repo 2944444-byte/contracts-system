@@ -70,6 +70,7 @@ export default function ContractsPage() {
   const [search,    setSearch]    = useState("");
   const [cpiResult, setCpiResult] = useState<any>(null);
   const [cpiLoading, setCpiLoading] = useState(false);
+  const [perUnitCpi, setPerUnitCpi] = useState<Record<string, {ratio: number, source: string}>>({});
   const [priceTiers, setPriceTiers] = useState<PriceTier[]>([]);
   const [priceTimeline, setPriceTimeline] = useState<any[]>([]);
   const [amendments, setAmendments] = useState<any[]>([]);
@@ -98,7 +99,7 @@ export default function ContractsPage() {
 
   async function loadContracts() {
     const { data } = await supabase.from("contracts")
-      .select("*, tenants(name,phone,primary_email,company_name), properties(name,city), contract_options(id,option_number,duration_months,duration_years,end_date,notice_days_before_end,notice_type,status,is_exercised,rent_mechanism,rent_increase_pct,new_rent_value,option_group,exit_points), guarantees(id,guarantee_type,status,amount_required,amount_actual,end_date,bank,document_url), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area))")
+      .select("*, tenants(name,phone,primary_email,company_name), properties(name,city), contract_options(id,option_number,duration_months,duration_years,end_date,notice_days_before_end,notice_type,status,is_exercised,rent_mechanism,rent_increase_pct,new_rent_value,option_group,exit_points), guarantees(id,guarantee_type,status,amount_required,amount_actual,end_date,bank,document_url), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,index_base_value,index_base_date,use_original_index,spaces(space_name,area))")
       .order("end_date");
     setContracts(data??[]);
     setLoading(false);
@@ -113,7 +114,7 @@ export default function ContractsPage() {
   useEffect(function() {
     if (!selContract) { setAmendments([]); return; }
     supabase.from("contracts")
-      .select("id,amendment_number,amendment_date,amendment_notes,start_date,end_date,rent_per_sqm,charged_area,contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area))")
+      .select("id,amendment_number,amendment_date,amendment_notes,start_date,end_date,rent_per_sqm,charged_area,contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,index_base_value,index_base_date,use_original_index,spaces(space_name,area))")
       .eq("parent_contract_id", selContract.id)
       .eq("is_amendment", true)
       .order("amendment_number")
@@ -254,6 +255,52 @@ export default function ContractsPage() {
       });
   }, [selected, priceTimeline.length]);
 
+  // Per-unit CPI: compute CPI ratio per space (handles different CPI bases)
+  useEffect(function() {
+    if (!selContract) { setPerUnitCpi({}); return; }
+    if (selContract.indexation_method === "none") { setPerUnitCpi({}); return; }
+    if (effectiveSpaces.length === 0) { setPerUnitCpi({}); return; }
+
+    var contractBaseDate = selContract.index_base_date || selContract.start_date;
+    if (!contractBaseDate) { setPerUnitCpi({}); return; }
+
+    var todayForCbs = formatDateForCbs(new Date().toISOString());
+    if (!todayForCbs) return;
+
+    // Group spaces by CPI base date (deduplicate API calls)
+    var groups: Record<string, string[]> = {}; // baseDateCbs -> [spaceId, ...]
+    effectiveSpaces.forEach(function(cs: any) {
+      var useCustom = cs.use_original_index === false && cs.index_base_date;
+      var rawDate = useCustom ? cs.index_base_date : contractBaseDate;
+      var cbsDate = formatDateForCbs(rawDate);
+      if (!cbsDate) return;
+      if (!groups[cbsDate]) groups[cbsDate] = [];
+      groups[cbsDate].push(cs.space_id);
+    });
+
+    // Fetch CPI ratio for each unique base date (value=1 → result = ratio)
+    var groupKeys = Object.keys(groups);
+    Promise.all(groupKeys.map(function(fromDate) {
+      return fetchCpiAdjusted({ value: 1, fromDate: fromDate, toDate: todayForCbs! })
+        .then(function(data) {
+          if (!data.success) return { fromDate: fromDate, ratio: 1, source: "error" };
+          return { fromDate: fromDate, ratio: data.adjustedRentPerSqm || 1, source: "cbs" };
+        })
+        .catch(function() {
+          return { fromDate: fromDate, ratio: 1, source: "fallback" };
+        });
+    })).then(function(results) {
+      var map: Record<string, {ratio: number, source: string}> = {};
+      results.forEach(function(r, i) {
+        var spaceIds = groups[groupKeys[i]];
+        spaceIds.forEach(function(sid) {
+          map[sid] = { ratio: r.ratio, source: r.source };
+        });
+      });
+      setPerUnitCpi(map);
+    });
+  }, [selected, amendments.length, effectiveSpaces.length]);
+
   async function handleSync() {
     setSyncing(true);
     const n = await syncContractStatuses();
@@ -364,7 +411,40 @@ export default function ContractsPage() {
     });
     if (originalBaseRent === 0) originalBaseRent = (Number(selContract.rent_per_sqm) || 0) * (Number(selContract.charged_area) || 0);
   }
-  const vat         = selContract?.vat_type==="taxable" ? baseRent*0.18 : 0;
+  // Step-rent multiplier: ratio of current year rent vs base rent
+  var stepRentMultiplier = 1;
+  if (originalRentPerSqm > 0 && currentRentPerSqm > 0 && currentRentPerSqm !== originalRentPerSqm) {
+    stepRentMultiplier = currentRentPerSqm / originalRentPerSqm;
+  }
+
+  // Compute adjusted baseRent: apply step-rent to per-unit amounts
+  var adjustedBaseRent = 0;
+  if (selContract && effectiveSpaces.length > 0) {
+    effectiveSpaces.forEach(function(cs: any) {
+      var raw = cs.charge_method === "fixed" && cs.fixed_rent
+        ? Number(cs.fixed_rent)
+        : (Number(cs.price_per_sqm) || Number(effectiveRentPerSqm) || 0) * (cs.spaces?.area || 0);
+      adjustedBaseRent += raw * stepRentMultiplier;
+    });
+  }
+  if (adjustedBaseRent === 0) adjustedBaseRent = baseRent;
+
+  // Apply per-unit CPI to get fully adjusted rent
+  var cpiAdjustedRent = 0;
+  if (Object.keys(perUnitCpi).length > 0 && effectiveSpaces.length > 0) {
+    effectiveSpaces.forEach(function(cs: any) {
+      var raw = cs.charge_method === "fixed" && cs.fixed_rent
+        ? Number(cs.fixed_rent)
+        : (Number(cs.price_per_sqm) || Number(effectiveRentPerSqm) || 0) * (cs.spaces?.area || 0);
+      var stepped = raw * stepRentMultiplier;
+      var cpiRatio = perUnitCpi[cs.space_id]?.ratio || 1;
+      cpiAdjustedRent += stepped * cpiRatio;
+    });
+  }
+
+  // Use the best available rent for display
+  var displayRent = cpiAdjustedRent > 0 ? cpiAdjustedRent : adjustedBaseRent > 0 ? adjustedBaseRent : baseRent;
+  const vat         = selContract?.vat_type==="taxable" ? displayRent*0.18 : 0;
   const remaining   = effectiveEndDate ? yearsMonthsLeft(effectiveEndDate) : null;
 
   const counts: Record<string,number> = {};
@@ -561,16 +641,16 @@ export default function ContractsPage() {
 
                 {/* KPI — redesigned */}
                 <div className="grid grid-cols-4 gap-2 mb-3">
-                  <div className="rounded-xl p-2.5 text-center border border-slate-100 bg-slate-50">
-                    <div className="text-base text-slate-700">{fmtMoney(baseRent)}</div>
-                    <div className="text-xs text-slate-400">בסיס</div>
+                  <div className="rounded-xl p-2.5 text-center border border-green-200 bg-green-50">
+                    <div className="text-base text-green-800 font-bold">{fmtMoney(displayRent)}</div>
+                    <div className="text-xs text-green-600">{cpiAdjustedRent > 0 ? "כולל הצמדה" : "בסיס"}</div>
                   </div>
                   <div className="rounded-xl p-2.5 text-center border border-slate-100">
                     <div className="text-base text-slate-500">{fmtMoney(vat)}</div>
                     <div className="text-xs text-slate-400">מע&quot;מ</div>
                   </div>
                   <div className="rounded-xl p-2.5 text-center border border-blue-200 bg-blue-50">
-                    <div className="text-base text-blue-700 font-black">{fmtMoney(baseRent+vat)}</div>
+                    <div className="text-base text-blue-700 font-black">{fmtMoney(displayRent+vat)}</div>
                     <div className="text-xs text-blue-500">סה&quot;כ</div>
                   </div>
                   <div className={"rounded-xl p-2.5 text-center border " + (remaining?.isExpired ? "border-red-200 bg-red-50" : remaining && remaining.years < 1 ? "border-orange-200 bg-orange-50" : "border-green-200 bg-green-50")}>
@@ -603,7 +683,7 @@ export default function ContractsPage() {
                   <div className="rounded-lg bg-slate-50 border border-slate-200 px-3 py-2 mb-2 text-xs">
                     <div className="flex items-center justify-between">
                       <span className="text-slate-500">שכ&quot;ד חודשי (מחיר לפי יחידה)</span>
-                      <span className="font-black text-slate-800">{fmtMoney(baseRent)}/חודש</span>
+                      <span className="font-black text-slate-800">{fmtMoney(displayRent)}/חודש</span>
                     </div>
                   </div>
                 ) : null}
@@ -707,38 +787,59 @@ export default function ContractsPage() {
                   ].map(function(r){return <div key={r.l} className="flex justify-between border-b border-slate-50 py-1"><span className="text-slate-400">{r.l}</span><span className="font-medium">{r.v}</span></div>;})}
                 </div>
 
-                {/* Per-unit breakdown — uses EFFECTIVE spaces (latest amendment) */}
+                {/* Per-unit breakdown — with step-rent + CPI adjustments */}
                 {effectiveSpaces?.length > 0 && (
                   <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 mt-3">
                     <div className="text-sm font-bold text-slate-700 mb-2 flex items-center gap-2">
                       📐 פירוט לפי יחידה
                       {latestAmendment && <span className="text-xs font-normal text-yellow-600">(אחרי תוספת {latestAmendment.amendment_number})</span>}
+                      {stepRentMultiplier > 1 && <span className="text-xs font-normal text-blue-600">(שנה {currentContractYear})</span>}
                     </div>
                     <div className="space-y-1.5">
                       {effectiveSpaces.map(function(cs: any) {
                         var spName = cs.spaces?.space_name || "—";
                         var spArea = cs.spaces?.area || 0;
                         var isFixed = cs.charge_method === "fixed";
-                        var monthlyRent = isFixed
+                        // Raw base price
+                        var rawMonthly = isFixed
                           ? Number(cs.fixed_rent) || 0
                           : (Number(cs.price_per_sqm) || Number(effectiveRentPerSqm) || 0) * spArea;
+                        // Step-rent adjusted
+                        var steppedMonthly = rawMonthly * stepRentMultiplier;
+                        // CPI adjusted
+                        var cpiRatio = perUnitCpi[cs.space_id]?.ratio || (cpiResult ? cpiResult.adjustedRentPerSqm / cpiResult.baseRentPerSqm : 1);
+                        var cpiMonthly = steppedMonthly * cpiRatio;
+                        var hasCustomCpi = cs.use_original_index === false;
+                        var hasCpiData = cpiRatio > 1;
+                        var hasStepped = stepRentMultiplier > 1.001;
+
                         var rentLabel = isFixed
-                          ? fmtMoney(Number(cs.fixed_rent) || 0) + "/חודש (קבוע)"
+                          ? fmtMoney(Number(cs.fixed_rent) || 0) + " בסיס"
                           : fmtMoney(Number(cs.price_per_sqm) || Number(effectiveRentPerSqm) || 0) + '/מ"ר';
+
                         return (
-                          <div key={cs.space_id} className="rounded-lg border border-slate-100 bg-white px-3 py-2 flex items-center justify-between text-sm">
-                            <div className="flex items-center gap-2">
-                              <span className="font-semibold text-slate-700">{spName}</span>
-                              <span className="text-slate-500">{spArea} מ&quot;ר</span>
-                              <span className="text-slate-500">{rentLabel}</span>
+                          <div key={cs.space_id} className="rounded-lg border border-slate-100 bg-white px-3 py-2 text-sm">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <span className="font-semibold text-slate-700">{spName}</span>
+                                <span className="text-slate-500">{spArea} מ&quot;ר</span>
+                                {hasCustomCpi && <span className="text-orange-500 text-xs">📈 מדד נפרד</span>}
+                              </div>
+                              <span className="font-bold text-green-700">{fmtMoney(hasCpiData ? cpiMonthly : steppedMonthly)}/חודש</span>
                             </div>
-                            <span className="font-bold text-green-700">{fmtMoney(monthlyRent)}/חודש</span>
+                            {(hasStepped || hasCpiData) && (
+                              <div className="flex gap-3 mt-1 text-xs text-slate-500">
+                                <span>בסיס: {fmtMoney(rawMonthly)}</span>
+                                {hasStepped && <span>→ שנה {currentContractYear}: {fmtMoney(steppedMonthly)}</span>}
+                                {hasCpiData && <span>→ צמוד: {fmtMoney(cpiMonthly)}</span>}
+                              </div>
+                            )}
                           </div>
                         );
                       })}
                       <div className="rounded-lg bg-green-50 border border-green-200 px-3 py-2 text-center">
-                        <span className="text-base font-black text-green-800">{fmtMoney(baseRent)}/חודש</span>
-                        <span className="text-sm text-green-600 mr-2">סה&quot;כ כל היחידות</span>
+                        <span className="text-base font-black text-green-800">{fmtMoney(displayRent)}/חודש</span>
+                        <span className="text-sm text-green-600 mr-2">סה&quot;כ כל היחידות{cpiAdjustedRent > 0 ? " (כולל הצמדה)" : ""}</span>
                       </div>
                     </div>
                   </div>
