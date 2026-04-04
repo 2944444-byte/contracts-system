@@ -304,10 +304,19 @@ export default function ContractsPage() {
     return ms && mq;
   });
 
-  // selContract already defined above
-  const investPerSqm = selContract && selContract.charged_area > 0 && selContract.investment_addition
-    ? Math.round(selContract.investment_addition / selContract.charged_area * 100) / 100 : 0;
-  const originalRentPerSqm = (selContract?.rent_per_sqm ?? 0);
+  // ═══ EFFECTIVE STATE: latest amendment overrides original contract ═══
+  // If amendments exist, use the latest one for spaces/pricing/dates
+  var latestAmendment = amendments.length > 0 ? amendments[amendments.length - 1] : null;
+  var effectiveSpaces = latestAmendment?.contract_spaces?.length > 0
+    ? latestAmendment.contract_spaces
+    : (selContract?.contract_spaces ?? []);
+  var effectiveEndDate = latestAmendment?.end_date || selContract?.end_date;
+  var effectiveRentPerSqm = latestAmendment?.rent_per_sqm ?? selContract?.rent_per_sqm ?? 0;
+  var effectiveArea = latestAmendment?.charged_area ?? selContract?.charged_area ?? 0;
+
+  const investPerSqm = selContract && effectiveArea > 0 && selContract.investment_addition
+    ? Math.round(selContract.investment_addition / effectiveArea * 100) / 100 : 0;
+  const originalRentPerSqm = Number(effectiveRentPerSqm) || 0;
 
   // Current rent per sqm based on contract year (step-rent mechanism)
   var currentRentPerSqm = originalRentPerSqm;
@@ -324,22 +333,35 @@ export default function ContractsPage() {
     }
   }
   const trueRentPerSqm = currentRentPerSqm + investPerSqm;
-  // Calculate baseRent: prefer per-unit breakdown when available
+  // Calculate baseRent from EFFECTIVE spaces (latest amendment or original)
   var baseRent = 0;
   if (selContract) {
-    var hasPerUnitPricing = selContract.contract_spaces?.some(function(cs: any) { return cs.charge_method === "fixed" || cs.price_per_sqm; });
-    if (hasPerUnitPricing && (selContract.rent_per_sqm ?? 0) === 0) {
-      // Per-unit fixed pricing: sum each space
-      selContract.contract_spaces.forEach(function(cs: any) {
+    var hasPerUnitPricing = effectiveSpaces.some(function(cs: any) { return cs.charge_method === "fixed" || cs.price_per_sqm; });
+    if (hasPerUnitPricing && !effectiveRentPerSqm) {
+      effectiveSpaces.forEach(function(cs: any) {
         if (cs.charge_method === "fixed" && cs.fixed_rent) baseRent += Number(cs.fixed_rent);
         else baseRent += (Number(cs.price_per_sqm) || 0) * (cs.spaces?.area || 0);
       });
+    } else if (effectiveSpaces.length > 0 && effectiveSpaces.some(function(cs: any){ return cs.price_per_sqm; })) {
+      effectiveSpaces.forEach(function(cs: any) {
+        if (cs.charge_method === "fixed" && cs.fixed_rent) baseRent += Number(cs.fixed_rent);
+        else baseRent += (Number(cs.price_per_sqm) || trueRentPerSqm) * (cs.spaces?.area || 0);
+      });
     } else {
-      baseRent = trueRentPerSqm * (selContract.charged_area ?? 0);
+      baseRent = trueRentPerSqm * (effectiveArea || 0);
     }
   }
+  // Original contract rent for comparison
+  var originalBaseRent = 0;
+  if (selContract && latestAmendment) {
+    (selContract.contract_spaces || []).forEach(function(cs: any) {
+      if (cs.charge_method === "fixed" && cs.fixed_rent) originalBaseRent += Number(cs.fixed_rent);
+      else originalBaseRent += (Number(cs.price_per_sqm) || Number(selContract.rent_per_sqm) || 0) * (cs.spaces?.area || 0);
+    });
+    if (originalBaseRent === 0) originalBaseRent = (Number(selContract.rent_per_sqm) || 0) * (Number(selContract.charged_area) || 0);
+  }
   const vat         = selContract?.vat_type==="taxable" ? baseRent*0.18 : 0;
-  const remaining   = selContract?.end_date ? yearsMonthsLeft(selContract.end_date) : null;
+  const remaining   = effectiveEndDate ? yearsMonthsLeft(effectiveEndDate) : null;
 
   const counts: Record<string,number> = {};
   contracts.filter(function(c) { return !c.is_amendment; }).forEach(function(c){counts[c.status]=(counts[c.status]??0)+1;});
@@ -420,17 +442,21 @@ export default function ContractsPage() {
             </div>
           ) : filtered.map(function(c) {
             const si   = STATUS_MAP[c.status] ?? STATUS_MAP.ended;
-            var mon = (c.rent_per_sqm??0)*(c.charged_area??0)+(c.investment_addition??0);
-            // If rent_per_sqm is 0 but has per-unit pricing, calculate from contract_spaces
-            if (mon === (c.investment_addition??0) && c.contract_spaces?.length > 0) {
-              var spTotal = 0;
-              c.contract_spaces.forEach(function(cs: any) {
-                if (cs.charge_method === "fixed" && cs.fixed_rent) spTotal += Number(cs.fixed_rent);
-                else spTotal += (Number(cs.price_per_sqm) || Number(c.rent_per_sqm) || 0) * (cs.spaces?.area || 0);
+            // Find latest amendment for this contract to show effective rent
+            var cAmends = contracts.filter(function(a){return a.parent_contract_id===c.id && a.is_amendment;}).sort(function(a,b){return (a.amendment_number||0)-(b.amendment_number||0);});
+            var cEffSpaces = cAmends.length > 0 && cAmends[cAmends.length-1].contract_spaces?.length > 0
+              ? cAmends[cAmends.length-1].contract_spaces : c.contract_spaces;
+            var cEffEnd = cAmends.length > 0 ? (cAmends[cAmends.length-1].end_date || c.end_date) : c.end_date;
+            var mon = 0;
+            if (cEffSpaces?.length > 0) {
+              cEffSpaces.forEach(function(cs: any) {
+                if (cs.charge_method === "fixed" && cs.fixed_rent) mon += Number(cs.fixed_rent);
+                else mon += (Number(cs.price_per_sqm) || Number(c.rent_per_sqm) || 0) * (cs.spaces?.area || 0);
               });
-              if (spTotal > 0) mon = spTotal + (c.investment_addition??0);
             }
-            const rem  = c.end_date ? yearsMonthsLeft(c.end_date) : null;
+            if (mon === 0) mon = (c.rent_per_sqm??0)*(c.charged_area??0);
+            mon += (c.investment_addition??0);
+            const rem  = cEffEnd ? yearsMonthsLeft(cEffEnd) : null;
             const isSel = selected===c.id;
             return (
               <div key={c.id} onClick={function(){setSelected(isSel?null:c.id);}}
@@ -442,9 +468,10 @@ export default function ContractsPage() {
                 </div>
                 <div className="text-xs text-slate-400">
                   {c.properties?.name}
-                  {c.contract_spaces?.length > 0 && (
-                    <span className="text-slate-300"> — {c.contract_spaces.map(function(cs: any) { return cs.spaces?.space_name; }).filter(Boolean).join(", ")}</span>
+                  {cEffSpaces?.length > 0 && (
+                    <span className="text-slate-300"> — {cEffSpaces.map(function(cs: any) { return cs.spaces?.space_name; }).filter(Boolean).join(", ")}</span>
                   )}
+                  {cAmends.length > 0 && <span className="text-yellow-500 mr-1"> ({cAmends.length} תוספות)</span>}
                 </div>
                 <div className="flex items-center justify-between mt-1.5">
                   <span className="text-xs font-semibold text-green-700">{fmtMoney(mon)}/חודש</span>
@@ -511,6 +538,20 @@ export default function ContractsPage() {
                   </div>
                 </div>
 
+                {/* Amendment state indicator */}
+                {latestAmendment && (
+                  <div className="rounded-lg bg-yellow-50 border border-yellow-300 px-3 py-2 mb-3 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="text-yellow-600">📝</span>
+                      <span className="text-sm font-bold text-yellow-800">מצב אחרי תוספת {latestAmendment.amendment_number}</span>
+                      <span className="text-xs text-yellow-600">({fmtDate(latestAmendment.amendment_date || latestAmendment.start_date)})</span>
+                    </div>
+                    {originalBaseRent > 0 && originalBaseRent !== baseRent && (
+                      <span className="text-xs text-slate-500">לפני: {fmtMoney(originalBaseRent)}/חודש</span>
+                    )}
+                  </div>
+                )}
+
                 {/* KPI — redesigned */}
                 <div className="grid grid-cols-4 gap-2 mb-3">
                   <div className="rounded-xl p-2.5 text-center border border-slate-100 bg-slate-50">
@@ -529,7 +570,7 @@ export default function ContractsPage() {
                     <div className={"text-sm font-bold " + (remaining?.isExpired ? "text-red-600" : remaining && remaining.years < 1 ? "text-orange-600" : "text-green-700")}>
                       {remaining?.text ?? "—"}
                     </div>
-                    <div className="text-xs text-slate-400">עד {fmtDate(selContract.end_date)}</div>
+                    <div className="text-xs text-slate-400">עד {fmtDate(effectiveEndDate)}</div>
                   </div>
                 </div>
 
@@ -650,7 +691,7 @@ export default function ContractsPage() {
                 <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 text-sm text-slate-700">
                   {[
                     {l:"תחילה",   v:fmtDate(selContract.start_date)},
-                    {l:"סיום",    v:fmtDate(selContract.end_date)},
+                    {l:"סיום",    v:fmtDate(effectiveEndDate)},
                     {l:"שטח",    v:selContract.charged_area?selContract.charged_area+' מ"ר':"—"},
                     {l:"הצמדה",  v:selContract.indexation_method==="highest_in_period"?"מדד גבוה":selContract.indexation_method==="none"?"ללא":"t-2"},
                     {l:"מדד בסיס",v:selContract.index_base_value||"—"},
@@ -659,35 +700,38 @@ export default function ContractsPage() {
                   ].map(function(r){return <div key={r.l} className="flex justify-between border-b border-slate-50 py-1"><span className="text-slate-400">{r.l}</span><span className="font-medium">{r.v}</span></div>;})}
                 </div>
 
-                {/* Per-unit breakdown when multiple spaces */}
-                {selContract.contract_spaces?.length > 1 && (
+                {/* Per-unit breakdown — uses EFFECTIVE spaces (latest amendment) */}
+                {effectiveSpaces?.length > 0 && (
                   <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 mt-3">
-                    <div className="text-xs font-bold text-slate-600 mb-2">📐 פירוט לפי יחידה</div>
-                    <div className="space-y-1">
-                      {selContract.contract_spaces.map(function(cs: any) {
+                    <div className="text-sm font-bold text-slate-700 mb-2 flex items-center gap-2">
+                      📐 פירוט לפי יחידה
+                      {latestAmendment && <span className="text-xs font-normal text-yellow-600">(אחרי תוספת {latestAmendment.amendment_number})</span>}
+                    </div>
+                    <div className="space-y-1.5">
+                      {effectiveSpaces.map(function(cs: any) {
                         var spName = cs.spaces?.space_name || "—";
                         var spArea = cs.spaces?.area || 0;
                         var isFixed = cs.charge_method === "fixed";
                         var monthlyRent = isFixed
                           ? Number(cs.fixed_rent) || 0
-                          : (Number(cs.price_per_sqm) || Number(selContract.rent_per_sqm) || 0) * spArea;
+                          : (Number(cs.price_per_sqm) || Number(effectiveRentPerSqm) || 0) * spArea;
                         var rentLabel = isFixed
                           ? fmtMoney(Number(cs.fixed_rent) || 0) + "/חודש (קבוע)"
-                          : fmtMoney(Number(cs.price_per_sqm) || Number(selContract.rent_per_sqm) || 0) + '/מ"ר';
+                          : fmtMoney(Number(cs.price_per_sqm) || Number(effectiveRentPerSqm) || 0) + '/מ"ר';
                         return (
-                          <div key={cs.space_id} className="rounded-lg border border-slate-100 bg-white px-3 py-2 flex items-center justify-between text-xs">
+                          <div key={cs.space_id} className="rounded-lg border border-slate-100 bg-white px-3 py-2 flex items-center justify-between text-sm">
                             <div className="flex items-center gap-2">
                               <span className="font-semibold text-slate-700">{spName}</span>
-                              <span className="text-slate-400">{spArea} מ&quot;ר</span>
-                              <span className="text-slate-400">{rentLabel}</span>
+                              <span className="text-slate-500">{spArea} מ&quot;ר</span>
+                              <span className="text-slate-500">{rentLabel}</span>
                             </div>
                             <span className="font-bold text-green-700">{fmtMoney(monthlyRent)}/חודש</span>
                           </div>
                         );
                       })}
                       <div className="rounded-lg bg-green-50 border border-green-200 px-3 py-2 text-center">
-                        <span className="text-sm font-black text-green-800">{fmtMoney(baseRent)}/חודש</span>
-                        <span className="text-xs text-green-600 mr-2">סה&quot;כ כל היחידות</span>
+                        <span className="text-base font-black text-green-800">{fmtMoney(baseRent)}/חודש</span>
+                        <span className="text-sm text-green-600 mr-2">סה&quot;כ כל היחידות</span>
                       </div>
                     </div>
                   </div>
