@@ -113,6 +113,7 @@ export default function ContractEditPage() {
   const [cpiRecords, setCpiRecords] = useState<any[]>([]);
   const [currentVatPct, setCurrentVatPct] = useState(18);
   const [unitRentOverrides, setUnitRentOverrides] = useState<Record<string, string>>({});
+  const [unitRentTypes, setUnitRentTypes] = useState<Record<string, "per_sqm" | "fixed">>({});
   const [dataLoaded, setDataLoaded] = useState(false);
 
   // Step 1
@@ -251,15 +252,57 @@ export default function ContractEditPage() {
       setSpaces(sp ?? []);
     }
 
+    // Check for amendments — if parent contract has amendments, merge latest
+    var effectiveCs = cs ?? [];
+    var effectiveEndDate = c.end_date;
+    var effectiveArea = c.charged_area;
+    var effectiveRent = c.rent_per_sqm;
+    var hasAmendments = false;
+    var amends: any[] | null = null;
+
+    if (!c.is_amendment) {
+      var { data: amendsData } = await supabase.from("contracts")
+        .select("*, contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,index_base_value,index_base_date,use_original_index)")
+        .eq("parent_contract_id", id)
+        .eq("is_amendment", true)
+        .order("amendment_number");
+      amends = amendsData;
+      if (amends && amends.length > 0) {
+        hasAmendments = true;
+        var latest = amends[amends.length - 1];
+        // Override spaces with latest amendment's spaces
+        if (latest.contract_spaces?.length > 0) {
+          effectiveCs = latest.contract_spaces;
+        }
+        // Override end date if extended
+        if (latest.end_date && latest.end_date > c.end_date) {
+          effectiveEndDate = latest.end_date;
+        }
+        // Override area/rent if changed
+        if (latest.charged_area) effectiveArea = latest.charged_area;
+        if (latest.rent_per_sqm) effectiveRent = latest.rent_per_sqm;
+      }
+    }
+
     // Populate Step 1
     setTenantId(c.tenant_id ?? "");
     setPropertyId(c.property_id ?? "");
     setContractType(c.contract_type ?? "regular");
-    const spaceIds = (cs ?? []).map((s: any) => s.space_id);
+    const spaceIds = (effectiveCs).map((s: any) => s.space_id);
     setSelSpaces(spaceIds);
     const overrides: Record<string, string> = {};
-    (cs ?? []).forEach((s: any) => { if (s.price_per_sqm) overrides[s.space_id] = s.price_per_sqm.toString(); });
+    const rentTypes: Record<string, "per_sqm" | "fixed"> = {};
+    (effectiveCs).forEach((s: any) => {
+      if (s.charge_method === "fixed" && s.fixed_rent) {
+        rentTypes[s.space_id] = "fixed";
+        overrides[s.space_id] = s.fixed_rent.toString();
+      } else if (s.price_per_sqm) {
+        rentTypes[s.space_id] = "per_sqm";
+        overrides[s.space_id] = s.price_per_sqm.toString();
+      }
+    });
     setUnitRentOverrides(overrides);
+    setUnitRentTypes(rentTypes);
 
     // Populate Step 2
     setSigningDate(c.signing_date?.split("T")[0] ?? "");
@@ -267,11 +310,11 @@ export default function ContractEditPage() {
     setActualHandover(c.actual_handover_date?.split("T")[0] ?? "");
     setHasFutureHandover(c.handover_status && c.handover_status !== "not_applicable");
     setStartDate(c.start_date?.split("T")[0] ?? "");
-    setEndDate(c.end_date?.split("T")[0] ?? "");
+    setEndDate((effectiveEndDate || c.end_date)?.split("T")[0] ?? "");
     setLeasePeriodValue(c.lease_period_value ?? 12);
     setLeasePeriodUnit(c.lease_period_unit ?? "months");
-    setRentPerSqm(c.rent_per_sqm?.toString() ?? "");
-    setChargedArea(c.charged_area?.toString() ?? "");
+    setRentPerSqm((effectiveRent || c.rent_per_sqm)?.toString() ?? "");
+    setChargedArea((effectiveArea || c.charged_area)?.toString() ?? "");
     setInvestAdd(c.investment_addition?.toString() ?? "");
     setVatType(c.vat_type ?? "taxable");
     setPaymentFreq(c.payment_frequency ?? "monthly");
@@ -290,9 +333,18 @@ export default function ContractEditPage() {
       setGraceType(c.grace_type ?? "full");
       setGraceDiscountPct(c.grace_discount_pct?.toString() ?? "50");
     }
-    // Load price tiers from contract_price_tiers table
+    // Load price tiers — from latest amendment if exists, else from contract
+    var tiersContractId = id;
+    if (hasAmendments && amends && amends.length > 0) {
+      // Check if latest amendment has its own tiers
+      var { data: amendTiers } = await supabase.from("contract_price_tiers")
+        .select("*").eq("contract_id", amends[amends.length - 1].id).order("tier_number");
+      if (amendTiers && amendTiers.length > 0) {
+        tiersContractId = amends[amends.length - 1].id;
+      }
+    }
     const { data: tiers } = await supabase.from("contract_price_tiers")
-      .select("*").eq("contract_id", id).order("tier_number");
+      .select("*").eq("contract_id", tiersContractId).order("tier_number");
     if (tiers && tiers.length > 0) {
       setHasIncrease(true);
       // Check if tiers have space_id → per-unit mode
@@ -558,12 +610,17 @@ export default function ContractEditPage() {
       await supabase.from("contract_spaces").delete().eq("contract_id", id);
       if (selSpaces.length > 0) {
         await supabase.from("contract_spaces").insert(
-          selSpaces.map((sid) => ({
-            contract_id: id,
-            space_id: sid,
-            price_per_sqm: unitRentOverrides[sid] ? Number(unitRentOverrides[sid]) : Number(rentPerSqm) || null,
-            charge_method: "per_sqm",
-          }))
+          selSpaces.map((sid) => {
+            var rType = unitRentTypes[sid] || "per_sqm";
+            var rVal = unitRentOverrides[sid] ? Number(unitRentOverrides[sid]) : null;
+            return {
+              contract_id: id,
+              space_id: sid,
+              charge_method: rType,
+              price_per_sqm: rType === "per_sqm" ? (rVal ?? Number(rentPerSqm) ?? null) : null,
+              fixed_rent: rType === "fixed" ? rVal : null,
+            };
+          })
         );
       }
 
