@@ -89,6 +89,10 @@ export default function ContractsPage() {
   const [amendNewEndDate, setAmendNewEndDate] = useState("");
   // For price change
   const [amendPriceChanges, setAmendPriceChanges] = useState<Record<string, string>>({});
+  // Per-unit CPI base: "original" = use contract's CPI, "custom" = new CPI value/date
+  const [amendCpiMode, setAmendCpiMode] = useState<Record<string, "original" | "custom">>({});
+  const [amendCpiValue, setAmendCpiValue] = useState<Record<string, string>>({});
+  const [amendCpiDate, setAmendCpiDate] = useState<Record<string, string>>({});
 
   useEffect(function() { loadContracts(); }, []);
 
@@ -519,6 +523,9 @@ export default function ContractsPage() {
                         setAmendRemoveSpaces([]);
                         setAmendAddSpaces([]);
                         setAmendAddRents({});
+                        setAmendCpiMode({});
+                        setAmendCpiValue({});
+                        setAmendCpiDate({});
                         setAmendNewEndDate(selContract.end_date || "");
                         // Init price changes from current contract spaces
                         var pc: Record<string,string> = {};
@@ -1065,20 +1072,64 @@ export default function ContractsPage() {
                           );
                         })}
                       </div>
-                      {/* Rents for added spaces */}
+                      {/* Rents + CPI base for added spaces */}
                       {amendAddSpaces.length > 0 && (
-                        <div className="mt-3 space-y-2">
-                          <div className="text-xs font-bold text-slate-600">מחיר ליחידות שנוספו</div>
+                        <div className="mt-3 space-y-3">
+                          <div className="text-sm font-bold text-slate-700">מחיר והצמדה ליחידות שנוספו</div>
+                          {selContract.index_base_value && (
+                            <div className="text-xs text-slate-500 bg-slate-50 rounded-lg px-3 py-2 border border-slate-200">
+                              מדד בסיס מקורי של ההסכם: <span className="font-bold">{selContract.index_base_value}</span>
+                              {selContract.index_base_date && <span> (מתאריך {fmtDate(selContract.index_base_date)})</span>}
+                            </div>
+                          )}
                           {amendAddSpaces.map(function(sid) {
                             var sp = allPropertySpaces.find(function(s){return s.id===sid;});
+                            var cpiMode = amendCpiMode[sid] || "original";
                             return (
-                              <div key={sid} className="flex items-center gap-2">
-                                <span className="text-xs font-semibold text-slate-600 w-32 truncate">{sp?.space_name}</span>
-                                <span className="text-xs text-slate-400">{sp?.area} מ&quot;ר</span>
-                                <input type="number" value={amendAddRents[sid]||""} placeholder={selContract.rent_per_sqm?"₪/מ\"ר":"₪/חודש"}
-                                  onChange={function(e){setAmendAddRents(function(p){return {...p,[sid]:e.target.value};});}}
-                                  className="flex-1 rounded border border-slate-300 px-2 py-1 text-xs" />
-                                <span className="text-[10px] text-slate-400">₪/מ&quot;ר</span>
+                              <div key={sid} className="rounded-lg border border-green-200 bg-green-50/30 p-3 space-y-2">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-sm font-bold text-slate-700">{sp?.space_name}</span>
+                                  <span className="text-xs text-slate-500">{sp?.area} מ&quot;ר</span>
+                                </div>
+                                {/* Rent input */}
+                                <div className="flex items-center gap-2">
+                                  <label className="text-xs text-slate-600 w-16">מחיר:</label>
+                                  <input type="number" value={amendAddRents[sid]||""} placeholder={selContract.rent_per_sqm?"₪/מ\"ר":"₪/חודש"}
+                                    onChange={function(e){setAmendAddRents(function(p){return {...p,[sid]:e.target.value};});}}
+                                    className="flex-1 rounded border border-slate-300 px-2 py-1.5 text-sm" />
+                                  <span className="text-xs text-slate-500">₪/מ&quot;ר</span>
+                                </div>
+                                {/* CPI base toggle */}
+                                <div>
+                                  <label className="text-xs text-slate-600 block mb-1">בסיס הצמדה למדד:</label>
+                                  <div className="flex gap-2">
+                                    <button type="button" onClick={function(){setAmendCpiMode(function(p){return {...p,[sid]:"original"};});}}
+                                      className={"rounded-lg border px-3 py-1.5 text-xs font-bold transition-all " + (cpiMode==="original" ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-200 text-slate-500 hover:bg-slate-50")}>
+                                      📊 מדד מקורי ({selContract.index_base_value || "—"})
+                                    </button>
+                                    <button type="button" onClick={function(){setAmendCpiMode(function(p){return {...p,[sid]:"custom"};});}}
+                                      className={"rounded-lg border px-3 py-1.5 text-xs font-bold transition-all " + (cpiMode==="custom" ? "border-orange-500 bg-orange-50 text-orange-700" : "border-slate-200 text-slate-500 hover:bg-slate-50")}>
+                                      📈 מדד חדש
+                                    </button>
+                                  </div>
+                                  {cpiMode === "custom" && (
+                                    <div className="grid grid-cols-2 gap-2 mt-2">
+                                      <div>
+                                        <label className="text-[10px] text-slate-500 block mb-0.5">ערך מדד בסיס</label>
+                                        <input type="number" step="0.1" value={amendCpiValue[sid]||""}
+                                          onChange={function(e){setAmendCpiValue(function(p){return {...p,[sid]:e.target.value};});}}
+                                          placeholder="לדוגמה: 105.2"
+                                          className="w-full rounded border border-orange-300 px-2 py-1.5 text-sm" />
+                                      </div>
+                                      <div>
+                                        <label className="text-[10px] text-slate-500 block mb-0.5">תאריך מדד בסיס</label>
+                                        <input type="date" value={amendCpiDate[sid]||""}
+                                          onChange={function(e){setAmendCpiDate(function(p){return {...p,[sid]:e.target.value};});}}
+                                          className="w-full rounded border border-orange-300 px-2 py-1.5 text-sm" />
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
                               </div>
                             );
                           })}
@@ -1099,23 +1150,65 @@ export default function ContractsPage() {
 
                   {/* ── PRICE CHANGE ── */}
                   {amendType === "price_change" && (
-                    <div>
-                      <label className="block text-xs font-bold text-slate-700 mb-2">עדכון מחירים</label>
-                      <div className="space-y-2">
+                    <div className="space-y-3">
+                      <label className="block text-sm font-bold text-slate-700">עדכון מחירים והצמדה</label>
+                      {selContract.index_base_value && (
+                        <div className="text-xs text-slate-500 bg-slate-50 rounded-lg px-3 py-2 border border-slate-200">
+                          מדד בסיס מקורי: <span className="font-bold">{selContract.index_base_value}</span>
+                          {selContract.index_base_date && <span> ({fmtDate(selContract.index_base_date)})</span>}
+                        </div>
+                      )}
+                      <div className="space-y-3">
                         {(selContract.contract_spaces||[]).map(function(cs: any) {
                           var sp = cs.spaces;
                           var isFixed = cs.charge_method === "fixed";
                           var curVal = isFixed ? (cs.fixed_rent||0) : (cs.price_per_sqm || selContract.rent_per_sqm || 0);
+                          var cpiMode = amendCpiMode[cs.space_id] || "original";
                           return (
-                            <div key={cs.space_id} className="rounded-lg border border-slate-100 p-2 flex items-center gap-2">
-                              <span className="text-xs font-semibold text-slate-600 w-32 truncate">{sp?.space_name}</span>
-                              <span className="text-xs text-slate-400">{sp?.area} מ&quot;ר</span>
-                              <span className="text-xs text-slate-400">נוכחי: {fmtMoney(curVal)}</span>
-                              <span className="text-xs text-slate-400">→</span>
-                              <input type="number" value={amendPriceChanges[cs.space_id]||""}
-                                onChange={function(e){setAmendPriceChanges(function(p){return {...p,[cs.space_id]:e.target.value};});}}
-                                className="flex-1 rounded border border-slate-300 px-2 py-1 text-xs" />
-                              <span className="text-[10px] text-slate-400">{isFixed?"₪/חודש":"₪/מ\"ר"}</span>
+                            <div key={cs.space_id} className="rounded-lg border border-slate-200 p-3 space-y-2">
+                              <div className="flex items-center justify-between">
+                                <span className="text-sm font-bold text-slate-700">{sp?.space_name} <span className="font-normal text-slate-500">({sp?.area} מ&quot;ר)</span></span>
+                                <span className="text-xs text-slate-500">נוכחי: {fmtMoney(curVal)}{isFixed?"/חודש":"/מ\"ר"}</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <label className="text-xs text-slate-600">מחיר חדש:</label>
+                                <input type="number" value={amendPriceChanges[cs.space_id]||""}
+                                  onChange={function(e){setAmendPriceChanges(function(p){return {...p,[cs.space_id]:e.target.value};});}}
+                                  placeholder={String(curVal)}
+                                  className="flex-1 rounded border border-slate-300 px-2 py-1.5 text-sm" />
+                                <span className="text-xs text-slate-500">{isFixed?"₪/חודש":"₪/מ\"ר"}</span>
+                              </div>
+                              {/* CPI base option */}
+                              <div>
+                                <label className="text-xs text-slate-600 block mb-1">בסיס הצמדה:</label>
+                                <div className="flex gap-2">
+                                  <button type="button" onClick={function(){setAmendCpiMode(function(p){return {...p,[cs.space_id]:"original"};});}}
+                                    className={"rounded-lg border px-3 py-1.5 text-xs font-bold transition-all " + (cpiMode==="original" ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-200 text-slate-500 hover:bg-slate-50")}>
+                                    📊 מדד מקורי
+                                  </button>
+                                  <button type="button" onClick={function(){setAmendCpiMode(function(p){return {...p,[cs.space_id]:"custom"};});}}
+                                    className={"rounded-lg border px-3 py-1.5 text-xs font-bold transition-all " + (cpiMode==="custom" ? "border-orange-500 bg-orange-50 text-orange-700" : "border-slate-200 text-slate-500 hover:bg-slate-50")}>
+                                    📈 מדד חדש
+                                  </button>
+                                </div>
+                                {cpiMode === "custom" && (
+                                  <div className="grid grid-cols-2 gap-2 mt-2">
+                                    <div>
+                                      <label className="text-[10px] text-slate-500 block mb-0.5">ערך מדד</label>
+                                      <input type="number" step="0.1" value={amendCpiValue[cs.space_id]||""}
+                                        onChange={function(e){setAmendCpiValue(function(p){return {...p,[cs.space_id]:e.target.value};});}}
+                                        placeholder="105.2"
+                                        className="w-full rounded border border-orange-300 px-2 py-1.5 text-sm" />
+                                    </div>
+                                    <div>
+                                      <label className="text-[10px] text-slate-500 block mb-0.5">תאריך מדד</label>
+                                      <input type="date" value={amendCpiDate[cs.space_id]||""}
+                                        onChange={function(e){setAmendCpiDate(function(p){return {...p,[cs.space_id]:e.target.value};});}}
+                                        className="w-full rounded border border-orange-300 px-2 py-1.5 text-sm" />
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
                             </div>
                           );
                         })}
@@ -1187,27 +1280,41 @@ export default function ContractsPage() {
 
                       // Insert spaces for the amendment
                       var spacesToInsert: any[] = [];
-                      // Keep existing (not removed) with potential price changes
+                      // Keep existing (not removed) with potential price/CPI changes
                       newSpaces.forEach(function(cs: any) {
                         var priceChanged = amendPriceChanges[cs.space_id] && Number(amendPriceChanges[cs.space_id]) !== (cs.charge_method === "fixed" ? Number(cs.fixed_rent) : Number(cs.price_per_sqm || selContract.rent_per_sqm));
-                        spacesToInsert.push({
+                        var cpiMode = amendCpiMode[cs.space_id] || "original";
+                        var spaceEntry: any = {
                           contract_id: newContract.id,
                           space_id: cs.space_id,
                           charge_method: cs.charge_method || "per_sqm",
                           price_per_sqm: cs.charge_method === "fixed" ? null : (priceChanged ? Number(amendPriceChanges[cs.space_id]) : cs.price_per_sqm),
                           fixed_rent: cs.charge_method === "fixed" ? (priceChanged ? Number(amendPriceChanges[cs.space_id]) : cs.fixed_rent) : null,
-                        });
+                          use_original_index: cpiMode === "original",
+                        };
+                        if (cpiMode === "custom") {
+                          spaceEntry.index_base_value = Number(amendCpiValue[cs.space_id]) || null;
+                          spaceEntry.index_base_date = amendCpiDate[cs.space_id] || null;
+                        }
+                        spacesToInsert.push(spaceEntry);
                       });
-                      // Add new spaces
+                      // Add new spaces with CPI base
                       amendAddSpaces.forEach(function(sid) {
                         var rent = Number(amendAddRents[sid]) || Number(selContract.rent_per_sqm) || 0;
-                        spacesToInsert.push({
+                        var cpiMode = amendCpiMode[sid] || "original";
+                        var spaceEntry: any = {
                           contract_id: newContract.id,
                           space_id: sid,
                           charge_method: "per_sqm",
                           price_per_sqm: rent,
                           fixed_rent: null,
-                        });
+                          use_original_index: cpiMode === "original",
+                        };
+                        if (cpiMode === "custom") {
+                          spaceEntry.index_base_value = Number(amendCpiValue[sid]) || null;
+                          spaceEntry.index_base_date = amendCpiDate[sid] || null;
+                        }
+                        spacesToInsert.push(spaceEntry);
                       });
                       if (spacesToInsert.length > 0) {
                         await supabase.from("contract_spaces").insert(spacesToInsert);
