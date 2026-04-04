@@ -36,6 +36,28 @@ input[dir="ltr"] {
   text-align: left;
 }
 
+/* ═══ Global readability improvements ═══ */
+
+/* Bump base font size */
+body {
+  font-size: 15px;
+}
+
+/* Make Tailwind text-xs bigger (10px → 12px) */
+.text-\[10px\] { font-size: 11px !important; }
+.text-\[9px\] { font-size: 10px !important; }
+.text-xs { font-size: 13px !important; line-height: 1.4 !important; }
+
+/* Make faded colors more readable */
+.text-slate-400 { color: #64748b !important; }  /* was #94a3b8 → now slate-500 */
+.text-slate-300 { color: #94a3b8 !important; }  /* was #cbd5e1 → now slate-400 */
+.text-yellow-600 { color: #b45309 !important; }  /* stronger amber */
+.text-green-600 { color: #15803d !important; }
+.text-blue-400 { color: #3b82f6 !important; }
+
+/* Better contrast for table headers and labels */
+th { font-weight: 700; }
+
 /* Print */
 @media print {
   .no-print { display: none !important; }
