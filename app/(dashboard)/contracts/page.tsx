@@ -74,6 +74,22 @@ export default function ContractsPage() {
   const [priceTimeline, setPriceTimeline] = useState<any[]>([]);
   const [amendments, setAmendments] = useState<any[]>([]);
 
+  // Amendment modal state
+  const [showAmendModal, setShowAmendModal] = useState(false);
+  const [amendType, setAmendType] = useState<string|null>(null);
+  const [amendDate, setAmendDate] = useState(new Date().toISOString().split("T")[0]);
+  const [amendNotes, setAmendNotes] = useState("");
+  const [amendSaving, setAmendSaving] = useState(false);
+  // For unit swap/add
+  const [amendRemoveSpaces, setAmendRemoveSpaces] = useState<string[]>([]);
+  const [amendAddSpaces, setAmendAddSpaces] = useState<string[]>([]);
+  const [amendAddRents, setAmendAddRents] = useState<Record<string, string>>({});
+  const [allPropertySpaces, setAllPropertySpaces] = useState<any[]>([]);
+  // For extend period
+  const [amendNewEndDate, setAmendNewEndDate] = useState("");
+  // For price change
+  const [amendPriceChanges, setAmendPriceChanges] = useState<Record<string, string>>({});
+
   useEffect(function() { loadContracts(); }, []);
 
   async function loadContracts() {
@@ -468,7 +484,26 @@ export default function ContractsPage() {
                         className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-600 hover:bg-blue-100">📄 צפה בחוזה</a>
                     )}
                     {!selContract.is_amendment && (
-                      <button onClick={function(){router.push("/contracts/new?amendment_of="+selContract.id);}}
+                      <button onClick={function(){
+                        setShowAmendModal(true);
+                        setAmendType(null);
+                        setAmendDate(new Date().toISOString().split("T")[0]);
+                        setAmendNotes("");
+                        setAmendRemoveSpaces([]);
+                        setAmendAddSpaces([]);
+                        setAmendAddRents({});
+                        setAmendNewEndDate(selContract.end_date || "");
+                        // Init price changes from current contract spaces
+                        var pc: Record<string,string> = {};
+                        (selContract.contract_spaces||[]).forEach(function(cs: any) {
+                          pc[cs.space_id] = String(cs.charge_method === "fixed" ? (cs.fixed_rent||0) : (cs.price_per_sqm || selContract.rent_per_sqm || 0));
+                        });
+                        setAmendPriceChanges(pc);
+                        // Load all property spaces
+                        supabase.from("spaces").select("id,space_name,area,status")
+                          .eq("property_id", selContract.property_id).order("space_name")
+                          .then(function({data}) { setAllPropertySpaces(data??[]); });
+                      }}
                         className="rounded-lg border border-yellow-400 bg-yellow-50 px-3 py-1.5 text-xs font-semibold text-yellow-700 hover:bg-yellow-100">📝 תוספת להסכם</button>
                     )}
                     <button onClick={()=>selected && handleDeleteContract(selected)}
@@ -820,6 +855,283 @@ export default function ContractsPage() {
           )}
         </div>
       </div>
+      {/* ═══ Amendment Modal ═══ */}
+      {showAmendModal && selContract && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={function(){setShowAmendModal(false);}}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-xl max-h-[85vh] overflow-y-auto" onClick={function(e){e.stopPropagation();}}>
+            <div className="p-5">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-bold text-slate-800">📝 תוספת להסכם</h2>
+                <button onClick={function(){setShowAmendModal(false);}} className="text-slate-400 hover:text-slate-600 text-xl">✕</button>
+              </div>
+              <div className="text-xs text-slate-500 mb-4">
+                {selContract.tenants?.name} | {selContract.properties?.name} | {fmtDate(selContract.start_date)} — {fmtDate(selContract.end_date)}
+              </div>
+
+              {/* Step 1: Choose amendment type */}
+              {!amendType && (
+                <div className="space-y-2">
+                  <div className="text-sm font-bold text-slate-700 mb-3">מה מטרת התוספת?</div>
+                  {[
+                    { v: "swap_units", l: "החלפת יחידות", desc: "הורדת יחידה/ות והוספת אחרות במקום", icon: "🔄" },
+                    { v: "add_units", l: "הוספת יחידות", desc: "הוספת יחידות חדשות להסכם הקיים", icon: "➕" },
+                    { v: "remove_units", l: "הורדת יחידות", desc: "הסרת יחידות מההסכם", icon: "➖" },
+                    { v: "extend", l: "הארכת תקופה", desc: "שינוי תאריך סיום להסכם", icon: "📅" },
+                    { v: "price_change", l: "שינוי מחירים", desc: "עדכון מחירים ליחידות קיימות", icon: "💰" },
+                    { v: "other", l: "שינוי אחר", desc: "פתיחת כל האפשרויות (אשף מלא)", icon: "📋" },
+                  ].map(function(opt) {
+                    return (
+                      <button key={opt.v} onClick={function(){ if (opt.v==="other") { router.push("/contracts/new?amendment_of="+selContract.id); setShowAmendModal(false); return; } setAmendType(opt.v); }}
+                        className="w-full rounded-xl border border-slate-200 p-3 flex items-center gap-3 hover:bg-slate-50 hover:border-blue-300 transition-all text-right">
+                        <span className="text-2xl">{opt.icon}</span>
+                        <div className="flex-1">
+                          <div className="text-sm font-bold text-slate-700">{opt.l}</div>
+                          <div className="text-xs text-slate-400">{opt.desc}</div>
+                        </div>
+                        <span className="text-slate-300">←</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Step 2: Amendment details based on type */}
+              {amendType && (
+                <div className="space-y-4">
+                  <button onClick={function(){setAmendType(null);}} className="text-xs text-blue-600 hover:underline">← חזור לבחירת סוג</button>
+
+                  {/* Amendment date — shared by all types */}
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">תאריך תוקף התוספת *</label>
+                    <input type="date" value={amendDate} onChange={function(e){setAmendDate(e.target.value);}}
+                      className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                  </div>
+
+                  {/* ── SWAP UNITS ── */}
+                  {(amendType === "swap_units" || amendType === "remove_units") && (
+                    <div>
+                      <label className="block text-xs font-bold text-red-600 mb-2">יחידות להסרה</label>
+                      <div className="grid grid-cols-2 gap-2">
+                        {(selContract.contract_spaces||[]).map(function(cs: any) {
+                          var sp = cs.spaces;
+                          var isRem = amendRemoveSpaces.includes(cs.space_id);
+                          return (
+                            <button key={cs.space_id} type="button"
+                              onClick={function(){ setAmendRemoveSpaces(function(p){ return isRem ? p.filter(function(x){return x!==cs.space_id;}) : [...p, cs.space_id]; }); }}
+                              className={"rounded-lg border p-2 text-center text-xs transition-all " +
+                                (isRem ? "border-red-500 bg-red-50 text-red-700 font-bold" : "border-slate-200 hover:bg-slate-50")}>
+                              <div className="font-semibold">{sp?.space_name}</div>
+                              <div className="text-slate-400">{sp?.area} מ&quot;ר</div>
+                              {isRem && <div className="text-red-500 text-[10px] mt-0.5">✕ מסומנת להסרה</div>}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {(amendType === "swap_units" || amendType === "add_units") && (
+                    <div>
+                      <label className="block text-xs font-bold text-green-600 mb-2">יחידות להוספה</label>
+                      <div className="grid grid-cols-2 gap-2">
+                        {allPropertySpaces.filter(function(s) {
+                          // Show spaces NOT in current contract (or removed)
+                          var inContract = (selContract.contract_spaces||[]).some(function(cs: any){return cs.space_id===s.id;});
+                          var wasRemoved = amendRemoveSpaces.includes(s.id);
+                          return !inContract || wasRemoved;
+                        }).map(function(s) {
+                          var isAdd = amendAddSpaces.includes(s.id);
+                          return (
+                            <button key={s.id} type="button"
+                              onClick={function(){ setAmendAddSpaces(function(p){ return isAdd ? p.filter(function(x){return x!==s.id;}) : [...p, s.id]; }); }}
+                              className={"rounded-lg border p-2 text-center text-xs transition-all " +
+                                (isAdd ? "border-green-500 bg-green-50 text-green-700 font-bold" : "border-slate-200 hover:bg-slate-50")}>
+                              <div className="font-semibold">{s.space_name}</div>
+                              <div className="text-slate-400">{s.area} מ&quot;ר</div>
+                              {isAdd && <div className="text-green-500 text-[10px] mt-0.5">✓ נוספת</div>}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      {/* Rents for added spaces */}
+                      {amendAddSpaces.length > 0 && (
+                        <div className="mt-3 space-y-2">
+                          <div className="text-xs font-bold text-slate-600">מחיר ליחידות שנוספו</div>
+                          {amendAddSpaces.map(function(sid) {
+                            var sp = allPropertySpaces.find(function(s){return s.id===sid;});
+                            return (
+                              <div key={sid} className="flex items-center gap-2">
+                                <span className="text-xs font-semibold text-slate-600 w-32 truncate">{sp?.space_name}</span>
+                                <span className="text-xs text-slate-400">{sp?.area} מ&quot;ר</span>
+                                <input type="number" value={amendAddRents[sid]||""} placeholder={selContract.rent_per_sqm?"₪/מ\"ר":"₪/חודש"}
+                                  onChange={function(e){setAmendAddRents(function(p){return {...p,[sid]:e.target.value};});}}
+                                  className="flex-1 rounded border border-slate-300 px-2 py-1 text-xs" />
+                                <span className="text-[10px] text-slate-400">₪/מ&quot;ר</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* ── EXTEND PERIOD ── */}
+                  {amendType === "extend" && (
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">תאריך סיום חדש</label>
+                      <div className="text-xs text-slate-400 mb-2">סיום נוכחי: {fmtDate(selContract.end_date)}</div>
+                      <input type="date" value={amendNewEndDate} onChange={function(e){setAmendNewEndDate(e.target.value);}}
+                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                    </div>
+                  )}
+
+                  {/* ── PRICE CHANGE ── */}
+                  {amendType === "price_change" && (
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-2">עדכון מחירים</label>
+                      <div className="space-y-2">
+                        {(selContract.contract_spaces||[]).map(function(cs: any) {
+                          var sp = cs.spaces;
+                          var isFixed = cs.charge_method === "fixed";
+                          var curVal = isFixed ? (cs.fixed_rent||0) : (cs.price_per_sqm || selContract.rent_per_sqm || 0);
+                          return (
+                            <div key={cs.space_id} className="rounded-lg border border-slate-100 p-2 flex items-center gap-2">
+                              <span className="text-xs font-semibold text-slate-600 w-32 truncate">{sp?.space_name}</span>
+                              <span className="text-xs text-slate-400">{sp?.area} מ&quot;ר</span>
+                              <span className="text-xs text-slate-400">נוכחי: {fmtMoney(curVal)}</span>
+                              <span className="text-xs text-slate-400">→</span>
+                              <input type="number" value={amendPriceChanges[cs.space_id]||""}
+                                onChange={function(e){setAmendPriceChanges(function(p){return {...p,[cs.space_id]:e.target.value};});}}
+                                className="flex-1 rounded border border-slate-300 px-2 py-1 text-xs" />
+                              <span className="text-[10px] text-slate-400">{isFixed?"₪/חודש":"₪/מ\"ר"}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Notes */}
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">הערות</label>
+                    <textarea value={amendNotes} onChange={function(e){setAmendNotes(e.target.value);}}
+                      placeholder="תיאור השינוי..." rows={2}
+                      className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-right" />
+                  </div>
+
+                  {/* Save */}
+                  <button disabled={amendSaving} onClick={async function() {
+                    if (!amendDate) { alert("נא להזין תאריך תוקף"); return; }
+                    setAmendSaving(true);
+                    try {
+                      // Count existing amendments
+                      var { count } = await supabase.from("contracts")
+                        .select("id", { count: "exact", head: true })
+                        .eq("parent_contract_id", selContract.id).eq("is_amendment", true);
+
+                      // Build new spaces list
+                      var currentSpaces = (selContract.contract_spaces||[]).map(function(cs: any){return cs;});
+                      var newSpaces = currentSpaces.filter(function(cs: any){ return !amendRemoveSpaces.includes(cs.space_id); });
+
+                      // Calculate new end date
+                      var newEnd = amendType === "extend" ? amendNewEndDate : selContract.end_date;
+
+                      // Calculate totals for the amendment record
+                      var totalArea = 0;
+                      newSpaces.forEach(function(cs: any) { totalArea += cs.spaces?.area || 0; });
+                      amendAddSpaces.forEach(function(sid) {
+                        var sp = allPropertySpaces.find(function(s){return s.id===sid;});
+                        if (sp) totalArea += sp.area || 0;
+                      });
+
+                      // Build amendment contract record
+                      var amendPayload: any = {
+                        tenant_id: selContract.tenant_id,
+                        property_id: selContract.property_id,
+                        contract_type: selContract.contract_type,
+                        start_date: amendDate,
+                        end_date: newEnd,
+                        lease_period_value: selContract.lease_period_value,
+                        lease_period_unit: selContract.lease_period_unit,
+                        rent_per_sqm: selContract.rent_per_sqm || null,
+                        charged_area: totalArea || selContract.charged_area,
+                        vat_type: selContract.vat_type,
+                        payment_frequency: selContract.payment_frequency,
+                        payment_method: selContract.payment_method,
+                        payment_day: selContract.payment_day,
+                        indexation_method: selContract.indexation_method,
+                        index_base_value: selContract.index_base_value,
+                        index_base_date: selContract.index_base_date,
+                        status: "active",
+                        parent_contract_id: selContract.id,
+                        is_amendment: true,
+                        amendment_number: (count ?? 0) + 1,
+                        amendment_date: amendDate,
+                        amendment_notes: amendNotes || (amendType === "swap_units" ? "החלפת יחידות" : amendType === "add_units" ? "הוספת יחידות" : amendType === "remove_units" ? "הורדת יחידות" : amendType === "extend" ? "הארכת תקופה" : amendType === "price_change" ? "שינוי מחירים" : "שינוי אחר"),
+                      };
+
+                      var { data: newContract, error } = await supabase.from("contracts").insert(amendPayload).select().single();
+                      if (error) throw error;
+
+                      // Insert spaces for the amendment
+                      var spacesToInsert: any[] = [];
+                      // Keep existing (not removed) with potential price changes
+                      newSpaces.forEach(function(cs: any) {
+                        var priceChanged = amendPriceChanges[cs.space_id] && Number(amendPriceChanges[cs.space_id]) !== (cs.charge_method === "fixed" ? Number(cs.fixed_rent) : Number(cs.price_per_sqm || selContract.rent_per_sqm));
+                        spacesToInsert.push({
+                          contract_id: newContract.id,
+                          space_id: cs.space_id,
+                          charge_method: cs.charge_method || "per_sqm",
+                          price_per_sqm: cs.charge_method === "fixed" ? null : (priceChanged ? Number(amendPriceChanges[cs.space_id]) : cs.price_per_sqm),
+                          fixed_rent: cs.charge_method === "fixed" ? (priceChanged ? Number(amendPriceChanges[cs.space_id]) : cs.fixed_rent) : null,
+                        });
+                      });
+                      // Add new spaces
+                      amendAddSpaces.forEach(function(sid) {
+                        var rent = Number(amendAddRents[sid]) || Number(selContract.rent_per_sqm) || 0;
+                        spacesToInsert.push({
+                          contract_id: newContract.id,
+                          space_id: sid,
+                          charge_method: "per_sqm",
+                          price_per_sqm: rent,
+                          fixed_rent: null,
+                        });
+                      });
+                      if (spacesToInsert.length > 0) {
+                        await supabase.from("contract_spaces").insert(spacesToInsert);
+                      }
+
+                      // Update parent end date if extended
+                      if (amendType === "extend" && amendNewEndDate > selContract.end_date) {
+                        await supabase.from("contracts").update({ end_date: amendNewEndDate }).eq("id", selContract.id);
+                      }
+
+                      // Mark new spaces as occupied, removed as vacant
+                      if (amendAddSpaces.length > 0) {
+                        await supabase.from("spaces").update({ status: "occupied" }).in("id", amendAddSpaces);
+                      }
+                      if (amendRemoveSpaces.length > 0) {
+                        await supabase.from("spaces").update({ status: "vacant" }).in("id", amendRemoveSpaces);
+                      }
+
+                      await logAudit({ entity_type: "contract", entity_id: newContract.id, action: "create", notes: "תוספת להסכם: " + (amendNotes || amendType) });
+                      setShowAmendModal(false);
+                      loadContracts();
+                    } catch (e: any) {
+                      alert("שגיאה: " + (e.message || e));
+                    } finally {
+                      setAmendSaving(false);
+                    }
+                  }}
+                    className="w-full rounded-xl bg-yellow-600 px-4 py-3 text-sm font-bold text-white hover:bg-yellow-700 disabled:opacity-50 transition-all">
+                    {amendSaving ? "שומר..." : "💾 שמור תוספת"}
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
