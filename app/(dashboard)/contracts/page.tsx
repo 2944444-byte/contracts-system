@@ -527,10 +527,10 @@ export default function ContractsPage() {
                         setAmendCpiValue({});
                         setAmendCpiDate({});
                         setAmendNewEndDate(selContract.end_date || "");
-                        // Init price changes from current contract spaces
+                        // Init price changes from EFFECTIVE spaces (latest amendment or original)
                         var pc: Record<string,string> = {};
-                        (selContract.contract_spaces||[]).forEach(function(cs: any) {
-                          pc[cs.space_id] = String(cs.charge_method === "fixed" ? (cs.fixed_rent||0) : (cs.price_per_sqm || selContract.rent_per_sqm || 0));
+                        effectiveSpaces.forEach(function(cs: any) {
+                          pc[cs.space_id] = String(cs.charge_method === "fixed" ? (cs.fixed_rent||0) : (cs.price_per_sqm || effectiveRentPerSqm || 0));
                         });
                         setAmendPriceChanges(pc);
                         // Load all property spaces
@@ -760,11 +760,22 @@ export default function ContractsPage() {
                       });
                       if (amRent === 0) amRent = (Number(am.rent_per_sqm) || 0) * (Number(am.charged_area) || 0);
 
-                      // Compare with original contract spaces
-                      var origSpaceIds = (selContract.contract_spaces||[]).map(function(cs: any){return cs.space_id;});
+                      // Compare with PREVIOUS state (previous amendment or original contract)
+                      var prevSpaces = amIdx > 0 && amendments[amIdx-1].contract_spaces?.length > 0
+                        ? amendments[amIdx-1].contract_spaces
+                        : (selContract.contract_spaces || []);
+                      var prevSpaceIds = prevSpaces.map(function(cs: any){return cs.space_id;});
                       var amSpaceIds = amSpaces.map(function(cs: any){return cs.space_id;});
-                      var addedSpaces = amSpaces.filter(function(cs: any){ return !origSpaceIds.includes(cs.space_id); });
-                      var removedSpaces = (selContract.contract_spaces||[]).filter(function(cs: any){ return !amSpaceIds.includes(cs.space_id); });
+                      var addedSpaces = amSpaces.filter(function(cs: any){ return !prevSpaceIds.includes(cs.space_id); });
+                      var removedSpaces = prevSpaces.filter(function(cs: any){ return !amSpaceIds.includes(cs.space_id); });
+
+                      // Previous rent for comparison
+                      var prevRent = 0;
+                      prevSpaces.forEach(function(cs: any) {
+                        if (cs.charge_method === "fixed" && cs.fixed_rent) prevRent += Number(cs.fixed_rent);
+                        else prevRent += (Number(cs.price_per_sqm) || Number(selContract.rent_per_sqm) || 0) * (cs.spaces?.area || 0);
+                      });
+                      if (prevRent === 0) prevRent = (Number(selContract.rent_per_sqm) || 0) * (Number(selContract.charged_area) || 0);
 
                       return (
                         <div key={am.id} className="rounded-xl border border-yellow-300 bg-white p-4">
@@ -777,9 +788,26 @@ export default function ContractsPage() {
                                 <div className="text-sm text-slate-500">{am.amendment_notes || "—"}</div>
                               </div>
                             </div>
-                            <div className="text-left">
-                              <div className="text-base font-bold text-yellow-700">{am.amendment_date ? fmtDate(am.amendment_date) : fmtDate(am.start_date)}</div>
-                              <div className="text-xs text-slate-400">תאריך תוקף</div>
+                            <div className="flex items-center gap-2">
+                              <div className="text-left">
+                                <div className="text-base font-bold text-yellow-700">{am.amendment_date ? fmtDate(am.amendment_date) : fmtDate(am.start_date)}</div>
+                                <div className="text-xs text-slate-400">תאריך תוקף</div>
+                              </div>
+                              <button onClick={function(e){e.stopPropagation(); router.push("/contracts/"+am.id+"/edit");}}
+                                className="rounded border border-slate-200 px-2 py-1 text-xs text-slate-500 hover:bg-slate-50">✏️</button>
+                              <button onClick={async function(e){
+                                e.stopPropagation();
+                                if(!confirm("למחוק תוספת "+( am.amendment_number||"")+"?")) return;
+                                // Free removed spaces
+                                var amSpIds = (am.contract_spaces||[]).map(function(cs:any){return cs.space_id;});
+                                await supabase.from("contract_spaces").delete().eq("contract_id", am.id);
+                                await supabase.from("contract_price_tiers").delete().eq("contract_id", am.id);
+                                await supabase.from("guarantees").delete().eq("contract_id", am.id);
+                                await supabase.from("contract_options").delete().eq("contract_id", am.id);
+                                await supabase.from("contracts").delete().eq("id", am.id);
+                                loadContracts();
+                              }}
+                                className="rounded border border-red-200 px-2 py-1 text-xs text-red-500 hover:bg-red-50">🗑</button>
                             </div>
                           </div>
 
@@ -787,9 +815,9 @@ export default function ContractsPage() {
                           <div className="rounded-xl bg-green-50 border border-green-200 p-3 mb-3 text-center">
                             <div className="text-2xl font-black text-green-800">{fmtMoney(amRent)}/חודש</div>
                             <div className="text-sm text-green-600">שכ&quot;ד חודשי אחרי התוספת</div>
-                            {amRent !== baseRent && baseRent > 0 && (
+                            {prevRent > 0 && amRent !== prevRent && (
                               <div className="text-sm text-slate-500 mt-1">
-                                לפני: {fmtMoney(baseRent)} | הפרש: <span className={amRent > baseRent ? "text-red-600 font-bold" : "text-green-600 font-bold"}>{amRent > baseRent ? "+" : ""}{fmtMoney(amRent - baseRent)}</span>
+                                לפני: {fmtMoney(prevRent)} | הפרש: <span className={amRent > prevRent ? "text-red-600 font-bold" : "text-green-600 font-bold"}>{amRent > prevRent ? "+" : ""}{fmtMoney(amRent - prevRent)}</span>
                               </div>
                             )}
                           </div>
@@ -1029,9 +1057,9 @@ export default function ContractsPage() {
                   {/* ── SWAP UNITS ── */}
                   {(amendType === "swap_units" || amendType === "remove_units") && (
                     <div>
-                      <label className="block text-xs font-bold text-red-600 mb-2">יחידות להסרה</label>
+                      <label className="block text-sm font-bold text-red-600 mb-2">יחידות להסרה (מצב נוכחי)</label>
                       <div className="grid grid-cols-2 gap-2">
-                        {(selContract.contract_spaces||[]).map(function(cs: any) {
+                        {effectiveSpaces.map(function(cs: any) {
                           var sp = cs.spaces;
                           var isRem = amendRemoveSpaces.includes(cs.space_id);
                           return (
@@ -1051,13 +1079,13 @@ export default function ContractsPage() {
 
                   {(amendType === "swap_units" || amendType === "add_units") && (
                     <div>
-                      <label className="block text-xs font-bold text-green-600 mb-2">יחידות להוספה</label>
+                      <label className="block text-sm font-bold text-green-600 mb-2">יחידות להוספה</label>
                       <div className="grid grid-cols-2 gap-2">
                         {allPropertySpaces.filter(function(s) {
-                          // Show spaces NOT in current contract (or removed)
-                          var inContract = (selContract.contract_spaces||[]).some(function(cs: any){return cs.space_id===s.id;});
+                          // Show spaces NOT in current effective state (or removed)
+                          var inEffective = effectiveSpaces.some(function(cs: any){return cs.space_id===s.id;});
                           var wasRemoved = amendRemoveSpaces.includes(s.id);
-                          return !inContract || wasRemoved;
+                          return !inEffective || wasRemoved;
                         }).map(function(s) {
                           var isAdd = amendAddSpaces.includes(s.id);
                           return (
@@ -1159,10 +1187,10 @@ export default function ContractsPage() {
                         </div>
                       )}
                       <div className="space-y-3">
-                        {(selContract.contract_spaces||[]).map(function(cs: any) {
+                        {effectiveSpaces.map(function(cs: any) {
                           var sp = cs.spaces;
                           var isFixed = cs.charge_method === "fixed";
-                          var curVal = isFixed ? (cs.fixed_rent||0) : (cs.price_per_sqm || selContract.rent_per_sqm || 0);
+                          var curVal = isFixed ? (cs.fixed_rent||0) : (cs.price_per_sqm || effectiveRentPerSqm || 0);
                           var cpiMode = amendCpiMode[cs.space_id] || "original";
                           return (
                             <div key={cs.space_id} className="rounded-lg border border-slate-200 p-3 space-y-2">
@@ -1234,12 +1262,12 @@ export default function ContractsPage() {
                         .select("id", { count: "exact", head: true })
                         .eq("parent_contract_id", selContract.id).eq("is_amendment", true);
 
-                      // Build new spaces list
-                      var currentSpaces = (selContract.contract_spaces||[]).map(function(cs: any){return cs;});
+                      // Build new spaces list from EFFECTIVE state (latest amendment or original)
+                      var currentSpaces = effectiveSpaces.map(function(cs: any){return cs;});
                       var newSpaces = currentSpaces.filter(function(cs: any){ return !amendRemoveSpaces.includes(cs.space_id); });
 
-                      // Calculate new end date
-                      var newEnd = amendType === "extend" ? amendNewEndDate : selContract.end_date;
+                      // Calculate new end date from effective
+                      var newEnd = amendType === "extend" ? amendNewEndDate : effectiveEndDate;
 
                       // Calculate totals for the amendment record
                       var totalArea = 0;
