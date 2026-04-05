@@ -3013,7 +3013,7 @@ export default function ContractsNewPage() {
               onClick={() => setStep(step + 1)}
               disabled={
                 (step === 1 && (!tenantId || !propertyId)) ||
-                (step === 2 && (!startDate || (!rentPerSqm && Object.keys(unitRentOverrides).filter(function(k){return unitRentOverrides[k];}).length === 0)))
+                (step === 2 && (!startDate || (rentType === "revenue_pct" ? !revenuePct : (!rentPerSqm && Object.keys(unitRentOverrides).filter(function(k){return unitRentOverrides[k];}).length === 0))))
               }
               className="rounded-xl bg-blue-700 px-6 py-2.5 text-sm font-bold text-white hover:bg-blue-800 disabled:opacity-40"
             >
