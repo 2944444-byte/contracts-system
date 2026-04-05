@@ -50,8 +50,8 @@ const PAYMENT_FREQS = [
   { v: "one_time", l: "חד פעמי" },
 ];
 const PAYMENT_METHODS = [
-  { v: "standing_order", l: "הוראת קבע", icon: "🏦" },
   { v: "checks_advance", l: "שיקים מראש", icon: "📝" },
+  { v: "standing_order", l: "הוראת קבע", icon: "🏦" },
   { v: "bank_transfer", l: "העברה בנקאית", icon: "💳" },
   { v: "cash", l: "מזומן", icon: "💵" },
   { v: "credit_card", l: "כרטיס אשראי", icon: "💳" },
@@ -150,7 +150,7 @@ export default function ContractsNewPage() {
   const [investAdd, setInvestAdd] = useState("");
   const [vatType, setVatType] = useState("taxable");
   const [paymentFreq, setPaymentFreq] = useState("monthly");
-  const [paymentMethod, setPaymentMethod] = useState("standing_order");
+  const [paymentMethod, setPaymentMethod] = useState("checks_advance");
   const [paymentDay, setPaymentDay] = useState("1");
   const [indexMethod, setIndexMethod] = useState("standard");
   const [baseCPI, setBaseCPI] = useState("");
@@ -314,7 +314,7 @@ export default function ContractsNewPage() {
       setInvestAdd(c.investment_addition ? String(c.investment_addition) : "");
       setVatType(c.vat_type || "taxable");
       setPaymentFreq(c.payment_frequency || "monthly");
-      setPaymentMethod(c.payment_method || "standing_order");
+      setPaymentMethod(c.payment_method || "checks_advance");
       setPaymentDay(c.payment_day ? String(c.payment_day) : "1");
       setIndexMethod(c.indexation_method || "standard");
       setBaseCPI(c.index_base_value ? String(c.index_base_value) : "");
