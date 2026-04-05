@@ -145,9 +145,17 @@ export default function ContractsNewPage() {
   const [leasePeriodValue, setLeasePeriodValue] = useState(12);
   const [leasePeriodUnit, setLeasePeriodUnit] = useState<"months" | "years">("months");
   const [endDate, setEndDate] = useState("");
+  const [rentType, setRentType] = useState<"fixed" | "revenue_pct">("fixed");
+  const [revenuePct, setRevenuePct] = useState("");
+  const [minimumRent, setMinimumRent] = useState("0");
+  const [revenueReportDay, setRevenueReportDay] = useState("5");
   const [rentPerSqm, setRentPerSqm] = useState("");
   const [chargedArea, setChargedArea] = useState("");
   const [investAdd, setInvestAdd] = useState("");
+  // Early termination
+  const [earlyTermination, setEarlyTermination] = useState(false);
+  const [terminationNoticeDays, setTerminationNoticeDays] = useState("30");
+  const [terminationBy, setTerminationBy] = useState("both");
   const [vatType, setVatType] = useState("taxable");
   const [paymentFreq, setPaymentFreq] = useState("monthly");
   const [paymentMethod, setPaymentMethod] = useState("checks_advance");
@@ -650,7 +658,7 @@ export default function ContractsNewPage() {
 
   // === Submit ===
   async function handleSubmit() {
-    var hasAnyRent = rentPerSqm || Object.keys(unitRentOverrides).some(function(k) { return unitRentOverrides[k]; });
+    var hasAnyRent = rentType === "revenue_pct" ? !!revenuePct : (rentPerSqm || Object.keys(unitRentOverrides).some(function(k) { return unitRentOverrides[k]; }));
     if (!tenantId || !propertyId || !startDate || !endDate || !hasAnyRent) {
       alert("נא מלא כל שדות חובה");
       return;
@@ -680,13 +688,20 @@ export default function ContractsNewPage() {
         end_date: endDate,
         lease_period_value: leasePeriodValue,
         lease_period_unit: leasePeriodUnit,
+        rent_type: rentType,
         rent_per_sqm: Number(rentPerSqm) || null,
+        revenue_pct: rentType === "revenue_pct" ? Number(revenuePct) || null : null,
+        minimum_rent: rentType === "revenue_pct" ? Number(minimumRent) || 0 : null,
+        revenue_report_day: rentType === "revenue_pct" ? Number(revenueReportDay) || 5 : null,
         charged_area: Number(chargedArea) || null,
         investment_addition: Number(investAdd) || null,
         vat_type: vatType,
         payment_frequency: paymentFreq,
         payment_method: paymentMethod,
         payment_day: Number(paymentDay) || 1,
+        early_termination_allowed: earlyTermination,
+        termination_notice_days: earlyTermination ? Number(terminationNoticeDays) || 30 : null,
+        termination_by: earlyTermination ? terminationBy : null,
         indexation_method: indexMethod,
         index_base_value: baseCPI ? Number(baseCPI) : null,
         index_base_date: baseCPIDate || null,
@@ -1249,6 +1264,58 @@ export default function ContractsNewPage() {
               </div>
             )}
 
+            {/* Rent type toggle */}
+            <div className="flex gap-2 mb-3">
+              <button type="button" onClick={() => setRentType("fixed")}
+                className={"rounded-lg border px-4 py-2 text-sm font-bold transition-all " +
+                  (rentType === "fixed" ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-200 text-slate-500 hover:bg-slate-50")}>
+                💰 שכ&quot;ד קבוע (למ&quot;ר / סכום)
+              </button>
+              <button type="button" onClick={() => setRentType("revenue_pct")}
+                className={"rounded-lg border px-4 py-2 text-sm font-bold transition-all " +
+                  (rentType === "revenue_pct" ? "border-purple-500 bg-purple-50 text-purple-700" : "border-slate-200 text-slate-500 hover:bg-slate-50")}>
+                📊 אחוז ממחזור (פדיון)
+              </button>
+            </div>
+
+            {/* Revenue-based rent fields */}
+            {rentType === "revenue_pct" && (
+              <div className="rounded-xl border-2 border-purple-200 bg-purple-50/30 p-4 mb-4 space-y-3">
+                <div className="text-sm font-bold text-purple-800">📊 שכ&quot;ד לפי אחוז ממחזור</div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-purple-700">אחוז מהפדיון (%) *</label>
+                    <input type="number" step="0.1" value={revenuePct} onChange={(e) => setRevenuePct(e.target.value)}
+                      placeholder="12" className={ic} />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-purple-700">דמי שכירות מינימום (₪/חודש)</label>
+                    <input type="number" value={minimumRent} onChange={(e) => setMinimumRent(e.target.value)}
+                      placeholder="0 = ללא מינימום" className={ic} />
+                    <div className="text-xs text-purple-500 mt-0.5">0 = ללא מינימום, רק אחוז ממחזור</div>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-purple-700">יום הגשת דו&quot;ח פדיון</label>
+                    <input type="number" min="1" max="28" value={revenueReportDay}
+                      onChange={(e) => setRevenueReportDay(e.target.value)} className={ic} />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-slate-700">שטח מחויב (מ&quot;ר)</label>
+                    <input type="number" value={chargedArea} onChange={(e) => setChargedArea(e.target.value)} className={ic} />
+                  </div>
+                </div>
+                {Number(revenuePct) > 0 && (
+                  <div className="rounded-lg bg-purple-100 border border-purple-300 p-3 text-sm text-purple-800 text-center">
+                    שכ&quot;ד = {revenuePct}% מהפדיון החודשי
+                    {Number(minimumRent) > 0 && <span> | מינימום: {fmtMoney(Number(minimumRent))}/חודש</span>}
+                    {Number(minimumRent) === 0 && <span> | ללא מינימום</span>}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Fixed rent fields */}
+            {rentType === "fixed" && (
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="mb-1 block text-xs font-semibold text-slate-700">
@@ -1345,6 +1412,33 @@ export default function ContractsNewPage() {
                 />
               </div>
             </div>
+            )}
+
+            {/* Early termination clause */}
+            <div className="rounded-xl border border-slate-200 p-4 mt-3">
+              <div className="flex items-center gap-2 mb-3">
+                <input type="checkbox" id="earlyTerm" checked={earlyTermination}
+                  onChange={(e) => setEarlyTermination(e.target.checked)} className="w-4 h-4" />
+                <label htmlFor="earlyTerm" className="text-sm font-bold text-slate-700">סיום מוקדם בהודעה מראש</label>
+              </div>
+              {earlyTermination && (
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-slate-700">ימי הודעה מראש</label>
+                    <input type="number" min="1" value={terminationNoticeDays}
+                      onChange={(e) => setTerminationNoticeDays(e.target.value)} className={ic} />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-slate-700">מי רשאי לסיים</label>
+                    <select value={terminationBy} onChange={(e) => setTerminationBy(e.target.value)} className={ic}>
+                      <option value="both">שני הצדדים</option>
+                      <option value="landlord">משכיר בלבד</option>
+                      <option value="tenant">שוכר בלבד</option>
+                    </select>
+                  </div>
+                </div>
+              )}
+            </div>
 
             {/* Rent preview */}
             {baseRent > 0 && (
@@ -1372,8 +1466,8 @@ export default function ContractsNewPage() {
               </div>
             )}
 
-            {/* Per-unit rent — shown when multiple spaces selected */}
-            {selSpaces.length > 1 && (
+            {/* Per-unit rent — shown when multiple spaces selected (fixed rent only) */}
+            {rentType === "fixed" && selSpaces.length > 1 && (
               <div className="rounded-xl border border-slate-200 p-4">
                 <div className="text-xs font-bold text-slate-700 mb-2">מחיר לפי יחידה</div>
                 <div className="text-xs text-slate-400 mb-3">בחר למ&quot;ר או סכום קבוע לכל יחידה. השאר ריק לברירת מחדל.</div>
@@ -2770,7 +2864,7 @@ export default function ContractsNewPage() {
                     ? new Date(endDate).toLocaleDateString("he-IL")
                     : "",
                 },
-                { l: 'שכ"ד לחודש', v: fmtMoney(totalRent) },
+                { l: 'שכ"ד', v: rentType === "revenue_pct" ? `${revenuePct}% ממחזור${Number(minimumRent) > 0 ? " | מינימום " + fmtMoney(Number(minimumRent)) : " | ללא מינימום"}` : fmtMoney(totalRent) + "/חודש" },
                 { l: "שנתי", v: fmtMoney(annualRent) },
                 {
                   l: "תדירות",

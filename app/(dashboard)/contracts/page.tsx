@@ -674,8 +674,37 @@ export default function ContractsPage() {
                   </div>
                 </div>
 
+                {/* Revenue-based rent display */}
+                {selContract.rent_type === "revenue_pct" && (
+                  <div className="rounded-lg bg-purple-50 border border-purple-200 px-3 py-3 mb-2">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-sm font-bold text-purple-800">📊 שכ&quot;ד לפי מחזור</span>
+                      <span className="text-lg font-black text-purple-800">{selContract.revenue_pct}%</span>
+                    </div>
+                    <div className="text-sm text-purple-600">
+                      {Number(selContract.minimum_rent) > 0
+                        ? `מינימום: ${fmtMoney(Number(selContract.minimum_rent))}/חודש`
+                        : "ללא מינימום — רק אחוז ממחזור"}
+                    </div>
+                    {selContract.revenue_report_day && (
+                      <div className="text-xs text-purple-500 mt-1">דו&quot;ח פדיון עד ה-{selContract.revenue_report_day} לכל חודש</div>
+                    )}
+                  </div>
+                )}
+
+                {/* Early termination clause */}
+                {selContract.early_termination_allowed && (
+                  <div className="rounded-lg bg-orange-50 border border-orange-200 px-3 py-2 mb-2 flex items-center justify-between text-sm">
+                    <span className="text-orange-700 font-bold">⚠️ סיום מוקדם בהודעה</span>
+                    <span className="text-orange-800">
+                      {selContract.termination_notice_days} ימים מראש
+                      {selContract.termination_by === "landlord" ? " (משכיר)" : selContract.termination_by === "tenant" ? " (שוכר)" : " (שני הצדדים)"}
+                    </span>
+                  </div>
+                )}
+
                 {/* Current rent per sqm (with step-rent + investment) */}
-                {trueRentPerSqm > 0 ? (
+                {selContract.rent_type !== "revenue_pct" && trueRentPerSqm > 0 ? (
                   <div className="rounded-lg bg-slate-50 border border-slate-200 px-3 py-2 mb-2 text-xs space-y-1">
                     <div className="flex items-center justify-between">
                       <span className="text-slate-500">
@@ -796,6 +825,7 @@ export default function ContractsPage() {
                     {l:"הצמדה",  v:selContract.indexation_method==="highest_in_period"?"מדד גבוה":selContract.indexation_method==="none"?"ללא":"t-2"},
                     {l:"מדד בסיס",v:selContract.index_base_value||"—"},
                     {l:'מע"מ',  v:selContract.vat_type==="taxable"?"18%":"פטור"},
+                    {l:"סוג שכ\"ד", v: selContract.rent_type==="revenue_pct" ? selContract.revenue_pct+"% ממחזור" : "קבוע"},
                     {l:"שיטת תשלום", v: selContract.payment_method==="checks_advance"?"שיקים מראש":selContract.payment_method==="bank_transfer"?"העברה בנקאית":selContract.payment_method==="cash"?"מזומן":selContract.payment_method==="credit_card"?"כרטיס אשראי":"הוראת קבע"},
                   ].map(function(r){return <div key={r.l} className="flex justify-between border-b border-slate-50 py-1"><span className="text-slate-400">{r.l}</span><span className="font-medium">{r.v}</span></div>;})}
                 </div>
