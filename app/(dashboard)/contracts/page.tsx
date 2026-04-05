@@ -830,6 +830,11 @@ export default function ContractsPage() {
                           ? fmtMoney(Number(cs.fixed_rent) || 0) + " בסיס"
                           : fmtMoney(Number(cs.price_per_sqm) || Number(effectiveRentPerSqm) || 0) + '/מ"ר';
 
+                        // Per-sqm prices (base and adjusted)
+                        var basePsqm = isFixed ? 0 : (Number(cs.price_per_sqm) || Number(effectiveRentPerSqm) || 0);
+                        var steppedPsqm = basePsqm * stepRentMultiplier;
+                        var cpiPsqm = steppedPsqm * cpiRatio;
+
                         return (
                           <div key={cs.space_id} className="rounded-lg border border-slate-100 bg-white px-3 py-2 text-sm">
                             <div className="flex items-center justify-between">
@@ -840,7 +845,23 @@ export default function ContractsPage() {
                               </div>
                               <span className="font-bold text-green-700">{fmtMoney(hasCpiData ? cpiMonthly : steppedMonthly)}/חודש</span>
                             </div>
-                            {(hasStepped || hasCpiData) && (
+                            {/* Per-sqm breakdown for sqm-based units */}
+                            {!isFixed && spArea > 0 && (
+                              <div className="flex gap-3 mt-1 text-xs text-slate-500">
+                                {hasCpiData ? (
+                                  <span>{fmtMoney(cpiPsqm)}/מ&quot;ר צמוד</span>
+                                ) : hasStepped ? (
+                                  <span>{fmtMoney(steppedPsqm)}/מ&quot;ר</span>
+                                ) : (
+                                  <span>{fmtMoney(basePsqm)}/מ&quot;ר</span>
+                                )}
+                                {(hasStepped || hasCpiData) && basePsqm !== (hasCpiData ? cpiPsqm : steppedPsqm) && (
+                                  <span className="text-slate-400">(בסיס: {fmtMoney(basePsqm)}/מ&quot;ר)</span>
+                                )}
+                              </div>
+                            )}
+                            {/* Fixed rent breakdown */}
+                            {isFixed && (hasStepped || hasCpiData) && (
                               <div className="flex gap-3 mt-1 text-xs text-slate-500">
                                 <span>בסיס: {fmtMoney(rawMonthly)}</span>
                                 {hasStepped && <span>→ שנה {currentContractYear}: {fmtMoney(steppedMonthly)}</span>}
