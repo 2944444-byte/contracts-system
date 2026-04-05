@@ -2583,15 +2583,27 @@ export default function ContractsNewPage() {
                       var expanded = calculateTierPreviews(opt.price_tiers, forecastBase);
                       forecast.push({ year: 1, rent: forecastBase, label: "בסיס" });
                       expanded.forEach(function(t) { forecast.push({ year: t.to_year, rent: t.calculated_rent_per_sqm ?? forecastBase, label: t.increase_type === "pct" ? "+" + t.increase_value + "%" : t.increase_type === "fixed_sqm" ? "+₪" + t.increase_value : "" }); });
-                    } else if (priceTiers.length > 0) {
+                    } else if (priceTiers.length > 0 && priceTiers.some(function(t) { return t.increase_value > 0; })) {
                       forecast.push({ year: 1, rent: forecastBase, label: "בסיס (מימוש)" });
-                      var virtualTiers = priceTiers.map(function(mt) { return { ...mt, from_year: Math.min(mt.from_year, years), to_year: Math.min(mt.to_year, years) }; }).filter(function(t) { return t.from_year < t.to_year; });
-                      if (virtualTiers.length > 0) {
-                        var vp = calculateTierPreviews(virtualTiers, forecastBase);
-                        vp.forEach(function(t) { forecast.push({ year: t.to_year, rent: t.calculated_rent_per_sqm ?? forecastBase, label: t.increase_type === "pct" ? "+" + t.increase_value + "%" : "" }); });
+                      // Apply main contract's recurring tiers to option period
+                      var recurringTier = priceTiers.find(function(t) { return t.is_recurring; });
+                      if (recurringTier && recurringTier.increase_value > 0) {
+                        var curRent = forecastBase;
+                        var every = recurringTier.recurring_every_years || 1;
+                        for (var yr = 2; yr <= years; yr++) {
+                          if ((yr - 1) % every === 0) {
+                            if (recurringTier.increase_type === "pct") curRent = curRent * (1 + recurringTier.increase_value / 100);
+                            else if (recurringTier.increase_type === "fixed_sqm") curRent = curRent + recurringTier.increase_value;
+                            else if (recurringTier.increase_type === "fixed_total") curRent = curRent + recurringTier.increase_value;
+                          }
+                          forecast.push({ year: yr, rent: Math.round(curRent * 100) / 100, label: yr === years ? "סוף אופציה" : "" });
+                        }
                       }
                     } else {
-                      forecast.push({ year: 1, rent: forecastBase, label: "קבוע" });
+                      // No tiers — show all years at same price
+                      for (var yr = 1; yr <= years; yr++) {
+                        forecast.push({ year: yr, rent: forecastBase, label: yr === 1 ? "קבוע" : "" });
+                      }
                     }
 
                     if (forecast.length === 0) return null;
