@@ -257,49 +257,62 @@ export default function ContractsPage() {
 
   // Per-unit CPI: compute CPI ratio per space (handles different CPI bases)
   useEffect(function() {
-    if (!selContract) { setPerUnitCpi({}); return; }
-    if (selContract.indexation_method === "none") { setPerUnitCpi({}); return; }
-    if (effectiveSpaces.length === 0) { setPerUnitCpi({}); return; }
+    try {
+      if (!selContract) { setPerUnitCpi({}); return; }
+      if (selContract.indexation_method === "none") { setPerUnitCpi({}); return; }
 
-    var contractBaseDate = selContract.index_base_date || selContract.start_date;
-    if (!contractBaseDate) { setPerUnitCpi({}); return; }
+      // Get current effective spaces from latest amendment or contract
+      var latAmend = amendments.length > 0 ? amendments[amendments.length - 1] : null;
+      var curSpaces = latAmend?.contract_spaces?.length > 0
+        ? latAmend.contract_spaces
+        : (selContract.contract_spaces || []);
+      if (!curSpaces || curSpaces.length === 0) { setPerUnitCpi({}); return; }
 
-    var todayForCbs = formatDateForCbs(new Date().toISOString());
-    if (!todayForCbs) return;
+      var contractBaseDate = selContract.index_base_date || selContract.start_date;
+      if (!contractBaseDate) { setPerUnitCpi({}); return; }
 
-    // Group spaces by CPI base date (deduplicate API calls)
-    var groups: Record<string, string[]> = {}; // baseDateCbs -> [spaceId, ...]
-    effectiveSpaces.forEach(function(cs: any) {
-      var useCustom = cs.use_original_index === false && cs.index_base_date;
-      var rawDate = useCustom ? cs.index_base_date : contractBaseDate;
-      var cbsDate = formatDateForCbs(rawDate);
-      if (!cbsDate) return;
-      if (!groups[cbsDate]) groups[cbsDate] = [];
-      groups[cbsDate].push(cs.space_id);
-    });
+      var todayForCbs = formatDateForCbs(new Date().toISOString());
+      if (!todayForCbs) { setPerUnitCpi({}); return; }
 
-    // Fetch CPI ratio for each unique base date (value=1 → result = ratio)
-    var groupKeys = Object.keys(groups);
-    Promise.all(groupKeys.map(function(fromDate) {
-      return fetchCpiAdjusted({ value: 1, fromDate: fromDate, toDate: todayForCbs! })
-        .then(function(data) {
-          if (!data.success) return { fromDate: fromDate, ratio: 1, source: "error" };
-          return { fromDate: fromDate, ratio: data.adjustedRentPerSqm || 1, source: "cbs" };
-        })
-        .catch(function() {
-          return { fromDate: fromDate, ratio: 1, source: "fallback" };
-        });
-    })).then(function(results) {
-      var map: Record<string, {ratio: number, source: string}> = {};
-      results.forEach(function(r, i) {
-        var spaceIds = groups[groupKeys[i]];
-        spaceIds.forEach(function(sid) {
-          map[sid] = { ratio: r.ratio, source: r.source };
-        });
+      // Group spaces by CPI base date (deduplicate API calls)
+      var groups: Record<string, string[]> = {};
+      curSpaces.forEach(function(cs: any) {
+        if (!cs || !cs.space_id) return;
+        var useCustom = cs.use_original_index === false && cs.index_base_date;
+        var rawDate = useCustom ? cs.index_base_date : contractBaseDate;
+        var cbsDate = formatDateForCbs(rawDate);
+        if (!cbsDate) return;
+        if (!groups[cbsDate]) groups[cbsDate] = [];
+        groups[cbsDate].push(cs.space_id);
       });
-      setPerUnitCpi(map);
-    });
-  }, [selected, amendments.length, effectiveSpaces.length]);
+
+      var groupKeys = Object.keys(groups);
+      if (groupKeys.length === 0) { setPerUnitCpi({}); return; }
+
+      Promise.all(groupKeys.map(function(fromDate) {
+        return fetchCpiAdjusted({ value: 1, fromDate: fromDate, toDate: todayForCbs as string })
+          .then(function(data: any) {
+            if (!data || !data.success) return { fromDate: fromDate, ratio: 1, source: "error" };
+            return { fromDate: fromDate, ratio: Number(data.adjustedRentPerSqm) || 1, source: "cbs" };
+          })
+          .catch(function() {
+            return { fromDate: fromDate, ratio: 1, source: "fallback" };
+          });
+      })).then(function(results) {
+        var map: Record<string, {ratio: number, source: string}> = {};
+        results.forEach(function(r: any, i: number) {
+          var spaceIds = groups[groupKeys[i]] || [];
+          spaceIds.forEach(function(sid: string) {
+            map[sid] = { ratio: r.ratio, source: r.source };
+          });
+        });
+        setPerUnitCpi(map);
+      }).catch(function() { setPerUnitCpi({}); });
+    } catch (e) {
+      console.error("perUnitCpi error:", e);
+      setPerUnitCpi({});
+    }
+  }, [selected, amendments.length]);
 
   async function handleSync() {
     setSyncing(true);
@@ -807,7 +820,7 @@ export default function ContractsPage() {
                         // Step-rent adjusted
                         var steppedMonthly = rawMonthly * stepRentMultiplier;
                         // CPI adjusted
-                        var cpiRatio = perUnitCpi[cs.space_id]?.ratio || (cpiResult ? cpiResult.adjustedRentPerSqm / cpiResult.baseRentPerSqm : 1);
+                        var cpiRatio = perUnitCpi[cs.space_id]?.ratio || (cpiResult && cpiResult.baseRentPerSqm > 0 ? cpiResult.adjustedRentPerSqm / cpiResult.baseRentPerSqm : 1);
                         var cpiMonthly = steppedMonthly * cpiRatio;
                         var hasCustomCpi = cs.use_original_index === false;
                         var hasCpiData = cpiRatio > 1;
