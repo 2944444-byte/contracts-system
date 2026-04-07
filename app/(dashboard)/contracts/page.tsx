@@ -310,50 +310,82 @@ export default function ContractsPage() {
       });
   }, [selected, priceTimeline.length]);
 
-  // Per-unit CPI: compute CPI ratio per space (handles different CPI bases)
+  // Per-unit CPI: compute CPI ratio per space (handles different CPI bases + indexation method)
   useEffect(function() {
-    try {
-      if (!selContract) { setPerUnitCpi({}); return; }
-      if (selContract.indexation_method === "none") { setPerUnitCpi({}); return; }
+    (async function() {
+      try {
+        if (!selContract) { setPerUnitCpi({}); return; }
+        if (selContract.indexation_method === "none") { setPerUnitCpi({}); return; }
 
-      // Get current effective spaces from latest amendment or contract
-      var latAmend = amendments.length > 0 ? amendments[amendments.length - 1] : null;
-      var curSpaces = latAmend?.contract_spaces?.length > 0
-        ? latAmend.contract_spaces
-        : (selContract.contract_spaces || []);
-      if (!curSpaces || curSpaces.length === 0) { setPerUnitCpi({}); return; }
+        var latAmend = amendments.length > 0 ? amendments[amendments.length - 1] : null;
+        var curSpaces = latAmend?.contract_spaces?.length > 0
+          ? latAmend.contract_spaces
+          : (selContract.contract_spaces || []);
+        if (!curSpaces || curSpaces.length === 0) { setPerUnitCpi({}); return; }
 
-      var contractBaseDate = selContract.index_base_date || selContract.start_date;
-      if (!contractBaseDate) { setPerUnitCpi({}); return; }
+        var contractBaseDate = selContract.index_base_date || selContract.start_date;
+        if (!contractBaseDate) { setPerUnitCpi({}); return; }
 
-      var todayForCbs = formatDateForCbs(new Date().toISOString());
-      if (!todayForCbs) { setPerUnitCpi({}); return; }
+        var idxMethod = selContract.indexation_method || "standard";
+        var useHighest = idxMethod === "highest_in_period" || idxMethod === "no_drop";
 
-      // Group spaces by CPI base date (deduplicate API calls)
-      var groups: Record<string, string[]> = {};
-      curSpaces.forEach(function(cs: any) {
-        if (!cs || !cs.space_id) return;
-        var useCustom = cs.use_original_index === false && cs.index_base_date;
-        var rawDate = useCustom ? cs.index_base_date : contractBaseDate;
-        var cbsDate = formatDateForCbs(rawDate);
-        if (!cbsDate) return;
-        if (!groups[cbsDate]) groups[cbsDate] = [];
-        groups[cbsDate].push(cs.space_id);
-      });
+        // For highest_in_period: pre-load all CPI records once, find peak per base date
+        var allCpiRecords: any[] | null = null;
+        if (useHighest) {
+          var { data: records } = await supabase.from("cpi_records")
+            .select("year,month,value,base_year")
+            .order("year").order("month");
+          allCpiRecords = records || [];
+        }
 
-      var groupKeys = Object.keys(groups);
-      if (groupKeys.length === 0) { setPerUnitCpi({}); return; }
+        var todayForCbs = formatDateForCbs(new Date().toISOString());
+        if (!todayForCbs) { setPerUnitCpi({}); return; }
 
-      Promise.all(groupKeys.map(function(fromDate) {
-        return fetchCpiAdjusted({ value: 1, fromDate: fromDate, toDate: todayForCbs as string })
-          .then(function(data: any) {
+        // Group spaces by CPI base date
+        var groups: Record<string, string[]> = {};
+        var groupBaseDates: Record<string, string> = {}; // cbsDate -> rawDate
+        curSpaces.forEach(function(cs: any) {
+          if (!cs || !cs.space_id) return;
+          var useCustom = cs.use_original_index === false && cs.index_base_date;
+          var rawDate = useCustom ? cs.index_base_date : contractBaseDate;
+          var cbsDate = formatDateForCbs(rawDate);
+          if (!cbsDate) return;
+          if (!groups[cbsDate]) groups[cbsDate] = [];
+          groups[cbsDate].push(cs.space_id);
+          groupBaseDates[cbsDate] = rawDate;
+        });
+
+        var groupKeys = Object.keys(groups);
+        if (groupKeys.length === 0) { setPerUnitCpi({}); return; }
+
+        // For each group, determine target date (today or peak)
+        var results = await Promise.all(groupKeys.map(async function(fromDate) {
+          var toDate = todayForCbs as string;
+          if (useHighest && allCpiRecords && allCpiRecords.length > 0) {
+            var rawBase = groupBaseDates[fromDate];
+            var baseDateObj = new Date(rawBase);
+            var baseYM = baseDateObj.getFullYear() * 12 + baseDateObj.getMonth();
+            var todayYM = new Date().getFullYear() * 12 + new Date().getMonth();
+            var inPeriod = allCpiRecords.filter(function(r: any) {
+              var ym = r.year * 12 + (r.month - 1);
+              return ym >= baseYM && ym <= todayYM;
+            });
+            if (inPeriod.length > 0) {
+              var highest = inPeriod.reduce(function(a: any, b: any) {
+                return Number(b.value) > Number(a.value) ? b : a;
+              });
+              toDate = `${String(highest.month).padStart(2, "0")}-15-${highest.year}`;
+            }
+          }
+          try {
+            var data: any = await fetchCpiAdjusted({ value: 1, fromDate: fromDate, toDate: toDate });
             if (!data || !data.success) return { fromDate: fromDate, ratio: 1, source: "error" };
             return { fromDate: fromDate, ratio: Number(data.adjustedRentPerSqm) || 1, source: "cbs" };
-          })
-          .catch(function() {
+          } catch {
             return { fromDate: fromDate, ratio: 1, source: "fallback" };
-          });
-      })).then(function(results) {
+          }
+        }));
+
         var map: Record<string, {ratio: number, source: string}> = {};
         results.forEach(function(r: any, i: number) {
           var spaceIds = groups[groupKeys[i]] || [];
@@ -362,11 +394,11 @@ export default function ContractsPage() {
           });
         });
         setPerUnitCpi(map);
-      }).catch(function() { setPerUnitCpi({}); });
-    } catch (e) {
-      console.error("perUnitCpi error:", e);
-      setPerUnitCpi({});
-    }
+      } catch (e) {
+        console.error("perUnitCpi error:", e);
+        setPerUnitCpi({});
+      }
+    })();
   }, [selected, amendments.length]);
 
   async function handleSync() {
