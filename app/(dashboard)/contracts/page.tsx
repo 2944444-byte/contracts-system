@@ -67,6 +67,7 @@ export default function ContractsPage() {
   const [syncing,   setSyncing]   = useState(false);
   const [selected,  setSelected]  = useState<string|null>(null);
   const [filterSt,  setFilterSt]  = useState("active");
+  const [filterProp, setFilterProp] = useState("all");
   const [search,    setSearch]    = useState("");
   const [cpiResult, setCpiResult] = useState<any>(null);
   const [cpiLoading, setCpiLoading] = useState(false);
@@ -462,9 +463,21 @@ export default function ContractsPage() {
   const filtered = contracts.filter(function(c) {
     if (c.is_amendment) return false; // Hide amendments from sidebar
     const ms = filterSt==="all" || c.status===filterSt;
+    const mp = filterProp === "all" || c.property_id === filterProp;
     const mq = !search || c.tenants?.name?.includes(search) || c.properties?.name?.includes(search);
-    return ms && mq;
+    return ms && mp && mq;
   });
+
+  // Unique properties from contracts for the filter dropdown
+  const propertyOptions = (function() {
+    var seen: Record<string, string> = {};
+    contracts.forEach(function(c) {
+      if (c.property_id && c.properties?.name && !seen[c.property_id]) {
+        seen[c.property_id] = c.properties.name;
+      }
+    });
+    return Object.entries(seen).sort(function(a,b){return a[1].localeCompare(b[1]);});
+  })();
 
   // ═══ EFFECTIVE STATE: latest amendment overrides original contract ═══
   // If amendments exist, use the latest one for spaces/pricing/dates
@@ -631,9 +644,16 @@ export default function ContractsPage() {
             </button>
           );
         })}
+        <select value={filterProp} onChange={function(e){setFilterProp(e.target.value);}}
+          className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs mr-auto">
+          <option value="all">🏢 כל הנכסים</option>
+          {propertyOptions.map(function(p) {
+            return <option key={p[0]} value={p[0]}>{p[1]}</option>;
+          })}
+        </select>
         <input type="text" value={search} onChange={function(e){setSearch(e.target.value);}}
           placeholder="חיפוש שוכר / נכס..."
-          className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs mr-auto"/>
+          className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs"/>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
