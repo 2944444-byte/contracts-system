@@ -220,7 +220,12 @@ export default function ContractsPage() {
       if (idxMethod === "highest_in_period" || idxMethod === "no_drop") {
         var highest = await findHighestCpi();
         if (highest) {
-          var highestDate = `${String(highest.month).padStart(2, "0")}-15-${highest.year}`;
+          // CBS t-2 rule: to make month X the "known" index, send date = month (X+1), day 16+
+          // Peak in 8/2025 → send 9/16/2025 so CBS knows about August's CPI
+          var publishYear = highest.year;
+          var publishMonth = highest.month + 1;
+          if (publishMonth > 12) { publishMonth = 1; publishYear++; }
+          var highestDate = `${String(publishMonth).padStart(2, "0")}-16-${publishYear}`;
           var data = await fetchCpiAdjusted({ value: totalRentPerSqm, fromDate: baseDate, toDate: highestDate });
           if (data.success) {
             setCpiResult({
@@ -374,7 +379,11 @@ export default function ContractsPage() {
               var highest = inPeriod.reduce(function(a: any, b: any) {
                 return Number(b.value) > Number(a.value) ? b : a;
               });
-              toDate = `${String(highest.month).padStart(2, "0")}-15-${highest.year}`;
+              // t-2 rule: peak month X is "known" from month (X+1) day 16
+              var pubYear = highest.year;
+              var pubMonth = highest.month + 1;
+              if (pubMonth > 12) { pubMonth = 1; pubYear++; }
+              toDate = `${String(pubMonth).padStart(2, "0")}-16-${pubYear}`;
             }
           }
           try {
