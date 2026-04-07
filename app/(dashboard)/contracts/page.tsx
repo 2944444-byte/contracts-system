@@ -106,6 +106,7 @@ export default function ContractsPage() {
   const [amendVisitorCodes, setAmendVisitorCodes] = useState("");
   const [amendVisitorDiscount, setAmendVisitorDiscount] = useState("");
   const [amendVisitorTariff, setAmendVisitorTariff] = useState("");
+  const [amendVisitorFreq, setAmendVisitorFreq] = useState("quarterly");
 
   useEffect(function() { loadContracts(); }, []);
 
@@ -1079,16 +1080,17 @@ export default function ContractsPage() {
                         );
                       })}
                       {parkingSubs.filter(function(p:any){return p.subscription_type === "visitor";}).map(function(p: any) {
-                        var tenantRate = (Number(p.visitor_lot_tariff)||0) * (1 - (Number(p.visitor_discount_pct)||0)/100);
+                        var freqLabel = p.billing_frequency === "monthly" ? "חודשי" : p.billing_frequency === "quarterly" ? "רבעוני" : p.billing_frequency === "semi_annual" ? "חצי שנתי" : p.billing_frequency === "with_cpi" ? "עם הפרשי הצמדה" : "שנתי";
                         return (
                           <div key={p.id} className="rounded-lg border border-purple-100 bg-purple-50 px-3 py-2 text-sm">
                             <div className="flex items-center justify-between">
                               <div className="flex items-center gap-2">
                                 <span className="text-purple-500">🎫</span>
-                                <span className="font-semibold text-slate-700">{p.visitor_codes_count} חניות אורחים</span>
+                                <span className="font-semibold text-slate-700">חניות אורחים מזדמנים{p.visitor_codes_count ? " (" + p.visitor_codes_count + " מדבקות)" : ""}</span>
                               </div>
-                              <span className="text-purple-700 text-xs">{fmtMoney(tenantRate)}/שעה ({p.visitor_discount_pct}% הנחה)</span>
+                              <span className="text-purple-700 text-xs font-semibold">{p.visitor_discount_pct}% הנחה</span>
                             </div>
+                            <div className="text-xs text-purple-600 mt-1">חיוב לפי שימוש בפועל • תדירות: {freqLabel}{p.next_billing_date ? " • חיוב הבא: " + fmtDate(p.next_billing_date) : ""}</div>
                           </div>
                         );
                       })}
@@ -1649,31 +1651,46 @@ export default function ContractsPage() {
                   {amendType === "parking_visitor" && (
                     <div className="rounded-xl border-2 border-purple-200 bg-purple-50/30 p-4 space-y-3">
                       <div className="text-sm font-bold text-purple-800">🎫 מינוי חניות אורחים מזדמנים</div>
-                      <div className="text-xs text-purple-600">השוכר מקבל קודים/מנוי לחניון, עם הנחה על תעריף החניון הרגיל</div>
-                      <div className="grid grid-cols-3 gap-3">
+                      <div className="text-xs text-purple-600">השוכר מקבל הנחה על תעריף החניון. החיוב נעשה לפי שימוש בפועל בתדירות שתוגדר. המערכת תשלח התראה למנהל לפני כל מועד חיוב.</div>
+                      <div className="grid grid-cols-2 gap-3">
                         <div>
-                          <label className="text-xs font-semibold text-slate-700 block mb-1">כמות מקומות / קודים</label>
-                          <input type="number" min="1" value={amendVisitorCodes} onChange={function(e){setAmendVisitorCodes(e.target.value);}}
-                            placeholder="לדוגמה: 50"
-                            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-                        </div>
-                        <div>
-                          <label className="text-xs font-semibold text-slate-700 block mb-1">אחוז הנחה (%)</label>
+                          <label className="text-xs font-semibold text-slate-700 block mb-1">אחוז הנחה ממחירון החניון (%) *</label>
                           <input type="number" min="0" max="100" value={amendVisitorDiscount} onChange={function(e){setAmendVisitorDiscount(e.target.value);}}
                             placeholder="לדוגמה: 50"
                             className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
                         </div>
                         <div>
-                          <label className="text-xs font-semibold text-slate-700 block mb-1">תעריף חניון מלא (₪/שעה)</label>
+                          <label className="text-xs font-semibold text-slate-700 block mb-1">תדירות חיוב *</label>
+                          <select value={amendVisitorFreq} onChange={function(e){setAmendVisitorFreq(e.target.value);}}
+                            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+                            <option value="monthly">חודשי</option>
+                            <option value="quarterly">רבעוני</option>
+                            <option value="semi_annual">חצי שנתי</option>
+                            <option value="annual">שנתי</option>
+                            <option value="with_cpi">יחד עם הפרשי הצמדה</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="text-xs font-semibold text-slate-700 block mb-1">כמות מדבקות / קודים (אופציונלי)</label>
+                          <input type="number" min="0" value={amendVisitorCodes} onChange={function(e){setAmendVisitorCodes(e.target.value);}}
+                            placeholder="לדוגמה: 50"
+                            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                        </div>
+                        <div>
+                          <label className="text-xs font-semibold text-slate-700 block mb-1">תעריף חניון מלא — להתייחסות (₪/שעה)</label>
                           <input type="number" step="0.5" value={amendVisitorTariff} onChange={function(e){setAmendVisitorTariff(e.target.value);}}
                             placeholder="לדוגמה: 8"
                             className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
                         </div>
                       </div>
-                      {Number(amendVisitorTariff) > 0 && Number(amendVisitorDiscount) > 0 && (
-                        <div className="rounded-lg bg-purple-100 border border-purple-300 p-2 text-sm text-purple-800 text-center">
-                          תעריף לשוכר: {fmtMoney(Number(amendVisitorTariff) * (1 - Number(amendVisitorDiscount)/100))}/שעה
-                          <span className="text-xs mr-2">({amendVisitorDiscount}% הנחה מ-{fmtMoney(Number(amendVisitorTariff))})</span>
+                      {Number(amendVisitorDiscount) > 0 && (
+                        <div className="rounded-lg bg-purple-100 border border-purple-300 p-3 text-sm text-purple-800 space-y-1">
+                          <div>הנחה לשוכר: <strong>{amendVisitorDiscount}%</strong> ממחירון החניון</div>
+                          {Number(amendVisitorTariff) > 0 && (
+                            <div className="text-xs">תעריף בפועל: {fmtMoney(Number(amendVisitorTariff) * (1 - Number(amendVisitorDiscount)/100))}/שעה (במקום {fmtMoney(Number(amendVisitorTariff))})</div>
+                          )}
+                          <div className="text-xs">חיוב בפועל: <strong>{amendVisitorFreq === "monthly" ? "חודשי" : amendVisitorFreq === "quarterly" ? "רבעוני" : amendVisitorFreq === "semi_annual" ? "חצי שנתי" : amendVisitorFreq === "annual" ? "שנתי" : "יחד עם הפרשי הצמדה"}</strong> לפי שימוש בפועל</div>
+                          <div className="text-xs text-purple-600 mt-1">📢 המערכת תשלח התראה למנהל לפני כל מועד חיוב להוצאת חיוב על השימוש בפועל</div>
                         </div>
                       )}
                     </div>
@@ -1813,9 +1830,17 @@ export default function ContractsPage() {
                         });
                       }
 
-                      // Visitor parking
+                      // Visitor parking — usage-based billing
                       if (amendType === "parking_visitor") {
-                        await supabase.from("parking_subscriptions").insert({
+                        // Calculate first billing date based on frequency
+                        var nextBilling = new Date(amendDate);
+                        if (amendVisitorFreq === "monthly") nextBilling.setMonth(nextBilling.getMonth() + 1);
+                        else if (amendVisitorFreq === "quarterly") nextBilling.setMonth(nextBilling.getMonth() + 3);
+                        else if (amendVisitorFreq === "semi_annual") nextBilling.setMonth(nextBilling.getMonth() + 6);
+                        else if (amendVisitorFreq === "annual" || amendVisitorFreq === "with_cpi") nextBilling.setFullYear(nextBilling.getFullYear() + 1);
+                        var nextBillingStr = nextBilling.toISOString().split("T")[0];
+
+                        var { data: parkSub } = await supabase.from("parking_subscriptions").insert({
                           property_id: selContract.property_id,
                           tenant_id: selContract.tenant_id,
                           contract_id: newContract.id,
@@ -1825,9 +1850,23 @@ export default function ContractsPage() {
                           visitor_codes_count: Number(amendVisitorCodes) || null,
                           visitor_discount_pct: Number(amendVisitorDiscount) || null,
                           visitor_lot_tariff: Number(amendVisitorTariff) || null,
+                          billing_frequency: amendVisitorFreq,
+                          next_billing_date: nextBillingStr,
                           is_marked: false,
                           start_date: amendDate,
                           status: "active",
+                        }).select().single();
+
+                        // Create initial alert for first billing
+                        await supabase.from("alerts").insert({
+                          title: "חיוב חניות אורחים — " + (selContract.tenants?.name || ""),
+                          message: "הגיע מועד הוצאת חיוב על שימוש בחניות אורחים מזדמנים (" + amendVisitorDiscount + "% הנחה). יש לאסוף נתוני שימוש בפועל ולהוציא חיוב.",
+                          alert_type: "visitor_parking_billing",
+                          severity: "medium",
+                          entity_type: "parking_subscription",
+                          entity_id: parkSub?.id || null,
+                          contract_id: newContract.id,
+                          due_date: nextBillingStr,
                         });
                       }
 

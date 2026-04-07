@@ -90,6 +90,56 @@ export async function syncContractStatuses(): Promise<number> {
     }
   }
 
+  // ── Visitor parking billing alerts ──
+  // For visitor parking subs that reached their next_billing_date, create an alert
+  // (or one approaching within 14 days) and advance next_billing_date
+  const { data: visitorSubs } = await supabase.from("parking_subscriptions")
+    .select("id,contract_id,billing_frequency,next_billing_date,visitor_discount_pct,tenant_id,tenants(name)")
+    .eq("subscription_type", "visitor")
+    .eq("status", "active");
+
+  for (const ps of visitorSubs ?? []) {
+    if (!ps.next_billing_date) continue;
+    const dueMs = new Date(ps.next_billing_date).getTime();
+    const daysToDue = Math.ceil((dueMs - Date.now()) / 86400000);
+
+    // Reminder alert 14 days before
+    if (daysToDue <= 14 && daysToDue >= 0) {
+      const { data: existing } = await supabase.from("alerts")
+        .select("id")
+        .eq("entity_id", ps.id)
+        .eq("alert_type", "visitor_parking_billing")
+        .gte("due_date", ps.next_billing_date)
+        .limit(1);
+      if (!existing || existing.length === 0) {
+        await supabase.from("alerts").insert({
+          title: `חיוב חניות אורחים — ${(ps as any).tenants?.name || ""}`,
+          message: `הגיע מועד הוצאת חיוב על שימוש בחניות אורחים מזדמנים (${ps.visitor_discount_pct || 0}% הנחה). יש לאסוף נתוני שימוש בפועל ולהוציא חיוב.${ps.billing_frequency === "with_cpi" ? " ניתן להוציא יחד עם הפרשי ההצמדה." : ""}`,
+          alert_type: "visitor_parking_billing",
+          severity: daysToDue <= 3 ? "high" : "medium",
+          entity_type: "parking_subscription",
+          entity_id: ps.id,
+          contract_id: ps.contract_id,
+          due_date: ps.next_billing_date,
+        });
+        updated++;
+      }
+    }
+
+    // After due date passed → advance next_billing_date
+    if (daysToDue < 0) {
+      const next = new Date(ps.next_billing_date);
+      if (ps.billing_frequency === "monthly") next.setMonth(next.getMonth() + 1);
+      else if (ps.billing_frequency === "quarterly") next.setMonth(next.getMonth() + 3);
+      else if (ps.billing_frequency === "semi_annual") next.setMonth(next.getMonth() + 6);
+      else next.setFullYear(next.getFullYear() + 1);
+      await supabase.from("parking_subscriptions").update({
+        last_billed_date: ps.next_billing_date,
+        next_billing_date: next.toISOString().split("T")[0],
+      }).eq("id", ps.id);
+    }
+  }
+
   // ── Update contract statuses ──
   const { data: contracts } = await supabase.from("contracts")
     .select("id,status,start_date,end_date")
