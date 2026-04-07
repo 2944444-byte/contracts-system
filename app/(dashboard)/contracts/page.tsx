@@ -99,7 +99,7 @@ export default function ContractsPage() {
 
   async function loadContracts() {
     const { data } = await supabase.from("contracts")
-      .select("*, tenants(name,phone,primary_email,company_name), properties(name,city), contract_options(id,option_number,duration_months,duration_years,end_date,notice_days_before_end,notice_type,status,is_exercised,rent_mechanism,rent_increase_pct,new_rent_value,option_group,exit_points), guarantees(id,guarantee_type,status,amount_required,amount_actual,end_date,bank,document_url), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,index_base_value,index_base_date,use_original_index,spaces(space_name,area))")
+      .select("*, tenants(name,phone,primary_email,company_name), properties(name,city), contract_options(id,option_number,duration_months,duration_years,start_date,end_date,notice_days_before_end,notice_type,status,is_exercised,rent_mechanism,rent_increase_pct,new_rent_value,option_group,exit_points,price_schedule_type,price_tiers), guarantees(id,guarantee_type,status,amount_required,amount_actual,end_date,bank,document_url), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,index_base_value,index_base_date,use_original_index,spaces(space_name,area))")
       .order("end_date");
     setContracts(data??[]);
     setLoading(false);
