@@ -95,6 +95,16 @@ export default function ContractsPage() {
   const [amendCpiMode, setAmendCpiMode] = useState<Record<string, "original" | "custom">>({});
   const [amendCpiValue, setAmendCpiValue] = useState<Record<string, string>>({});
   const [amendCpiDate, setAmendCpiDate] = useState<Record<string, string>>({});
+  // Parking subscription
+  const [amendParkQty, setAmendParkQty] = useState("1");
+  const [amendParkFee, setAmendParkFee] = useState("");
+  const [amendParkMarked, setAmendParkMarked] = useState(false);
+  const [amendParkSpotNumber, setAmendParkSpotNumber] = useState("");
+  const [amendParkIncluded, setAmendParkIncluded] = useState(false);
+  // Visitor parking
+  const [amendVisitorCodes, setAmendVisitorCodes] = useState("");
+  const [amendVisitorDiscount, setAmendVisitorDiscount] = useState("");
+  const [amendVisitorTariff, setAmendVisitorTariff] = useState("");
 
   useEffect(function() { loadContracts(); }, []);
 
@@ -1325,6 +1335,8 @@ export default function ContractsPage() {
                     { v: "remove_units", l: "הורדת יחידות", desc: "הסרת יחידות מההסכם", icon: "➖" },
                     { v: "extend", l: "הארכת תקופה", desc: "שינוי תאריך סיום להסכם", icon: "📅" },
                     { v: "price_change", l: "שינוי מחירים", desc: "עדכון מחירים ליחידות קיימות", icon: "💰" },
+                    { v: "parking_subscription", l: "תוספת חניות מינוי", desc: "חניות קבועות בתשלום חודשי", icon: "🅿️" },
+                    { v: "parking_visitor", l: "חניות אורחים מזדמנים", desc: "מנוי דרך מקומות / קודים בהנחה", icon: "🎫" },
                     { v: "other", l: "שינוי אחר", desc: "פתיחת כל האפשרויות (אשף מלא)", icon: "📋" },
                   ].map(function(opt) {
                     return (
@@ -1544,6 +1556,83 @@ export default function ContractsPage() {
                     </div>
                   )}
 
+                  {/* ── PARKING SUBSCRIPTION ── */}
+                  {amendType === "parking_subscription" && (
+                    <div className="rounded-xl border-2 border-blue-200 bg-blue-50/30 p-4 space-y-3">
+                      <div className="text-sm font-bold text-blue-800">🅿️ פרטי חניות מינוי</div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="text-xs font-semibold text-slate-700 block mb-1">כמות חניות *</label>
+                          <input type="number" min="1" value={amendParkQty} onChange={function(e){setAmendParkQty(e.target.value);}}
+                            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                        </div>
+                        <div>
+                          <label className="text-xs font-semibold text-slate-700 block mb-1">תשלום חודשי לחניה (₪)</label>
+                          <input type="number" value={amendParkFee} onChange={function(e){setAmendParkFee(e.target.value);}}
+                            placeholder="0 = כלול בשכ&quot;ד"
+                            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-4">
+                        <label className="flex items-center gap-2 text-sm">
+                          <input type="checkbox" checked={amendParkMarked} onChange={function(e){setAmendParkMarked(e.target.checked);}} className="w-4 h-4" />
+                          <span className="text-slate-700">חניות מסומנות (מספר ספציפי)</span>
+                        </label>
+                        <label className="flex items-center gap-2 text-sm">
+                          <input type="checkbox" checked={amendParkIncluded} onChange={function(e){setAmendParkIncluded(e.target.checked);}} className="w-4 h-4" />
+                          <span className="text-slate-700">כלול בשכ&quot;ד</span>
+                        </label>
+                      </div>
+                      {amendParkMarked && (
+                        <div>
+                          <label className="text-xs font-semibold text-slate-700 block mb-1">מספרי חניות (מופרדים בפסיק)</label>
+                          <input type="text" value={amendParkSpotNumber} onChange={function(e){setAmendParkSpotNumber(e.target.value);}}
+                            placeholder="לדוגמה: 12, 13, 14"
+                            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                        </div>
+                      )}
+                      {Number(amendParkQty) > 0 && Number(amendParkFee) > 0 && (
+                        <div className="rounded-lg bg-blue-100 border border-blue-300 p-2 text-sm text-blue-800 text-center">
+                          סה&quot;כ: {amendParkQty} חניות × {fmtMoney(Number(amendParkFee))} = <span className="font-bold">{fmtMoney(Number(amendParkQty) * Number(amendParkFee))}/חודש</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* ── VISITOR PARKING ── */}
+                  {amendType === "parking_visitor" && (
+                    <div className="rounded-xl border-2 border-purple-200 bg-purple-50/30 p-4 space-y-3">
+                      <div className="text-sm font-bold text-purple-800">🎫 מינוי חניות אורחים מזדמנים</div>
+                      <div className="text-xs text-purple-600">השוכר מקבל קודים/מנוי לחניון, עם הנחה על תעריף החניון הרגיל</div>
+                      <div className="grid grid-cols-3 gap-3">
+                        <div>
+                          <label className="text-xs font-semibold text-slate-700 block mb-1">כמות מקומות / קודים</label>
+                          <input type="number" min="1" value={amendVisitorCodes} onChange={function(e){setAmendVisitorCodes(e.target.value);}}
+                            placeholder="לדוגמה: 50"
+                            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                        </div>
+                        <div>
+                          <label className="text-xs font-semibold text-slate-700 block mb-1">אחוז הנחה (%)</label>
+                          <input type="number" min="0" max="100" value={amendVisitorDiscount} onChange={function(e){setAmendVisitorDiscount(e.target.value);}}
+                            placeholder="לדוגמה: 50"
+                            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                        </div>
+                        <div>
+                          <label className="text-xs font-semibold text-slate-700 block mb-1">תעריף חניון מלא (₪/שעה)</label>
+                          <input type="number" step="0.5" value={amendVisitorTariff} onChange={function(e){setAmendVisitorTariff(e.target.value);}}
+                            placeholder="לדוגמה: 8"
+                            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                        </div>
+                      </div>
+                      {Number(amendVisitorTariff) > 0 && Number(amendVisitorDiscount) > 0 && (
+                        <div className="rounded-lg bg-purple-100 border border-purple-300 p-2 text-sm text-purple-800 text-center">
+                          תעריף לשוכר: {fmtMoney(Number(amendVisitorTariff) * (1 - Number(amendVisitorDiscount)/100))}/שעה
+                          <span className="text-xs mr-2">({amendVisitorDiscount}% הנחה מ-{fmtMoney(Number(amendVisitorTariff))})</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {/* Notes */}
                   <div>
                     <label className="block text-xs font-bold text-slate-700 mb-1">הערות</label>
@@ -1600,7 +1689,7 @@ export default function ContractsPage() {
                         is_amendment: true,
                         amendment_number: (count ?? 0) + 1,
                         amendment_date: amendDate,
-                        amendment_notes: amendNotes || (amendType === "swap_units" ? "החלפת יחידות" : amendType === "add_units" ? "הוספת יחידות" : amendType === "remove_units" ? "הורדת יחידות" : amendType === "extend" ? "הארכת תקופה" : amendType === "price_change" ? "שינוי מחירים" : "שינוי אחר"),
+                        amendment_notes: amendNotes || (amendType === "swap_units" ? "החלפת יחידות" : amendType === "add_units" ? "הוספת יחידות" : amendType === "remove_units" ? "הורדת יחידות" : amendType === "extend" ? "הארכת תקופה" : amendType === "price_change" ? "שינוי מחירים" : amendType === "parking_subscription" ? "תוספת חניות מינוי" : amendType === "parking_visitor" ? "חניות אורחים מזדמנים" : "שינוי אחר"),
                       };
 
                       var { data: newContract, error } = await supabase.from("contracts").insert(amendPayload).select().single();
@@ -1659,6 +1748,41 @@ export default function ContractsPage() {
                       }
                       if (amendRemoveSpaces.length > 0) {
                         await supabase.from("spaces").update({ status: "vacant" }).in("id", amendRemoveSpaces);
+                      }
+
+                      // Parking subscription
+                      if (amendType === "parking_subscription") {
+                        await supabase.from("parking_subscriptions").insert({
+                          property_id: selContract.property_id,
+                          tenant_id: selContract.tenant_id,
+                          contract_id: newContract.id,
+                          subscription_type: "monthly",
+                          quantity: Number(amendParkQty) || 1,
+                          monthly_fee: Number(amendParkFee) || 0,
+                          is_marked: amendParkMarked,
+                          spot_number: amendParkMarked ? amendParkSpotNumber || null : null,
+                          is_included_in_rent: amendParkIncluded,
+                          start_date: amendDate,
+                          status: "active",
+                        });
+                      }
+
+                      // Visitor parking
+                      if (amendType === "parking_visitor") {
+                        await supabase.from("parking_subscriptions").insert({
+                          property_id: selContract.property_id,
+                          tenant_id: selContract.tenant_id,
+                          contract_id: newContract.id,
+                          subscription_type: "visitor",
+                          quantity: Number(amendVisitorCodes) || 1,
+                          monthly_fee: 0,
+                          visitor_codes_count: Number(amendVisitorCodes) || null,
+                          visitor_discount_pct: Number(amendVisitorDiscount) || null,
+                          visitor_lot_tariff: Number(amendVisitorTariff) || null,
+                          is_marked: false,
+                          start_date: amendDate,
+                          status: "active",
+                        });
                       }
 
                       await logAudit({ entity_type: "contract", entity_id: newContract.id, action: "create", notes: "תוספת להסכם: " + (amendNotes || amendType) });
