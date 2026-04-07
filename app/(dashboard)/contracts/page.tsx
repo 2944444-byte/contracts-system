@@ -75,6 +75,7 @@ export default function ContractsPage() {
   const [priceTiers, setPriceTiers] = useState<PriceTier[]>([]);
   const [priceTimeline, setPriceTimeline] = useState<any[]>([]);
   const [amendments, setAmendments] = useState<any[]>([]);
+  const [parkingSubs, setParkingSubs] = useState<any[]>([]);
 
   // Amendment modal state
   const [showAmendModal, setShowAmendModal] = useState(false);
@@ -123,13 +124,22 @@ export default function ContractsPage() {
 
   // Load amendments for selected contract
   useEffect(function() {
-    if (!selContract) { setAmendments([]); return; }
+    if (!selContract) { setAmendments([]); setParkingSubs([]); return; }
     supabase.from("contracts")
       .select("id,amendment_number,amendment_date,amendment_notes,start_date,end_date,rent_per_sqm,charged_area,contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,index_base_value,index_base_date,use_original_index,spaces(space_name,area))")
       .eq("parent_contract_id", selContract.id)
       .eq("is_amendment", true)
       .order("amendment_number")
       .then(function({ data }) { setAmendments(data ?? []); });
+    // Load parking subscriptions for this contract AND its amendments
+    supabase.from("contracts").select("id").or("id.eq."+selContract.id+",parent_contract_id.eq."+selContract.id)
+      .then(function({ data: ids }) {
+        var contractIds = (ids || []).map(function(c: any) { return c.id; });
+        if (contractIds.length === 0) { setParkingSubs([]); return; }
+        supabase.from("parking_subscriptions")
+          .select("*").in("contract_id", contractIds).eq("status","active")
+          .then(function({ data: pks }) { setParkingSubs(pks ?? []); });
+      });
   }, [selected]);
 
   // Load price tiers and build timeline when contract selected
@@ -585,7 +595,15 @@ export default function ContractsPage() {
   }
 
   // Use the best available rent for display
-  var displayRent = cpiAdjustedRent > 0 ? cpiAdjustedRent : adjustedBaseRent > 0 ? adjustedBaseRent : baseRent;
+  // Sum parking subscriptions (only those NOT included in rent)
+  var parkingMonthlyTotal = 0;
+  parkingSubs.forEach(function(p: any) {
+    if (p.is_included_in_rent) return;
+    if (p.subscription_type === "visitor") return; // visitor parking has no fixed monthly fee
+    parkingMonthlyTotal += (Number(p.monthly_fee) || 0) * (Number(p.quantity) || 1);
+  });
+  var rentBeforeParking = cpiAdjustedRent > 0 ? cpiAdjustedRent : adjustedBaseRent > 0 ? adjustedBaseRent : baseRent;
+  var displayRent = rentBeforeParking + parkingMonthlyTotal;
   const vat         = selContract?.vat_type==="taxable" ? displayRent*0.18 : 0;
   const remaining   = effectiveEndDate ? yearsMonthsLeft(effectiveEndDate) : null;
 
@@ -1046,9 +1064,37 @@ export default function ContractsPage() {
                           </div>
                         );
                       })}
+                      {/* Parking subscriptions */}
+                      {parkingSubs.filter(function(p:any){return !p.is_included_in_rent && p.subscription_type !== "visitor";}).map(function(p: any) {
+                        var monthly = (Number(p.monthly_fee) || 0) * (Number(p.quantity) || 1);
+                        return (
+                          <div key={p.id} className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 flex items-center justify-between text-sm">
+                            <div className="flex items-center gap-2">
+                              <span className="text-blue-500">🅿️</span>
+                              <span className="font-semibold text-slate-700">{p.quantity} חניות {p.is_marked && p.spot_number ? "(" + p.spot_number + ")" : "מינוי"}</span>
+                              <span className="text-slate-500">{fmtMoney(Number(p.monthly_fee) || 0)} × {p.quantity}</span>
+                            </div>
+                            <span className="font-bold text-blue-700">{fmtMoney(monthly)}/חודש</span>
+                          </div>
+                        );
+                      })}
+                      {parkingSubs.filter(function(p:any){return p.subscription_type === "visitor";}).map(function(p: any) {
+                        var tenantRate = (Number(p.visitor_lot_tariff)||0) * (1 - (Number(p.visitor_discount_pct)||0)/100);
+                        return (
+                          <div key={p.id} className="rounded-lg border border-purple-100 bg-purple-50 px-3 py-2 text-sm">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <span className="text-purple-500">🎫</span>
+                                <span className="font-semibold text-slate-700">{p.visitor_codes_count} חניות אורחים</span>
+                              </div>
+                              <span className="text-purple-700 text-xs">{fmtMoney(tenantRate)}/שעה ({p.visitor_discount_pct}% הנחה)</span>
+                            </div>
+                          </div>
+                        );
+                      })}
                       <div className="rounded-lg bg-green-50 border border-green-200 px-3 py-2 text-center">
                         <span className="text-base font-black text-green-800">{fmtMoney(displayRent)}/חודש</span>
-                        <span className="text-sm text-green-600 mr-2">סה&quot;כ כל היחידות{cpiAdjustedRent > 0 ? " (כולל הצמדה)" : ""}</span>
+                        <span className="text-sm text-green-600 mr-2">סה&quot;כ {parkingMonthlyTotal > 0 ? "(יחידות + חניות)" : "כל היחידות"}{cpiAdjustedRent > 0 ? " (כולל הצמדה)" : ""}</span>
                       </div>
                     </div>
                   </div>
