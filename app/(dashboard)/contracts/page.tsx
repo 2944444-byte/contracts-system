@@ -497,7 +497,7 @@ export default function ContractsPage() {
       <div className="mb-5 flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-3xl font-bold text-slate-800">חוזים</h1>
-          <p className="text-sm text-slate-500 mt-1">{contracts.length} חוזים</p>
+          <p className="text-sm text-slate-500 mt-1">{contracts.filter(function(c){return !c.is_amendment;}).length} חוזים</p>
         </div>
         <div className="flex gap-2">
           <button onClick={handleSync} disabled={syncing}
@@ -513,7 +513,7 @@ export default function ContractsPage() {
       {/* Status filter */}
       <div className="flex gap-2 mb-4 flex-wrap">
         {[{v:"all",l:"הכל"},{v:"active",l:"פעיל"},{v:"expiring",l:"פוגה"},{v:"extended",l:"מורחב"},{v:"upcoming",l:"עתידי"},{v:"ended",l:"הסתיים"}].map(function(s) {
-          const cnt = s.v==="all" ? contracts.length : (counts[s.v]??0);
+          const cnt = s.v==="all" ? contracts.filter(function(c){return !c.is_amendment;}).length : (counts[s.v]??0);
           const si  = STATUS_MAP[s.v];
           return (
             <button key={s.v} onClick={function(){setFilterSt(s.v);}}
