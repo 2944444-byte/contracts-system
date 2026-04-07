@@ -195,26 +195,81 @@ export default function ContractsPage() {
     // Known index months for fallback
     const knownFrom = getKnownIndexMonth(new Date(refDateStr));
     const knownTo = getKnownIndexMonth(new Date());
+    const idxMethod = selContract.indexation_method || "standard";
+
+    // For "highest_in_period" / "no_drop": find highest CPI between base and today
+    async function findHighestCpi() {
+      var { data: records } = await supabase.from("cpi_records")
+        .select("year,month,value,base_year")
+        .order("year").order("month");
+      if (!records || records.length === 0) return null;
+      var baseDateObj = new Date(refDateStr);
+      var baseYM = baseDateObj.getFullYear() * 12 + baseDateObj.getMonth();
+      var todayYM = new Date().getFullYear() * 12 + new Date().getMonth();
+      var inPeriod = records.filter(function(r: any) {
+        var ym = r.year * 12 + (r.month - 1);
+        return ym >= baseYM && ym <= todayYM;
+      });
+      if (inPeriod.length === 0) return null;
+      var highest = inPeriod.reduce(function(a: any, b: any) { return Number(b.value) > Number(a.value) ? b : a; });
+      return highest;
+    }
+
+    async function runCpiCalculation() {
+      // For highest/no_drop methods, find peak CPI and use that as "current"
+      if (idxMethod === "highest_in_period" || idxMethod === "no_drop") {
+        var highest = await findHighestCpi();
+        if (highest) {
+          var highestDate = `${String(highest.month).padStart(2, "0")}-15-${highest.year}`;
+          var data = await fetchCpiAdjusted({ value: totalRentPerSqm, fromDate: baseDate, toDate: highestDate });
+          if (data.success) {
+            setCpiResult({
+              success: true, source: "cbs",
+              baseRentPerSqm: data.baseRentPerSqm,
+              adjustedRentPerSqm: data.adjustedRentPerSqm,
+              changePct: data.changePct,
+              fromDate: data.fromDate,
+              toDate: `${highest.month}/${highest.year} (שיא)`,
+              fromIndexValue: data.fromIndexValue,
+              toIndexValue: data.toIndexValue,
+              baseYear: data.baseYear,
+              verificationUrl: data.verificationUrl,
+              method: idxMethod,
+              peakMonth: `${highest.month}/${highest.year}`,
+              peakValue: highest.value,
+            });
+            setCpiLoading(false);
+            return;
+          }
+        }
+      }
+
+      // Standard t-2: use today
+      var stdData = await fetchCpiAdjusted({ value: totalRentPerSqm, fromDate: baseDate, toDate: todayForCbs });
+      if (stdData.success) {
+        setCpiResult({
+          success: true, source: "cbs",
+          baseRentPerSqm: stdData.baseRentPerSqm,
+          adjustedRentPerSqm: stdData.adjustedRentPerSqm,
+          changePct: stdData.changePct,
+          fromDate: stdData.fromDate,
+          toDate: stdData.toDate,
+          fromIndexValue: stdData.fromIndexValue,
+          toIndexValue: stdData.toIndexValue,
+          baseYear: stdData.baseYear,
+          verificationUrl: stdData.verificationUrl,
+          method: idxMethod,
+        });
+        setCpiLoading(false);
+      } else {
+        throw new Error("CBS failed");
+      }
+    }
 
     // Primary: CBS calculator via Server Action (server-side, bypasses Vercel auth)
     // Fallback: cumulative % chain from Supabase cpi_records
-    fetchCpiAdjusted({ value: totalRentPerSqm, fromDate: baseDate, toDate: todayForCbs })
-      .then(function(data) {
-        if (!data.success) throw new Error(data.error || "CBS failed");
-        setCpiResult({
-          success: true, source: "cbs",
-          baseRentPerSqm: data.baseRentPerSqm,
-          adjustedRentPerSqm: data.adjustedRentPerSqm,
-          changePct: data.changePct,
-          fromDate: data.fromDate,
-          toDate: data.toDate,
-          fromIndexValue: data.fromIndexValue,
-          toIndexValue: data.toIndexValue,
-          baseYear: data.baseYear,
-          verificationUrl: data.verificationUrl,
-        });
-        setCpiLoading(false);
-      })
+    runCpiCalculation()
+      .then(function() {})
       .catch(function() {
         // Fallback: index ratio with chaining coefficient (same formula as CBS calculator)
         // Formula: adjusted = baseRent × (currentIndex × chainingCoeff) / baseIndex
@@ -741,10 +796,15 @@ export default function ContractsPage() {
                 {cpiResult && !cpiLoading && (
                   <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-3 mb-3 space-y-2">
                     <div className="text-xs font-bold text-amber-800 mb-1 flex items-center gap-2">
-                      📊 הצמדה למדד (כלל t-2)
+                      📊 הצמדה למדד ({selContract.indexation_method === "highest_in_period" ? "מדד גבוה ביותר" : selContract.indexation_method === "no_drop" ? "ללא ירידה" : selContract.indexation_method === "none" ? "ללא הצמדה" : "כלל t-2"})
                       <span className={"rounded px-1.5 py-0.5 text-[9px] font-bold " + (cpiResult.source === "cbs" ? "bg-green-100 text-green-700" : "bg-yellow-100 text-yellow-700")}>
                         {cpiResult.source === "cbs" ? "✓ מחשבון למ\"ס" : "≈ חישוב מקומי"}
                       </span>
+                      {cpiResult.peakMonth && (
+                        <span className="rounded px-1.5 py-0.5 text-[9px] font-bold bg-orange-100 text-orange-700">
+                          🔝 שיא: {cpiResult.peakMonth} ({cpiResult.peakValue})
+                        </span>
+                      )}
                     </div>
 
                     <div className="grid grid-cols-2 gap-2">
