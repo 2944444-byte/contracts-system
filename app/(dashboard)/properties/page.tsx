@@ -58,8 +58,8 @@ export default function PropertiesPage() {
   async function loadAll() {
     const [{ data: p }, { data: c }, { data: sp }, { data: co }] = await Promise.all([
       supabase.from("properties").select("*, companies(company_name)").order("name"),
-      supabase.from("contracts").select("id, status, rent_per_sqm, charged_area, investment_addition, property_id, tenants(name)").in("status",["active","expiring","extended"]),
-      supabase.from("spaces").select("id, property_id, status").order("name"),
+      supabase.from("contracts").select("id, status, rent_per_sqm, charged_area, investment_addition, property_id, end_date, tenants(name), contract_spaces(space_id,spaces(space_name))").in("status",["active","expiring","extended"]),
+      supabase.from("spaces").select("id, property_id, status, space_name, area").order("space_name"),
       supabase.from("companies").select("id,company_name").order("company_name"),
     ]);
     setProperties(p ?? []);
@@ -154,7 +154,18 @@ export default function PropertiesPage() {
   const selContracts = contracts.filter(function(c) { return c.property_id === selected; });
   const selRevenue   = selContracts.reduce(function(s,c){return s+(c.rent_per_sqm??0)*(c.charged_area??0)+(c.investment_addition??0);},0);
   const selOccupied  = selSpaces.filter(function(s){return s.status==="occupied";}).length;
-  const selOccPct    = selSpaces.length > 0 ? Math.round(selOccupied/selSpaces.length*100) : 0;
+  const selVacant    = selSpaces.filter(function(s){return s.status==="vacant";});
+  // Occupancy by AREA (more meaningful than by count)
+  const totalArea    = selSpaces.reduce(function(s,sp){return s + (Number(sp.area) || 0);}, 0);
+  const occupiedArea = selSpaces.filter(function(s){return s.status==="occupied";}).reduce(function(s,sp){return s + (Number(sp.area) || 0);}, 0);
+  const selOccPct    = totalArea > 0 ? Math.round(occupiedArea/totalArea*100) : (selSpaces.length > 0 ? Math.round(selOccupied/selSpaces.length*100) : 0);
+  // Contracts expiring within next 12 months
+  const oneYearMs    = 365 * 24 * 60 * 60 * 1000;
+  const expiringSoon = selContracts.filter(function(c) {
+    if (!c.end_date) return false;
+    var diff = new Date(c.end_date).getTime() - Date.now();
+    return diff > 0 && diff <= oneYearMs;
+  }).sort(function(a,b){return new Date(a.end_date).getTime() - new Date(b.end_date).getTime();});
 
   const typeInfo = function(v: string) { return PROP_TYPES.find(function(t){return t.v===v;})??PROP_TYPES[4]; };
 
@@ -230,8 +241,8 @@ export default function PropertiesPage() {
                 <div className="grid grid-cols-4 gap-3">
                   {[
                     {label:"הכנסה חודשית", value:fmtMoney(selRevenue),      color:"text-green-700", bg:"bg-green-50"},
-                    {label:"תפוסה",         value:selOccPct+"%",              color:"text-blue-700",  bg:"bg-blue-50"},
-                    {label:"יחידות",        value:selSpaces.length+" יח'",   color:"text-slate-700", bg:"bg-slate-50", link:"/units?propertyId="+selProp.id},
+                    {label:"תפוסה (לפי שטח)", value:selOccPct+"%",            color:"text-blue-700",  bg:"bg-blue-50"},
+                    {label:selVacant.length > 0 ? selVacant.length + " פנויות" : "יחידות", value:selOccupied + "/" + selSpaces.length + " יח'",   color:"text-slate-700", bg:"bg-slate-50", link:"/units?propertyId="+selProp.id},
                     {label:"חוזים פעילים", value:String(selContracts.length),color:"text-purple-700",bg:"bg-purple-50", link:"/contracts"},
                   ].map(function(k) {
                     return (
@@ -300,18 +311,75 @@ export default function PropertiesPage() {
                 <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
                   <div className="px-5 py-3 border-b border-slate-100 flex items-center justify-between">
                     <span className="font-semibold text-slate-700 text-sm">יחידות ({selSpaces.length})</span>
-                    <button onClick={function(){router.push("/units");}} className="text-xs text-blue-600 hover:underline">נהל →</button>
+                    <button onClick={function(){router.push("/units?propertyId="+selProp.id);}} className="text-xs text-blue-600 hover:underline">נהל →</button>
                   </div>
                   <div className="px-5 py-3 grid grid-cols-3 gap-2">
                     {[
                       {label:"מושכרות", count:selOccupied,                               color:"text-green-600"},
-                      {label:"פנויות",  count:selSpaces.filter(function(s){return s.status==="vacant";}).length, color:"text-blue-600"},
+                      {label:"פנויות",  count:selVacant.length, color:"text-blue-600"},
                       {label:"תחזוקה", count:selSpaces.filter(function(s){return s.status==="maintenance";}).length, color:"text-slate-400"},
                     ].map(function(k) {
                       return (
                         <div key={k.label} className="text-center">
                           <div className={"text-xl font-black " + k.color}>{k.count}</div>
                           <div className="text-xs text-slate-400">{k.label}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* יחידות פנויות — פירוט */}
+              {selVacant.length > 0 && (
+                <div className="rounded-xl border border-blue-200 bg-blue-50/30 shadow-sm overflow-hidden">
+                  <div className="px-5 py-3 border-b border-blue-200 flex items-center justify-between">
+                    <span className="font-bold text-blue-800 text-sm">🏠 יחידות פנויות ({selVacant.length})</span>
+                    <span className="text-xs text-blue-600">סה"כ {selVacant.reduce(function(s,sp){return s+(Number(sp.area)||0);},0)} מ&quot;ר זמין</span>
+                  </div>
+                  <div className="divide-y divide-blue-100">
+                    {selVacant.map(function(sp) {
+                      return (
+                        <div key={sp.id} className="px-5 py-2.5 flex items-center justify-between hover:bg-blue-50 cursor-pointer"
+                          onClick={function(){router.push("/units?propertyId="+selProp.id);}}>
+                          <div className="flex items-center gap-2">
+                            <span className="text-blue-500">📍</span>
+                            <span className="font-semibold text-slate-700 text-sm">{sp.space_name}</span>
+                          </div>
+                          <span className="text-sm text-slate-600">{sp.area || "—"} מ&quot;ר</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* חוזים שמסתיימים בשנה הקרובה */}
+              {expiringSoon.length > 0 && (
+                <div className="rounded-xl border border-orange-200 bg-orange-50/30 shadow-sm overflow-hidden">
+                  <div className="px-5 py-3 border-b border-orange-200 flex items-center justify-between">
+                    <span className="font-bold text-orange-800 text-sm">⏰ חוזים שמסתיימים בשנה הקרובה ({expiringSoon.length})</span>
+                  </div>
+                  <div className="divide-y divide-orange-100">
+                    {expiringSoon.map(function(c) {
+                      var daysLeft = Math.ceil((new Date(c.end_date).getTime() - Date.now()) / (24*60*60*1000));
+                      var monthsLeft = Math.floor(daysLeft / 30);
+                      var spNames = (c.contract_spaces||[]).map(function(cs:any){return cs.spaces?.space_name;}).filter(Boolean).join(", ");
+                      return (
+                        <div key={c.id} className="px-5 py-3 hover:bg-orange-50 cursor-pointer"
+                          onClick={function(){router.push("/contracts");}}>
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <div className="font-semibold text-slate-800 text-sm">{c.tenants?.name}</div>
+                              {spNames && <div className="text-xs text-slate-500 mt-0.5">{spNames}</div>}
+                            </div>
+                            <div className="text-left">
+                              <div className={"text-sm font-bold " + (daysLeft <= 90 ? "text-red-600" : "text-orange-700")}>
+                                {monthsLeft > 0 ? monthsLeft + " חודשים" : daysLeft + " ימים"}
+                              </div>
+                              <div className="text-xs text-slate-500">עד {fmtDate(c.end_date)}</div>
+                            </div>
+                          </div>
                         </div>
                       );
                     })}
