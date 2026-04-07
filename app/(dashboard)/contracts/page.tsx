@@ -485,6 +485,8 @@ export default function ContractsPage() {
   // when their date range overlaps with the original main period
   var currentRentPerSqm = originalRentPerSqm;
   var currentContractYear = 0;
+  var currentInOption = false;
+  var currentOptionLabel = "";
   if (selContract?.start_date && priceTimeline.length > 0) {
     var now = new Date();
     for (var i = priceTimeline.length - 1; i >= 0; i--) {
@@ -492,6 +494,10 @@ export default function ContractsPage() {
       if (new Date(entry.startDate) <= now && new Date(entry.endDate) > now) {
         currentRentPerSqm = entry.rentPerSqm ?? originalRentPerSqm;
         currentContractYear = i + 1;
+        if (entry.source && entry.source.toString().startsWith("option")) {
+          currentInOption = true;
+          currentOptionLabel = entry.label || "אופציה";
+        }
         break;
       }
     }
@@ -941,7 +947,7 @@ export default function ContractsPage() {
                     <div className="text-sm font-bold text-slate-700 mb-2 flex items-center gap-2">
                       📐 פירוט לפי יחידה
                       {latestAmendment && <span className="text-xs font-normal text-yellow-600">(אחרי תוספת {latestAmendment.amendment_number})</span>}
-                      {stepRentMultiplier > 1 && <span className="text-xs font-normal text-blue-600">(שנה {currentContractYear})</span>}
+                      {stepRentMultiplier > 1 && <span className="text-xs font-normal text-blue-600">({currentInOption ? currentOptionLabel : "שנה " + currentContractYear})</span>}
                     </div>
                     <div className="space-y-1.5">
                       {effectiveSpaces.map(function(cs: any) {
@@ -982,7 +988,7 @@ export default function ContractsPage() {
                             </div>
                             {/* Per-sqm breakdown for sqm-based units */}
                             {!isFixed && spArea > 0 && (
-                              <div className="flex gap-3 mt-1 text-xs text-slate-500">
+                              <div className="flex gap-3 mt-1 text-xs text-slate-500 flex-wrap">
                                 {hasCpiData ? (
                                   <span>{fmtMoney(cpiPsqm)}/מ&quot;ר צמוד</span>
                                 ) : hasStepped ? (
@@ -991,15 +997,19 @@ export default function ContractsPage() {
                                   <span>{fmtMoney(basePsqm)}/מ&quot;ר</span>
                                 )}
                                 {(hasStepped || hasCpiData) && basePsqm !== (hasCpiData ? cpiPsqm : steppedPsqm) && (
-                                  <span className="text-slate-400">(בסיס: {fmtMoney(basePsqm)}/מ&quot;ר)</span>
+                                  <span className="text-slate-400">
+                                    {currentInOption
+                                      ? `(בסיס באופציה: ${fmtMoney(steppedPsqm)}/מ"ר | מקורי: ${fmtMoney(basePsqm)}/מ"ר)`
+                                      : `(בסיס: ${fmtMoney(basePsqm)}/מ"ר)`}
+                                  </span>
                                 )}
                               </div>
                             )}
                             {/* Fixed rent breakdown */}
                             {isFixed && (hasStepped || hasCpiData) && (
-                              <div className="flex gap-3 mt-1 text-xs text-slate-500">
-                                <span>בסיס: {fmtMoney(rawMonthly)}</span>
-                                {hasStepped && <span>→ שנה {currentContractYear}: {fmtMoney(steppedMonthly)}</span>}
+                              <div className="flex gap-3 mt-1 text-xs text-slate-500 flex-wrap">
+                                <span>{currentInOption ? "מקורי" : "בסיס"}: {fmtMoney(rawMonthly)}</span>
+                                {hasStepped && <span>→ {currentInOption ? "באופציה" : "שנה " + currentContractYear}: {fmtMoney(steppedMonthly)}</span>}
                                 {hasCpiData && <span>→ צמוד: {fmtMoney(cpiMonthly)}</span>}
                               </div>
                             )}
