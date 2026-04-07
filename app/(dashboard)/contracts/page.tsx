@@ -54,8 +54,8 @@ function formatDateForCbs(dateStr: string): string | null {
 
 const STATUS_MAP: Record<string,{label:string;color:string;dot:string}> = {
   active:   {label:"פעיל",    color:"bg-green-100 text-green-700",  dot:"bg-green-500"},
-  expiring: {label:"פוגה",   color:"bg-yellow-100 text-yellow-700",dot:"bg-yellow-500"},
-  extended: {label:"מורחב",  color:"bg-blue-100 text-blue-700",    dot:"bg-blue-500"},
+  expiring: {label:"מסתיים", color:"bg-yellow-100 text-yellow-700",dot:"bg-yellow-500"},
+  extended: {label:"פעיל",   color:"bg-green-100 text-green-700",  dot:"bg-green-500"}, // alias for active
   upcoming: {label:"עתידי",  color:"bg-purple-100 text-purple-700",dot:"bg-purple-500"},
   ended:    {label:"הסתיים", color:"bg-slate-100 text-slate-500",  dot:"bg-slate-400"},
 };
@@ -483,7 +483,12 @@ export default function ContractsPage() {
 
   const filtered = contracts.filter(function(c) {
     if (c.is_amendment) return false; // Hide amendments from sidebar
-    const ms = filterSt==="all" || c.status===filterSt;
+    var ms = false;
+    if (filterSt === "all") ms = true;
+    else if (filterSt === "active") ms = c.status === "active" || c.status === "extended" || c.status === "expiring";
+    else if (filterSt === "ended") ms = c.status === "ended";
+    else if (filterSt === "upcoming") ms = c.status === "upcoming";
+    else ms = c.status === filterSt;
     const mp = filterProp === "all" || c.property_id === filterProp;
     const mq = !search || c.tenants?.name?.includes(search) || c.properties?.name?.includes(search);
     return ms && mp && mq;
@@ -608,8 +613,12 @@ export default function ContractsPage() {
   const vat         = selContract?.vat_type==="taxable" ? displayRent*0.18 : 0;
   const remaining   = effectiveEndDate ? yearsMonthsLeft(effectiveEndDate) : null;
 
-  const counts: Record<string,number> = {};
-  contracts.filter(function(c) { return !c.is_amendment; }).forEach(function(c){counts[c.status]=(counts[c.status]??0)+1;});
+  const counts: Record<string,number> = { active: 0, upcoming: 0, ended: 0 };
+  contracts.filter(function(c) { return !c.is_amendment; }).forEach(function(c){
+    if (c.status === "active" || c.status === "extended" || c.status === "expiring") counts.active++;
+    else if (c.status === "upcoming") counts.upcoming++;
+    else if (c.status === "ended") counts.ended++;
+  });
 
   async function handleDeleteContract(contractId: string) {
     if (!confirm("למחוק חוזה? פעולה זו תמחק גם את כל החיובים, הערבויות, הביטוחים והמכתבים של החוזה!")) return;
@@ -660,7 +669,7 @@ export default function ContractsPage() {
 
       {/* Status filter */}
       <div className="flex gap-2 mb-4 flex-wrap">
-        {[{v:"all",l:"הכל"},{v:"active",l:"פעיל"},{v:"expiring",l:"פוגה"},{v:"extended",l:"מורחב"},{v:"upcoming",l:"עתידי"},{v:"ended",l:"הסתיים"}].map(function(s) {
+        {[{v:"all",l:"הכל"},{v:"active",l:"פעיל"},{v:"upcoming",l:"עתידי"},{v:"ended",l:"הסתיים"}].map(function(s) {
           const cnt = s.v==="all" ? contracts.filter(function(c){return !c.is_amendment;}).length : (counts[s.v]??0);
           const si  = STATUS_MAP[s.v];
           return (
