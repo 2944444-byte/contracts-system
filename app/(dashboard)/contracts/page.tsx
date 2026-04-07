@@ -387,9 +387,11 @@ export default function ContractsPage() {
             }
           }
           try {
-            var data: any = await fetchCpiAdjusted({ value: 1, fromDate: fromDate, toDate: toDate });
+            // Use 10000 instead of 1 to avoid rounding errors (CBS rounds to 2 decimals)
+            var data: any = await fetchCpiAdjusted({ value: 10000, fromDate: fromDate, toDate: toDate });
             if (!data || !data.success) return { fromDate: fromDate, ratio: 1, source: "error" };
-            return { fromDate: fromDate, ratio: Number(data.adjustedRentPerSqm) || 1, source: "cbs" };
+            var preciseRatio = (Number(data.adjustedRentPerSqm) || 10000) / 10000;
+            return { fromDate: fromDate, ratio: preciseRatio, source: "cbs" };
           } catch {
             return { fromDate: fromDate, ratio: 1, source: "fallback" };
           }
