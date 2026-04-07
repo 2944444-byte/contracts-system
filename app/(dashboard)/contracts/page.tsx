@@ -164,11 +164,11 @@ export default function ContractsPage() {
     const origRent = Number(selContract.rent_per_sqm);
     if (!origRent) { setCpiResult(null); return; }
 
-    // Determine current rent from step-rent timeline
+    // Determine current rent from step-rent timeline (search backwards for option priority)
     var currentRent = origRent;
     if (priceTimeline.length > 0) {
       var now = new Date();
-      for (var i = 0; i < priceTimeline.length; i++) {
+      for (var i = priceTimeline.length - 1; i >= 0; i--) {
         if (new Date(priceTimeline[i].startDate) <= now && new Date(priceTimeline[i].endDate) > now) {
           currentRent = priceTimeline[i].rentPerSqm ?? origRent;
           break;
@@ -383,11 +383,13 @@ export default function ContractsPage() {
   const originalRentPerSqm = Number(effectiveRentPerSqm) || 0;
 
   // Current rent per sqm based on contract year (step-rent mechanism)
+  // Search BACKWARDS so option entries (which come after main) take priority
+  // when their date range overlaps with the original main period
   var currentRentPerSqm = originalRentPerSqm;
   var currentContractYear = 0;
   if (selContract?.start_date && priceTimeline.length > 0) {
     var now = new Date();
-    for (var i = 0; i < priceTimeline.length; i++) {
+    for (var i = priceTimeline.length - 1; i >= 0; i--) {
       var entry = priceTimeline[i];
       if (new Date(entry.startDate) <= now && new Date(entry.endDate) > now) {
         currentRentPerSqm = entry.rentPerSqm ?? originalRentPerSqm;
