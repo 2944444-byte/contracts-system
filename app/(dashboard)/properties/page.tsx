@@ -3,7 +3,17 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit-log';
+import { fetchCpiAdjusted } from '@/lib/cpi-server';
 import PropertyBudgetManager from '@/components/PropertyBudgetManager';
+
+function formatDateForCbs(dateStr: string): string | null {
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return null;
+  if (d.getDate() === 15) d.setDate(16);
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${mm}-${dd}-${d.getFullYear()}`;
+}
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 
@@ -34,6 +44,8 @@ export default function PropertiesPage() {
   const [saving,     setSaving]     = useState(false);
   const [search,     setSearch]     = useState("");
   const [budgetFor,  setBudgetFor]  = useState<any>(null);
+  const [cpiRatios,  setCpiRatios]  = useState<Record<string, number>>({}); // contract_id → ratio
+  const [cpiLoading, setCpiLoading] = useState(false);
 
   const [fName,       setFName]       = useState("");
   const [fCompanyId,  setFCompanyId]  = useState("");
@@ -55,10 +67,62 @@ export default function PropertiesPage() {
 
   useEffect(function() { loadAll(); }, []);
 
+  // Compute CPI ratio per contract for the selected property (for indexed revenue)
+  useEffect(function() {
+    (async function() {
+      try {
+        if (!selected) { setCpiRatios({}); return; }
+        var propContracts = contracts.filter(function(c) { return c.property_id === selected && !c.is_amendment; });
+        if (propContracts.length === 0) { setCpiRatios({}); return; }
+
+        // Group contracts by base date to deduplicate API calls
+        var groups: Record<string, string[]> = {};
+        propContracts.forEach(function(c) {
+          if (c.indexation_method === "none") return;
+          var baseDate = c.index_base_date || null;
+          if (!baseDate) return;
+          var cbsDate = formatDateForCbs(baseDate);
+          if (!cbsDate) return;
+          if (!groups[cbsDate]) groups[cbsDate] = [];
+          groups[cbsDate].push(c.id);
+        });
+
+        var groupKeys = Object.keys(groups);
+        if (groupKeys.length === 0) { setCpiRatios({}); return; }
+
+        setCpiLoading(true);
+        var todayForCbs = formatDateForCbs(new Date().toISOString());
+        if (!todayForCbs) { setCpiLoading(false); return; }
+
+        var results = await Promise.all(groupKeys.map(async function(fromDate) {
+          try {
+            var data: any = await fetchCpiAdjusted({ value: 10000, fromDate: fromDate, toDate: todayForCbs as string });
+            if (!data || !data.success) return { fromDate: fromDate, ratio: 1 };
+            return { fromDate: fromDate, ratio: (Number(data.adjustedRentPerSqm) || 10000) / 10000 };
+          } catch {
+            return { fromDate: fromDate, ratio: 1 };
+          }
+        }));
+
+        var map: Record<string, number> = {};
+        results.forEach(function(r: any, i: number) {
+          var contractIds = groups[groupKeys[i]] || [];
+          contractIds.forEach(function(cid: string) { map[cid] = r.ratio; });
+        });
+        setCpiRatios(map);
+        setCpiLoading(false);
+      } catch (e) {
+        console.error("property cpi error:", e);
+        setCpiRatios({});
+        setCpiLoading(false);
+      }
+    })();
+  }, [selected, contracts.length]);
+
   async function loadAll() {
     const [{ data: p }, { data: c }, { data: sp }, { data: co }] = await Promise.all([
       supabase.from("properties").select("*, companies(company_name)").order("name"),
-      supabase.from("contracts").select("id, status, rent_per_sqm, charged_area, investment_addition, property_id, end_date, tenants(name), contract_spaces(space_id,spaces(space_name))").in("status",["active","expiring","extended"]),
+      supabase.from("contracts").select("id, status, rent_per_sqm, charged_area, investment_addition, property_id, end_date, indexation_method, index_base_date, index_base_value, is_amendment, parent_contract_id, tenants(name), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area))").in("status",["active","expiring","extended"]),
       supabase.from("spaces").select("id, property_id, status, space_name, area").order("space_name"),
       supabase.from("companies").select("id,company_name").order("company_name"),
     ]);
@@ -68,6 +132,19 @@ export default function PropertiesPage() {
     setCompanies(co ?? []);
     setLoading(false);
     if (!selected && (p??[]).length > 0) setSelected((p??[])[0].id);
+  }
+
+  // Calculate base monthly rent for a contract (handles per-unit pricing)
+  function calcContractRent(c: any): number {
+    var total = 0;
+    if (c.contract_spaces?.length > 0) {
+      c.contract_spaces.forEach(function(cs: any) {
+        if (cs.charge_method === "fixed" && cs.fixed_rent) total += Number(cs.fixed_rent);
+        else total += (Number(cs.price_per_sqm) || Number(c.rent_per_sqm) || 0) * (cs.spaces?.area || 0);
+      });
+    }
+    if (total === 0) total = (Number(c.rent_per_sqm) || 0) * (Number(c.charged_area) || 0);
+    return total + (Number(c.investment_addition) || 0);
   }
 
   function openNew() {
@@ -151,8 +228,17 @@ export default function PropertiesPage() {
 
   const selProp = properties.find(function(p) { return p.id === selected; });
   const selSpaces    = spaces.filter(function(s) { return s.property_id === selected; });
-  const selContracts = contracts.filter(function(c) { return c.property_id === selected; });
-  const selRevenue   = selContracts.reduce(function(s,c){return s+(c.rent_per_sqm??0)*(c.charged_area??0)+(c.investment_addition??0);},0);
+  // Filter out amendments — show only main contracts. Amendment data is folded into parent below.
+  const selContracts = contracts.filter(function(c) { return c.property_id === selected && !c.is_amendment; });
+  // Base revenue (not indexed) — using accurate per-unit calculation
+  const selRevenueBase = selContracts.reduce(function(s,c){return s + calcContractRent(c);},0);
+  // Indexed revenue — applies CPI ratio per contract from cpiRatios state
+  const selRevenueIndexed = selContracts.reduce(function(s,c){
+    var base = calcContractRent(c);
+    var ratio = cpiRatios[c.id] || 1;
+    return s + (base * ratio);
+  },0);
+  const selRevenue = selRevenueBase; // for backwards compat below
   const selOccupied  = selSpaces.filter(function(s){return s.status==="occupied";}).length;
   const selVacant    = selSpaces.filter(function(s){return s.status==="vacant";});
   // Occupancy by AREA (more meaningful than by count)
@@ -238,11 +324,12 @@ export default function PropertiesPage() {
                 </div>
 
                 {/* KPI */}
-                <div className="grid grid-cols-4 gap-3">
+                <div className="grid grid-cols-5 gap-2">
                   {[
-                    {label:"הכנסה חודשית", value:fmtMoney(selRevenue),      color:"text-green-700", bg:"bg-green-50"},
+                    {label: cpiLoading ? "מחשב הצמדה..." : "הכנסה צמודה", value:fmtMoney(selRevenueIndexed || selRevenueBase), color:"text-green-700", bg:"bg-green-50"},
+                    {label:"הכנסה לא צמודה", value:fmtMoney(selRevenueBase), color:"text-slate-700", bg:"bg-slate-50"},
                     {label:"תפוסה (לפי שטח)", value:selOccPct+"%",            color:"text-blue-700",  bg:"bg-blue-50"},
-                    {label:selVacant.length > 0 ? selVacant.length + " פנויות" : "יחידות", value:selOccupied + "/" + selSpaces.length + " יח'",   color:"text-slate-700", bg:"bg-slate-50", link:"/units?propertyId="+selProp.id},
+                    {label:selVacant.length > 0 ? selVacant.length + " פנויות" : "יחידות", value:selOccupied + "/" + selSpaces.length + " יח'",   color:"text-orange-700", bg:"bg-orange-50", link:"/units?propertyId="+selProp.id},
                     {label:"חוזים פעילים", value:String(selContracts.length),color:"text-purple-700",bg:"bg-purple-50", link:"/contracts"},
                   ].map(function(k) {
                     return (
@@ -288,7 +375,9 @@ export default function PropertiesPage() {
                   </div>
                   <div className="divide-y divide-slate-100">
                     {selContracts.map(function(c) {
-                      const mon = (c.rent_per_sqm??0)*(c.charged_area??0)+(c.investment_addition??0);
+                      const monBase = calcContractRent(c);
+                      const monIdx = monBase * (cpiRatios[c.id] || 1);
+                      const mon = monIdx;
                       return (
                         <div key={c.id} className="px-5 py-3 flex items-center justify-between hover:bg-slate-50">
                           <div>
