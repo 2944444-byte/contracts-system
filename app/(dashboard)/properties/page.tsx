@@ -366,35 +366,6 @@ export default function PropertiesPage() {
                 </button>
               </div>
 
-              {/* חוזים */}
-              {selContracts.length > 0 && (
-                <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-                  <div className="px-5 py-3 border-b border-slate-100 flex items-center justify-between">
-                    <span className="font-semibold text-slate-700 text-sm">חוזים פעילים ({selContracts.length})</span>
-                    <button onClick={function(){router.push("/contracts");}} className="text-xs text-blue-600 hover:underline">הכל →</button>
-                  </div>
-                  <div className="divide-y divide-slate-100">
-                    {selContracts.map(function(c) {
-                      const monBase = calcContractRent(c);
-                      const monIdx = monBase * (cpiRatios[c.id] || 1);
-                      const mon = monIdx;
-                      return (
-                        <div key={c.id} className="px-5 py-3 flex items-center justify-between hover:bg-slate-50">
-                          <div>
-                            <div className="font-medium text-slate-800 text-sm">{c.tenants?.name}</div>
-                            <span className={"text-xs px-1.5 py-0.5 rounded-full " +
-                              (c.status==="active"?"bg-green-100 text-green-700":c.status==="expiring"?"bg-yellow-100 text-yellow-700":"bg-blue-100 text-blue-700")}>
-                              {c.status==="active"?"פעיל":c.status==="expiring"?"פוגה":"מורחב"}
-                            </span>
-                          </div>
-                          <div className="font-bold text-green-700 text-sm">{fmtMoney(mon)}/חודש</div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
               {/* יחידות */}
               {selSpaces.length > 0 && (
                 <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
@@ -469,6 +440,35 @@ export default function PropertiesPage() {
                               <div className="text-xs text-slate-500">עד {fmtDate(c.end_date)}</div>
                             </div>
                           </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* חוזים פעילים — מתחת לפרטים */}
+              {selContracts.length > 0 && (
+                <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+                  <div className="px-5 py-3 border-b border-slate-100 flex items-center justify-between">
+                    <span className="font-semibold text-slate-700 text-sm">חוזים פעילים ({selContracts.length})</span>
+                    <button onClick={function(){router.push("/contracts");}} className="text-xs text-blue-600 hover:underline">הכל →</button>
+                  </div>
+                  <div className="divide-y divide-slate-100">
+                    {selContracts.map(function(c) {
+                      const monBase = calcContractRent(c);
+                      const monIdx = monBase * (cpiRatios[c.id] || 1);
+                      const mon = monIdx;
+                      return (
+                        <div key={c.id} className="px-5 py-3 flex items-center justify-between hover:bg-slate-50">
+                          <div>
+                            <div className="font-medium text-slate-800 text-sm">{c.tenants?.name}</div>
+                            <span className={"text-xs px-1.5 py-0.5 rounded-full " +
+                              (c.status==="active"?"bg-green-100 text-green-700":c.status==="expiring"?"bg-yellow-100 text-yellow-700":"bg-blue-100 text-blue-700")}>
+                              {c.status==="active"?"פעיל":c.status==="expiring"?"פוגה":"מורחב"}
+                            </span>
+                          </div>
+                          <div className="font-bold text-green-700 text-sm">{fmtMoney(mon)}/חודש</div>
                         </div>
                       );
                     })}
