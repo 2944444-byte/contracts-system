@@ -49,6 +49,8 @@ export default function PropertiesPage() {
 
   const [fName,       setFName]       = useState("");
   const [fCompanyId,  setFCompanyId]  = useState("");
+  const [fGroupId,    setFGroupId]    = useState("");
+  const [propertyGroups, setPropertyGroups] = useState<any[]>([]);
   const [fType,       setFType]       = useState("office");
   const [fAddress,    setFAddress]    = useState("");
   const [fCity,       setFCity]       = useState("");
@@ -130,6 +132,9 @@ export default function PropertiesPage() {
     setContracts(c ?? []);
     setSpaces(sp ?? []);
     setCompanies(co ?? []);
+    // Load property groups separately
+    var { data: g } = await supabase.from("property_groups").select("id,group_name").order("group_name");
+    setPropertyGroups(g ?? []);
     setLoading(false);
     if (!selected && (p??[]).length > 0) setSelected((p??[])[0].id);
   }
@@ -149,13 +154,13 @@ export default function PropertiesPage() {
 
   function openNew() {
     setIsNew(true); setEditingId("new");
-    setFName(""); setFCompanyId(""); setFType("office"); setFAddress(""); setFCity(""); setFArea(""); setFFloors(""); setFNotes("");
+    setFName(""); setFCompanyId(""); setFGroupId(""); setFType("office"); setFAddress(""); setFCity(""); setFArea(""); setFFloors(""); setFNotes("");
     setFYardArea(""); setFParking(""); setFInsurCost(""); setFInsurDate(""); setFInsurPolicy(""); setFMgmtBudget(""); setFWasteCost("");
   }
 
   function openEdit(p: any) {
     setIsNew(false); setEditingId(p.id);
-    setFName(p.name??""); setFCompanyId(p.company_id??""); setFType(p.property_type??"office");
+    setFName(p.name??""); setFCompanyId(p.company_id??""); setFGroupId(p.group_id??""); setFType(p.property_type??"office");
     setFAddress(p.address??""); setFCity(p.city??""); setFArea(p.total_area?.toString()??"");
     setFFloors(p.floors?.toString()??""); setFNotes(p.notes??"");
     setFYardArea(p.yard_terrace_area?.toString()??""); setFParking(p.parking_spaces?.toString()??"");
@@ -171,7 +176,7 @@ export default function PropertiesPage() {
     setSaving(true);
     try {
       const payload: any = {
-        name: fName.trim(), company_id: fCompanyId||null,
+        name: fName.trim(), company_id: fCompanyId||null, group_id: fGroupId||null,
         property_type: fType, address: fAddress||null, city: fCity||null,
         total_area: fArea ? Number(fArea) : null, floors: fFloors ? Number(fFloors) : null,
         notes: fNotes||null,
@@ -499,6 +504,16 @@ export default function PropertiesPage() {
                   <option value="">-- ללא חברה --</option>
                   {companies.map(function(c){return <option key={c.id} value={c.id}>{c.company_name}</option>;})}
                 </select>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">קבוצת נכסים</label>
+                <select value={fGroupId} onChange={function(e){setFGroupId(e.target.value);}} className={ic}>
+                  <option value="">-- ללא קבוצה --</option>
+                  {propertyGroups.map(function(g:any){return <option key={g.id} value={g.id}>{g.group_name}</option>;})}
+                </select>
+                <div className="text-xs text-slate-400 mt-1">
+                  ניהול קבוצות: <span className="text-blue-600 cursor-pointer hover:underline" onClick={function(){router.push("/groups");}}>עבור לדף קבוצות →</span>
+                </div>
               </div>
               <div>
                 <label className="mb-2 block text-xs font-semibold text-slate-700">סוג נכס</label>

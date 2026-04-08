@@ -22,7 +22,7 @@ export default function GroupsPage() {
   async function loadAll() {
     const [{ data: g }, { data: p }] = await Promise.all([
       supabase.from("property_groups").select("*").order("group_name"),
-      supabase.from("properties").select("id,name,group_id").order("group_name"),
+      supabase.from("properties").select("id,name,group_id").order("name"),
     ]);
     setGroups(g??[]); setProperties(p??[]); setLoading(false);
   }
@@ -71,7 +71,7 @@ export default function GroupsPage() {
                   <div className="rounded-xl bg-slate-50 p-3">
                     <div className="text-xs font-semibold text-slate-500 mb-2">נכסים ({props.length})</div>
                     {props.length===0 ? <div className="text-xs text-slate-400">אין נכסים</div> : (
-                      <div className="space-y-1">{props.slice(0,4).map(function(p){return <div key={p.id} className="flex items-center gap-2 text-xs text-slate-700"><span>🏢</span><span>{p.group_name}</span></div>;})}
+                      <div className="space-y-1">{props.slice(0,4).map(function(p){return <div key={p.id} className="flex items-center gap-2 text-xs text-slate-700"><span>🏢</span><span>{p.name}</span></div>;})}
                       {props.length>4&&<div className="text-xs text-slate-400">+{props.length-4} נוספים...</div>}</div>
                     )}
                   </div>
@@ -86,7 +86,7 @@ export default function GroupsPage() {
           {properties.filter(function(p){return !p.group_id;}).length>0&&(
             <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-5">
               <div className="flex items-center gap-2 mb-3"><span className="text-2xl">📋</span><h3 className="font-semibold text-slate-600">ללא קבוצה</h3></div>
-              <div className="space-y-1">{properties.filter(function(p){return !p.group_id;}).map(function(p){return <div key={p.id} className="text-xs text-slate-500 flex items-center gap-1"><span>🏢</span><span>{p.group_name}</span></div>;})}</div>
+              <div className="space-y-1">{properties.filter(function(p){return !p.group_id;}).map(function(p){return <div key={p.id} className="text-xs text-slate-500 flex items-center gap-1"><span>🏢</span><span>{p.name}</span></div>;})}</div>
             </div>
           )}
         </div>
