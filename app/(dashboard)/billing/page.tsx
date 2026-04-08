@@ -99,6 +99,9 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
 
   // reconciliation
   const [actualCost, setActualCost] = useState("");
+  const [groupActualCosts, setGroupActualCosts] = useState<Record<string, string>>({}); // groupId → actual cost
+  const [defaultActualCost, setDefaultActualCost] = useState(""); // actual cost for units not in any group
+  const [mgmtGroupsData, setMgmtGroupsData] = useState<any[]>([]);
   const [mgmtResults, setMgmtResults] = useState<MgmtResult[]>([]);
   const [computing, setComputing] = useState(false);
   const [creatingCharges, setCreatingCharges] = useState(false);
@@ -109,9 +112,19 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
 
   // load spaces when property changes to detect mixed use
   useEffect(function () {
-    if (!propId) { setIsMixed(false); setMixedRows([]); return; }
+    if (!propId) { setIsMixed(false); setMixedRows([]); setMgmtGroupsData([]); return; }
     loadSpaces();
-  }, [propId]);
+    loadMgmtGroups();
+  }, [propId, year]);
+
+  async function loadMgmtGroups() {
+    const { data } = await supabase.from("billing_groups")
+      .select("*,billing_group_spaces(space_id)")
+      .eq("property_id", propId)
+      .eq("group_type", "management")
+      .eq("year", year);
+    setMgmtGroupsData(data ?? []);
+  }
 
   async function loadSpaces() {
     const { data: spaces } = await supabase
@@ -180,10 +193,11 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
   }
 
   async function computeReconciliation() {
-    if (!propId || !actualCost) { alert("יש לבחור נכס ולהזין עלות בפועל"); return; }
+    if (!propId) { alert("יש לבחור נכס"); return; }
+    const hasGroups = mgmtGroupsData.length > 0;
+    if (!hasGroups && !actualCost) { alert("יש להזין עלות בפועל"); return; }
     setComputing(true);
     try {
-      const actual = Number(actualCost);
       // Load active contracts with their spaces
       const { data: contracts } = await supabase
         .from("contracts")
@@ -199,42 +213,32 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
         .eq("year", year)
         .single();
 
-      // Load management billing groups for this property+year
-      const { data: mgmtGroups } = await supabase.from("billing_groups")
-        .select("*,billing_group_spaces(space_id)")
-        .eq("property_id", propId)
-        .eq("group_type", "management")
-        .eq("year", year);
-
       const annualBudget = Number(budget?.management_budget) || 0;
-      const defaultRate = totalArea > 0 ? annualBudget / totalArea / 12 : 0;
 
-      // Build map: space_id → { rate, groupId, groupTotalArea }
-      const spaceGroupMap = new Map<string, { rate: number; groupId: string; groupTotalArea: number; }>();
-      const groupSpaceTotalArea: Record<string, number> = {};
-      for (const g of mgmtGroups ?? []) {
-        const sids = (g.billing_group_spaces || []).map((x: any) => x.space_id);
-        // Need space areas — load separately
-      }
       // Load all spaces for this property to get areas
       const { data: propSpaces } = await supabase.from("spaces").select("id,area").eq("property_id", propId);
       const spaceAreaMap = new Map<string, number>();
       (propSpaces ?? []).forEach((sp: any) => spaceAreaMap.set(sp.id, Number(sp.area) || 0));
 
-      for (const g of mgmtGroups ?? []) {
+      // Build map: space_id → { rate, groupId, groupTotalArea, groupActualCost }
+      const spaceGroupMap = new Map<string, { rate: number; groupId: string; groupTotalArea: number; groupActualCost: number; }>();
+      for (const g of mgmtGroupsData) {
         const sids = (g.billing_group_spaces || []).map((x: any) => x.space_id);
         const groupTotalArea = sids.reduce((s: number, sid: string) => s + (spaceAreaMap.get(sid) || 0), 0);
         const rate = Number(g.rate_per_sqm_monthly) || (Number(g.annual_amount) && groupTotalArea > 0 ? Number(g.annual_amount) / groupTotalArea / 12 : 0);
-        groupSpaceTotalArea[g.id] = groupTotalArea;
+        const groupActualCost = Number(groupActualCosts[g.id]) || 0;
         for (const sid of sids) {
-          spaceGroupMap.set(sid, { rate, groupId: g.id, groupTotalArea });
+          spaceGroupMap.set(sid, { rate, groupId: g.id, groupTotalArea, groupActualCost });
         }
       }
 
-      // Area totals for default (non-group) spaces
+      // Default (unassigned) space total area
       const groupedSpaceIds = new Set(spaceGroupMap.keys());
       const defaultSpaceArea = (propSpaces ?? []).filter((sp: any) => !groupedSpaceIds.has(sp.id))
         .reduce((s: number, sp: any) => s + (Number(sp.area) || 0), 0);
+      const defaultActual = Number(defaultActualCost) || (hasGroups ? 0 : Number(actualCost));
+      const defaultAnnualBudget = hasGroups ? annualBudget : annualBudget; // still same source
+      const defaultRate = defaultSpaceArea > 0 ? defaultAnnualBudget / defaultSpaceArea / 12 : (totalArea > 0 ? annualBudget / totalArea / 12 : 0);
 
       const results: MgmtResult[] = (contracts ?? []).map(function (c: any) {
         let advance = 0;
@@ -246,20 +250,17 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
           contractArea += spArea;
           const info = spaceGroupMap.get(cs.space_id);
           if (info) {
-            // This space is in a group — use group rate
+            // This space is in a group — use group rate for advance, group actual for share
             advance += info.rate * spArea * 12;
-            // Actual share: split user-entered actual proportionally between this group's area vs property total
-            actualShare += totalArea > 0 ? actual * (spArea / totalArea) : 0;
+            actualShare += info.groupTotalArea > 0 ? info.groupActualCost * (spArea / info.groupTotalArea) : 0;
           } else {
-            // Default rate
+            // Default/unassigned: use property default rate + default actual
             advance += defaultRate * spArea * 12;
-            actualShare += totalArea > 0 ? actual * (spArea / totalArea) : 0;
+            actualShare += defaultSpaceArea > 0 ? defaultActual * (spArea / defaultSpaceArea) : 0;
           }
         }
 
         if (contractArea === 0) contractArea = c.charged_area ?? 0;
-        if (advance === 0) advance = defaultRate * contractArea * 12;
-        if (actualShare === 0 && totalArea > 0) actualShare = actual * (contractArea / totalArea);
 
         return {
           contractId: c.id,
@@ -473,29 +474,68 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
 
       {/* Section B: Reconciliation */}
       <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-        <h2 className="text-lg font-bold text-slate-800 mb-4">{"\u05D4\u05EA\u05D7\u05E9\u05D1\u05E0\u05D5\u05EA"}</h2>
-        <div className="grid grid-cols-3 gap-4 mb-4">
+        <h2 className="text-lg font-bold text-slate-800 mb-4">התחשבנות — עלות בפועל לשנה {year}</h2>
+        <div className="grid grid-cols-2 gap-4 mb-4">
           <div>
-            <label className="mb-1 block text-xs font-semibold text-slate-700">{"\u05E0\u05DB\u05E1"}</label>
+            <label className="mb-1 block text-xs font-semibold text-slate-700">נכס</label>
             <select value={propId} onChange={function (e) { setPropId(e.target.value); }} className={ic}>
-              <option value="">{"\u2014 \u05D1\u05D7\u05E8 \u05E0\u05DB\u05E1 \u2014"}</option>
+              <option value="">— בחר נכס —</option>
               {properties.map(function (p) {
                 return <option key={p.id} value={p.id}>{p.name}</option>;
               })}
             </select>
           </div>
           <div>
-            <label className="mb-1 block text-xs font-semibold text-slate-700">{"\u05E9\u05E0\u05D4"}</label>
+            <label className="mb-1 block text-xs font-semibold text-slate-700">שנה</label>
             <input type="number" value={year} onChange={function (e) { setYear(Number(e.target.value)); }} className={ic} />
           </div>
-          <div>
-            <label className="mb-1 block text-xs font-semibold text-slate-700">{"\u05E2\u05DC\u05D5\u05EA \u05D1\u05E4\u05D5\u05E2\u05DC (\u20AA)"}</label>
-            <input type="number" value={actualCost} onChange={function (e) { setActualCost(e.target.value); }} className={ic} placeholder="0" />
-          </div>
         </div>
-        <button onClick={computeReconciliation} disabled={computing || !propId || !actualCost}
+
+        {/* Per-group actual costs */}
+        {propId && mgmtGroupsData.length > 0 && (
+          <div className="rounded-lg border border-blue-200 bg-blue-50/30 p-4 mb-4">
+            <div className="text-xs font-bold text-blue-800 mb-2">עלות בפועל לכל קבוצה (שנתי)</div>
+            <div className="space-y-2">
+              {mgmtGroupsData.map(function(g: any) {
+                return (
+                  <div key={g.id} className="flex items-center gap-3">
+                    <div className="flex-1">
+                      <div className="text-sm font-semibold text-slate-700">{g.name}</div>
+                      <div className="text-xs text-slate-500">{(g.billing_group_spaces || []).length} יחידות | תקציב שנתי: {fmtMoney(Number(g.annual_amount) || 0)}</div>
+                    </div>
+                    <input type="number" value={groupActualCosts[g.id] || ""}
+                      onChange={function(e){ setGroupActualCosts(function(p){return {...p, [g.id]: e.target.value};}); }}
+                      className="w-36 rounded-lg border border-slate-300 px-3 py-2 text-sm text-right"
+                      placeholder="0 ₪ בפועל" />
+                  </div>
+                );
+              })}
+              <div className="border-t border-blue-200 pt-2 flex items-center gap-3">
+                <div className="flex-1">
+                  <div className="text-sm font-semibold text-slate-700">יתר היחידות (תעריף ברירת מחדל)</div>
+                  <div className="text-xs text-slate-500">תקציב שנתי: {fmtMoney(0)}</div>
+                </div>
+                <input type="number" value={defaultActualCost}
+                  onChange={function(e){ setDefaultActualCost(e.target.value); }}
+                  className="w-36 rounded-lg border border-slate-300 px-3 py-2 text-sm text-right"
+                  placeholder="0 ₪ בפועל" />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Simple single-cost input (when no groups) */}
+        {propId && mgmtGroupsData.length === 0 && (
+          <div className="mb-4">
+            <label className="mb-1 block text-xs font-semibold text-slate-700">עלות בפועל לשנה (₪)</label>
+            <input type="number" value={actualCost} onChange={function (e) { setActualCost(e.target.value); }}
+              className={ic + " max-w-xs"} placeholder="0" />
+          </div>
+        )}
+
+        <button onClick={computeReconciliation} disabled={computing || !propId}
           className="rounded-lg bg-purple-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-purple-800 disabled:opacity-50">
-          {computing ? "\u05DE\u05D7\u05E9\u05D1..." : "\u05D7\u05E9\u05D1"}
+          {computing ? "מחשב..." : "חשב"}
         </button>
 
         {mgmtResults.length > 0 && (

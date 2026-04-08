@@ -108,6 +108,19 @@ export default function BillingGroupsManager({ propertyId, year, groupType, onCh
     if (!fName.trim()) { alert("חובה: שם הקבוצה"); return; }
     if (fSpaceIds.length === 0) { alert("יש לבחור לפחות יחידה אחת"); return; }
     if (!fRate && !fAnnual) { alert("יש להזין תעריף או סכום שנתי"); return; }
+    // Validate no space is in another group of same type
+    const conflicts: string[] = [];
+    for (const sid of fSpaceIds) {
+      const other = groups.find((g) => g.id !== editing?.id && g.spaceIds.includes(sid));
+      if (other) {
+        const sp = allSpaces.find((x) => x.id === sid);
+        conflicts.push(`${sp?.space_name} (בקבוצה "${other.name}")`);
+      }
+    }
+    if (conflicts.length > 0) {
+      alert("יחידות כבר משויכות לקבוצה אחרת:\n" + conflicts.join("\n"));
+      return;
+    }
 
     setSaving(true);
     try {
@@ -269,22 +282,41 @@ export default function BillingGroupsManager({ propertyId, year, groupType, onCh
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <label className="text-xs font-semibold text-slate-700">יחידות בקבוצה ({fSpaceIds.length} נבחרו, {editingTotalArea.toLocaleString("he-IL")} מ&quot;ר)</label>
-                  <button type="button" onClick={() => setFSpaceIds(fSpaceIds.length === allSpaces.length ? [] : allSpaces.map((s) => s.id))}
+                  <button type="button" onClick={() => {
+                      // Select all unassigned (not in OTHER groups) + currently selected
+                      const takenByOthers = new Set<string>();
+                      for (const g of groups) {
+                        if (g.id === editing?.id) continue;
+                        g.spaceIds.forEach((sid) => takenByOthers.add(sid));
+                      }
+                      const available = allSpaces.filter((s) => !takenByOthers.has(s.id)).map((s) => s.id);
+                      setFSpaceIds(fSpaceIds.length === available.length ? [] : available);
+                    }}
                     className="text-xs text-blue-600 hover:underline">
-                    {fSpaceIds.length === allSpaces.length ? "נקה הכל" : "בחר הכל"}
+                    {fSpaceIds.length > 0 ? "נקה הכל" : "בחר הכל הזמינים"}
                   </button>
                 </div>
                 <div className="grid grid-cols-2 gap-2 max-h-64 overflow-y-auto border border-slate-200 rounded-lg p-2">
                   {allSpaces.map((s) => {
                     const sel = fSpaceIds.includes(s.id);
+                    // Find if it's in another group (not the one being edited)
+                    const otherGroup = groups.find((g) => g.id !== editing?.id && g.spaceIds.includes(s.id));
+                    const takenByOther = !!otherGroup;
                     return (
-                      <button key={s.id} type="button" onClick={() => toggleSpace(s.id)}
+                      <button key={s.id} type="button"
+                        onClick={() => { if (!takenByOther) toggleSpace(s.id); }}
+                        disabled={takenByOther}
                         className={"rounded-lg border p-2 text-right text-xs transition-all " +
-                          (sel ? "border-blue-500 bg-blue-50 font-bold text-blue-700" : "border-slate-200 hover:bg-slate-50")}>
+                          (takenByOther
+                            ? "border-slate-200 bg-slate-100 opacity-60 cursor-not-allowed"
+                            : sel ? "border-blue-500 bg-blue-50 font-bold text-blue-700" : "border-slate-200 hover:bg-slate-50")}>
                         <div className="flex items-center justify-between">
                           <span>{s.space_name}</span>
                           <span className="text-slate-400">{s.area || 0} מ&quot;ר</span>
                         </div>
+                        {takenByOther && (
+                          <div className="text-[10px] text-slate-500 mt-0.5 italic">בקבוצה: {otherGroup!.name}</div>
+                        )}
                       </button>
                     );
                   })}
