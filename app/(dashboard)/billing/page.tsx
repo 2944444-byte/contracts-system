@@ -126,6 +126,17 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
     setMgmtGroupsData(data ?? []);
   }
 
+  // Load space areas for summary calculations (used when groups exist)
+  const [spacesAreaMap, setSpacesAreaMap] = useState<Record<string, number>>({});
+  useEffect(function() {
+    if (!propId) { setSpacesAreaMap({}); return; }
+    supabase.from("spaces").select("id,area").eq("property_id", propId).then(function({data}) {
+      var m: Record<string, number> = {};
+      (data ?? []).forEach(function(sp: any){ m[sp.id] = Number(sp.area) || 0; });
+      setSpacesAreaMap(m);
+    });
+  }, [propId]);
+
   async function loadSpaces() {
     const { data: spaces } = await supabase
       .from("spaces")
@@ -364,7 +375,43 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
           </div>
         )}
 
-        {propId && !isMixed && (
+        {/* Summary when groups exist */}
+        {propId && mgmtGroupsData.length > 0 && (
+          <div className="rounded-lg border-2 border-blue-300 bg-blue-50/50 p-4 mb-4">
+            <div className="text-sm font-bold text-blue-800 mb-2">💡 חיוב הנכס לפי קבוצות — התקציב מפורט למטה</div>
+            <div className="text-xs text-blue-700 mb-3">נכס זה משתמש בקבוצות חיוב. אין תקציב מרכזי — כל קבוצה מנהלת את התעריף והעלות שלה בנפרד.</div>
+            <div className="space-y-1.5">
+              {mgmtGroupsData.map(function(g: any) {
+                var sids = (g.billing_group_spaces || []).map(function(x:any){return x.space_id;});
+                var groupArea = sids.reduce(function(s:number,sid:string){
+                  return s + (spacesAreaMap[sid] || 0);
+                }, 0);
+                var annual = Number(g.annual_amount) || (Number(g.rate_per_sqm_monthly) || 0) * groupArea * 12;
+                return (
+                  <div key={g.id} className="flex items-center justify-between bg-white rounded px-3 py-2 text-sm">
+                    <div>
+                      <span className="font-bold text-slate-700">{g.name}</span>
+                      <span className="text-xs text-slate-500 mr-2">{sids.length} יחידות | {groupArea.toLocaleString("he-IL")} מ&quot;ר</span>
+                    </div>
+                    <span className="font-bold text-blue-700">{fmtMoney(annual)}/שנה</span>
+                  </div>
+                );
+              })}
+              <div className="flex items-center justify-between border-t-2 border-blue-300 pt-2 mt-1 text-sm">
+                <span className="font-bold text-blue-900">סה&quot;כ תקציב שנתי (כל הקבוצות)</span>
+                <span className="font-black text-blue-900 text-base">
+                  {fmtMoney(mgmtGroupsData.reduce(function(s:number,g:any){
+                    var sids = (g.billing_group_spaces || []).map(function(x:any){return x.space_id;});
+                    var groupArea = sids.reduce(function(ss:number,sid:string){ return ss + (spacesAreaMap[sid] || 0); }, 0);
+                    return s + (Number(g.annual_amount) || (Number(g.rate_per_sqm_monthly) || 0) * groupArea * 12);
+                  }, 0))}
+                </span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {propId && !isMixed && mgmtGroupsData.length === 0 && (
           <>
             <div className="flex gap-3 mb-4">
               {[
@@ -452,7 +499,7 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
           </div>
         )}
 
-        {propId && (
+        {propId && mgmtGroupsData.length === 0 && (
           <div className="flex items-center gap-3 mt-4">
             <button onClick={saveBudget} disabled={saving}
               className="rounded-lg bg-blue-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-blue-800 disabled:opacity-50">
