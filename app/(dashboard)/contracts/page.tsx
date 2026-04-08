@@ -82,6 +82,7 @@ export default function ContractsPage() {
   const [amendType, setAmendType] = useState<string|null>(null);
   const [amendDate, setAmendDate] = useState(new Date().toISOString().split("T")[0]);
   const [amendNotes, setAmendNotes] = useState("");
+  const [amendDocUrl, setAmendDocUrl] = useState("");
   const [amendSaving, setAmendSaving] = useState(false);
   // For unit swap/add
   const [amendRemoveSpaces, setAmendRemoveSpaces] = useState<string[]>([]);
@@ -127,7 +128,7 @@ export default function ContractsPage() {
   useEffect(function() {
     if (!selContract) { setAmendments([]); setParkingSubs([]); return; }
     supabase.from("contracts")
-      .select("id,amendment_number,amendment_date,amendment_notes,start_date,end_date,rent_per_sqm,charged_area,contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,index_base_value,index_base_date,use_original_index,spaces(space_name,area))")
+      .select("id,amendment_number,amendment_date,amendment_notes,document_url,start_date,end_date,rent_per_sqm,charged_area,contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,index_base_value,index_base_date,use_original_index,spaces(space_name,area))")
       .eq("parent_contract_id", selContract.id)
       .eq("is_amendment", true)
       .order("amendment_number")
@@ -777,6 +778,7 @@ export default function ContractsPage() {
                         setAmendType(null);
                         setAmendDate(new Date().toISOString().split("T")[0]);
                         setAmendNotes("");
+                        setAmendDocUrl("");
                         setAmendRemoveSpaces([]);
                         setAmendAddSpaces([]);
                         setAmendAddRents({});
@@ -1160,6 +1162,10 @@ export default function ContractsPage() {
                                 <div className="text-base font-bold text-yellow-700">{am.amendment_date ? fmtDate(am.amendment_date) : fmtDate(am.start_date)}</div>
                                 <div className="text-xs text-slate-400">תאריך תוקף</div>
                               </div>
+                              {am.document_url && (
+                                <a href={am.document_url} target="_blank" rel="noopener noreferrer" onClick={function(e){e.stopPropagation();}}
+                                  className="rounded border border-blue-200 bg-blue-50 px-2 py-1 text-xs text-blue-600 hover:bg-blue-100" title="צפה במסמך התוספת">📄</a>
+                              )}
                               <button onClick={function(e){e.stopPropagation(); router.push("/contracts/"+am.id+"/edit");}}
                                 className="rounded border border-slate-200 px-2 py-1 text-xs text-slate-500 hover:bg-slate-50">✏️</button>
                               <button onClick={async function(e){
@@ -1705,6 +1711,14 @@ export default function ContractsPage() {
                     </div>
                   )}
 
+                  {/* Document URL */}
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">📄 קישור למסמך התוספת (Dropbox / Google Drive)</label>
+                    <input type="url" value={amendDocUrl} onChange={function(e){setAmendDocUrl(e.target.value);}}
+                      placeholder="https://www.dropbox.com/... או https://drive.google.com/..."
+                      className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-left" dir="ltr" />
+                  </div>
+
                   {/* Notes */}
                   <div>
                     <label className="block text-xs font-bold text-slate-700 mb-1">הערות</label>
@@ -1761,6 +1775,7 @@ export default function ContractsPage() {
                         is_amendment: true,
                         amendment_number: (count ?? 0) + 1,
                         amendment_date: amendDate,
+                        document_url: amendDocUrl || null,
                         amendment_notes: amendNotes || (amendType === "swap_units" ? "החלפת יחידות" : amendType === "add_units" ? "הוספת יחידות" : amendType === "remove_units" ? "הורדת יחידות" : amendType === "extend" ? "הארכת תקופה" : amendType === "price_change" ? "שינוי מחירים" : amendType === "parking_subscription" ? "תוספת חניות מינוי" : amendType === "parking_visitor" ? "חניות אורחים מזדמנים" : "שינוי אחר"),
                       };
 
