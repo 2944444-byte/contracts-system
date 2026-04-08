@@ -72,10 +72,12 @@ const GUARANTEE_TYPES = [
   { v: "bank", l: "ערבות בנקאית", icon: "🏦" },
   { v: "promissory_note", l: "שטר חוב", icon: "📜" },
   { v: "check", l: "שיקים", icon: "📝" },
-  { v: "cash", l: "מזומן", icon: "💵" },
+  { v: "cash", l: "פיקדון מזומן", icon: "💵" },
   { v: "insurance", l: "ביטוח", icon: "🛡️" },
   { v: "personal", l: "אישית", icon: "👤" },
 ];
+// Guarantee types that don't require an expiry date
+const NO_EXPIRY_GUARANTEES = ["promissory_note", "cash"];
 const INCREASE_TYPES = [
   { v: "pct", l: "אחוז (%)", icon: "📈" },
   { v: "fixed_sqm", l: '₪/מ"ר', icon: "📐" },
@@ -189,6 +191,7 @@ export default function ContractsNewPage() {
   const [guaranteeActual, setGuaranteeActual] = useState("");
   const [guaranteeBank, setGuaranteeBank] = useState("");
   const [guaranteeEnd, setGuaranteeEnd] = useState("");
+  const [guarantors, setGuarantors] = useState<Array<{name: string; id_number: string}>>([]);
   const [guaranteeDocUrl, setGuaranteeDocUrl] = useState("");
   const [depositCalcMethod, setDepositCalcMethod] = useState<"months_based" | "fixed_amount">("months_based");
   const [depositMonths, setDepositMonths] = useState(3);
@@ -839,14 +842,17 @@ export default function ContractsNewPage() {
 
       // Guarantee
       if (addGuarantee && guaranteeAmt) {
+        var noExpiry = guaranteeType === "promissory_note" || guaranteeType === "cash";
+        var validGuarantors = guarantors.filter(function(g){return g.name || g.id_number;});
         await supabase.from("guarantees").insert({
           contract_id: contract.id,
           guarantee_type: guaranteeType,
           amount_required: Number(guaranteeAmt),
           amount_actual: guaranteeActual ? Number(guaranteeActual) : null,
           bank: guaranteeBank || null,
-          end_date: guaranteeEnd || null,
+          end_date: noExpiry ? null : (guaranteeEnd || null),
           document_url: guaranteeDocUrl || null,
+          guarantors: guaranteeType === "promissory_note" && validGuarantors.length > 0 ? validGuarantors : null,
           status: "active",
         });
       }
@@ -2795,18 +2801,52 @@ export default function ContractsNewPage() {
                       className={ic}
                     />
                   </div>
-                  <div>
-                    <label className="mb-1 block text-xs font-semibold text-slate-700">
-                      תוקף ערבות
-                    </label>
-                    <input
-                      type="date"
-                      value={guaranteeEnd}
-                      onChange={(e) => setGuaranteeEnd(e.target.value)}
-                      className={ic}
-                    />
-                  </div>
+                  {!NO_EXPIRY_GUARANTEES.includes(guaranteeType) && (
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-slate-700">
+                        תוקף ערבות
+                      </label>
+                      <input
+                        type="date"
+                        value={guaranteeEnd}
+                        onChange={(e) => setGuaranteeEnd(e.target.value)}
+                        className={ic}
+                      />
+                    </div>
+                  )}
                 </div>
+
+                {/* Guarantors for promissory note */}
+                {guaranteeType === "promissory_note" && (
+                  <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50/50 p-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="text-xs font-bold text-amber-800">ערבים לשטר</label>
+                      <button type="button" onClick={() => setGuarantors([...guarantors, {name: "", id_number: ""}])}
+                        className="rounded-lg bg-amber-600 text-white px-3 py-1 text-xs font-bold hover:bg-amber-700">+ ערב</button>
+                    </div>
+                    {guarantors.length === 0 ? (
+                      <div className="text-xs text-amber-600 text-center py-2">אין ערבים — הוסף ערב לשטר</div>
+                    ) : (
+                      <div className="space-y-2">
+                        {guarantors.map((g, idx) => (
+                          <div key={idx} className="flex items-center gap-2">
+                            <input type="text" value={g.name}
+                              onChange={(e) => setGuarantors(guarantors.map((x,i) => i===idx ? {...x, name: e.target.value} : x))}
+                              placeholder="שם הערב"
+                              className="flex-1 rounded-lg border border-amber-300 px-2 py-1.5 text-sm" />
+                            <input type="text" value={g.id_number}
+                              onChange={(e) => setGuarantors(guarantors.map((x,i) => i===idx ? {...x, id_number: e.target.value} : x))}
+                              placeholder="ת.ז."
+                              className="w-32 rounded-lg border border-amber-300 px-2 py-1.5 text-sm" />
+                            <button type="button" onClick={() => setGuarantors(guarantors.filter((_,i) => i !== idx))}
+                              className="text-red-500 hover:text-red-700 text-sm">🗑</button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 <div className="mt-3">
                   <label className="mb-1 block text-xs font-semibold text-slate-700">
                     קישור למסמך ערבות (URL)
@@ -2913,9 +2953,9 @@ export default function ContractsNewPage() {
                       : "לא",
                 },
                 {
-                  l: "ערבות",
+                  l: addGuarantee ? (GUARANTEE_TYPES.find(g => g.v === guaranteeType)?.l || "ערבות") : "ערבות",
                   v: addGuarantee
-                    ? fmtMoney(Number(guaranteeAmt) || 0)
+                    ? fmtMoney(Number(guaranteeAmt) || 0) + (guaranteeType === "promissory_note" && guarantors.filter(g=>g.name).length > 0 ? " | " + guarantors.filter(g=>g.name).length + " ערבים" : "")
                     : "לא",
                 },
               ].map((r) =>
