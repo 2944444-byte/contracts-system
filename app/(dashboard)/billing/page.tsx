@@ -3,6 +3,7 @@ import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
 import { logAudit } from "@/lib/audit-log";
 import PropertyHierarchyFilter from '@/components/PropertyHierarchyFilter';
+import BillingGroupsManager from '@/components/BillingGroupsManager';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 
@@ -179,18 +180,18 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
   }
 
   async function computeReconciliation() {
-    if (!propId || !actualCost) { alert("\u05D9\u05E9 \u05DC\u05D1\u05D7\u05D5\u05E8 \u05E0\u05DB\u05E1 \u05D5\u05DC\u05D4\u05D6\u05D9\u05DF \u05E2\u05DC\u05D5\u05EA \u05D1\u05E4\u05D5\u05E2\u05DC"); return; }
+    if (!propId || !actualCost) { alert("יש לבחור נכס ולהזין עלות בפועל"); return; }
     setComputing(true);
     try {
       const actual = Number(actualCost);
-      // Load active contracts for this property in the year
+      // Load active contracts with their spaces
       const { data: contracts } = await supabase
         .from("contracts")
-        .select("id, charged_area, rent_per_sqm, tenants(name), contract_spaces(space_id, spaces(area))")
+        .select("id, charged_area, rent_per_sqm, tenants(name), contract_spaces(space_id, spaces(id, area))")
         .eq("property_id", propId)
         .in("status", ["active", "expiring", "extended"]);
 
-      // Load budget for rate
+      // Load property budget (default rate fallback)
       const { data: budget } = await supabase
         .from("property_budgets")
         .select("management_budget")
@@ -198,25 +199,79 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
         .eq("year", year)
         .single();
 
-      const annualBudget = budget?.management_budget ?? 0;
-      const rate = totalArea > 0 ? annualBudget / totalArea / 12 : 0;
+      // Load management billing groups for this property+year
+      const { data: mgmtGroups } = await supabase.from("billing_groups")
+        .select("*,billing_group_spaces(space_id)")
+        .eq("property_id", propId)
+        .eq("group_type", "management")
+        .eq("year", year);
+
+      const annualBudget = Number(budget?.management_budget) || 0;
+      const defaultRate = totalArea > 0 ? annualBudget / totalArea / 12 : 0;
+
+      // Build map: space_id → { rate, groupId, groupTotalArea }
+      const spaceGroupMap = new Map<string, { rate: number; groupId: string; groupTotalArea: number; }>();
+      const groupSpaceTotalArea: Record<string, number> = {};
+      for (const g of mgmtGroups ?? []) {
+        const sids = (g.billing_group_spaces || []).map((x: any) => x.space_id);
+        // Need space areas — load separately
+      }
+      // Load all spaces for this property to get areas
+      const { data: propSpaces } = await supabase.from("spaces").select("id,area").eq("property_id", propId);
+      const spaceAreaMap = new Map<string, number>();
+      (propSpaces ?? []).forEach((sp: any) => spaceAreaMap.set(sp.id, Number(sp.area) || 0));
+
+      for (const g of mgmtGroups ?? []) {
+        const sids = (g.billing_group_spaces || []).map((x: any) => x.space_id);
+        const groupTotalArea = sids.reduce((s: number, sid: string) => s + (spaceAreaMap.get(sid) || 0), 0);
+        const rate = Number(g.rate_per_sqm_monthly) || (Number(g.annual_amount) && groupTotalArea > 0 ? Number(g.annual_amount) / groupTotalArea / 12 : 0);
+        groupSpaceTotalArea[g.id] = groupTotalArea;
+        for (const sid of sids) {
+          spaceGroupMap.set(sid, { rate, groupId: g.id, groupTotalArea });
+        }
+      }
+
+      // Area totals for default (non-group) spaces
+      const groupedSpaceIds = new Set(spaceGroupMap.keys());
+      const defaultSpaceArea = (propSpaces ?? []).filter((sp: any) => !groupedSpaceIds.has(sp.id))
+        .reduce((s: number, sp: any) => s + (Number(sp.area) || 0), 0);
 
       const results: MgmtResult[] = (contracts ?? []).map(function (c: any) {
-        const cArea = c.charged_area ?? 0;
-        const advance = rate * cArea * 12;
-        const actualShare = totalArea > 0 ? actual * (cArea / totalArea) : 0;
-        const difference = actualShare - advance;
+        let advance = 0;
+        let actualShare = 0;
+        let contractArea = 0;
+
+        for (const cs of (c.contract_spaces ?? [])) {
+          const spArea = Number(cs.spaces?.area) || 0;
+          contractArea += spArea;
+          const info = spaceGroupMap.get(cs.space_id);
+          if (info) {
+            // This space is in a group — use group rate
+            advance += info.rate * spArea * 12;
+            // Actual share: split user-entered actual proportionally between this group's area vs property total
+            actualShare += totalArea > 0 ? actual * (spArea / totalArea) : 0;
+          } else {
+            // Default rate
+            advance += defaultRate * spArea * 12;
+            actualShare += totalArea > 0 ? actual * (spArea / totalArea) : 0;
+          }
+        }
+
+        if (contractArea === 0) contractArea = c.charged_area ?? 0;
+        if (advance === 0) advance = defaultRate * contractArea * 12;
+        if (actualShare === 0 && totalArea > 0) actualShare = actual * (contractArea / totalArea);
+
         return {
           contractId: c.id,
-          tenantName: c.tenants?.name ?? "\u2014",
-          chargedArea: cArea,
+          tenantName: c.tenants?.name ?? "—",
+          chargedArea: contractArea,
           advance,
           actualShare,
-          difference,
+          difference: actualShare - advance,
         };
       });
       setMgmtResults(results);
-    } catch (e: any) { alert("\u05E9\u05D2\u05D9\u05D0\u05D4: " + e?.message); }
+    } catch (e: any) { alert("שגיאה: " + e?.message); }
     finally { setComputing(false); }
   }
 
@@ -406,6 +461,15 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
           </div>
         )}
       </div>
+
+      {/* Section A2: Billing Groups (management) */}
+      {propId && (
+        <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+          <h2 className="text-lg font-bold text-slate-800 mb-2">קבוצות חיוב מיוחדות</h2>
+          <p className="text-xs text-slate-500 mb-4">יחידות עם תעריף שונה מהתקציב הראשי של הנכס (למשל מחסנים מול משרדים). יחידות שלא משויכות לקבוצה יחויבו בתעריף ברירת המחדל.</p>
+          <BillingGroupsManager propertyId={propId} year={year} groupType="management" />
+        </div>
+      )}
 
       {/* Section B: Reconciliation */}
       <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
@@ -712,10 +776,13 @@ function WasteTab({ properties }: { properties: any[] }) {
   const [creatingCharges, setCreatingCharges] = useState(false);
   const [creatingLetters, setCreatingLetters] = useState(false);
 
+  const [wasteGroups, setWasteGroups] = useState<any[]>([]);
+
   useEffect(function () {
-    if (!propId) { setSpaces([]); setResults([]); return; }
+    if (!propId) { setSpaces([]); setResults([]); setWasteGroups([]); return; }
     loadSpaces();
-  }, [propId]);
+    loadWasteGroups();
+  }, [propId, year]);
 
   async function loadSpaces() {
     const { data } = await supabase
@@ -727,9 +794,20 @@ function WasteTab({ properties }: { properties: any[] }) {
     setResults([]);
   }
 
+  async function loadWasteGroups() {
+    const { data } = await supabase.from("billing_groups")
+      .select("*,billing_group_spaces(space_id)")
+      .eq("property_id", propId)
+      .eq("group_type", "waste")
+      .eq("year", year);
+    setWasteGroups(data ?? []);
+  }
+
+  // Legacy: spaces filtered by uses_waste_service flag (fallback when no groups defined)
   const participatingSpaces = spaces.filter(function (s) { return s.uses_waste_service !== false; });
   const nonParticipating = spaces.filter(function (s) { return s.uses_waste_service === false; });
   const totalWasteArea = participatingSpaces.reduce(function (s, sp) { return s + (sp.area ?? 0); }, 0);
+  const hasGroups = wasteGroups.length > 0;
 
   function getPeriodDates(): { start: string; end: string } {
     if (period === "Q1") return { start: year + "-01-01", end: year + "-03-31" };
@@ -740,11 +818,12 @@ function WasteTab({ properties }: { properties: any[] }) {
   }
 
   async function compute() {
-    if (!propId || !wasteCost) { alert("\u05D9\u05E9 \u05DC\u05D1\u05D7\u05D5\u05E8 \u05E0\u05DB\u05E1 \u05D5\u05DC\u05D4\u05D6\u05D9\u05DF \u05E2\u05DC\u05D5\u05EA"); return; }
+    if (!propId) { alert("יש לבחור נכס"); return; }
+    if (!hasGroups && !wasteCost) { alert("יש להגדיר קבוצות אשפה או להזין עלות שנתית"); return; }
     setComputing(true);
     try {
-      const cost = Number(wasteCost);
-      const participatingIds = new Set(participatingSpaces.map(function (s) { return s.id; }));
+      // Period factor: fraction of annual
+      const periodFactor = period === "annual" ? 1 : 0.25;
 
       // Load contracts with their spaces
       const { data: contracts } = await supabase
@@ -754,30 +833,77 @@ function WasteTab({ properties }: { properties: any[] }) {
         .in("status", ["active", "expiring", "extended"]);
 
       const res: WasteResult[] = [];
-      for (const c of contracts ?? []) {
-        const contractSpaces = (c.contract_spaces ?? []).filter(function (cs: any) {
-          return cs.spaces && participatingIds.has(cs.space_id);
-        });
-        if (contractSpaces.length === 0) continue;
 
-        const wasteArea = contractSpaces.reduce(function (s: number, cs: any) {
-          return s + (cs.spaces?.area ?? 0);
-        }, 0);
-        const spaceNames = contractSpaces.map(function (cs: any) { return cs.spaces?.space_name ?? ""; }).filter(Boolean).join(", ");
-        const pct = totalWasteArea > 0 ? (wasteArea / totalWasteArea) * 100 : 0;
-        const charge = totalWasteArea > 0 ? cost * (wasteArea / totalWasteArea) : 0;
+      if (hasGroups) {
+        // NEW: use billing groups
+        // Build map: space_id → { groupId, groupName, annualAmount, groupTotalArea }
+        type SpaceGroupInfo = { groupId: string; groupName: string; annualAmount: number; groupTotalArea: number; };
+        const spaceGroupMap = new Map<string, SpaceGroupInfo>();
+        for (const g of wasteGroups) {
+          const groupSpaceIds = (g.billing_group_spaces || []).map((x: any) => x.space_id);
+          const groupTotalArea = groupSpaceIds.reduce((s: number, sid: string) => {
+            const sp = spaces.find((x) => x.id === sid);
+            return s + (Number(sp?.area) || 0);
+          }, 0);
+          const annual = Number(g.annual_amount) || (Number(g.rate_per_sqm_monthly) || 0) * groupTotalArea * 12;
+          for (const sid of groupSpaceIds) {
+            spaceGroupMap.set(sid, { groupId: g.id, groupName: g.name, annualAmount: annual, groupTotalArea });
+          }
+        }
 
-        res.push({
-          contractId: c.id,
-          tenantName: (c.tenants as any)?.name ?? "\u2014",
-          spaces: spaceNames,
-          wasteArea,
-          pct,
-          charge,
-        });
+        for (const c of contracts ?? []) {
+          const cs = (c.contract_spaces ?? []).filter((x: any) => x.spaces && spaceGroupMap.has(x.space_id));
+          if (cs.length === 0) continue;
+          let totalCharge = 0;
+          let totalArea = 0;
+          const groupNamesSet = new Set<string>();
+          const spaceNames: string[] = [];
+          for (const x of cs) {
+            const info = spaceGroupMap.get(x.space_id)!;
+            const spArea = Number(x.spaces?.area) || 0;
+            const spShare = info.groupTotalArea > 0 ? (info.annualAmount * (spArea / info.groupTotalArea) * periodFactor) : 0;
+            totalCharge += spShare;
+            totalArea += spArea;
+            groupNamesSet.add(info.groupName);
+            if (x.spaces?.space_name) spaceNames.push(x.spaces.space_name);
+          }
+          const totalGroupArea = Array.from(new Set(cs.map((x: any) => spaceGroupMap.get(x.space_id)!.groupId)))
+            .reduce((s, gid) => {
+              const g = wasteGroups.find((g) => g.id === gid);
+              return s + ((g?.billing_group_spaces || []).reduce((ss: number, bs: any) => {
+                const sp = spaces.find((x) => x.id === bs.space_id);
+                return ss + (Number(sp?.area) || 0);
+              }, 0));
+            }, 0);
+          const pct = totalGroupArea > 0 ? (totalArea / totalGroupArea) * 100 : 0;
+          res.push({
+            contractId: c.id,
+            tenantName: (c.tenants as any)?.name ?? "—",
+            spaces: spaceNames.join(", ") + " | " + Array.from(groupNamesSet).join(" + "),
+            wasteArea: totalArea,
+            pct,
+            charge: totalCharge,
+          });
+        }
+      } else {
+        // LEGACY: single waste cost + uses_waste_service flag
+        const cost = Number(wasteCost) * periodFactor;
+        const participatingIds = new Set(participatingSpaces.map(function (s) { return s.id; }));
+
+        for (const c of contracts ?? []) {
+          const contractSpaces = (c.contract_spaces ?? []).filter(function (cs: any) {
+            return cs.spaces && participatingIds.has(cs.space_id);
+          });
+          if (contractSpaces.length === 0) continue;
+          const wasteArea = contractSpaces.reduce(function (s: number, cs: any) { return s + (cs.spaces?.area ?? 0); }, 0);
+          const spaceNames = contractSpaces.map(function (cs: any) { return cs.spaces?.space_name ?? ""; }).filter(Boolean).join(", ");
+          const pct = totalWasteArea > 0 ? (wasteArea / totalWasteArea) * 100 : 0;
+          const charge = totalWasteArea > 0 ? cost * (wasteArea / totalWasteArea) : 0;
+          res.push({ contractId: c.id, tenantName: (c.tenants as any)?.name ?? "—", spaces: spaceNames, wasteArea, pct, charge });
+        }
       }
       setResults(res);
-    } catch (e: any) { alert("\u05E9\u05D2\u05D9\u05D0\u05D4: " + e?.message); }
+    } catch (e: any) { alert("שגיאה: " + e?.message); }
     finally { setComputing(false); }
   }
 
@@ -879,12 +1005,22 @@ function WasteTab({ properties }: { properties: any[] }) {
           </div>
         </div>
 
-        <div className="mb-4">
-          <label className="mb-1 block text-xs font-semibold text-slate-700">{"\u05E2\u05DC\u05D5\u05EA \u05E4\u05D9\u05E0\u05D5\u05D9 \u05D0\u05E9\u05E4\u05D4 \u05DC\u05EA\u05E7\u05D5\u05E4\u05D4 (\u20AA)"}</label>
-          <input type="number" value={wasteCost} onChange={function (e) { setWasteCost(e.target.value); }} className={ic + " max-w-xs"} placeholder="0" />
-        </div>
+        {/* Billing Groups for Waste */}
+        {propId && (
+          <div className="rounded-lg border border-orange-200 bg-orange-50/20 p-4 mb-4">
+            <BillingGroupsManager propertyId={propId} year={year} groupType="waste" onChange={function(){loadWasteGroups();}} />
+          </div>
+        )}
 
-        {propId && spaces.length > 0 && (
+        {/* Legacy single-cost input (used when no groups defined) */}
+        {!hasGroups && (
+          <div className="mb-4">
+            <label className="mb-1 block text-xs font-semibold text-slate-700">עלות פינוי אשפה שנתית (₪) — <span className="text-slate-500 font-normal">ברירת מחדל כשלא הוגדרו קבוצות</span></label>
+            <input type="number" value={wasteCost} onChange={function (e) { setWasteCost(e.target.value); }} className={ic + " max-w-xs"} placeholder="0" />
+          </div>
+        )}
+
+        {propId && spaces.length > 0 && !hasGroups && (
           <div className="grid grid-cols-2 gap-4 mb-4">
             <div className="rounded-lg bg-green-50 border border-green-200 p-3">
               <div className="text-xs font-bold text-green-800 mb-1">{"\u05DE\u05E9\u05EA\u05EA\u05E4\u05D5\u05EA \u05D1\u05E9\u05D9\u05E8\u05D5\u05EA"} ({participatingSpaces.length})</div>
@@ -910,9 +1046,9 @@ function WasteTab({ properties }: { properties: any[] }) {
           </div>
         )}
 
-        <button onClick={compute} disabled={computing || !propId || !wasteCost}
+        <button onClick={compute} disabled={computing || !propId || (!hasGroups && !wasteCost)}
           className="rounded-lg bg-purple-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-purple-800 disabled:opacity-50">
-          {computing ? "\u05DE\u05D7\u05E9\u05D1..." : "\u05D7\u05E9\u05D1"}
+          {computing ? "מחשב..." : "חשב"}
         </button>
 
         {results.length > 0 && (
