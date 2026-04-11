@@ -4,13 +4,16 @@ import { supabase } from "@/lib/supabase";
 import { logAudit } from "@/lib/audit-log";
 import PropertyHierarchyFilter from '@/components/PropertyHierarchyFilter';
 import BillingGroupsManager from '@/components/BillingGroupsManager';
+import { fetchCpiAdjusted } from '@/lib/cpi-server';
+import AdvancesTab from '@/components/AdvancesTab';
+import CpiDiffTab from '@/components/CpiDiffTab';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 
 function fmtMoney(n: number) { return "\u20AA" + (n ?? 0).toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "\u2014"; }
 
-type Tab = "management" | "insurance" | "waste";
+type Tab = "management" | "insurance" | "waste" | "advances" | "cpi_diff";
 
 interface MgmtResult { contractId: string; tenantName: string; chargedArea: number; advance: number; actualShare: number; difference: number; }
 interface InsResult { contractId: string; tenantName: string; area: number; pct: number; charge: number; }
@@ -40,9 +43,11 @@ export default function BillingPage() {
   const internalProps = filteredProperties.filter(function (p) { return p.management_type === "internal"; });
 
   const TABS: { v: Tab; l: string }[] = [
-    { v: "management", l: "\u05D3\u05DE\u05D9 \u05E0\u05D9\u05D4\u05D5\u05DC" },
-    { v: "insurance", l: "\u05D1\u05D9\u05D8\u05D5\u05D7 \u05DE\u05D1\u05E0\u05D4" },
-    { v: "waste", l: "\u05E4\u05D9\u05E0\u05D5\u05D9 \u05D0\u05E9\u05E4\u05D4" },
+    { v: "management", l: "דמי ניהול" },
+    { v: "insurance", l: "ביטוח מבנה" },
+    { v: "waste", l: "פינוי אשפה" },
+    { v: "advances", l: "מקדמות שכ\"ד" },
+    { v: "cpi_diff", l: "הפרשי הצמדה" },
   ];
 
   return (
@@ -76,6 +81,8 @@ export default function BillingPage() {
           {activeTab === "management" && <ManagementTab properties={internalProps} allProperties={properties} />}
           {activeTab === "insurance" && <InsuranceTab properties={filteredProperties} />}
           {activeTab === "waste" && <WasteTab properties={filteredProperties} />}
+          {activeTab === "advances" && <AdvancesTab properties={filteredProperties} />}
+          {activeTab === "cpi_diff" && <CpiDiffTab properties={filteredProperties} />}
         </>
       )}
     </div>
