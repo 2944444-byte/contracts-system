@@ -34,6 +34,7 @@ interface CheckRow {
 
 interface AdvanceRow {
   contractId: string;
+  spaceId: string;
   tenantName: string;
   spaceName: string;
   spaceArea: number;
@@ -380,6 +381,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
           if (checks.length > 0) {
             rows.push({
               contractId: c.id,
+              spaceId: cs.space_id,
               tenantName: (c.tenants as any)?.name || "—",
               spaceName: spaceName,
               spaceArea: area,
@@ -414,8 +416,9 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
         for (var p of r.checks) {
           await supabase.from("advance_payments").upsert({
             contract_id: r.contractId,
+            space_id: r.spaceId,
             year: year,
-            period: r.spaceName + " — " + p.label,
+            period: p.label.split(" (")[0], // "רבעון 1" or "חודש 3" (clean, no extras)
             base_rent: r.baseRentMonthly * p.months,
             indexed_rent: p.rentBeforeVat,
             management_advance: p.mgmtBeforeVat,
@@ -426,7 +429,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
             cpi_base_value: r.cpiBaseValue,
             cpi_at_payment: r.cpiCurrentValue,
             status: "pending",
-          }, { onConflict: "contract_id,year,period" });
+          }, { onConflict: "contract_id,space_id,year,period" });
           count++;
         }
       }

@@ -60,6 +60,11 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
       contracts = (contracts ?? []).filter(function(c: any) { return c.payment_method === "checks_advance"; });
       if (contracts.length === 0) { alert("אין חוזים עם שיקים מראש"); setComputing(false); return; }
 
+      // Load saved advance payments — these are the baseline "what was calculated"
+      var contractIds = contracts.map(function(c: any) { return c.id; });
+      var { data: savedAdvances } = await supabase.from("advance_payments")
+        .select("*").in("contract_id", contractIds).eq("year", year);
+
       // Load management rates
       var { data: mgmtGroups } = await supabase.from("billing_groups")
         .select("*,billing_group_spaces(space_id)")
@@ -144,10 +149,15 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
 
           var shouldPay = indexedRent + mgmtPeriodWithVat;
 
-          // Pre-fill actual paid from advance_payments or inputs
-          var existingAdv = (existingAdvances ?? []).find(function(a: any) { return a.contract_id === c.id && a.period === label; });
+          // Pre-fill actual paid:
+          // 1. User input (if edited in this session)
+          // 2. Saved actual_paid from advance_payments (if user previously confirmed payment)
+          // 3. Saved total_with_vat from advance_payments (= the check amount that was written)
+          // 4. Fallback: computed base rent + mgmt (if no saved advances exist)
+          var matchingAdvances = (savedAdvances ?? []).filter(function(a: any) { return a.contract_id === c.id && a.period === label; });
+          var savedTotalForPeriod = matchingAdvances.reduce(function(s: number, a: any) { return s + (Number(a.actual_paid) || Number(a.total_with_vat) || 0); }, 0);
           var userInput = actualPaidInputs[c.id]?.[label];
-          var actualPaid = userInput ? Number(userInput) : (existingAdv?.actual_paid ? Number(existingAdv.actual_paid) : baseRentPeriodWithVat + mgmtPeriodWithVat);
+          var actualPaid = userInput ? Number(userInput) : (savedTotalForPeriod > 0 ? savedTotalForPeriod : baseRentPeriodWithVat + mgmtPeriodWithVat);
 
           periods.push({
             label: label,
