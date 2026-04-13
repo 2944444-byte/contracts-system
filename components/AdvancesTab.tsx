@@ -46,13 +46,18 @@ interface AdvanceRow {
   cpiCurrentValue: number;
   cpiCurrentDate: string;
   indexationMethod: string;
-  startDate: string;  // when this unit starts in the year (could be mid-year)
+  startDate: string;
+  rentChangeDate?: string;   // date of step-rent increase within year
+  rentBefore?: number;       // rent before step-rent increase
+  rentAfter?: number;        // rent after step-rent increase
   checks: CheckRow[];
 }
 
 export default function AdvancesTab({ properties }: { properties: any[] }) {
   const currentYear = new Date().getFullYear();
   const [propId, setPropId] = useState("");
+  const [contractFilter, setContractFilter] = useState("all"); // "all" or specific contract ID
+  const [availableContracts, setAvailableContracts] = useState<any[]>([]);
   const [year, setYear] = useState(currentYear + 1);
   // User-specified CPI calculation date (e.g. Nov 15 = use Oct CPI)
   const [cpiCalcDate, setCpiCalcDate] = useState(currentYear + "-11-15");
@@ -61,20 +66,36 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
   const [creatingCharges, setCreatingCharges] = useState(false);
   const [creatingLetters, setCreatingLetters] = useState(false);
 
+  // Load available contracts when property changes
+  async function loadAvailableContracts() {
+    if (!propId) { setAvailableContracts([]); return; }
+    var { data } = await supabase.from("contracts")
+      .select("id, tenants(name), payment_method, contract_spaces(spaces(space_name))")
+      .eq("property_id", propId).in("status", ["active", "extended"]).eq("is_amendment", false);
+    setAvailableContracts((data ?? []).filter(function(c: any) { return c.payment_method === "checks_advance"; }));
+  }
+
   async function compute() {
     if (!propId) { alert("יש לבחור נכס"); return; }
     setComputing(true);
     setResults([]);
     try {
       // Load contracts
-      var { data: contracts } = await supabase.from("contracts")
-        .select("id, rent_per_sqm, charged_area, investment_addition, payment_method, payment_frequency, vat_type, indexation_method, index_base_date, index_base_value, start_date, end_date, is_amendment, tenants(name), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,index_base_date,index_base_value,use_original_index,spaces(space_name,area))")
+      var query = supabase.from("contracts")
+        .select("id, rent_per_sqm, charged_area, investment_addition, payment_method, payment_frequency, vat_type, indexation_method, index_base_date, index_base_value, start_date, end_date, is_amendment, grace_months, grace_type, tenants(name), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,index_base_date,index_base_value,use_original_index,spaces(space_name,area))")
         .eq("property_id", propId)
         .in("status", ["active", "extended"])
         .eq("is_amendment", false);
+      if (contractFilter !== "all") query = query.eq("id", contractFilter);
+      var { data: contracts } = await query;
 
       contracts = (contracts ?? []).filter(function(c: any) { return c.payment_method === "checks_advance"; });
       if (contracts.length === 0) { alert("אין חוזים עם שיקים מראש"); setComputing(false); return; }
+
+      // Load price tiers for step-rent detection
+      var contractIds = contracts.map(function(c: any) { return c.id; });
+      var { data: allTiers } = await supabase.from("contract_price_tiers")
+        .select("*").in("contract_id", contractIds).order("tier_number");
 
       // Management rates
       var { data: mgmtGroups } = await supabase.from("billing_groups")
@@ -112,10 +133,51 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
           var area = cs.spaces?.area || 0;
           var spaceName = cs.spaces?.space_name || "—";
 
-          // Base monthly rent for this space
-          var baseMonthly = 0;
-          if (cs.charge_method === "fixed" && cs.fixed_rent) baseMonthly = Number(cs.fixed_rent);
-          else baseMonthly = (Number(cs.price_per_sqm) || Number(c.rent_per_sqm) || 0) * area;
+          // Base monthly rent for this space — detect step-rent changes
+          var baseRentPerSqm = Number(cs.price_per_sqm) || Number(c.rent_per_sqm) || 0;
+          var isFixed = cs.charge_method === "fixed";
+          var baseMonthly = isFixed ? Number(cs.fixed_rent) || 0 : baseRentPerSqm * area;
+
+          // Step-rent: find if rent changes during the target year
+          // Anniversary = contract start date's day+month in the target year
+          var contractStartDate = new Date(c.start_date);
+          var anniversaryInYear = new Date(year, contractStartDate.getMonth(), contractStartDate.getDate());
+          // Build rent schedule: [{from, to, rentMonthly}] for the year
+          var contractTiers = (allTiers ?? []).filter(function(t: any) { return t.contract_id === c.id && !t.space_id; });
+          var spaceTiers = (allTiers ?? []).filter(function(t: any) { return t.contract_id === c.id && t.space_id === cs.space_id; });
+          var activeTiers = spaceTiers.length > 0 ? spaceTiers : contractTiers;
+
+          // Determine which "contract year" we're in and what rent applies before/after anniversary
+          var contractYearsFromStart = year - contractStartDate.getFullYear();
+          var rentBeforeAnniversary = baseMonthly; // previous year's rate
+          var rentAfterAnniversary = baseMonthly;  // new year's rate
+
+          if (activeTiers.length > 0 && contractYearsFromStart > 0) {
+            // Calculate rent progression year by year
+            var currentRent = isFixed ? (Number(cs.fixed_rent) || 0) : baseRentPerSqm * area;
+            for (var tierYear = 1; tierYear <= contractYearsFromStart; tierYear++) {
+              // Find tier that covers this contract year
+              var tier = activeTiers.find(function(t: any) {
+                if (t.is_recurring) {
+                  var every = t.recurring_every_years || 1;
+                  return tierYear % every === 0;
+                }
+                return tierYear >= t.from_year && tierYear <= t.to_year;
+              });
+              if (tier) {
+                if (tier.increase_type === "pct") currentRent = currentRent * (1 + (tier.increase_value || 0) / 100);
+                else if (tier.increase_type === "fixed_sqm") currentRent = currentRent + (tier.increase_value || 0) * area;
+                else if (tier.increase_type === "fixed_total") currentRent = currentRent + (tier.increase_value || 0);
+              }
+              if (tierYear === contractYearsFromStart - 1) rentBeforeAnniversary = currentRent;
+              if (tierYear === contractYearsFromStart) rentAfterAnniversary = currentRent;
+            }
+            if (contractYearsFromStart === 1) rentBeforeAnniversary = baseMonthly;
+          }
+          // If anniversary is Jan 1 or before year start, no split needed
+          var hasRentChange = Math.abs(rentAfterAnniversary - rentBeforeAnniversary) > 0.01
+            && anniversaryInYear > new Date(year, 0, 1)
+            && anniversaryInYear <= new Date(year, 11, 31);
 
           // Management advance for this space
           var mgmtMonthly = (spaceMgmtRate[cs.space_id] ?? defaultMgmtRate) * area;
@@ -142,15 +204,24 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
             } catch (e) { /* keep ratio 1 */ }
           }
 
-          var indexedMonthly = baseMonthly * cpiRatio;
+          // Indexed rent for before/after anniversary
+          var indexedBefore = rentBeforeAnniversary * cpiRatio;
+          var indexedAfter = rentAfterAnniversary * cpiRatio;
+          var indexedMonthly = hasRentChange ? indexedAfter : rentAfterAnniversary * cpiRatio;
           var totalMonthly = indexedMonthly + mgmtMonthly;
 
           // Determine start date for this unit in the target year
-          // Could be Jan 1 if contract started before, or mid-year if started this year
           var contractStart = new Date(c.start_date);
           var yearStart = new Date(year, 0, 1);
           var yearEnd = new Date(year, 11, 31);
           var effectiveStart = contractStart > yearStart ? contractStart : yearStart;
+
+          // Grace period: if contract has grace, reduce effective start
+          if (c.grace_months && c.grace_type === "full") {
+            var graceEnd = new Date(contractStart);
+            graceEnd.setMonth(graceEnd.getMonth() + Number(c.grace_months));
+            if (graceEnd > effectiveStart) effectiveStart = graceEnd;
+          }
 
           // If contract ends before year end, use contract end
           var contractEnd = c.end_date ? new Date(c.end_date) : yearEnd;
@@ -164,31 +235,47 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
           if (isQuarterly) {
             for (var q = 0; q < 4; q++) {
               var qStart = new Date(year, q * 3, 1);
-              var qEnd = new Date(year, (q + 1) * 3, 0); // last day of quarter
+              var qEnd = new Date(year, (q + 1) * 3, 0);
 
-              // Skip quarters before effective start
               if (qEnd < effectiveStart) continue;
-              // Skip quarters after effective end
               if (qStart > effectiveEnd) continue;
 
-              // Calculate actual days/months in this quarter for this unit
               var periodStart = qStart < effectiveStart ? effectiveStart : qStart;
               var periodEnd = qEnd > effectiveEnd ? effectiveEnd : qEnd;
 
-              // Pro-rata calculation
               var totalDaysInQuarter = Math.round((qEnd.getTime() - qStart.getTime()) / 86400000) + 1;
               var actualDays = Math.round((periodEnd.getTime() - periodStart.getTime()) / 86400000) + 1;
-              var ratio = actualDays / totalDaysInQuarter;
 
-              var rentBV = indexedMonthly * 3 * ratio;
+              // Handle rent change mid-quarter (step-rent on anniversary)
+              var rentBV = 0;
+              var labelExtra = "";
+              if (hasRentChange && anniversaryInYear > periodStart && anniversaryInYear <= periodEnd) {
+                // Split: before anniversary at old rate, from anniversary at new rate
+                var daysBefore = Math.round((anniversaryInYear.getTime() - periodStart.getTime()) / 86400000);
+                var daysAfter = actualDays - daysBefore;
+                var dailyBefore = indexedBefore / 30.44; // average daily
+                var dailyAfter = indexedAfter / 30.44;
+                rentBV = dailyBefore * daysBefore + dailyAfter * daysAfter;
+                labelExtra = " (עליית שכ\"ד " + fmtDate(anniversaryInYear.toISOString().split("T")[0]) + ": " + daysBefore + "+" + daysAfter + " ימים)";
+              } else if (hasRentChange && anniversaryInYear <= periodStart) {
+                // After anniversary — use new rate
+                rentBV = indexedAfter * actualDays / 30.44;
+              } else {
+                // Before anniversary or no change — use old/base rate
+                var useRate = hasRentChange ? indexedBefore : indexedMonthly;
+                rentBV = useRate * actualDays / 30.44;
+              }
+
+              var ratio = actualDays / totalDaysInQuarter;
               var mgmtBV = mgmtMonthly * 3 * ratio;
               var totalBV = rentBV + mgmtBV;
               var vat = isVat ? totalBV * vatPct : 0;
 
               var checkDate = year + "-" + String(q * 3 + 1).padStart(2, "0") + "-01";
+              var partialLabel = ratio < 0.99 ? " (חלקי — " + actualDays + " ימים)" : "";
 
               checks.push({
-                label: "רבעון " + (q + 1) + (ratio < 0.99 ? " (חלקי — " + actualDays + " ימים)" : ""),
+                label: "רבעון " + (q + 1) + partialLabel + labelExtra,
                 months: 3,
                 partialDays: ratio < 0.99 ? actualDays : 0,
                 totalDaysInMonth: totalDaysInQuarter,
@@ -216,15 +303,30 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
               var actualDaysM = Math.round((periodEndM.getTime() - periodStartM.getTime()) / 86400000) + 1;
               var ratioM = actualDaysM / totalDaysMonth;
 
-              var rentBVM = indexedMonthly * ratioM;
+              // Handle rent change mid-month
+              var rentBVM = 0;
+              var labelExtraM = "";
+              if (hasRentChange && anniversaryInYear > periodStartM && anniversaryInYear <= periodEndM) {
+                var daysBeforeM = Math.round((anniversaryInYear.getTime() - periodStartM.getTime()) / 86400000);
+                var daysAfterM = actualDaysM - daysBeforeM;
+                rentBVM = (indexedBefore / 30.44) * daysBeforeM + (indexedAfter / 30.44) * daysAfterM;
+                labelExtraM = " (עליית שכ\"ד: " + daysBeforeM + "+" + daysAfterM + " ימים)";
+              } else if (hasRentChange && anniversaryInYear <= periodStartM) {
+                rentBVM = indexedAfter * ratioM;
+              } else {
+                var useRateM = hasRentChange ? indexedBefore : indexedMonthly;
+                rentBVM = useRateM * ratioM;
+              }
+
               var mgmtBVM = mgmtMonthly * ratioM;
               var totalBVM = rentBVM + mgmtBVM;
               var vatM = isVat ? totalBVM * vatPct : 0;
 
               var checkDateM = year + "-" + String(m + 1).padStart(2, "0") + "-01";
+              var partialLabelM = ratioM < 0.99 ? " (חלקי — " + actualDaysM + " ימים)" : "";
 
               checks.push({
-                label: "חודש " + (m + 1) + (ratioM < 0.99 ? " (חלקי — " + actualDaysM + " ימים)" : ""),
+                label: "חודש " + (m + 1) + partialLabelM + labelExtraM,
                 months: 1,
                 partialDays: ratioM < 0.99 ? actualDaysM : 0,
                 totalDaysInMonth: totalDaysMonth,
@@ -244,8 +346,11 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
               tenantName: (c.tenants as any)?.name || "—",
               spaceName: spaceName,
               spaceArea: area,
-              baseRentMonthly: baseMonthly,
-              indexedRentMonthly: indexedMonthly,
+              baseRentMonthly: hasRentChange ? rentBeforeAnniversary : baseMonthly,
+              indexedRentMonthly: hasRentChange ? indexedAfter : indexedMonthly,
+              rentChangeDate: hasRentChange ? anniversaryInYear.toISOString().split("T")[0] : undefined,
+              rentBefore: hasRentChange ? rentBeforeAnniversary : undefined,
+              rentAfter: hasRentChange ? rentAfterAnniversary : undefined,
               mgmtAdvanceMonthly: mgmtMonthly,
               totalMonthly: totalMonthly,
               cpiBaseValue: cpiBaseValue,
@@ -346,14 +451,26 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
         <h2 className="text-lg font-bold text-slate-800 mb-4">📋 מקדמות שכ&quot;ד — חישוב שייקים</h2>
         <p className="text-sm text-slate-500 mb-4">חישוב סכומי שייקים מראש לפי יחידה, כולל שכ&quot;ד צמוד למדד ומקדמת דמי ניהול. תומך ביחידות שמתחילות באמצע שנה (פרו-רטה).</p>
 
-        <div className="grid grid-cols-3 gap-4 mb-4">
+        <div className="grid grid-cols-2 gap-4 mb-3">
           <div>
             <label className="mb-1 block text-xs font-semibold text-slate-700">נכס</label>
-            <select value={propId} onChange={function(e) { setPropId(e.target.value); setResults([]); }} className={ic}>
+            <select value={propId} onChange={function(e) { setPropId(e.target.value); setContractFilter("all"); setResults([]); loadAvailableContracts(); }} className={ic}>
               <option value="">— בחר נכס —</option>
               {properties.map(function(p) { return <option key={p.id} value={p.id}>{p.name}</option>; })}
             </select>
           </div>
+          <div>
+            <label className="mb-1 block text-xs font-semibold text-slate-700">הסכם / שוכר</label>
+            <select value={contractFilter} onChange={function(e) { setContractFilter(e.target.value); setResults([]); }} className={ic}>
+              <option value="all">כל ההסכמים</option>
+              {availableContracts.map(function(c: any) {
+                var spNames = (c.contract_spaces || []).map(function(cs: any) { return cs.spaces?.space_name; }).filter(Boolean).join(", ");
+                return <option key={c.id} value={c.id}>{(c.tenants as any)?.name || "—"}{spNames ? " — " + spNames : ""}</option>;
+              })}
+            </select>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-4 mb-4">
           <div>
             <label className="mb-1 block text-xs font-semibold text-slate-700">שנת שכירות</label>
             <input type="number" value={year} onChange={function(e) { setYear(Number(e.target.value)); setResults([]); }} className={ic} />
@@ -409,6 +526,9 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
                     <div>
                       <div className="text-slate-500">שכ&quot;ד בסיס</div>
                       <div className="font-bold text-slate-800">{fmtMoney(r.baseRentMonthly)}/חודש</div>
+                      {r.rentChangeDate && r.rentAfter && (
+                        <div className="text-orange-600 mt-0.5">→ {fmtMoney(r.rentAfter)} מ-{fmtDate(r.rentChangeDate)}</div>
+                      )}
                     </div>
                     <div>
                       <div className="text-slate-500">שכ&quot;ד צמוד</div>
