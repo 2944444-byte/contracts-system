@@ -191,6 +191,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
           var cpiBaseValue = useCustomCpi ? Number(cs.index_base_value) : (Number(c.index_base_value) || 0);
           var cpiCurrentValue = 0;
           var cpiCurrentDate = "";
+          var cbsVerifyUrl = "";
 
           if (c.indexation_method !== "none" && fromCbs && toCbs) {
             try {
@@ -200,6 +201,8 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
                 cpiCurrentValue = Number(cpiData.toIndexValue) || 0;
                 cpiCurrentDate = cpiData.toDate || "";
                 if (!cpiBaseValue) cpiBaseValue = Number(cpiData.fromIndexValue) || 0;
+                cbsVerifyUrl = cpiData.verificationUrl || "";
+                console.log("CBS for " + spaceName + ": from=" + fromCbs + " to=" + toCbs + " ratio=" + cpiRatio.toFixed(6) + " fromIdx=" + cpiData.fromIndexValue + " toIdx=" + cpiData.toIndexValue + " url=" + cbsVerifyUrl);
               }
             } catch (e) { /* keep ratio 1 */ }
           }
@@ -252,13 +255,31 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
               var isFullQuarter = (actualDays === totalDaysInQuarter);
 
               if (hasRentChange && anniversaryInYear > periodStart && anniversaryInYear <= periodEnd) {
-                // Split: before anniversary at old rate, from anniversary at new rate
-                // Use daily pro-rata based on days in this specific quarter
+                // Split: month-by-month calculation within the quarter
+                // Full months before/after the change date get full monthly rate
+                // The month containing the change gets pro-rata by days
+                rentBV = 0;
+                var changeMonth = anniversaryInYear.getMonth(); // 0-indexed
+                var changeDay = anniversaryInYear.getDate();
+                for (var qm = 0; qm < 3; qm++) {
+                  var monthIdx = q * 3 + qm; // 0-indexed month in year
+                  var mStartD = new Date(year, monthIdx, 1);
+                  var mEndD = new Date(year, monthIdx + 1, 0);
+                  if (mEndD < periodStart || mStartD > periodEnd) continue;
+                  var daysInThisMonth = daysInMonth(year, monthIdx + 1);
+                  if (monthIdx === changeMonth) {
+                    // Split month: days before change at old rate, days from change at new rate
+                    var daysOld = changeDay - 1; // days 1 to (changeDay-1) at old rate
+                    var daysNew = daysInThisMonth - daysOld; // from changeDay to end at new rate
+                    rentBV += indexedBefore * daysOld / daysInThisMonth + indexedAfter * daysNew / daysInThisMonth;
+                  } else if (monthIdx < changeMonth) {
+                    rentBV += indexedBefore; // full month at old rate
+                  } else {
+                    rentBV += indexedAfter; // full month at new rate
+                  }
+                }
                 var daysBefore = Math.round((anniversaryInYear.getTime() - periodStart.getTime()) / 86400000);
                 var daysAfter = actualDays - daysBefore;
-                var dailyBefore = indexedBefore * 3 / totalDaysInQuarter;
-                var dailyAfter = indexedAfter * 3 / totalDaysInQuarter;
-                rentBV = dailyBefore * daysBefore + dailyAfter * daysAfter;
                 labelExtra = " (עליית שכ\"ד " + fmtDate(anniversaryInYear.toISOString().split("T")[0]) + ": " + daysBefore + "+" + daysAfter + " ימים)";
               } else if (hasRentChange && anniversaryInYear <= periodStart) {
                 // After anniversary — use new rate × exact months (not day-based)
