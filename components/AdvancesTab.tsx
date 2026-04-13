@@ -249,21 +249,32 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
               // Handle rent change mid-quarter (step-rent on anniversary)
               var rentBV = 0;
               var labelExtra = "";
+              var isFullQuarter = (actualDays === totalDaysInQuarter);
+
               if (hasRentChange && anniversaryInYear > periodStart && anniversaryInYear <= periodEnd) {
                 // Split: before anniversary at old rate, from anniversary at new rate
+                // Use daily pro-rata based on days in this specific quarter
                 var daysBefore = Math.round((anniversaryInYear.getTime() - periodStart.getTime()) / 86400000);
                 var daysAfter = actualDays - daysBefore;
-                var dailyBefore = indexedBefore / 30.44; // average daily
-                var dailyAfter = indexedAfter / 30.44;
+                var dailyBefore = indexedBefore * 3 / totalDaysInQuarter;
+                var dailyAfter = indexedAfter * 3 / totalDaysInQuarter;
                 rentBV = dailyBefore * daysBefore + dailyAfter * daysAfter;
                 labelExtra = " (עליית שכ\"ד " + fmtDate(anniversaryInYear.toISOString().split("T")[0]) + ": " + daysBefore + "+" + daysAfter + " ימים)";
               } else if (hasRentChange && anniversaryInYear <= periodStart) {
-                // After anniversary — use new rate
-                rentBV = indexedAfter * actualDays / 30.44;
+                // After anniversary — use new rate × exact months (not day-based)
+                if (isFullQuarter) {
+                  rentBV = indexedAfter * 3;
+                } else {
+                  rentBV = indexedAfter * 3 * actualDays / totalDaysInQuarter;
+                }
               } else {
-                // Before anniversary or no change — use old/base rate
+                // Before anniversary or no change — use old/base rate × exact months
                 var useRate = hasRentChange ? indexedBefore : indexedMonthly;
-                rentBV = useRate * actualDays / 30.44;
+                if (isFullQuarter) {
+                  rentBV = useRate * 3;
+                } else {
+                  rentBV = useRate * 3 * actualDays / totalDaysInQuarter;
+                }
               }
 
               var ratio = actualDays / totalDaysInQuarter;
@@ -306,16 +317,19 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
               // Handle rent change mid-month
               var rentBVM = 0;
               var labelExtraM = "";
+              var isFullMonth = (actualDaysM === totalDaysMonth);
               if (hasRentChange && anniversaryInYear > periodStartM && anniversaryInYear <= periodEndM) {
                 var daysBeforeM = Math.round((anniversaryInYear.getTime() - periodStartM.getTime()) / 86400000);
                 var daysAfterM = actualDaysM - daysBeforeM;
-                rentBVM = (indexedBefore / 30.44) * daysBeforeM + (indexedAfter / 30.44) * daysAfterM;
+                var dailyBeforeM = indexedBefore / totalDaysMonth;
+                var dailyAfterM = indexedAfter / totalDaysMonth;
+                rentBVM = dailyBeforeM * daysBeforeM + dailyAfterM * daysAfterM;
                 labelExtraM = " (עליית שכ\"ד: " + daysBeforeM + "+" + daysAfterM + " ימים)";
               } else if (hasRentChange && anniversaryInYear <= periodStartM) {
-                rentBVM = indexedAfter * ratioM;
+                rentBVM = isFullMonth ? indexedAfter : indexedAfter * actualDaysM / totalDaysMonth;
               } else {
                 var useRateM = hasRentChange ? indexedBefore : indexedMonthly;
-                rentBVM = useRateM * ratioM;
+                rentBVM = isFullMonth ? useRateM : useRateM * actualDaysM / totalDaysMonth;
               }
 
               var mgmtBVM = mgmtMonthly * ratioM;
@@ -545,6 +559,9 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
                     <div>
                       <div className="text-slate-500">מדד לחישוב</div>
                       <div className="font-bold text-slate-800">{r.cpiCurrentValue || "—"} ({r.cpiCurrentDate})</div>
+                      {r.cpiBaseValue > 0 && r.cpiCurrentValue > 0 && (
+                        <div className="text-blue-600 mt-0.5">יחס: {(r.cpiCurrentValue / r.cpiBaseValue).toFixed(6)}</div>
+                      )}
                     </div>
                   </div>
 
