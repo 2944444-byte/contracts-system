@@ -67,12 +67,14 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
   const [creatingLetters, setCreatingLetters] = useState(false);
 
   // Load available contracts when property changes
-  async function loadAvailableContracts() {
-    if (!propId) { setAvailableContracts([]); return; }
-    var { data } = await supabase.from("contracts")
+  function loadAvailableContracts(pid: string) {
+    if (!pid) { setAvailableContracts([]); return; }
+    supabase.from("contracts")
       .select("id, tenants(name), payment_method, contract_spaces(spaces(space_name))")
-      .eq("property_id", propId).in("status", ["active", "extended"]).eq("is_amendment", false);
-    setAvailableContracts((data ?? []).filter(function(c: any) { return c.payment_method === "checks_advance"; }));
+      .eq("property_id", pid).in("status", ["active", "extended"]).eq("is_amendment", false)
+      .then(function({ data }) {
+        setAvailableContracts((data ?? []).filter(function(c: any) { return c.payment_method === "checks_advance"; }));
+      });
   }
 
   async function compute() {
@@ -489,7 +491,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
         <div className="grid grid-cols-2 gap-4 mb-3">
           <div>
             <label className="mb-1 block text-xs font-semibold text-slate-700">נכס</label>
-            <select value={propId} onChange={function(e) { setPropId(e.target.value); setContractFilter("all"); setResults([]); loadAvailableContracts(); }} className={ic}>
+            <select value={propId} onChange={function(e) { var v = e.target.value; setPropId(v); setContractFilter("all"); setResults([]); loadAvailableContracts(v); }} className={ic}>
               <option value="">— בחר נכס —</option>
               {properties.map(function(p) { return <option key={p.id} value={p.id}>{p.name}</option>; })}
             </select>
@@ -628,6 +630,97 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
                 </div>
               );
             })}
+
+            {/* ═══ Consolidated check tables per CONTRACT ═══ */}
+            {(function() {
+              // Group results by contractId
+              var byContract: Record<string, AdvanceRow[]> = {};
+              results.forEach(function(r) {
+                if (!byContract[r.contractId]) byContract[r.contractId] = [];
+                byContract[r.contractId].push(r);
+              });
+              var contractGroups = Object.entries(byContract).filter(function(e) { return e[1].length > 0; });
+              if (contractGroups.length === 0) return null;
+              return (
+                <div className="space-y-4">
+                  <h3 className="text-lg font-bold text-slate-800 border-t-2 border-slate-300 pt-4 mt-4">📋 טבלה מרכזת לפי הסכם — סכומי שייקים</h3>
+                  <p className="text-sm text-slate-500">סיכום כל היחידות לכל הסכם — השוכר רושם שייק אחד לכל תקופה</p>
+
+                  {contractGroups.map(function([cid, unitRows]) {
+                    var tenantName = unitRows[0].tenantName;
+                    var spaceNames = unitRows.map(function(r) { return r.spaceName; }).join(", ");
+                    // Merge checks across units for same period
+                    var periodMap: Record<string, { label: string; checkDate: string; rent: number; mgmt: number; total: number; vat: number; withVat: number; }> = {};
+                    unitRows.forEach(function(r) {
+                      r.checks.forEach(function(ch) {
+                        var key = ch.checkDate;
+                        if (!periodMap[key]) periodMap[key] = { label: ch.label.split(" (")[0], checkDate: ch.checkDate, rent: 0, mgmt: 0, total: 0, vat: 0, withVat: 0 };
+                        periodMap[key].rent += ch.rentBeforeVat;
+                        periodMap[key].mgmt += ch.mgmtBeforeVat;
+                        periodMap[key].total += ch.totalBeforeVat;
+                        periodMap[key].vat += ch.vat;
+                        periodMap[key].withVat += ch.totalWithVat;
+                      });
+                    });
+                    var consolidatedChecks = Object.values(periodMap).sort(function(a, b) { return a.checkDate.localeCompare(b.checkDate); });
+                    var contractTotal = consolidatedChecks.reduce(function(s, ch) { return s + ch.withVat; }, 0);
+
+                    return (
+                      <div key={cid} className="rounded-xl border-2 border-blue-300 bg-blue-50/30 shadow-sm overflow-hidden">
+                        <div className="px-5 py-3 bg-blue-100 border-b border-blue-300 flex items-center justify-between">
+                          <div>
+                            <div className="font-bold text-blue-900 text-base">{tenantName}</div>
+                            <div className="text-xs text-blue-700">{spaceNames} ({unitRows.length} יחידות)</div>
+                          </div>
+                          <div className="text-left">
+                            <div className="text-lg font-black text-blue-900">{fmtMoney(contractTotal)}</div>
+                            <div className="text-xs text-blue-700">סה&quot;כ שנתי כולל מע&quot;מ</div>
+                          </div>
+                        </div>
+                        <table className="w-full text-sm text-right">
+                          <thead className="bg-blue-50 text-xs">
+                            <tr>
+                              <th className="px-4 py-2 font-bold text-blue-800">תקופה</th>
+                              <th className="px-4 py-2 font-bold text-blue-800">תאריך שייק</th>
+                              <th className="px-4 py-2 font-bold text-blue-800">שכ&quot;ד צמוד</th>
+                              <th className="px-4 py-2 font-bold text-blue-800">ד.נ.</th>
+                              <th className="px-4 py-2 font-bold text-blue-800">לפני מע&quot;מ</th>
+                              <th className="px-4 py-2 font-bold text-blue-800">מע&quot;מ</th>
+                              <th className="px-4 py-2 font-bold text-blue-800">סכום שייק</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {consolidatedChecks.map(function(ch, ci) {
+                              return (
+                                <tr key={ci} className="border-t border-blue-200 hover:bg-blue-50">
+                                  <td className="px-4 py-2.5 font-bold text-blue-900">{ch.label}</td>
+                                  <td className="px-4 py-2.5 text-slate-700">{fmtDate(ch.checkDate)}</td>
+                                  <td className="px-4 py-2.5 text-green-700 font-semibold">{fmtMoney(ch.rent)}</td>
+                                  <td className="px-4 py-2.5 text-slate-600">{fmtMoney(ch.mgmt)}</td>
+                                  <td className="px-4 py-2.5 text-slate-800">{fmtMoney(ch.total)}</td>
+                                  <td className="px-4 py-2.5 text-slate-500">{fmtMoney(ch.vat)}</td>
+                                  <td className="px-4 py-2.5 font-black text-blue-800 text-base">{fmtMoney(ch.withVat)}</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                          <tfoot className="bg-blue-100 border-t-2 border-blue-300">
+                            <tr>
+                              <td className="px-4 py-2.5 font-black text-blue-900" colSpan={2}>סה&quot;כ שנתי</td>
+                              <td className="px-4 py-2.5 font-bold text-green-800">{fmtMoney(consolidatedChecks.reduce(function(s,c){return s+c.rent;},0))}</td>
+                              <td className="px-4 py-2.5 font-bold text-slate-700">{fmtMoney(consolidatedChecks.reduce(function(s,c){return s+c.mgmt;},0))}</td>
+                              <td className="px-4 py-2.5 font-bold text-slate-800">{fmtMoney(consolidatedChecks.reduce(function(s,c){return s+c.total;},0))}</td>
+                              <td className="px-4 py-2.5 font-bold text-slate-500">{fmtMoney(consolidatedChecks.reduce(function(s,c){return s+c.vat;},0))}</td>
+                              <td className="px-4 py-2.5 font-black text-blue-900 text-lg">{fmtMoney(contractTotal)}</td>
+                            </tr>
+                          </tfoot>
+                        </table>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
 
             {/* Grand total */}
             <div className="rounded-xl bg-purple-50 border-2 border-purple-200 p-4 text-center">
