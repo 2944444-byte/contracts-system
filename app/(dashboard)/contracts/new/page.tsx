@@ -1577,23 +1577,39 @@ export default function ContractsNewPage() {
                         alert("נא לבחור תאריך מדד בסיס קודם");
                         return;
                       }
+                      const d = new Date(baseCPIDate);
+                      const day = d.getDate();
+                      // Don't allow day 15 — ambiguous (publication date)
+                      if (day === 15) {
+                        alert("ה-15 לחודש הוא תאריך פרסום המדד. יש לבחור עד 14 לחודש (מדד חודש קודם) או מ-16 ואילך (מדד החודש שפורסם).");
+                        return;
+                      }
                       setCbsFetching(true);
                       try {
-                        const d = new Date(baseCPIDate);
-                        const year = d.getFullYear();
-                        const month = d.getMonth() + 1;
-                        const res = await fetch(`/api/cpi?year=${year}`);
+                        // Apply t-2 rule: determine which CPI month is "known" at this date
+                        // Day >= 16: CPI for month-1 is known (published on 15th)
+                        // Day <= 14: CPI for month-2 is known (previous month's publication)
+                        const knownDate = new Date(d);
+                        if (day >= 16) {
+                          knownDate.setMonth(knownDate.getMonth() - 1);
+                        } else {
+                          knownDate.setMonth(knownDate.getMonth() - 2);
+                        }
+                        const knownYear = knownDate.getFullYear();
+                        const knownMonth = knownDate.getMonth() + 1;
+
+                        const res = await fetch(`/api/cpi?year=${knownYear}`);
                         const data = await res.json();
                         const records = data.records || [];
-                        const rec = records.find((r: any) => r.year === year && r.month === month);
+                        const rec = records.find((r: any) => r.year === knownYear && r.month === knownMonth);
                         if (rec) {
                           setBaseCPI(rec.value.toString());
-                          // Also refresh CPI records in state
+                          alert(`מדד ידוע בתאריך ${day}/${d.getMonth()+1}/${d.getFullYear()}: מדד ${knownMonth}/${knownYear} = ${rec.value}`);
                           const allRes = await fetch("/api/cpi");
                           const allData = await allRes.json();
                           if (allData.records) setCpiRecords(allData.records);
                         } else {
-                          alert(`מדד לחודש ${month}/${year} לא פורסם עדיין בלמ"ס`);
+                          alert(`מדד ${knownMonth}/${knownYear} לא פורסם עדיין בלמ"ס (מדד ידוע לתאריך ${day}/${d.getMonth()+1}/${d.getFullYear()})`);
                         }
                       } catch (e: any) {
                         alert("שגיאה בשליפת מדד: " + e.message);

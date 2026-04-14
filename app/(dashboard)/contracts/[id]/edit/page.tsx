@@ -1113,14 +1113,27 @@ export default function ContractEditPage() {
                   <button type="button" disabled={cbsFetching || !baseCPIDate}
                     onClick={async () => {
                       if (!baseCPIDate) { alert("נא לבחור תאריך מדד בסיס קודם"); return; }
+                      var d = new Date(baseCPIDate);
+                      var day = d.getDate();
+                      if (day === 15) {
+                        alert("ה-15 לחודש הוא תאריך פרסום המדד. יש לבחור עד 14 לחודש או מ-16 ואילך.");
+                        return;
+                      }
                       setCbsFetching(true);
                       try {
-                        const d = new Date(baseCPIDate);
-                        const res = await fetch(`/api/cpi?year=${d.getFullYear()}`);
-                        const data = await res.json();
-                        const rec = (data.records || []).find((r: any) => r.year === d.getFullYear() && r.month === d.getMonth() + 1);
-                        if (rec) setBaseCPI(rec.value.toString());
-                        else alert(`מדד לא פורסם עדיין`);
+                        // t-2 rule: known CPI at this date
+                        var knownDate = new Date(d);
+                        if (day >= 16) knownDate.setMonth(knownDate.getMonth() - 1);
+                        else knownDate.setMonth(knownDate.getMonth() - 2);
+                        var knownYear = knownDate.getFullYear();
+                        var knownMonth = knownDate.getMonth() + 1;
+                        var res = await fetch("/api/cpi?year=" + knownYear);
+                        var data = await res.json();
+                        var rec = (data.records || []).find(function(r: any) { return r.year === knownYear && r.month === knownMonth; });
+                        if (rec) {
+                          setBaseCPI(rec.value.toString());
+                          alert("מדד ידוע: " + knownMonth + "/" + knownYear + " = " + rec.value);
+                        } else alert("מדד " + knownMonth + "/" + knownYear + " לא פורסם עדיין");
                       } catch (e: any) { alert("שגיאה: " + e.message); }
                       finally { setCbsFetching(false); }
                     }}
