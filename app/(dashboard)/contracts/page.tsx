@@ -963,8 +963,14 @@ export default function ContractsPage() {
                           var now = new Date();
                           var isCurrent = new Date(entry.startDate) <= now && new Date(entry.endDate) > now;
                           var startD = new Date(entry.startDate);
+                          var endD = new Date(entry.endDate);
                           var isNotCalendar = startD.getMonth() !== 0 || startD.getDate() !== 1;
                           var changeMonth = isNotCalendar ? startD.toLocaleDateString("he-IL", { month: "short" }) : "";
+                          // Calendar year(s) covered by this period — endDate is exclusive, subtract 1 day
+                          var endYearCalc = new Date(endD.getTime() - 86400000);
+                          var startYear = startD.getFullYear();
+                          var endYear = endYearCalc.getFullYear();
+                          var yearLabel = startYear === endYear ? String(startYear) : startYear + "–" + endYear;
                           var rentSqm = entry.rentPerSqm ?? 0;
                           var rentWithInvest = rentSqm + investPerSqm;
                           // CPI adjustment ratio applied to each year
@@ -974,6 +980,7 @@ export default function ContractsPage() {
                             <tr key={idx} className={"border-b border-blue-100 " + (isCurrent ? "bg-blue-100 font-bold" : "")}>
                               <td className="py-1 text-right">
                                 <span>{entry.label}</span>
+                                <span className="text-blue-500 mr-1 font-semibold">({yearLabel})</span>
                                 {changeMonth && <span className="text-blue-400 mr-1">({changeMonth})</span>}
                               </td>
                               <td className="py-1 text-right">₪{rentWithInvest.toFixed(2)}/מ&quot;ר</td>
