@@ -101,6 +101,13 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
       var { data: allTiers } = await supabase.from("contract_price_tiers")
         .select("*").in("contract_id", contractIds).order("tier_number");
 
+      // Load amendments (for per-unit entry/exit dates)
+      var { data: allAmendments } = await supabase.from("contracts")
+        .select("id, parent_contract_id, amendment_date, start_date, end_date, contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,index_base_date,index_base_value,use_original_index,spaces(space_name,area))")
+        .in("parent_contract_id", contractIds)
+        .eq("is_amendment", true)
+        .order("amendment_date", { ascending: true });
+
       // Management rates
       var { data: mgmtGroups } = await supabase.from("billing_groups")
         .select("*,billing_group_spaces(space_id)")
@@ -132,8 +139,47 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
         var isVat = c.vat_type === "taxable";
         var isQuarterly = c.payment_frequency === "quarterly";
 
+        // Build per-space timeline: entry_date = earliest date the space appeared,
+        // exit_date = earliest amendment date that removed it (null if still active).
+        var cAmends = (allAmendments ?? []).filter(function(a: any) { return a.parent_contract_id === c.id; });
+        // Chronological snapshots: [{date, spaceIds, spaces}]
+        var snapshots: any[] = [
+          { date: new Date(c.start_date), spaceIds: new Set((c.contract_spaces || []).map(function(x: any){return x.space_id;})), spaces: c.contract_spaces || [] }
+        ];
+        for (var am of cAmends) {
+          var amDate = new Date(am.amendment_date || am.start_date);
+          snapshots.push({ date: amDate, spaceIds: new Set((am.contract_spaces || []).map(function(x: any){return x.space_id;})), spaces: am.contract_spaces || [] });
+        }
+        // Build entry_date / exit_date per space_id
+        var spaceEntry: Record<string, Date> = {};
+        var spaceExit: Record<string, Date | null> = {};
+        for (var i = 0; i < snapshots.length; i++) {
+          var snap = snapshots[i];
+          var prevIds = i > 0 ? snapshots[i-1].spaceIds : new Set();
+          // New spaces = in this snap but not previously seen ever
+          snap.spaceIds.forEach(function(sid: string) {
+            if (spaceEntry[sid] === undefined) spaceEntry[sid] = snap.date;
+          });
+          // Spaces removed in this amendment (present in prev, absent now)
+          if (i > 0) {
+            prevIds.forEach(function(sid: string) {
+              if (!snap.spaceIds.has(sid) && spaceExit[sid] === undefined) {
+                spaceExit[sid] = snap.date;
+              }
+            });
+          }
+        }
+
+        // Determine the "active" snapshot = latest snapshot whose date <= yearEnd
+        var yearEndForSnap = new Date(year, 11, 31);
+        var activeSnapshot = snapshots[0];
+        for (var s of snapshots) {
+          if (s.date <= yearEndForSnap) activeSnapshot = s;
+        }
+        var spacesToProcess = activeSnapshot.spaces || [];
+
         // Process EACH space separately (per-unit view)
-        for (var cs of (c.contract_spaces || [])) {
+        for (var cs of spacesToProcess) {
           var area = cs.spaces?.area || 0;
           var spaceName = cs.spaces?.space_name || "—";
 
@@ -217,11 +263,14 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
           var indexedMonthly = hasRentChange ? indexedAfter : rentAfterAnniversary * cpiRatio;
           var totalMonthly = indexedMonthly + mgmtMonthly;
 
-          // Determine start date for this unit in the target year
+          // Determine start date for this unit in the target year.
+          // Each space has its own entry_date (= earliest date it appeared in the
+          // contract, base start or amendment that added it). Likewise exit_date.
           var contractStart = new Date(c.start_date);
+          var unitEntry = spaceEntry[cs.space_id] || contractStart;
           var yearStart = new Date(year, 0, 1);
           var yearEnd = new Date(year, 11, 31);
-          var effectiveStart = contractStart > yearStart ? contractStart : yearStart;
+          var effectiveStart = unitEntry > yearStart ? unitEntry : yearStart;
 
           // Grace period: if contract has grace, reduce effective start
           if (c.grace_months && c.grace_type === "full") {
@@ -233,8 +282,13 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
           // If contract ends before year end, use contract end
           var contractEnd = c.end_date ? new Date(c.end_date) : yearEnd;
           var effectiveEnd = contractEnd < yearEnd ? contractEnd : yearEnd;
+          // If unit was removed via amendment, cap at exit date
+          var unitExit = spaceExit[cs.space_id];
+          if (unitExit && unitExit < effectiveEnd) effectiveEnd = unitExit;
 
           if (effectiveStart > effectiveEnd) continue; // Not active in this year
+          // If the unit's entry date is after the target year end → skip entirely
+          if (unitEntry > yearEnd) continue;
 
           // Generate checks based on payment frequency
           var checks: CheckRow[] = [];
