@@ -3,6 +3,7 @@ import { useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { logAudit } from "@/lib/audit-log";
 import { fetchCpiAdjusted } from "@/lib/cpi-server";
+import { formatPeriod } from "@/lib/cpi-utils";
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 function fmtMoney(n: number) { return "₪" + (n ?? 0).toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -580,11 +581,17 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
                     </div>
                     <div>
                       <div className="text-slate-500">מדד בסיס</div>
-                      <div className="font-bold text-slate-800">{r.cpiBaseValue || "—"} ({fmtDate(r.cpiBaseDate)})</div>
+                      <div className="font-bold text-slate-800">{r.cpiBaseValue || "—"}</div>
+                      {r.cpiBaseValue ? (
+                        <div className="text-xs text-blue-600 font-semibold">📊 מדד {r.cpiBaseDate ? formatPeriod(new Date(r.cpiBaseDate).getFullYear(), new Date(r.cpiBaseDate).getMonth()+1) : ""}</div>
+                      ) : null}
                     </div>
                     <div>
                       <div className="text-slate-500">מדד לחישוב</div>
-                      <div className="font-bold text-slate-800">{r.cpiCurrentValue || "—"} ({r.cpiCurrentDate})</div>
+                      <div className="font-bold text-slate-800">{r.cpiCurrentValue || "—"}</div>
+                      {r.cpiCurrentValue ? (
+                        <div className="text-xs text-blue-600 font-semibold">📊 מדד {r.cpiCurrentDate ? (typeof r.cpiCurrentDate === "string" && /^\d{4}-\d{2}/.test(r.cpiCurrentDate) ? formatPeriod(new Date(r.cpiCurrentDate).getFullYear(), new Date(r.cpiCurrentDate).getMonth()+1) : r.cpiCurrentDate) : ""}</div>
+                      ) : null}
                       {r.cpiBaseValue > 0 && r.cpiCurrentValue > 0 && (
                         <div className="text-blue-600 mt-0.5">יחס: {(r.cpiCurrentValue / r.cpiBaseValue).toFixed(6)}</div>
                       )}

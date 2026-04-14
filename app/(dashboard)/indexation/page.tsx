@@ -177,7 +177,7 @@ export default function IndexationPage() {
                     <td className="px-4 py-3 font-semibold text-slate-700">{fmtMoney(baseRent)}</td>
                     <td className="px-4 py-3">
                       <div className="font-semibold text-slate-700">{c.index_base_value}</div>
-                      <div className="text-xs text-slate-400">{fmtDate(c.index_base_date)}</div>
+                      <div className="text-xs text-blue-600 font-semibold">📊 מדד {c.index_base_date ? formatPeriod(new Date(c.index_base_date).getFullYear(), new Date(c.index_base_date).getMonth()+1) : ""}</div>
                     </td>
                     <td className="px-4 py-3">
                       <span className={"text-xs px-2 py-0.5 rounded-full font-semibold " +
@@ -190,7 +190,7 @@ export default function IndexationPage() {
                         <div>
                           <div className="font-black text-green-700">{fmtMoney(res.indexedRent)}</div>
                           <div className="text-xs text-slate-400">+ מע"מ: {fmtMoney(res.indexedRent + res.vat)}</div>
-                          <div className="text-xs text-slate-400">מדד {res.period}: {res.currentIdx}</div>
+                          <div className="text-xs text-blue-600 font-semibold">📊 מדד {res.period} = {res.currentIdx}</div>
                         </div>
                       ) : (
                         <span className="text-slate-300">—</span>

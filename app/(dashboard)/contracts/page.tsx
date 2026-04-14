@@ -5,7 +5,7 @@ import { supabase } from '@/lib/supabase';
 import { syncContractStatuses } from '@/lib/contractSync';
 import { logAudit } from '@/lib/audit-log';
 import { fetchCpiAdjusted } from '@/lib/cpi-server';
-import { calcChainingCoefficient } from '@/lib/cpi-utils';
+import { calcChainingCoefficient, formatPeriod } from '@/lib/cpi-utils';
 import { buildPriceTimeline, calculateTierPreviews, type PriceTier } from '@/lib/contract-utils';
 // CPI + price timeline
 
@@ -994,7 +994,7 @@ export default function ContractsPage() {
                     {l:"סיום",    v:fmtDate(effectiveEndDate)},
                     {l:"שטח",    v:selContract.charged_area?selContract.charged_area+' מ"ר':"—"},
                     {l:"הצמדה",  v:selContract.indexation_method==="highest_in_period"?"מדד גבוה":selContract.indexation_method==="none"?"ללא":"t-2"},
-                    {l:"מדד בסיס",v:selContract.index_base_value||"—"},
+                    {l:"מדד בסיס",v:selContract.index_base_value ? ("📊 מדד " + (selContract.index_base_date ? formatPeriod(new Date(selContract.index_base_date).getFullYear(), new Date(selContract.index_base_date).getMonth()+1) + " = " : "= ") + selContract.index_base_value) : "—"},
                     {l:'מע"מ',  v:selContract.vat_type==="taxable"?"18%":"פטור"},
                     {l:"סוג שכ\"ד", v: selContract.rent_type==="revenue_pct" ? selContract.revenue_pct+"% ממחזור" : "קבוע"},
                     {l:"שיטת תשלום", v: selContract.payment_method==="checks_advance"?"שיקים מראש":selContract.payment_method==="bank_transfer"?"העברה בנקאית":selContract.payment_method==="cash"?"מזומן":selContract.payment_method==="credit_card"?"כרטיס אשראי":"הוראת קבע"},
@@ -1557,8 +1557,7 @@ export default function ContractsPage() {
                       <label className="block text-sm font-bold text-slate-700">עדכון מחירים והצמדה</label>
                       {selContract.index_base_value && (
                         <div className="text-xs text-slate-500 bg-slate-50 rounded-lg px-3 py-2 border border-slate-200">
-                          מדד בסיס מקורי: <span className="font-bold">{selContract.index_base_value}</span>
-                          {selContract.index_base_date && <span> ({fmtDate(selContract.index_base_date)})</span>}
+                          מדד בסיס מקורי: <span className="font-bold">📊 מדד {selContract.index_base_date ? formatPeriod(new Date(selContract.index_base_date).getFullYear(), new Date(selContract.index_base_date).getMonth()+1) + " = " : "= "}{selContract.index_base_value}</span>
                         </div>
                       )}
                       <div className="space-y-3">
