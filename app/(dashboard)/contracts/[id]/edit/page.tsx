@@ -156,6 +156,7 @@ export default function ContractEditPage() {
   const [perUnitTiers, setPerUnitTiers] = useState<Record<string, PriceTier[]>>({});
   const [priceTiers, setPriceTiers] = useState<PriceTier[]>([]);
   const [cbsFetching, setCbsFetching] = useState(false);
+  const [cbsFetchedMonth, setCbsFetchedMonth] = useState("");
   const [editParkingSpots, setEditParkingSpots] = useState<any[]>([]);
 
   // Step 4
@@ -1130,9 +1131,10 @@ export default function ContractEditPage() {
                         var res = await fetch("/api/cpi?year=" + knownYear);
                         var data = await res.json();
                         var rec = (data.records || []).find(function(r: any) { return r.year === knownYear && r.month === knownMonth; });
+                        var HEB_MONTHS = ["","ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
                         if (rec) {
                           setBaseCPI(rec.value.toString());
-                          alert("מדד ידוע: " + knownMonth + "/" + knownYear + " = " + rec.value);
+                          setCbsFetchedMonth(HEB_MONTHS[knownMonth] + " " + knownYear);
                         } else alert("מדד " + knownMonth + "/" + knownYear + " לא פורסם עדיין");
                       } catch (e: any) { alert("שגיאה: " + e.message); }
                       finally { setCbsFetching(false); }
@@ -1141,6 +1143,9 @@ export default function ContractEditPage() {
                     {cbsFetching ? "טוען..." : "משוך מדד"}
                   </button>
                 </div>
+                {cbsFetchedMonth && baseCPI && (
+                  <div className="text-xs text-blue-600 mt-1 font-semibold">📊 מדד {cbsFetchedMonth} = {baseCPI}</div>
+                )}
               </div>
               <div>
                 <label className="mb-1 block text-xs font-semibold text-slate-700">תאריך פרסום מדד הבסיס (מדד ידוע)</label>
