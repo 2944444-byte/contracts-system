@@ -128,32 +128,42 @@ export default function ContractsPage() {
   // Load amendments + check space overlaps for selected contract
   useEffect(function() {
     if (!selContract) { setAmendments([]); setParkingSubs([]); setSpaceOverlaps([]); return; }
-    // Check for overlapping active contracts on the same spaces
-    var spaceIds = (selContract.contract_spaces || []).map(function(cs: any) { return cs.space_id; });
-    if (spaceIds.length > 0) {
-      supabase.from("contract_spaces")
-        .select("space_id, contracts!inner(id, status, start_date, end_date, is_amendment, tenants(name))")
-        .in("space_id", spaceIds)
-        .in("contracts.status", ["active", "extended"])
-        .then(function({ data }) {
-          var overlaps = (data ?? []).filter(function(o: any) {
-            if (o.contracts.is_amendment) return false;
-            if (o.contracts.id === selContract.id) return false;
-            var oS = new Date(o.contracts.start_date);
-            var oE = new Date(o.contracts.end_date);
-            var cS = new Date(selContract.start_date);
-            var cE = new Date(selContract.end_date);
-            return oS < cE && oE > cS;
-          });
-          setSpaceOverlaps(overlaps);
-        });
-    } else { setSpaceOverlaps([]); }
+    // Load amendments first, then check overlaps using ALL spaces (base + amendments)
     supabase.from("contracts")
       .select("id,amendment_number,amendment_date,amendment_notes,document_url,start_date,end_date,rent_per_sqm,charged_area,contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,index_base_value,index_base_date,use_original_index,spaces(space_name,area))")
       .eq("parent_contract_id", selContract.id)
       .eq("is_amendment", true)
       .order("amendment_number")
-      .then(function({ data }) { setAmendments(data ?? []); });
+      .then(function({ data }) {
+        var loadedAmendments = data ?? [];
+        setAmendments(loadedAmendments);
+
+        // Effective spaces = latest amendment's spaces, or base if no amendments
+        var latestAm = loadedAmendments.length > 0 ? loadedAmendments[loadedAmendments.length - 1] : null;
+        var effSpaces = latestAm?.contract_spaces?.length > 0
+          ? latestAm.contract_spaces
+          : (selContract.contract_spaces || []);
+        var spaceIds = effSpaces.map(function(cs: any) { return cs.space_id; });
+
+        if (spaceIds.length > 0) {
+          supabase.from("contract_spaces")
+            .select("space_id, contracts!inner(id, status, start_date, end_date, is_amendment, tenants(name))")
+            .in("space_id", spaceIds)
+            .in("contracts.status", ["active", "extended"])
+            .then(function({ data: overlapData }) {
+              var overlaps = (overlapData ?? []).filter(function(o: any) {
+                if (o.contracts.is_amendment) return false;
+                if (o.contracts.id === selContract.id) return false;
+                var oS = new Date(o.contracts.start_date);
+                var oE = new Date(o.contracts.end_date);
+                var cS = new Date(selContract.start_date);
+                var cE = new Date(selContract.end_date);
+                return oS < cE && oE > cS;
+              });
+              setSpaceOverlaps(overlaps);
+            });
+        } else { setSpaceOverlaps([]); }
+      });
     // Load parking subscriptions for this contract AND its amendments
     supabase.from("contracts").select("id").or("id.eq."+selContract.id+",parent_contract_id.eq."+selContract.id)
       .then(function({ data: ids }) {
@@ -848,7 +858,9 @@ export default function ContractsPage() {
                     </div>
                     <div className="text-xs text-red-600 space-y-0.5">
                       {spaceOverlaps.map(function(o: any, idx: number) {
-                        var spaceName = (selContract.contract_spaces || []).find(function(cs: any){return cs.space_id === o.space_id;})?.spaces?.space_name || o.space_id;
+                        var spaceName = (effectiveSpaces || []).find(function(cs: any){return cs.space_id === o.space_id;})?.spaces?.space_name
+                          || (selContract.contract_spaces || []).find(function(cs: any){return cs.space_id === o.space_id;})?.spaces?.space_name
+                          || o.space_id;
                         return <div key={idx}>{spaceName} — גם בחוזה: {o.contracts.tenants?.name || "—"} (עד {fmtDate(o.contracts.end_date)})</div>;
                       })}
                     </div>
