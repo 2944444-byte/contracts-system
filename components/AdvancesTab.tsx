@@ -42,6 +42,7 @@ interface AdvanceRow {
   baseRentMonthly: number;
   indexedRentMonthly: number;
   mgmtAdvanceMonthly: number;
+  parkingMonthly: number;
   totalMonthly: number;
   cpiBaseValue: number;
   cpiBaseDate: string;
@@ -114,6 +115,28 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
         .in("parent_contract_id", contractIds)
         .eq("is_amendment", true)
         .order("amendment_date", { ascending: true });
+
+      // Load parking subscriptions (for adding parking fees to advances)
+      // Need to check both base contracts AND their amendments for parking
+      var allContractAndAmendIds = [...contractIds];
+      (allAmendments ?? []).forEach(function(am: any) { allContractAndAmendIds.push(am.id); });
+      var { data: allParking } = await supabase.from("parking_subscriptions")
+        .select("contract_id, subscription_type, monthly_fee, quantity, is_included_in_rent")
+        .in("contract_id", allContractAndAmendIds)
+        .eq("status", "active");
+
+      // Build per-base-contract parking monthly total
+      var contractParkingMonthly: Record<string, number> = {};
+      for (var pk of (allParking ?? [])) {
+        if (pk.is_included_in_rent) continue;
+        if (pk.subscription_type === "visitor") continue; // visitor has no fixed monthly
+        var fee = (Number(pk.monthly_fee) || 0) * (Number(pk.quantity) || 1);
+        // Map amendment parking to base contract
+        var baseForParking = pk.contract_id;
+        var amForParking = (allAmendments ?? []).find(function(a: any) { return a.id === pk.contract_id; });
+        if (amForParking) baseForParking = amForParking.parent_contract_id;
+        contractParkingMonthly[baseForParking] = (contractParkingMonthly[baseForParking] || 0) + fee;
+      }
 
       // Management rates
       var { data: mgmtGroups } = await supabase.from("billing_groups")
@@ -188,11 +211,19 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
           if (s.date <= snapCutoff) activeSnapshot = s;
         }
         var spacesToProcess = activeSnapshot.spaces || [];
+        var parkingMonthly = contractParkingMonthly[c.id] || 0;
+        var parkingAddedToFirstSpace = false;
 
         // Process EACH space separately (per-unit view)
         for (var cs of spacesToProcess) {
           var area = cs.spaces?.area || 0;
           var spaceName = cs.spaces?.space_name || "—";
+          // Add parking to first space only (to avoid double-counting)
+          var thisParkingMonthly = 0;
+          if (!parkingAddedToFirstSpace && parkingMonthly > 0) {
+            thisParkingMonthly = parkingMonthly;
+            parkingAddedToFirstSpace = true;
+          }
 
           // Base monthly rent for this space — detect step-rent changes
           var baseRentPerSqm = Number(cs.price_per_sqm) || Number(c.rent_per_sqm) || 0;
@@ -314,7 +345,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
           var indexedBefore = rentBeforeAnniversary * cpiRatio;
           var indexedAfter = rentAfterAnniversary * cpiRatio;
           var indexedMonthly = hasRentChange ? indexedAfter : rentAfterAnniversary * cpiRatio;
-          var totalMonthly = indexedMonthly + mgmtMonthly;
+          var totalMonthly = indexedMonthly + mgmtMonthly + thisParkingMonthly;
 
           // Determine start date for this unit in the target year.
           // Each space has its own entry_date (= earliest date it appeared in the
@@ -442,7 +473,8 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
               var gf = graceFactors(periodStart, periodEnd);
               rentBV = rentBV * gf.rentFactor;
               var mgmtBV = mgmtMonthly * 3 * ratio * gf.mgmtFactor;
-              var totalBV = rentBV + mgmtBV;
+              var parkingBV = thisParkingMonthly * 3 * ratio;
+              var totalBV = rentBV + mgmtBV + parkingBV;
               var vat = isVat ? totalBV * vatPct : 0;
 
               var checkDate = year + "-" + String(q * 3 + 1).padStart(2, "0") + "-01";
@@ -500,7 +532,8 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
               var gfM = graceFactors(periodStartM, periodEndM);
               rentBVM = rentBVM * gfM.rentFactor;
               var mgmtBVM = mgmtMonthly * ratioM * gfM.mgmtFactor;
-              var totalBVM = rentBVM + mgmtBVM;
+              var parkingBVM = thisParkingMonthly * ratioM;
+              var totalBVM = rentBVM + mgmtBVM + parkingBVM;
               var vatM = isVat ? totalBVM * vatPct : 0;
 
               var checkDateM = year + "-" + String(m + 1).padStart(2, "0") + "-01";
@@ -535,6 +568,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
               rentBefore: hasRentChange ? rentBeforeAnniversary : undefined,
               rentAfter: hasRentChange ? rentAfterAnniversary : undefined,
               mgmtAdvanceMonthly: mgmtMonthly,
+              parkingMonthly: thisParkingMonthly,
               totalMonthly: totalMonthly,
               cpiBaseValue: cpiBaseValue,
               cpiBaseDate: cpiBaseDate,
@@ -732,6 +766,12 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
                       <div className="text-slate-500">מקדמת ד.נ.</div>
                       <div className="font-bold text-slate-800">{fmtMoney(r.mgmtAdvanceMonthly)}/חודש</div>
                     </div>
+                    {r.parkingMonthly > 0 && (
+                    <div>
+                      <div className="text-slate-500">🅿️ חניה</div>
+                      <div className="font-bold text-slate-800">{fmtMoney(r.parkingMonthly)}/חודש</div>
+                    </div>
+                    )}
                     <div>
                       <div className="text-slate-500">מדד בסיס</div>
                       <div className="font-bold text-slate-800">{r.cpiBaseValue || "—"}</div>
