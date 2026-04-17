@@ -170,11 +170,15 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
           }
         }
 
-        // Determine the "active" snapshot = latest snapshot whose date <= yearEnd
+        // Determine the "active" snapshot = latest snapshot whose date <= cutoff
+        // Use cpiCalcDate (the user-specified calculation date) as the cutoff,
+        // so only units that actually entered before that date are included.
+        var cutoffDate = new Date(cpiCalcDate);
         var yearEndForSnap = new Date(year, 11, 31);
+        var snapCutoff = cutoffDate < yearEndForSnap ? cutoffDate : yearEndForSnap;
         var activeSnapshot = snapshots[0];
         for (var s of snapshots) {
-          if (s.date <= yearEndForSnap) activeSnapshot = s;
+          if (s.date <= snapCutoff) activeSnapshot = s;
         }
         var spacesToProcess = activeSnapshot.spaces || [];
 
@@ -297,8 +301,8 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
           if (unitExit && unitExit < effectiveEnd) effectiveEnd = unitExit;
 
           if (effectiveStart > effectiveEnd) continue; // Not active in this year
-          // If the unit's entry date is after the target year end → skip entirely
-          if (unitEntry > yearEnd) continue;
+          // If the unit's entry date is after the cutoff (calc date or year end) → skip
+          if (unitEntry > snapCutoff) continue;
 
           // Grace helper: given a period [pStart, pEnd], compute how much of
           // the rent and management should actually be charged.
@@ -503,6 +507,15 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
           }
         }
       }
+      // Deduplicate: if the same space appears in multiple contracts
+      // (e.g., standalone + amendment), keep only the first occurrence
+      var seenSpaceIds = new Set<string>();
+      rows = rows.filter(function(r) {
+        if (seenSpaceIds.has(r.spaceId)) return false;
+        seenSpaceIds.add(r.spaceId);
+        return true;
+      });
+
       setResults(rows);
     } catch (e: any) { alert("שגיאה: " + (e?.message || e)); }
     finally { setComputing(false); }

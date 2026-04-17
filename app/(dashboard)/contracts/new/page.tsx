@@ -752,6 +752,30 @@ export default function ContractsNewPage() {
         insertPayload.deposit_includes_mgmt = depositIncludesMgmt;
       }
 
+      // ── Overlap validation: check for active contracts on same spaces ──
+      if (selSpaces.length > 0 && !amendmentOfId) {
+        var { data: existingCS } = await supabase
+          .from("contract_spaces")
+          .select("space_id, contracts!inner(id, status, start_date, end_date, is_amendment, tenants(name))")
+          .in("space_id", selSpaces)
+          .in("contracts.status", ["active", "extended"]);
+        var overlapConflicts = (existingCS ?? []).filter(function(o: any) {
+          if (o.contracts.is_amendment) return false;
+          var oStart = new Date(o.contracts.start_date);
+          var oEnd = new Date(o.contracts.end_date);
+          return oStart < new Date(endDate) && oEnd > new Date(startDate);
+        });
+        if (overlapConflicts.length > 0) {
+          var conflictNames = overlapConflicts.map(function(o: any) {
+            return (o.contracts.tenants?.name || "—") + " (עד " + new Date(o.contracts.end_date).toLocaleDateString("he-IL") + ")";
+          });
+          var uniqueNames = Array.from(new Set(conflictNames));
+          alert("שגיאה: יחידות כבר משויכות לחוזה פעיל חופף:\n" + uniqueNames.join("\n"));
+          setSaving(false);
+          return;
+        }
+      }
+
       const { data: contract, error: ce } = await supabase
         .from("contracts")
         .insert(insertPayload)
