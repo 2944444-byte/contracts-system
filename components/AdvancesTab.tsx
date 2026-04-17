@@ -86,7 +86,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
     try {
       // Load contracts
       var query = supabase.from("contracts")
-        .select("id, rent_per_sqm, charged_area, investment_addition, payment_method, payment_frequency, vat_type, indexation_method, index_base_date, index_base_value, start_date, end_date, is_amendment, grace_months, grace_type, tenants(name), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,index_base_date,index_base_value,use_original_index,spaces(space_name,area))")
+        .select("id, rent_per_sqm, charged_area, investment_addition, payment_method, payment_frequency, vat_type, indexation_method, index_base_date, index_base_value, start_date, end_date, is_amendment, grace_months, grace_type, grace_discount_pct, tenants(name), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,index_base_date,index_base_value,use_original_index,spaces(space_name,area))")
         .eq("property_id", propId)
         .in("status", ["active", "extended"])
         .eq("is_amendment", false);
@@ -247,12 +247,21 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
             try {
               var cpiData = await fetchCpiAdjusted({ value: 10000, fromDate: fromCbs, toDate: toCbs });
               if (cpiData.success) {
-                cpiRatio = Number(cpiData.adjustedRentPerSqm) / 10000;
                 cpiCurrentValue = Number(cpiData.toIndexValue) || 0;
                 cpiCurrentDate = cpiData.toDate || "";
-                if (!cpiBaseValue) cpiBaseValue = Number(cpiData.fromIndexValue) || 0;
                 cbsVerifyUrl = cpiData.verificationUrl || "";
-                console.log("CBS for " + spaceName + ": from=" + fromCbs + " to=" + toCbs + " ratio=" + cpiRatio.toFixed(6) + " fromIdx=" + cpiData.fromIndexValue + " toIdx=" + cpiData.toIndexValue + " url=" + cbsVerifyUrl);
+
+                // If user already stored a base CPI value in the contract, use it
+                // directly instead of the CBS-derived from-index (which can map to
+                // a different month via t-2 logic).
+                if (cpiBaseValue > 0 && cpiCurrentValue > 0) {
+                  cpiRatio = cpiCurrentValue / cpiBaseValue;
+                } else {
+                  // Fallback to CBS ratio when no stored base value
+                  cpiRatio = Number(cpiData.adjustedRentPerSqm) / 10000;
+                  if (!cpiBaseValue) cpiBaseValue = Number(cpiData.fromIndexValue) || 0;
+                }
+                console.log("CBS for " + spaceName + ": from=" + fromCbs + " to=" + toCbs + " ratio=" + cpiRatio.toFixed(6) + " baseValue=" + cpiBaseValue + " currentValue=" + cpiCurrentValue + " url=" + cbsVerifyUrl);
               }
             } catch (e) { /* keep ratio 1 */ }
           }
@@ -272,12 +281,13 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
           var yearEnd = new Date(year, 11, 31);
           var effectiveStart = unitEntry > yearStart ? unitEntry : yearStart;
 
-          // Grace period: if contract has grace, reduce effective start
-          if (c.grace_months && c.grace_type === "full") {
-            var graceEnd = new Date(contractStart);
-            graceEnd.setMonth(graceEnd.getMonth() + Number(c.grace_months));
-            if (graceEnd > effectiveStart) effectiveStart = graceEnd;
+          // Grace period: compute the end-date of grace from contract start
+          var graceEndDate: Date | null = null;
+          if (c.grace_months && Number(c.grace_months) > 0 && c.grace_type) {
+            graceEndDate = new Date(contractStart);
+            graceEndDate.setMonth(graceEndDate.getMonth() + Number(c.grace_months));
           }
+          var graceDiscountPct = Number(c.grace_discount_pct) || 0;
 
           // If contract ends before year end, use contract end
           var contractEnd = c.end_date ? new Date(c.end_date) : yearEnd;
@@ -289,6 +299,33 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
           if (effectiveStart > effectiveEnd) continue; // Not active in this year
           // If the unit's entry date is after the target year end → skip entirely
           if (unitEntry > yearEnd) continue;
+
+          // Grace helper: given a period [pStart, pEnd], compute how much of
+          // the rent and management should actually be charged.
+          // Returns {rentFactor, mgmtFactor} where 0 = fully in grace, 1 = no grace.
+          var graceFactors = function(pStart: Date, pEnd: Date): { rentFactor: number; mgmtFactor: number; inGrace: boolean } {
+            if (!graceEndDate || pStart >= graceEndDate) return { rentFactor: 1, mgmtFactor: 1, inGrace: false };
+            // Period is fully or partially in grace
+            var totalMs = pEnd.getTime() - pStart.getTime();
+            if (totalMs <= 0) return { rentFactor: 1, mgmtFactor: 1, inGrace: false };
+            var graceMs = Math.min(graceEndDate.getTime(), pEnd.getTime()) - pStart.getTime();
+            if (graceMs <= 0) return { rentFactor: 1, mgmtFactor: 1, inGrace: false };
+            var graceRatio = graceMs / totalMs; // portion of the period in grace
+            var normalRatio = 1 - graceRatio;
+
+            if (c.grace_type === "full") {
+              // Full grace: no rent, no management during grace portion
+              return { rentFactor: normalRatio, mgmtFactor: normalRatio, inGrace: true };
+            } else if (c.grace_type === "rent_only") {
+              // Grace on rent only: no rent, but management is charged normally
+              return { rentFactor: normalRatio, mgmtFactor: 1, inGrace: true };
+            } else if (c.grace_type === "partial") {
+              // Partial discount on rent during grace, management normal
+              var discountFactor = 1 - (graceDiscountPct / 100);
+              return { rentFactor: normalRatio + graceRatio * discountFactor, mgmtFactor: 1, inGrace: true };
+            }
+            return { rentFactor: 1, mgmtFactor: 1, inGrace: false };
+          };
 
           // Generate checks based on payment frequency
           var checks: CheckRow[] = [];
@@ -357,15 +394,19 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
               }
 
               var ratio = actualDays / totalDaysInQuarter;
-              var mgmtBV = mgmtMonthly * 3 * ratio;
+              // Apply grace period adjustments
+              var gf = graceFactors(periodStart, periodEnd);
+              rentBV = rentBV * gf.rentFactor;
+              var mgmtBV = mgmtMonthly * 3 * ratio * gf.mgmtFactor;
               var totalBV = rentBV + mgmtBV;
               var vat = isVat ? totalBV * vatPct : 0;
 
               var checkDate = year + "-" + String(q * 3 + 1).padStart(2, "0") + "-01";
               var partialLabel = ratio < 0.99 ? " (חלקי — " + actualDays + " ימים)" : "";
+              var graceLabel = gf.inGrace ? " (גרייס)" : "";
 
               checks.push({
-                label: "רבעון " + (q + 1) + partialLabel + labelExtra,
+                label: "רבעון " + (q + 1) + partialLabel + labelExtra + graceLabel,
                 months: 3,
                 partialDays: ratio < 0.99 ? actualDays : 0,
                 totalDaysInMonth: totalDaysInQuarter,
@@ -411,15 +452,19 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
                 rentBVM = isFullMonth ? useRateM : useRateM * actualDaysM / totalDaysMonth;
               }
 
-              var mgmtBVM = mgmtMonthly * ratioM;
+              // Apply grace period adjustments
+              var gfM = graceFactors(periodStartM, periodEndM);
+              rentBVM = rentBVM * gfM.rentFactor;
+              var mgmtBVM = mgmtMonthly * ratioM * gfM.mgmtFactor;
               var totalBVM = rentBVM + mgmtBVM;
               var vatM = isVat ? totalBVM * vatPct : 0;
 
               var checkDateM = year + "-" + String(m + 1).padStart(2, "0") + "-01";
               var partialLabelM = ratioM < 0.99 ? " (חלקי — " + actualDaysM + " ימים)" : "";
+              var graceLabelM = gfM.inGrace ? " (גרייס)" : "";
 
               checks.push({
-                label: "חודש " + (m + 1) + partialLabelM + labelExtraM,
+                label: "חודש " + (m + 1) + partialLabelM + labelExtraM + graceLabelM,
                 months: 1,
                 partialDays: ratioM < 0.99 ? actualDaysM : 0,
                 totalDaysInMonth: totalDaysMonth,
