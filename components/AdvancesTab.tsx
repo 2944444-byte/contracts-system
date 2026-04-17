@@ -46,6 +46,7 @@ interface AdvanceRow {
   totalMonthly: number;
   cpiBaseValue: number;
   cpiBaseDate: string;
+  cbsFromDate: string;  // CBS actual from-index period (e.g. "2021-7")
   cpiCurrentValue: number;
   cpiCurrentDate: string;
   cpiRatio: number;
@@ -322,6 +323,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
           var cpiBaseValue = useCustomCpi ? Number(cs.index_base_value) : (Number(c.index_base_value) || 0);
           var cpiCurrentValue = 0;
           var cpiCurrentDate = "";
+          var cbsFromDate = ""; // CBS's actual from-index period (e.g. "2021-7")
           var cbsVerifyUrl = "";
 
           if (c.indexation_method !== "none" && fromCbs && toCbs) {
@@ -334,7 +336,11 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
                 cpiRatio = Number(cpiData.adjustedRentPerSqm) / 10000;
                 cpiCurrentValue = Number(cpiData.toIndexValue) || 0;
                 cpiCurrentDate = cpiData.toDate || "";
+                cbsFromDate = cpiData.fromDate || "";
+                // Use CBS-returned base value if contract doesn't have one
                 if (!cpiBaseValue) cpiBaseValue = Number(cpiData.fromIndexValue) || 0;
+                // Always show CBS's actual from-index value for accuracy
+                if (cpiData.fromIndexValue) cpiBaseValue = Number(cpiData.fromIndexValue);
                 cbsVerifyUrl = cpiData.verificationUrl || "";
                 console.log("CBS for " + spaceName + ": from=" + fromCbs + " to=" + toCbs + " ratio=" + cpiRatio.toFixed(6) + " fromIdx=" + cpiData.fromIndexValue + " toIdx=" + cpiData.toIndexValue + " url=" + cbsVerifyUrl);
               }
@@ -572,6 +578,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
               totalMonthly: totalMonthly,
               cpiBaseValue: cpiBaseValue,
               cpiBaseDate: cpiBaseDate,
+              cbsFromDate: cbsFromDate,
               cpiCurrentValue: cpiCurrentValue,
               cpiCurrentDate: cpiCurrentDate,
               cpiRatio: cpiRatio,
@@ -776,14 +783,20 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
                       <div className="text-slate-500">מדד בסיס</div>
                       <div className="font-bold text-slate-800">{r.cpiBaseValue || "—"}</div>
                       {r.cpiBaseValue ? (
-                        <div className="text-xs text-blue-600 font-semibold">📊 מדד {r.cpiBaseDate ? formatPeriod(new Date(r.cpiBaseDate).getFullYear(), new Date(r.cpiBaseDate).getMonth()+1) : ""}</div>
+                        <div className="text-xs text-blue-600 font-semibold">📊 מדד {r.cbsFromDate ? (function() {
+                          var parts = r.cbsFromDate.split("-");
+                          return parts.length >= 2 ? formatPeriod(Number(parts[0]), Number(parts[1])) : r.cbsFromDate;
+                        })() : (r.cpiBaseDate ? formatPeriod(new Date(r.cpiBaseDate).getFullYear(), new Date(r.cpiBaseDate).getMonth()+1) : "")}</div>
                       ) : null}
                     </div>
                     <div>
                       <div className="text-slate-500">מדד לחישוב</div>
                       <div className="font-bold text-slate-800">{r.cpiCurrentValue || "—"}</div>
                       {r.cpiCurrentValue ? (
-                        <div className="text-xs text-blue-600 font-semibold">📊 מדד {r.cpiCurrentDate ? (typeof r.cpiCurrentDate === "string" && /^\d{4}-\d{2}/.test(r.cpiCurrentDate) ? formatPeriod(new Date(r.cpiCurrentDate).getFullYear(), new Date(r.cpiCurrentDate).getMonth()+1) : r.cpiCurrentDate) : ""}</div>
+                        <div className="text-xs text-blue-600 font-semibold">📊 מדד {r.cpiCurrentDate ? (function() {
+                          var parts = String(r.cpiCurrentDate).split("-");
+                          return parts.length >= 2 ? formatPeriod(Number(parts[0]), Number(parts[1])) : r.cpiCurrentDate;
+                        })() : ""}</div>
                       ) : null}
                       {r.cpiBaseValue > 0 && r.cpiCurrentValue > 0 && (
                         <div className="text-blue-600 mt-0.5">יחס: {(r.cpiRatio || 1).toFixed(6)}</div>
