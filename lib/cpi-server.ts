@@ -71,8 +71,8 @@ export async function fetchCpiAdjusted(params: {
 
     return {
       success: true,
-      baseRentPerSqm: Math.round(value * 100) / 100,
-      adjustedRentPerSqm: Math.round(answer.to_value * 100) / 100,
+      baseRentPerSqm: value,
+      adjustedRentPerSqm: answer.to_value,
       changePct: answer.change_percent ?? null,
       fromDate: answer.from_index_date || fromMM,
       toDate: answer.to_index_date || toMM,

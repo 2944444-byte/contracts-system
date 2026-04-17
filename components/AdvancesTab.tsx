@@ -47,6 +47,7 @@ interface AdvanceRow {
   cpiBaseDate: string;
   cpiCurrentValue: number;
   cpiCurrentDate: string;
+  cpiRatio: number;
   indexationMethod: string;
   startDate: string;
   rentChangeDate?: string;   // date of step-rent increase within year
@@ -251,21 +252,15 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
             try {
               var cpiData = await fetchCpiAdjusted({ value: 10000, fromDate: fromCbs, toDate: toCbs });
               if (cpiData.success) {
+                // ALWAYS use CBS calculator ratio — it handles base-year chaining
+                // (מקדמי קשר) automatically. Direct division of index values
+                // from different base years would give wrong results.
+                cpiRatio = Number(cpiData.adjustedRentPerSqm) / 10000;
                 cpiCurrentValue = Number(cpiData.toIndexValue) || 0;
                 cpiCurrentDate = cpiData.toDate || "";
+                if (!cpiBaseValue) cpiBaseValue = Number(cpiData.fromIndexValue) || 0;
                 cbsVerifyUrl = cpiData.verificationUrl || "";
-
-                // If user already stored a base CPI value in the contract, use it
-                // directly instead of the CBS-derived from-index (which can map to
-                // a different month via t-2 logic).
-                if (cpiBaseValue > 0 && cpiCurrentValue > 0) {
-                  cpiRatio = cpiCurrentValue / cpiBaseValue;
-                } else {
-                  // Fallback to CBS ratio when no stored base value
-                  cpiRatio = Number(cpiData.adjustedRentPerSqm) / 10000;
-                  if (!cpiBaseValue) cpiBaseValue = Number(cpiData.fromIndexValue) || 0;
-                }
-                console.log("CBS for " + spaceName + ": from=" + fromCbs + " to=" + toCbs + " ratio=" + cpiRatio.toFixed(6) + " baseValue=" + cpiBaseValue + " currentValue=" + cpiCurrentValue + " url=" + cbsVerifyUrl);
+                console.log("CBS for " + spaceName + ": from=" + fromCbs + " to=" + toCbs + " ratio=" + cpiRatio.toFixed(6) + " fromIdx=" + cpiData.fromIndexValue + " toIdx=" + cpiData.toIndexValue + " url=" + cbsVerifyUrl);
               }
             } catch (e) { /* keep ratio 1 */ }
           }
@@ -500,6 +495,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
               cpiBaseDate: cpiBaseDate,
               cpiCurrentValue: cpiCurrentValue,
               cpiCurrentDate: cpiCurrentDate,
+              cpiRatio: cpiRatio,
               indexationMethod: c.indexation_method || "standard",
               startDate: effectiveStart.toISOString().split("T")[0],
               checks: checks,
@@ -705,7 +701,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
                         <div className="text-xs text-blue-600 font-semibold">📊 מדד {r.cpiCurrentDate ? (typeof r.cpiCurrentDate === "string" && /^\d{4}-\d{2}/.test(r.cpiCurrentDate) ? formatPeriod(new Date(r.cpiCurrentDate).getFullYear(), new Date(r.cpiCurrentDate).getMonth()+1) : r.cpiCurrentDate) : ""}</div>
                       ) : null}
                       {r.cpiBaseValue > 0 && r.cpiCurrentValue > 0 && (
-                        <div className="text-blue-600 mt-0.5">יחס: {(r.cpiCurrentValue / r.cpiBaseValue).toFixed(6)}</div>
+                        <div className="text-blue-600 mt-0.5">יחס: {(r.cpiRatio || 1).toFixed(6)}</div>
                       )}
                     </div>
                   </div>
