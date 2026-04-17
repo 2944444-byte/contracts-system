@@ -120,6 +120,8 @@ export default function ContractEditPage() {
   const [tenantId, setTenantId] = useState("");
   const [propertyId, setPropertyId] = useState("");
   const [selSpaces, setSelSpaces] = useState<string[]>([]);
+  const [originalBaseSpaceIds, setOriginalBaseSpaceIds] = useState<string[]>([]);
+  const [contractHasAmendments, setContractHasAmendments] = useState(false);
   const [contractType, setContractType] = useState("regular");
   const [showNewTenant, setShowNewTenant] = useState(false);
   const [showNewProperty, setShowNewProperty] = useState(false);
@@ -273,6 +275,10 @@ export default function ContractEditPage() {
     var hasAmendments = false;
     var amends: any[] | null = null;
 
+    // Store original base spaces (before amendment pollution)
+    var baseSpaceIds = (cs ?? []).map(function(s: any) { return s.space_id; });
+    setOriginalBaseSpaceIds(baseSpaceIds);
+
     if (!c.is_amendment) {
       var { data: amendsData } = await supabase.from("contracts")
         .select("*, contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,index_base_value,index_base_date,use_original_index)")
@@ -282,6 +288,7 @@ export default function ContractEditPage() {
       amends = amendsData;
       if (amends && amends.length > 0) {
         hasAmendments = true;
+        setContractHasAmendments(true);
         var latest = amends[amends.length - 1];
         // Override spaces with latest amendment's spaces
         if (latest.contract_spaces?.length > 0) {
@@ -641,10 +648,19 @@ export default function ContractEditPage() {
       if (ue) throw new Error(ue.message);
 
       // Delete + re-insert contract_spaces
+      // IMPORTANT: if contract has amendments, only save the ORIGINAL base spaces
+      // (not amendment-added spaces). Otherwise amendment diff display breaks.
+      var spacesToSave = selSpaces;
+      if (contractHasAmendments && originalBaseSpaceIds.length > 0) {
+        // Only save spaces that were in the original base contract
+        spacesToSave = selSpaces.filter(function(sid) {
+          return originalBaseSpaceIds.includes(sid);
+        });
+      }
       await supabase.from("contract_spaces").delete().eq("contract_id", id);
-      if (selSpaces.length > 0) {
+      if (spacesToSave.length > 0) {
         await supabase.from("contract_spaces").insert(
-          selSpaces.map((sid) => {
+          spacesToSave.map((sid) => {
             var rType = unitRentTypes[sid] || "per_sqm";
             var rVal = unitRentOverrides[sid] ? Number(unitRentOverrides[sid]) : null;
             return {
