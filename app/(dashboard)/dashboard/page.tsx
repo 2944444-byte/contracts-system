@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { supabase } from '@/lib/supabase';
 import { fetchCpiAdjusted } from '@/lib/cpi-server';
 
-function fmtMoney(n: number) { return "₪" + (n ?? 0).toLocaleString("he-IL",{minimumFractionDigits:0,maximumFractionDigits:0}); }
+function fmtMoney(n: number) { return "₪" + (n ?? 0).toLocaleString("he-IL",{minimumFractionDigits:2,maximumFractionDigits:2}); }
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
 
 // Calculate base monthly rent for a contract (handles per-unit pricing)
