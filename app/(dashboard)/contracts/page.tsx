@@ -146,9 +146,16 @@ export default function ContractsPage() {
         var spaceIds = effSpaces.map(function(cs: any) { return cs.space_id; });
 
         if (spaceIds.length > 0) {
-          // Collect IDs to exclude: base contract + all its amendments
-          var excludeIds = [selContract.id];
+          // Build the full "family" of IDs to exclude:
+          // The base contract, all its amendments, and if selContract IS an amendment —
+          // also its parent and all sibling amendments.
+          var baseId = selContract.parent_contract_id || selContract.id;
+          var excludeIds = [selContract.id, baseId];
           loadedAmendments.forEach(function(am: any) { excludeIds.push(am.id); });
+          // If this contract is an amendment, also load sibling amendments from parent
+          if (selContract.parent_contract_id) {
+            excludeIds.push(selContract.parent_contract_id);
+          }
 
           supabase.from("contract_spaces")
             .select("space_id, contracts!inner(id, status, start_date, end_date, is_amendment, parent_contract_id, tenants(name))")
@@ -157,11 +164,10 @@ export default function ContractsPage() {
             .then(function({ data: overlapData }) {
               var overlaps = (overlapData ?? []).filter(function(o: any) {
                 var cId = o.contracts.id;
-                // Skip: same contract, its amendments, or amendments OF this contract
+                // Skip: this contract, its parent, its amendments, sibling amendments
                 if (excludeIds.includes(cId)) return false;
-                if (o.contracts.parent_contract_id === selContract.id) return false;
-                // Also skip any amendment record (its base might be this contract)
-                if (o.contracts.is_amendment && o.contracts.parent_contract_id === selContract.id) return false;
+                // Skip amendments whose parent is in our family
+                if (o.contracts.parent_contract_id && excludeIds.includes(o.contracts.parent_contract_id)) return false;
                 var oS = new Date(o.contracts.start_date);
                 var oE = new Date(o.contracts.end_date);
                 var cS = new Date(selContract.start_date);
