@@ -102,6 +102,12 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
       var { data: allTiers } = await supabase.from("contract_price_tiers")
         .select("*").in("contract_id", contractIds).order("tier_number");
 
+      // Load exercised contract options (for mid-year price changes from options)
+      var { data: allOptions } = await supabase.from("contract_options")
+        .select("*").in("contract_id", contractIds)
+        .eq("is_exercised", true)
+        .order("start_date", { ascending: true });
+
       // Load amendments (for per-unit entry/exit dates)
       var { data: allAmendments } = await supabase.from("contracts")
         .select("id, parent_contract_id, amendment_date, start_date, end_date, contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,index_base_date,index_base_value,use_original_index,spaces(space_name,area))")
@@ -229,6 +235,45 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
             }
             if (contractYearsFromStart === 1) rentBeforeAnniversary = baseMonthly;
           }
+          // Check exercised options: if an option starts during the target year,
+          // it overrides the rent from that date forward.
+          var contractOptions = (allOptions ?? []).filter(function(o: any) { return o.contract_id === c.id; });
+          for (var opt of contractOptions) {
+            if (!opt.start_date) continue;
+            var optStart = new Date(opt.start_date);
+            var optYear = optStart.getFullYear();
+            // Option starts in the target year → price change mid-year
+            if (optYear === year) {
+              var newRent = 0;
+              if (opt.rent_mechanism === "new_value" && opt.new_rent_value) {
+                newRent = isFixed ? Number(opt.new_rent_value) : Number(opt.new_rent_value) * area;
+              } else if (opt.rent_mechanism === "increase_pct" && opt.rent_increase_pct) {
+                newRent = rentAfterAnniversary * (1 + Number(opt.rent_increase_pct) / 100);
+              } else {
+                continue; // no rent change from this option
+              }
+              if (newRent > 0) {
+                rentBeforeAnniversary = rentAfterAnniversary; // current rate becomes "before"
+                rentAfterAnniversary = newRent;
+                anniversaryInYear = optStart; // the change date is the option start
+              }
+            }
+            // Option started BEFORE target year → entire year at option rent
+            if (optYear < year) {
+              var optRent = 0;
+              if (opt.rent_mechanism === "new_value" && opt.new_rent_value) {
+                optRent = isFixed ? Number(opt.new_rent_value) : Number(opt.new_rent_value) * area;
+              } else if (opt.rent_mechanism === "increase_pct" && opt.rent_increase_pct) {
+                optRent = baseMonthly * (1 + Number(opt.rent_increase_pct) / 100);
+              }
+              if (optRent > 0) {
+                baseMonthly = optRent;
+                rentBeforeAnniversary = optRent;
+                rentAfterAnniversary = optRent;
+              }
+            }
+          }
+
           // If anniversary is Jan 1 or before year start, no split needed
           var hasRentChange = Math.abs(rentAfterAnniversary - rentBeforeAnniversary) > 0.01
             && anniversaryInYear > new Date(year, 0, 1)
