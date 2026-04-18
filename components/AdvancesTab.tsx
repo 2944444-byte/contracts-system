@@ -43,6 +43,7 @@ interface AdvanceRow {
   indexedRentMonthly: number;
   mgmtAdvanceMonthly: number;
   parkingMonthly: number;
+  parkingSpots: number;
   totalMonthly: number;
   cpiBaseValue: number;
   cpiBaseDate: string;
@@ -126,17 +127,19 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
         .in("contract_id", allContractAndAmendIds)
         .eq("status", "active");
 
-      // Build per-base-contract parking monthly total
+      // Build per-base-contract parking monthly total + spot count
       var contractParkingMonthly: Record<string, number> = {};
+      var contractParkingSpots: Record<string, number> = {};
       for (var pk of (allParking ?? [])) {
         if (pk.is_included_in_rent) continue;
-        if (pk.subscription_type === "visitor") continue; // visitor has no fixed monthly
+        if (pk.subscription_type === "visitor") continue;
         var fee = (Number(pk.monthly_fee) || 0) * (Number(pk.quantity) || 1);
-        // Map amendment parking to base contract
+        var spots = Number(pk.quantity) || 1;
         var baseForParking = pk.contract_id;
         var amForParking = (allAmendments ?? []).find(function(a: any) { return a.id === pk.contract_id; });
         if (amForParking) baseForParking = amForParking.parent_contract_id;
         contractParkingMonthly[baseForParking] = (contractParkingMonthly[baseForParking] || 0) + fee;
+        contractParkingSpots[baseForParking] = (contractParkingSpots[baseForParking] || 0) + spots;
       }
 
       // Management rates
@@ -221,8 +224,10 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
           var spaceName = cs.spaces?.space_name || "—";
           // Add parking to first space only (to avoid double-counting)
           var thisParkingMonthly = 0;
+          var thisParkingSpots = 0;
           if (!parkingAddedToFirstSpace && parkingMonthly > 0) {
             thisParkingMonthly = parkingMonthly;
+            thisParkingSpots = contractParkingSpots[c.id] || 0;
             parkingAddedToFirstSpace = true;
           }
 
@@ -575,6 +580,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
               rentAfter: hasRentChange ? rentAfterAnniversary : undefined,
               mgmtAdvanceMonthly: mgmtMonthly,
               parkingMonthly: thisParkingMonthly,
+              parkingSpots: thisParkingSpots,
               totalMonthly: totalMonthly,
               cpiBaseValue: cpiBaseValue,
               cpiBaseDate: cpiBaseDate,
@@ -761,13 +767,17 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
                     <div>
                       <div className="text-slate-500">שכ&quot;ד בסיס</div>
                       <div className="font-bold text-slate-800">{fmtMoney(r.baseRentMonthly)}/חודש</div>
+                      {r.spaceArea > 0 && <div className="text-xs text-slate-400">(בסיס: {(r.baseRentMonthly / r.spaceArea).toFixed(2)}₪/מ&quot;ר)</div>}
                       {r.rentChangeDate && r.rentAfter && (
-                        <div className="text-orange-600 mt-0.5">→ {fmtMoney(r.rentAfter)} מ-{fmtDate(r.rentChangeDate)}</div>
+                        <div className="text-orange-600 mt-0.5">→ {fmtMoney(r.rentAfter)} מ-{fmtDate(r.rentChangeDate)}
+                        {r.spaceArea > 0 && <span className="text-xs"> ({(r.rentAfter / r.spaceArea).toFixed(2)}₪/מ&quot;ר)</span>}
+                        </div>
                       )}
                     </div>
                     <div>
                       <div className="text-slate-500">שכ&quot;ד צמוד</div>
                       <div className="font-bold text-green-700">{fmtMoney(r.indexedRentMonthly)}/חודש</div>
+                      {r.spaceArea > 0 && <div className="text-xs text-green-600">(צמוד: {(r.indexedRentMonthly / r.spaceArea).toFixed(2)}₪/מ&quot;ר)</div>}
                     </div>
                     <div>
                       <div className="text-slate-500">מקדמת ד.נ.</div>
@@ -777,6 +787,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
                     <div>
                       <div className="text-slate-500">🅿️ חניה</div>
                       <div className="font-bold text-slate-800">{fmtMoney(r.parkingMonthly)}/חודש</div>
+                      {r.parkingSpots > 0 && <div className="text-xs text-slate-400">({r.parkingSpots} מקומות × {fmtMoney(r.parkingMonthly / r.parkingSpots)})</div>}
                     </div>
                     )}
                     <div>
