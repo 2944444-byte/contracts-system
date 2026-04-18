@@ -919,6 +919,29 @@ export default function ContractsPage() {
                   </div>
                 )}
 
+                {/* Cross-swap indicators */}
+                {amendments.filter(function(am: any) { return (am.amendment_notes || "").includes("החלפה צולבת"); }).map(function(am: any) {
+                  var noteMatch = (am.amendment_notes || "").match(/החלפה צולבת עם (.+?):\s*(.+?)\s*→\s*(.+)/);
+                  if (!noteMatch) return null;
+                  var otherTenant = noteMatch[1];
+                  var spacesOut = noteMatch[2];
+                  var spacesIn = noteMatch[3];
+                  return (
+                    <div key={am.id} className="rounded-lg bg-indigo-50 border border-indigo-300 px-3 py-2 mb-3">
+                      <div className="flex items-center gap-2 text-indigo-700 font-bold text-sm mb-1">
+                        <span>🔄</span>
+                        <span>החלפת יחידות עם {otherTenant}</span>
+                        <span className="text-xs font-normal text-indigo-500">({fmtDate(am.amendment_date || am.start_date)})</span>
+                      </div>
+                      <div className="text-xs text-indigo-600 flex items-center gap-2">
+                        <span className="bg-red-100 text-red-700 rounded px-1.5 py-0.5">⬅ יצא: {spacesOut}</span>
+                        <span className="text-indigo-400">⇄</span>
+                        <span className="bg-green-100 text-green-700 rounded px-1.5 py-0.5">➡ נכנס: {spacesIn}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+
                 {/* Overlap warning */}
                 {spaceOverlaps.length > 0 && (
                   <div className="rounded-lg bg-red-50 border border-red-300 px-3 py-2 mb-3">
