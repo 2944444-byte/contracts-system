@@ -383,8 +383,9 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
           if (unitExit && unitExit < effectiveEnd) effectiveEnd = unitExit;
 
           if (effectiveStart > effectiveEnd) continue; // Not active in this year
-          // If the unit's entry date is after the cutoff (calc date or year end) → skip
-          if (unitEntry > snapCutoff) continue;
+          // Skip units that enter AFTER the target year (not after calc date —
+          // contracts starting mid-year but within the year should be included)
+          if (unitEntry > yearEnd) continue;
 
           // Grace helper: given a period [pStart, pEnd], compute how much of
           // the rent and management should actually be charged.
