@@ -672,6 +672,7 @@ export default function ContractsPage() {
       const { data: linkedSpaces } = await supabase.from("contract_spaces").select("space_id").eq("contract_id", contractId);
       const spaceIds = (linkedSpaces || []).map((r: any) => r.space_id);
       await supabase.from("contracts").update({ parent_contract_id: null }).eq("parent_contract_id", contractId);
+      await supabase.from("parking_subscriptions").delete().eq("contract_id", contractId);
       await supabase.from("alerts").delete().eq("contract_id", contractId);
       await supabase.from("charges").delete().eq("contract_id", contractId);
       await supabase.from("contract_spaces").delete().eq("contract_id", contractId);
@@ -1240,15 +1241,37 @@ export default function ContractsPage() {
                                 className="rounded border border-slate-200 px-2 py-1 text-xs text-slate-500 hover:bg-slate-50">✏️</button>
                               <button onClick={async function(e){
                                 e.stopPropagation();
-                                if(!confirm("למחוק תוספת "+( am.amendment_number||"")+"?")) return;
-                                // Free removed spaces
-                                var amSpIds = (am.contract_spaces||[]).map(function(cs:any){return cs.space_id;});
-                                await supabase.from("contract_spaces").delete().eq("contract_id", am.id);
-                                await supabase.from("contract_price_tiers").delete().eq("contract_id", am.id);
-                                await supabase.from("guarantees").delete().eq("contract_id", am.id);
-                                await supabase.from("contract_options").delete().eq("contract_id", am.id);
-                                await supabase.from("contracts").delete().eq("id", am.id);
-                                loadContracts();
+                                if(!confirm("למחוק תוספת "+( am.amendment_number||"")+"? כל הנתונים הקשורים יימחקו.")) return;
+                                try {
+                                  // Delete ALL related data for this amendment
+                                  await supabase.from("parking_subscriptions").delete().eq("contract_id", am.id);
+                                  await supabase.from("charges").delete().eq("contract_id", am.id);
+                                  await supabase.from("alerts").delete().eq("contract_id", am.id);
+                                  await supabase.from("contract_spaces").delete().eq("contract_id", am.id);
+                                  await supabase.from("contract_price_tiers").delete().eq("contract_id", am.id);
+                                  await supabase.from("contract_options").delete().eq("contract_id", am.id);
+                                  await supabase.from("guarantees").delete().eq("contract_id", am.id);
+                                  await supabase.from("insurances_tenant").delete().eq("contract_id", am.id);
+                                  await supabase.from("documents").delete().eq("contract_id", am.id);
+                                  await supabase.from("letters").delete().eq("contract_id", am.id);
+                                  await supabase.from("management_fees").delete().eq("contract_id", am.id);
+                                  await supabase.from("revenue_reports").delete().eq("contract_id", am.id);
+                                  await supabase.from("contract_ti").delete().eq("contract_id", am.id);
+                                  await supabase.from("contracts").delete().eq("id", am.id);
+                                  // Renumber remaining amendments
+                                  var { data: remaining } = await supabase.from("contracts")
+                                    .select("id, amendment_number")
+                                    .eq("parent_contract_id", selContract.id)
+                                    .eq("is_amendment", true)
+                                    .order("amendment_date");
+                                  if (remaining) {
+                                    for (var ri = 0; ri < remaining.length; ri++) {
+                                      await supabase.from("contracts").update({ amendment_number: ri + 1 }).eq("id", remaining[ri].id);
+                                    }
+                                  }
+                                  await logAudit({ entity_type: "contract", entity_id: am.id, action: "delete", notes: "מחיקת תוספת " + (am.amendment_number || "") });
+                                  loadContracts();
+                                } catch (err: any) { alert("שגיאה במחיקת תוספת: " + (err?.message || err)); }
                               }}
                                 className="rounded border border-red-200 px-2 py-1 text-xs text-red-500 hover:bg-red-50">🗑</button>
                             </div>
