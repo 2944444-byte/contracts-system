@@ -1853,26 +1853,58 @@ export default function ContractsPage() {
                   {/* Save */}
                   <button disabled={amendSaving} onClick={async function() {
                     if (!amendDate) { alert("נא להזין תאריך תוקף"); return; }
-                    // ── Overlap validation for new spaces being added ──
+                    // ── Overlap validation + cross-tenant swap ──
+                    var crossSwapContracts: any[] = []; // contracts that need a mirror amendment
                     if (amendAddSpaces.length > 0) {
                       var { data: existOverlap } = await supabase
                         .from("contract_spaces")
-                        .select("space_id, contracts!inner(id, status, start_date, end_date, is_amendment, tenants(name))")
+                        .select("space_id, contracts!inner(id, status, start_date, end_date, is_amendment, parent_contract_id, tenants(name))")
                         .in("space_id", amendAddSpaces)
                         .in("contracts.status", ["active", "extended"]);
                       var amendEnd = selContract.end_date;
                       var overlapHits = (existOverlap ?? []).filter(function(o: any) {
                         if (o.contracts.is_amendment) return false;
-                        if (o.contracts.id === selContract.id) return false; // same contract
+                        if (o.contracts.id === selContract.id) return false;
                         var oS = new Date(o.contracts.start_date);
                         var oE = new Date(o.contracts.end_date);
                         return oS < new Date(amendEnd) && oE > new Date(amendDate);
                       });
-                      if (overlapHits.length > 0) {
+                      if (overlapHits.length > 0 && amendRemoveSpaces.length > 0) {
+                        // Potential cross-tenant swap: we're removing spaces AND adding occupied ones
+                        var conflictContractIds = Array.from(new Set(overlapHits.map(function(o: any) { return o.contracts.id; })));
+                        var conflictSpaceIds = overlapHits.map(function(o: any) { return o.space_id; });
                         var conflictNames = overlapHits.map(function(o: any) {
+                          var spName = allPropertySpaces.find(function(s: any) { return s.id === o.space_id; })?.space_name || o.space_id;
+                          return spName + " ← " + (o.contracts.tenants?.name || "—");
+                        });
+                        var removedNames = amendRemoveSpaces.map(function(sid: string) {
+                          return allPropertySpaces.find(function(s: any) { return s.id === sid; })?.space_name || sid;
+                        });
+                        var swapMsg = "יחידות שאתה מוסיף שייכות לשוכר אחר:\n" +
+                          conflictNames.join("\n") +
+                          "\n\nהאם לבצע החלפה צולבת?\n" +
+                          "• אצלך: הוסר " + removedNames.join(", ") + " → הוסף " + conflictSpaceIds.map(function(sid: string) { return allPropertySpaces.find(function(s: any) { return s.id === sid; })?.space_name || sid; }).join(", ") +
+                          "\n• אצל השוכר השני: תיווצר תוספת שמחליפה בכיוון ההפוך" +
+                          "\n\nלאשר?";
+                        if (!confirm(swapMsg)) return;
+                        // Mark contracts for cross-swap
+                        for (var cid of conflictContractIds) {
+                          var hit = overlapHits.find(function(o: any) { return o.contracts.id === cid; });
+                          crossSwapContracts.push({
+                            contractId: cid,
+                            tenantName: (hit?.contracts as any)?.tenants?.name || "—",
+                            spacesToRemove: conflictSpaceIds.filter(function(sid: string) {
+                              return overlapHits.some(function(o: any) { return o.space_id === sid && o.contracts.id === cid; });
+                            }),
+                            spacesToAdd: amendRemoveSpaces, // they get our removed spaces
+                          });
+                        }
+                      } else if (overlapHits.length > 0) {
+                        // No swap possible (not removing anything) — just block
+                        var conflictNames2 = overlapHits.map(function(o: any) {
                           return (o.contracts.tenants?.name || "—") + " (עד " + fmtDate(o.contracts.end_date) + ")";
                         });
-                        alert("שגיאה: יחידות כבר משויכות לחוזה פעיל חופף:\n" + Array.from(new Set(conflictNames)).join("\n"));
+                        alert("שגיאה: יחידות כבר משויכות לחוזה פעיל חופף:\n" + Array.from(new Set(conflictNames2)).join("\n"));
                         return;
                       }
                     }
@@ -1968,6 +2000,84 @@ export default function ContractsPage() {
                       });
                       if (spacesToInsert.length > 0) {
                         await supabase.from("contract_spaces").insert(spacesToInsert);
+                      }
+
+                      // ── Cross-tenant swap: create mirror amendments for other contracts ──
+                      for (var swapInfo of crossSwapContracts) {
+                        // Load the other contract's effective spaces
+                        var { data: otherContract } = await supabase.from("contracts")
+                          .select("*, tenants(name), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,index_base_value,index_base_date,use_original_index,spaces(space_name,area))")
+                          .eq("id", swapInfo.contractId).single();
+                        if (!otherContract) continue;
+                        // Get latest amendment's spaces for the other contract
+                        var { data: otherAmends } = await supabase.from("contracts")
+                          .select("id, contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,index_base_value,index_base_date,use_original_index,spaces(space_name,area))")
+                          .eq("parent_contract_id", swapInfo.contractId).eq("is_amendment", true)
+                          .order("amendment_number", { ascending: false }).limit(1);
+                        var otherEffSpaces = (otherAmends && otherAmends.length > 0 && otherAmends[0].contract_spaces?.length > 0)
+                          ? otherAmends[0].contract_spaces : (otherContract.contract_spaces || []);
+                        // Build the other contract's new spaces: remove swapped-out, add swapped-in
+                        var otherNewSpaces = otherEffSpaces.filter(function(cs: any) {
+                          return !swapInfo.spacesToRemove.includes(cs.space_id);
+                        });
+                        // Count amendments for the other contract
+                        var { count: otherAmendCount } = await supabase.from("contracts")
+                          .select("id", { count: "exact", head: true })
+                          .eq("parent_contract_id", swapInfo.contractId).eq("is_amendment", true);
+                        // Create mirror amendment
+                        var otherPayload: any = {
+                          tenant_id: otherContract.tenant_id,
+                          property_id: otherContract.property_id,
+                          contract_type: otherContract.contract_type,
+                          start_date: amendDate,
+                          end_date: otherContract.end_date,
+                          lease_period_value: otherContract.lease_period_value,
+                          lease_period_unit: otherContract.lease_period_unit,
+                          rent_per_sqm: otherContract.rent_per_sqm,
+                          charged_area: otherContract.charged_area,
+                          vat_type: otherContract.vat_type,
+                          payment_frequency: otherContract.payment_frequency,
+                          payment_method: otherContract.payment_method,
+                          payment_day: otherContract.payment_day,
+                          indexation_method: otherContract.indexation_method,
+                          index_base_value: otherContract.index_base_value,
+                          index_base_date: otherContract.index_base_date,
+                          status: "active",
+                          parent_contract_id: swapInfo.contractId,
+                          is_amendment: true,
+                          amendment_number: (otherAmendCount ?? 0) + 1,
+                          amendment_date: amendDate,
+                          amendment_notes: "החלפה צולבת עם " + (selContract.tenants?.name || "") + ": " +
+                            swapInfo.spacesToRemove.map(function(sid: string) { return allPropertySpaces.find(function(s: any){return s.id===sid;})?.space_name || sid; }).join(", ") +
+                            " → " + swapInfo.spacesToAdd.map(function(sid: string) { return allPropertySpaces.find(function(s: any){return s.id===sid;})?.space_name || sid; }).join(", "),
+                        };
+                        var { data: otherNewContract } = await supabase.from("contracts").insert(otherPayload).select().single();
+                        if (otherNewContract) {
+                          var otherSpacesToInsert: any[] = [];
+                          // Keep existing spaces (not swapped out)
+                          otherNewSpaces.forEach(function(cs: any) {
+                            otherSpacesToInsert.push({
+                              contract_id: otherNewContract.id, space_id: cs.space_id,
+                              charge_method: cs.charge_method || "per_sqm",
+                              price_per_sqm: cs.price_per_sqm, fixed_rent: cs.fixed_rent,
+                              use_original_index: cs.use_original_index ?? true,
+                            });
+                          });
+                          // Add new spaces (from our removed)
+                          swapInfo.spacesToAdd.forEach(function(sid: string) {
+                            otherSpacesToInsert.push({
+                              contract_id: otherNewContract.id, space_id: sid,
+                              charge_method: "per_sqm",
+                              price_per_sqm: otherContract.rent_per_sqm || 0,
+                              use_original_index: true,
+                            });
+                          });
+                          if (otherSpacesToInsert.length > 0) {
+                            await supabase.from("contract_spaces").insert(otherSpacesToInsert);
+                          }
+                          await logAudit({ entity_type: "contract", entity_id: otherNewContract.id, action: "create",
+                            notes: "החלפה צולבת אוטומטית עם " + (selContract.tenants?.name || "") });
+                        }
                       }
 
                       // Update parent end date if extended
