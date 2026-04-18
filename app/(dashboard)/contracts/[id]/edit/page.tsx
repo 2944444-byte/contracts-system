@@ -135,6 +135,11 @@ export default function ContractEditPage() {
   const [leasePeriodValue, setLeasePeriodValue] = useState(12);
   const [leasePeriodUnit, setLeasePeriodUnit] = useState<"months" | "years">("months");
   const [endDate, setEndDate] = useState("");
+  const [rentType, setRentType] = useState<"fixed" | "revenue_pct">("fixed");
+  const [revenuePct, setRevenuePct] = useState("");
+  const [minimumRent, setMinimumRent] = useState("");
+  const [revenueReportDay, setRevenueReportDay] = useState("5");
+  const [mgmtIncludedInRevenue, setMgmtIncludedInRevenue] = useState(false);
   const [rentPerSqm, setRentPerSqm] = useState("");
   const [chargedArea, setChargedArea] = useState("");
   const [investAdd, setInvestAdd] = useState("");
@@ -348,6 +353,11 @@ export default function ContractEditPage() {
       setLeasePeriodValue(c.lease_period_value ?? 12);
       setLeasePeriodUnit(c.lease_period_unit ?? "months");
     }
+    setRentType(c.rent_type === "revenue_pct" ? "revenue_pct" : "fixed");
+    setRevenuePct(c.revenue_pct?.toString() ?? "");
+    setMinimumRent(c.minimum_rent?.toString() ?? "");
+    setRevenueReportDay(c.revenue_report_day?.toString() ?? "5");
+    setMgmtIncludedInRevenue(c.mgmt_included_in_revenue ?? false);
     setRentPerSqm((effectiveRent || c.rent_per_sqm)?.toString() ?? "");
     setChargedArea((effectiveArea || c.charged_area)?.toString() ?? "");
     setInvestAdd(c.investment_addition?.toString() ?? "");
@@ -597,7 +607,12 @@ export default function ContractEditPage() {
         end_date: effectiveEndStr,
         lease_period_value: leasePeriodValue,
         lease_period_unit: leasePeriodUnit,
+        rent_type: rentType,
         rent_per_sqm: Number(rentPerSqm) || null,
+        revenue_pct: rentType === "revenue_pct" ? Number(revenuePct) || null : null,
+        minimum_rent: rentType === "revenue_pct" ? Number(minimumRent) || 0 : null,
+        revenue_report_day: rentType === "revenue_pct" ? Number(revenueReportDay) || 5 : null,
+        mgmt_included_in_revenue: mgmtIncludedInRevenue,
         charged_area: Number(chargedArea) || null,
         investment_addition: Number(investAdd) || null,
         vat_type: vatType,
@@ -1016,9 +1031,50 @@ export default function ContractEditPage() {
                 <span className="text-lg font-black text-green-800">{new Date(endDate).toLocaleDateString("he-IL")}</span>
               </div>
             )}
+            {/* Rent type toggle */}
+            <div className="mb-3">
+              <label className="mb-1 block text-xs font-semibold text-slate-700">סוג שכ&quot;ד</label>
+              <div className="flex gap-2">
+                <button type="button" onClick={() => setRentType("fixed")}
+                  className={"rounded-lg border px-4 py-2 text-sm font-semibold transition-all " +
+                    (rentType === "fixed" ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-200 text-slate-500 hover:bg-slate-50")}>
+                  💰 שכ&quot;ד קבוע
+                </button>
+                <button type="button" onClick={() => setRentType("revenue_pct")}
+                  className={"rounded-lg border px-4 py-2 text-sm font-semibold transition-all " +
+                    (rentType === "revenue_pct" ? "border-purple-500 bg-purple-50 text-purple-700" : "border-slate-200 text-slate-500 hover:bg-slate-50")}>
+                  📊 אחוז מפדיון
+                </button>
+              </div>
+            </div>
+
+            {rentType === "revenue_pct" && (
+              <div className="rounded-lg border border-purple-200 bg-purple-50/30 p-4 mb-3 space-y-3">
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-slate-700">אחוז מפדיון (%) *</label>
+                    <input type="number" value={revenuePct} onChange={(e) => setRevenuePct(e.target.value)} className={ic} placeholder="12" />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-slate-700">דמי שכירות מינימום (₪/חודש)</label>
+                    <input type="number" value={minimumRent} onChange={(e) => setMinimumRent(e.target.value)} className={ic} placeholder="0" />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-slate-700">יום דיווח מחזור</label>
+                    <input type="number" value={revenueReportDay} onChange={(e) => setRevenueReportDay(e.target.value)} className={ic} />
+                  </div>
+                  <div className="flex items-center gap-2 pt-5">
+                    <input type="checkbox" id="mgmtInRev" checked={mgmtIncludedInRevenue}
+                      onChange={(e) => setMgmtIncludedInRevenue(e.target.checked)} className="rounded" />
+                    <label htmlFor="mgmtInRev" className="text-xs text-slate-700">דמי ניהול כלולים באחוז מהמחזור</label>
+                  </div>
+                </div>
+              </div>
+            )}
+
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="mb-1 block text-xs font-semibold text-slate-700">שכ&quot;ד למ&quot;ר (₪) *</label>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">שכ&quot;ד למ&quot;ר (₪) {rentType === "fixed" ? "*" : "(מינימום/בסיס)"}</label>
                 <input type="number" value={rentPerSqm} onChange={(e) => setRentPerSqm(e.target.value)} className={ic} />
               </div>
               <div>

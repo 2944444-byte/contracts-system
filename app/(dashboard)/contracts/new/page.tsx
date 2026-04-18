@@ -151,6 +151,7 @@ export default function ContractsNewPage() {
   const [revenuePct, setRevenuePct] = useState("");
   const [minimumRent, setMinimumRent] = useState("0");
   const [revenueReportDay, setRevenueReportDay] = useState("5");
+  const [mgmtIncludedInRevenue, setMgmtIncludedInRevenue] = useState(false);
   const [rentPerSqm, setRentPerSqm] = useState("");
   const [chargedArea, setChargedArea] = useState("");
   const [investAdd, setInvestAdd] = useState("");
@@ -697,6 +698,7 @@ export default function ContractsNewPage() {
         revenue_pct: rentType === "revenue_pct" ? Number(revenuePct) || null : null,
         minimum_rent: rentType === "revenue_pct" ? Number(minimumRent) || 0 : null,
         revenue_report_day: rentType === "revenue_pct" ? Number(revenueReportDay) || 5 : null,
+        mgmt_included_in_revenue: rentType === "revenue_pct" ? mgmtIncludedInRevenue : false,
         charged_area: Number(chargedArea) || null,
         investment_addition: Number(investAdd) || null,
         vat_type: vatType,
@@ -1334,12 +1336,18 @@ export default function ContractsNewPage() {
                     <label className="mb-1 block text-xs font-semibold text-slate-700">שטח מחויב (מ&quot;ר)</label>
                     <input type="number" value={chargedArea} onChange={(e) => setChargedArea(e.target.value)} className={ic} />
                   </div>
+                  <div className="flex items-center gap-2 pt-5">
+                    <input type="checkbox" id="mgmtInRevNew" checked={mgmtIncludedInRevenue}
+                      onChange={(e) => setMgmtIncludedInRevenue(e.target.checked)} className="rounded" />
+                    <label htmlFor="mgmtInRevNew" className="text-xs text-slate-700">דמי ניהול כלולים באחוז מהמחזור</label>
+                  </div>
                 </div>
                 {Number(revenuePct) > 0 && (
                   <div className="rounded-lg bg-purple-100 border border-purple-300 p-3 text-sm text-purple-800 text-center">
                     שכ&quot;ד = {revenuePct}% מהפדיון החודשי
                     {Number(minimumRent) > 0 && <span> | מינימום: {fmtMoney(Number(minimumRent))}/חודש</span>}
                     {Number(minimumRent) === 0 && <span> | ללא מינימום</span>}
+                    {mgmtIncludedInRevenue && <span> | דמי ניהול כלולים</span>}
                   </div>
                 )}
               </div>

@@ -708,9 +708,18 @@ export default function ContractsPage() {
       var { error } = await supabase.from("contracts").delete().eq("id", contractId);
       if (error) throw error;
 
-      // Free spaces
+      // Free spaces — but ONLY if they have no other active contracts
       if (spaceIds.length > 0) {
-        await supabase.from("spaces").update({ status: "vacant" }).in("id", spaceIds);
+        var uniqueSpaceIds = Array.from(new Set(spaceIds));
+        var { data: stillUsed } = await supabase.from("contract_spaces")
+          .select("space_id, contracts!inner(status)")
+          .in("space_id", uniqueSpaceIds)
+          .in("contracts.status", ["active", "extended", "upcoming"]);
+        var stillUsedIds = new Set((stillUsed || []).map(function(r: any) { return r.space_id; }));
+        var toFree = uniqueSpaceIds.filter(function(sid) { return !stillUsedIds.has(sid); });
+        if (toFree.length > 0) {
+          await supabase.from("spaces").update({ status: "vacant" }).in("id", toFree);
+        }
       }
       await logAudit({ entity_type: "contract", entity_id: contractId, action: "delete" });
       setSelected(null);
