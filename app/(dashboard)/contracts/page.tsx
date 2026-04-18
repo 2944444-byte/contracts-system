@@ -1098,9 +1098,65 @@ export default function ContractsPage() {
                   </div>
                 )}
 
-                {/* Price Timeline Table */}
-                {priceTimeline.length > 1 && (
-                  <div className="rounded-lg border border-blue-200 bg-blue-50/30 p-3 mb-3">
+                {/* Price Timeline — per-unit when per-unit tiers exist */}
+                {(function() {
+                  var hasPerUnitTiers = rawTiersWithSpace.some(function(t: any) { return t.space_id; });
+                  var cpiRatio = cpiResult ? (cpiResult.adjustedRentPerSqm / cpiResult.baseRentPerSqm) : 1;
+                  var contractStart = selContract.start_date;
+
+                  if (hasPerUnitTiers && effectiveSpaces.length > 0) {
+                    // Per-unit timeline
+                    return <div className="rounded-lg border border-blue-200 bg-blue-50/30 p-3 mb-3">
+                      <div className="text-xs font-bold text-blue-800 mb-2">📊 ציר זמן מחירים (לפי יחידה)</div>
+                      <div className="space-y-3">
+                        {effectiveSpaces.map(function(cs: any) {
+                          var spaceName = cs.spaces?.space_name || "—";
+                          var area = cs.spaces?.area || 0;
+                          var baseRent = cs.charge_method === "fixed" ? Number(cs.fixed_rent) || 0 : (Number(cs.price_per_sqm) || 0);
+                          var isFixed = cs.charge_method === "fixed";
+                          var spaceTiersList = rawTiersWithSpace.filter(function(t: any) { return t.space_id === cs.space_id; });
+                          if (spaceTiersList.length === 0) {
+                            // No per-unit tiers — just show base
+                            return <div key={cs.space_id} className="text-[10px]">
+                              <div className="font-bold text-slate-700">{spaceName} <span className="text-slate-400">({area} מ&quot;ר)</span></div>
+                              <div className="text-slate-500 pr-2">{isFixed ? fmtMoney(baseRent) + "/חודש" : "₪" + baseRent.toFixed(2) + '/מ"ר'} — ללא עלייה</div>
+                            </div>;
+                          }
+                          // Build timeline for this space
+                          var rows: any[] = [{ label: "בסיס", rent: baseRent }];
+                          var currentRent = baseRent;
+                          spaceTiersList.sort(function(a: any, b: any) { return (a.from_year || 0) - (b.from_year || 0); });
+                          spaceTiersList.forEach(function(tier: any) {
+                            var yearLabel = tier.is_recurring ? "כל שנה" : (tier.from_year === tier.to_year ? "שנה " + tier.to_year : "שנים " + (tier.from_year + 1) + "-" + tier.to_year);
+                            if (tier.increase_type === "pct") currentRent = currentRent * (1 + (Number(tier.increase_value) || 0) / 100);
+                            else if (tier.increase_type === "fixed_sqm") currentRent = currentRent + (Number(tier.increase_value) || 0);
+                            else if (tier.increase_type === "fixed_total") currentRent = currentRent + (Number(tier.increase_value) || 0);
+                            rows.push({ label: yearLabel, rent: tier.calculated_rent_per_sqm ? Number(tier.calculated_rent_per_sqm) : currentRent, type: tier.increase_type, value: tier.increase_value });
+                          });
+                          return <div key={cs.space_id}>
+                            <div className="text-[10px] font-bold text-slate-700 mb-0.5">{spaceName} <span className="text-slate-400">({area} מ&quot;ר)</span></div>
+                            <table className="w-full text-[10px] mr-2">
+                              <tbody>
+                                {rows.map(function(r: any, ri: number) {
+                                  var changeStr = r.type === "pct" ? "+" + r.value + "%" : r.type === "fixed_sqm" ? "+₪" + r.value + '/מ"ר' : r.type === "fixed_total" ? "+₪" + r.value : "";
+                                  return <tr key={ri} className="border-b border-blue-100">
+                                    <td className="py-0.5 text-slate-600">{r.label}</td>
+                                    <td className="py-0.5 font-semibold">{isFixed ? fmtMoney(r.rent) : "₪" + r.rent.toFixed(2) + '/מ"ר'}</td>
+                                    <td className="py-0.5 text-amber-700">{cpiResult ? (isFixed ? fmtMoney(r.rent * cpiRatio) : "₪" + (r.rent * cpiRatio).toFixed(2) + '/מ"ר') : ""}</td>
+                                    <td className="py-0.5 text-blue-500 text-[9px]">{changeStr}</td>
+                                  </tr>;
+                                })}
+                              </tbody>
+                            </table>
+                          </div>;
+                        })}
+                      </div>
+                    </div>;
+                  }
+
+                  // Standard timeline (contract-level)
+                  if (priceTimeline.length <= 1) return null;
+                  return <div className="rounded-lg border border-blue-200 bg-blue-50/30 p-3 mb-3">
                     <div className="text-xs font-bold text-blue-800 mb-2">📊 ציר זמן מחירים</div>
                     <table className="w-full text-[10px]">
                       <thead>
@@ -1117,35 +1173,29 @@ export default function ContractsPage() {
                           var isCurrent = new Date(entry.startDate) <= now && new Date(entry.endDate) > now;
                           var startD = new Date(entry.startDate);
                           var endD = new Date(entry.endDate);
-                          var isNotCalendar = startD.getMonth() !== 0 || startD.getDate() !== 1;
-                          var changeMonth = isNotCalendar ? startD.toLocaleDateString("he-IL", { month: "short" }) : "";
-                          // Calendar year(s) covered by this period — endDate is exclusive, subtract 1 day
                           var endYearCalc = new Date(endD.getTime() - 86400000);
                           var startYear = startD.getFullYear();
                           var endYear = endYearCalc.getFullYear();
                           var yearLabel = startYear === endYear ? String(startYear) : startYear + "–" + endYear;
                           var rentSqm = entry.rentPerSqm ?? 0;
                           var rentWithInvest = rentSqm + investPerSqm;
-                          // CPI adjustment ratio applied to each year
-                          var cpiRatio = cpiResult ? (cpiResult.adjustedRentPerSqm / cpiResult.baseRentPerSqm) : 1;
-                          var cpiRent = rentWithInvest * cpiRatio;
+                          var cpiRentVal = rentWithInvest * cpiRatio;
                           return (
                             <tr key={idx} className={"border-b border-blue-100 " + (isCurrent ? "bg-blue-100 font-bold" : "")}>
                               <td className="py-1 text-right">
                                 <span>{entry.label}</span>
                                 <span className="text-blue-500 mr-1 font-semibold">({yearLabel})</span>
-                                {changeMonth && <span className="text-blue-400 mr-1">({changeMonth})</span>}
                               </td>
                               <td className="py-1 text-right">₪{rentWithInvest.toFixed(2)}/מ&quot;ר</td>
-                              {cpiResult && <td className="py-1 text-right text-amber-700">₪{cpiRent.toFixed(2)}/מ&quot;ר</td>}
+                              {cpiResult && <td className="py-1 text-right text-amber-700">₪{cpiRentVal.toFixed(2)}/מ&quot;ר</td>}
                               <td className="py-1 text-center">{isCurrent ? "◀" : ""}</td>
                             </tr>
                           );
                         })}
                       </tbody>
                     </table>
-                  </div>
-                )}
+                  </div>;
+                })()}
 
                 {/* Details */}
                 <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 text-sm text-slate-700">
