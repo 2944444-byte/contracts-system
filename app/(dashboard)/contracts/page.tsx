@@ -161,12 +161,10 @@ export default function ContractsPage() {
             .select("space_id, contracts!inner(id, status, start_date, end_date, is_amendment, parent_contract_id, tenants(name))")
             .in("space_id", spaceIds)
             .in("contracts.status", ["active", "extended"])
-            .then(function({ data: overlapData }) {
-              var overlaps = (overlapData ?? []).filter(function(o: any) {
+            .then(async function({ data: overlapData }) {
+              var rawOverlaps = (overlapData ?? []).filter(function(o: any) {
                 var cId = o.contracts.id;
-                // Skip: this contract, its parent, its amendments, sibling amendments
                 if (excludeIds.includes(cId)) return false;
-                // Skip amendments whose parent is in our family
                 if (o.contracts.parent_contract_id && excludeIds.includes(o.contracts.parent_contract_id)) return false;
                 var oS = new Date(o.contracts.start_date);
                 var oE = new Date(o.contracts.end_date);
@@ -174,7 +172,33 @@ export default function ContractsPage() {
                 var cE = new Date(selContract.end_date);
                 return oS < cE && oE > cS;
               });
-              setSpaceOverlaps(overlaps);
+              // Filter out "phantom" overlaps: if the other contract has an
+              // amendment that REMOVED the space (e.g. cross-swap), it's not real.
+              if (rawOverlaps.length > 0) {
+                var otherBaseIds = Array.from(new Set(rawOverlaps.map(function(o: any) { return o.contracts.id; })));
+                // Load latest amendment spaces for each overlapping base contract
+                var { data: otherAmends } = await supabase.from("contracts")
+                  .select("parent_contract_id, amendment_number, contract_spaces(space_id)")
+                  .in("parent_contract_id", otherBaseIds)
+                  .eq("is_amendment", true)
+                  .order("amendment_number", { ascending: false });
+                // Build map: baseId → Set of space_ids in latest amendment
+                var otherEffective: Record<string, Set<string>> = {};
+                for (var oa of (otherAmends || [])) {
+                  if (!otherEffective[oa.parent_contract_id]) {
+                    otherEffective[oa.parent_contract_id] = new Set(
+                      (oa.contract_spaces || []).map(function(cs: any) { return cs.space_id; })
+                    );
+                  }
+                }
+                rawOverlaps = rawOverlaps.filter(function(o: any) {
+                  var effSet = otherEffective[o.contracts.id];
+                  // If other contract has amendments, check if space is still in effective set
+                  if (effSet) return effSet.has(o.space_id);
+                  return true; // no amendments → base is the effective state
+                });
+              }
+              setSpaceOverlaps(rawOverlaps);
             });
         } else { setSpaceOverlaps([]); }
       });
