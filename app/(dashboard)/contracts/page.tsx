@@ -666,27 +666,49 @@ export default function ContractsPage() {
     else if (c.status === "ended") counts.ended++;
   });
 
+  // Helper: delete all related data for a single contract ID
+  async function deleteContractData(cid: string) {
+    await supabase.from("parking_subscriptions").delete().eq("contract_id", cid);
+    await supabase.from("alerts").delete().eq("contract_id", cid);
+    await supabase.from("charges").delete().eq("contract_id", cid);
+    await supabase.from("contract_spaces").delete().eq("contract_id", cid);
+    await supabase.from("contract_options").delete().eq("contract_id", cid);
+    await supabase.from("contract_price_tiers").delete().eq("contract_id", cid);
+    await supabase.from("contract_ti").delete().eq("contract_id", cid);
+    await supabase.from("documents").delete().eq("contract_id", cid);
+    await supabase.from("guarantees").delete().eq("contract_id", cid);
+    await supabase.from("insurances_tenant").delete().eq("contract_id", cid);
+    await supabase.from("letters").delete().eq("contract_id", cid);
+    await supabase.from("management_fees").delete().eq("contract_id", cid);
+    await supabase.from("revenue_reports").delete().eq("contract_id", cid);
+  }
+
   async function handleDeleteContract(contractId: string) {
-    if (!confirm("למחוק חוזה? פעולה זו תמחק גם את כל החיובים, הערבויות, הביטוחים והמכתבים של החוזה!")) return;
+    // Check if this is a base contract with amendments
+    var { data: childAmendments } = await supabase.from("contracts")
+      .select("id").eq("parent_contract_id", contractId).eq("is_amendment", true);
+    var amendCount = (childAmendments || []).length;
+    var msg = amendCount > 0
+      ? "למחוק חוזה + " + amendCount + " תוספות? כל החיובים, ערבויות, ביטוחים, חניות ומכתבים של החוזה והתוספות שלו יימחקו!"
+      : "למחוק חוזה? כל החיובים, ערבויות, ביטוחים, חניות ומכתבים שלו יימחקו!";
+    if (!confirm(msg)) return;
     try {
-      const { data: linkedSpaces } = await supabase.from("contract_spaces").select("space_id").eq("contract_id", contractId);
-      const spaceIds = (linkedSpaces || []).map((r: any) => r.space_id);
-      await supabase.from("contracts").update({ parent_contract_id: null }).eq("parent_contract_id", contractId);
-      await supabase.from("parking_subscriptions").delete().eq("contract_id", contractId);
-      await supabase.from("alerts").delete().eq("contract_id", contractId);
-      await supabase.from("charges").delete().eq("contract_id", contractId);
-      await supabase.from("contract_spaces").delete().eq("contract_id", contractId);
-      await supabase.from("contract_options").delete().eq("contract_id", contractId);
-      await supabase.from("contract_price_tiers").delete().eq("contract_id", contractId);
-      await supabase.from("contract_ti").delete().eq("contract_id", contractId);
-      await supabase.from("documents").delete().eq("contract_id", contractId);
-      await supabase.from("guarantees").delete().eq("contract_id", contractId);
-      await supabase.from("insurances_tenant").delete().eq("contract_id", contractId);
-      await supabase.from("letters").delete().eq("contract_id", contractId);
-      await supabase.from("management_fees").delete().eq("contract_id", contractId);
-      await supabase.from("revenue_reports").delete().eq("contract_id", contractId);
-      const { error } = await supabase.from("contracts").delete().eq("id", contractId);
+      // Collect ALL space IDs (base + amendments) for status reset
+      var allIds = [contractId, ...(childAmendments || []).map(function(a: any) { return a.id; })];
+      var { data: linkedSpaces } = await supabase.from("contract_spaces").select("space_id").in("contract_id", allIds);
+      var spaceIds = (linkedSpaces || []).map(function(r: any) { return r.space_id; });
+
+      // Delete ALL amendments first, then the base
+      for (var amend of (childAmendments || [])) {
+        await deleteContractData(amend.id);
+        await supabase.from("contracts").delete().eq("id", amend.id);
+      }
+      // Delete base contract data
+      await deleteContractData(contractId);
+      var { error } = await supabase.from("contracts").delete().eq("id", contractId);
       if (error) throw error;
+
+      // Free spaces
       if (spaceIds.length > 0) {
         await supabase.from("spaces").update({ status: "vacant" }).in("id", spaceIds);
       }
