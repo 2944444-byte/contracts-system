@@ -667,12 +667,19 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
         }
         body += "סה\"כ שנתי: " + fmtMoney(grandTotal) + "\n\nבברכה,\nהנהלת הנכס";
 
+        var firstRow = unitRows[0];
+        var propertyId = "";
+        // Get property_id from the contract
+        var { data: cData } = await supabase.from("contracts").select("property_id").eq("id", cid).single();
+        if (cData) propertyId = cData.property_id;
         await supabase.from("letters").insert({
           contract_id: cid,
+          property_id: propertyId || null,
           letter_type: "demand",
-          subject: "דרישת מקדמות שכ\"ד ודמי ניהול " + year,
-          body: body,
-          status: "draft",
+          title: "דרישת מקדמות שכ\"ד ודמי ניהול " + year,
+          content_json: { body: body, year: year, tenant: firstRow.tenantName },
+          billing_year: year,
+          billing_type: "advances",
         });
         count++;
       }
