@@ -891,11 +891,13 @@ export default function ContractsNewPage() {
 
         if (increaseMode === "per_unit" && Object.keys(perUnitTiers).length > 0) {
           // Per-unit mode: save each unit's tiers with space_id
+          var globalTierNum = 0; // running counter (UNIQUE on contract_id + tier_number)
           Object.entries(perUnitTiers).forEach(function([sid, uTiers]) {
             if (!uTiers || uTiers.length === 0) return;
             var rVal = Number(unitRentOverrides[sid]) || Number(rentPerSqm) || 0;
             var uPreviews = calculateTierPreviews(uTiers, rVal);
             uTiers.forEach(function(tier, i) {
+              globalTierNum++;
               var preview = uPreviews.find(function(t) { return t.from_year === tier.from_year && t.to_year === tier.to_year; }) || uPreviews[i];
               var tierStart = new Date(contractStart);
               tierStart.setFullYear(tierStart.getFullYear() + tier.from_year - 1);
@@ -904,7 +906,7 @@ export default function ContractsNewPage() {
               allTiersToInsert.push({
                 contract_id: contract.id,
                 space_id: sid,
-                tier_number: i + 1,
+                tier_number: globalTierNum,
                 start_date: tierStart.toISOString().split("T")[0],
                 end_date: tierEnd.toISOString().split("T")[0],
                 increase_type: tier.increase_type,
