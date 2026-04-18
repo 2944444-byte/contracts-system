@@ -1159,6 +1159,48 @@ export default function ContractsPage() {
                   ].map(function(r){return <div key={r.l} className="flex justify-between border-b border-slate-50 py-1"><span className="text-slate-400">{r.l}</span><span className="font-medium">{r.v}</span></div>;})}
                 </div>
 
+                {/* Parking info */}
+                {parkingSubs.length > 0 && (
+                  <div className="rounded-lg border border-teal-200 bg-teal-50/30 p-3 mt-3">
+                    <div className="text-sm font-bold text-teal-700 mb-2">🅿️ חניות</div>
+                    <div className="space-y-1">
+                      {parkingSubs.filter(function(p: any) { return p.subscription_type !== "visitor"; }).map(function(p: any) {
+                        return <div key={p.id} className="flex justify-between text-xs text-teal-800">
+                          <span>{p.quantity || 1} מקומות {p.is_marked ? "(מסומנים)" : ""} {p.is_included_in_rent ? "(כלול בשכ\"ד)" : ""}</span>
+                          <span className="font-bold">{fmtMoney((Number(p.monthly_fee) || 0) * (Number(p.quantity) || 1))}/חודש</span>
+                        </div>;
+                      })}
+                      {parkingSubs.filter(function(p: any) { return p.subscription_type === "visitor"; }).map(function(p: any) {
+                        return <div key={p.id} className="flex justify-between text-xs text-teal-600">
+                          <span>חניית אורחים ({p.visitor_codes_count || 0} קודים, {p.visitor_discount_pct || 0}% הנחה)</span>
+                          <span className="font-bold">{fmtMoney(Number(p.visitor_lot_tariff) || 0)}/לוט</span>
+                        </div>;
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Price increase schedule */}
+                {priceTiers.length > 0 && (
+                  <div className="rounded-lg border border-purple-200 bg-purple-50/30 p-3 mt-3">
+                    <div className="text-sm font-bold text-purple-700 mb-2">📈 מדרגות עליית מחיר</div>
+                    <div className="space-y-1">
+                      {priceTiers.map(function(tier: any, i: number) {
+                        var label = tier.is_recurring
+                          ? "כל שנה"
+                          : (tier.from_year === tier.to_year ? "שנה " + tier.to_year : "שנים " + (tier.from_year + 1) + "-" + tier.to_year);
+                        var changeLabel = tier.increase_type === "pct" ? "+" + tier.increase_value + "%"
+                          : tier.increase_type === "fixed_sqm" ? "+₪" + tier.increase_value + '/מ"ר'
+                          : "+₪" + tier.increase_value + " סה\"כ";
+                        return <div key={i} className="flex justify-between text-xs text-purple-800">
+                          <span>{label}</span>
+                          <span className="font-bold">{changeLabel} {tier.calculated_rent_per_sqm ? "→ ₪" + Number(tier.calculated_rent_per_sqm).toFixed(2) + '/מ"ר' : ""}</span>
+                        </div>;
+                      })}
+                    </div>
+                  </div>
+                )}
+
                 {/* Per-unit breakdown — with step-rent + CPI adjustments */}
                 {effectiveSpaces?.length > 0 && (
                   <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 mt-3">
@@ -1328,23 +1370,32 @@ export default function ContractsPage() {
                                 className="rounded border border-slate-200 px-2 py-1 text-xs text-slate-500 hover:bg-slate-50">✏️</button>
                               <button onClick={async function(e){
                                 e.stopPropagation();
-                                if(!confirm("למחוק תוספת "+( am.amendment_number||"")+"? כל הנתונים הקשורים יימחקו.")) return;
+                                if(!confirm("למחוק תוספת "+( am.amendment_number||"")+"? כל הנתונים הקשורים יימחקו והמצב יחזור לתוספת הקודמת.")) return;
                                 try {
-                                  // Delete ALL related data for this amendment
-                                  await supabase.from("parking_subscriptions").delete().eq("contract_id", am.id);
-                                  await supabase.from("charges").delete().eq("contract_id", am.id);
-                                  await supabase.from("alerts").delete().eq("contract_id", am.id);
-                                  await supabase.from("contract_spaces").delete().eq("contract_id", am.id);
-                                  await supabase.from("contract_price_tiers").delete().eq("contract_id", am.id);
-                                  await supabase.from("contract_options").delete().eq("contract_id", am.id);
-                                  await supabase.from("guarantees").delete().eq("contract_id", am.id);
-                                  await supabase.from("insurances_tenant").delete().eq("contract_id", am.id);
-                                  await supabase.from("documents").delete().eq("contract_id", am.id);
-                                  await supabase.from("letters").delete().eq("contract_id", am.id);
-                                  await supabase.from("management_fees").delete().eq("contract_id", am.id);
-                                  await supabase.from("revenue_reports").delete().eq("contract_id", am.id);
-                                  await supabase.from("contract_ti").delete().eq("contract_id", am.id);
+                                  // Determine the PREVIOUS state (before this amendment)
+                                  // to revert space statuses correctly
+                                  var amSpaceIds = (am.contract_spaces || []).map(function(cs: any) { return cs.space_id; });
+                                  var prevAmend = amendments.filter(function(a: any) {
+                                    return (a.amendment_number || 0) < (am.amendment_number || 0);
+                                  }).sort(function(a: any, b: any) { return (b.amendment_number || 0) - (a.amendment_number || 0); })[0];
+                                  var prevSpaceIds = prevAmend?.contract_spaces?.length > 0
+                                    ? prevAmend.contract_spaces.map(function(cs: any) { return cs.space_id; })
+                                    : (selContract.contract_spaces || []).map(function(cs: any) { return cs.space_id; });
+                                  // Spaces added in this amendment (not in previous) → mark vacant
+                                  var addedInAmend = amSpaceIds.filter(function(sid: string) { return !prevSpaceIds.includes(sid); });
+                                  // Spaces removed in this amendment (in previous but not here) → mark occupied
+                                  var removedInAmend = prevSpaceIds.filter(function(sid: string) { return !amSpaceIds.includes(sid); });
+
+                                  // Delete ALL related data + contract record
+                                  await deleteContractData(am.id);
                                   await supabase.from("contracts").delete().eq("id", am.id);
+                                  // Revert space statuses: spaces added → vacant, spaces removed → occupied
+                                  if (addedInAmend.length > 0) {
+                                    await supabase.from("spaces").update({ status: "vacant" }).in("id", addedInAmend);
+                                  }
+                                  if (removedInAmend.length > 0) {
+                                    await supabase.from("spaces").update({ status: "occupied" }).in("id", removedInAmend);
+                                  }
                                   // Renumber remaining amendments
                                   var { data: remaining } = await supabase.from("contracts")
                                     .select("id, amendment_number")
