@@ -73,6 +73,7 @@ export default function ContractsPage() {
   const [cpiLoading, setCpiLoading] = useState(false);
   const [perUnitCpi, setPerUnitCpi] = useState<Record<string, {ratio: number, source: string}>>({});
   const [priceTiers, setPriceTiers] = useState<PriceTier[]>([]);
+  const [rawTiersWithSpace, setRawTiersWithSpace] = useState<any[]>([]);
   const [priceTimeline, setPriceTimeline] = useState<any[]>([]);
   const [amendments, setAmendments] = useState<any[]>([]);
   const [parkingSubs, setParkingSubs] = useState<any[]>([]);
@@ -225,9 +226,10 @@ export default function ContractsPage() {
   // Load price tiers and build timeline when contract selected
   useEffect(function() {
     if (!selContract) { setPriceTiers([]); setPriceTimeline([]); return; }
-    supabase.from("contract_price_tiers").select("*")
+    supabase.from("contract_price_tiers").select("*, spaces(space_name)")
       .eq("contract_id", selContract.id).order("tier_number")
       .then(function({ data: tiers }) {
+        setRawTiersWithSpace(tiers ?? []);
         var loadedTiers: PriceTier[] = (tiers ?? []).map(function(t: any) {
           return {
             increase_type: t.increase_type ?? "pct",
@@ -1181,23 +1183,47 @@ export default function ContractsPage() {
                 )}
 
                 {/* Price increase schedule */}
-                {priceTiers.length > 0 && (
+                {rawTiersWithSpace.length > 0 && (
                   <div className="rounded-lg border border-purple-200 bg-purple-50/30 p-3 mt-3">
                     <div className="text-sm font-bold text-purple-700 mb-2">📈 מדרגות עליית מחיר</div>
-                    <div className="space-y-1">
-                      {priceTiers.map(function(tier: any, i: number) {
-                        var label = tier.is_recurring
-                          ? "כל שנה"
-                          : (tier.from_year === tier.to_year ? "שנה " + tier.to_year : "שנים " + (tier.from_year + 1) + "-" + tier.to_year);
-                        var changeLabel = tier.increase_type === "pct" ? "+" + tier.increase_value + "%"
-                          : tier.increase_type === "fixed_sqm" ? "+₪" + tier.increase_value + '/מ"ר'
-                          : "+₪" + tier.increase_value + " סה\"כ";
-                        return <div key={i} className="flex justify-between text-xs text-purple-800">
-                          <span>{label}</span>
-                          <span className="font-bold">{changeLabel} {tier.calculated_rent_per_sqm ? "→ ₪" + Number(tier.calculated_rent_per_sqm).toFixed(2) + '/מ"ר' : ""}</span>
-                        </div>;
-                      })}
-                    </div>
+                    {(function() {
+                      // Group tiers: per-space vs contract-level
+                      var contractLevel = rawTiersWithSpace.filter(function(t: any) { return !t.space_id; });
+                      var perSpace: Record<string, any[]> = {};
+                      rawTiersWithSpace.filter(function(t: any) { return t.space_id; }).forEach(function(t: any) {
+                        var name = t.spaces?.space_name || t.space_id;
+                        if (!perSpace[name]) perSpace[name] = [];
+                        perSpace[name].push(t);
+                      });
+                      var hasPerSpace = Object.keys(perSpace).length > 0;
+                      return <div className="space-y-2">
+                        {contractLevel.length > 0 && !hasPerSpace && (
+                          <div className="space-y-1">
+                            {contractLevel.map(function(tier: any, i: number) {
+                              var label = tier.is_recurring ? "כל שנה" : (tier.from_year === tier.to_year ? "שנה " + tier.to_year : "שנים " + (tier.from_year + 1) + "-" + tier.to_year);
+                              var changeLabel = tier.increase_type === "pct" ? "+" + tier.increase_value + "%" : tier.increase_type === "fixed_sqm" ? "+₪" + tier.increase_value + '/מ"ר' : "+₪" + tier.increase_value + " סה\"כ";
+                              return <div key={i} className="flex justify-between text-xs text-purple-800">
+                                <span>{label}</span>
+                                <span className="font-bold">{changeLabel} {tier.calculated_rent_per_sqm ? "→ ₪" + Number(tier.calculated_rent_per_sqm).toFixed(2) + '/מ"ר' : ""}</span>
+                              </div>;
+                            })}
+                          </div>
+                        )}
+                        {hasPerSpace && Object.entries(perSpace).map(function([spaceName, tiers]) {
+                          return <div key={spaceName} className="border-t border-purple-200 pt-1 first:border-0 first:pt-0">
+                            <div className="text-xs font-bold text-purple-600 mb-0.5">📐 {spaceName}</div>
+                            {(tiers as any[]).map(function(tier: any, i: number) {
+                              var label = tier.is_recurring ? "כל שנה" : (tier.from_year === tier.to_year ? "שנה " + tier.to_year : "שנים " + (tier.from_year + 1) + "-" + tier.to_year);
+                              var changeLabel = tier.increase_type === "pct" ? "+" + tier.increase_value + "%" : tier.increase_type === "fixed_sqm" ? "+₪" + tier.increase_value + '/מ"ר' : "+₪" + tier.increase_value + " סה\"כ";
+                              return <div key={i} className="flex justify-between text-xs text-purple-800 pr-3">
+                                <span>{label}</span>
+                                <span className="font-bold">{changeLabel} {tier.calculated_rent_per_sqm ? "→ ₪" + Number(tier.calculated_rent_per_sqm).toFixed(2) + '/מ"ר' : ""}</span>
+                              </div>;
+                            })}
+                          </div>;
+                        })}
+                      </div>;
+                    })()}
                   </div>
                 )}
 
