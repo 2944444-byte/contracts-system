@@ -2048,6 +2048,13 @@ export default function ContractsPage() {
                         var { count: otherAmendCount } = await supabase.from("contracts")
                           .select("id", { count: "exact", head: true })
                           .eq("parent_contract_id", swapInfo.contractId).eq("is_amendment", true);
+                        // Calculate new total area for the mirror amendment
+                        var otherNewArea = 0;
+                        otherNewSpaces.forEach(function(cs: any) { otherNewArea += Number(cs.spaces?.area) || 0; });
+                        swapInfo.spacesToAdd.forEach(function(sid: string) {
+                          var sp = allPropertySpaces.find(function(s: any) { return s.id === sid; });
+                          otherNewArea += Number(sp?.area) || 0;
+                        });
                         // Create mirror amendment
                         var otherPayload: any = {
                           tenant_id: otherContract.tenant_id,
@@ -2058,7 +2065,7 @@ export default function ContractsPage() {
                           lease_period_value: otherContract.lease_period_value,
                           lease_period_unit: otherContract.lease_period_unit,
                           rent_per_sqm: otherContract.rent_per_sqm,
-                          charged_area: otherContract.charged_area,
+                          charged_area: otherNewArea || otherContract.charged_area,
                           vat_type: otherContract.vat_type,
                           payment_frequency: otherContract.payment_frequency,
                           payment_method: otherContract.payment_method,
