@@ -90,14 +90,20 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
     try {
       // Load contracts
       var query = supabase.from("contracts")
-        .select("id, rent_per_sqm, charged_area, investment_addition, payment_method, payment_frequency, vat_type, indexation_method, index_base_date, index_base_value, start_date, end_date, is_amendment, grace_months, grace_type, grace_discount_pct, tenants(name), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,index_base_date,index_base_value,use_original_index,spaces(space_name,area))")
+        .select("id, rent_per_sqm, charged_area, investment_addition, payment_method, payment_frequency, vat_type, indexation_method, index_base_date, index_base_value, start_date, end_date, is_amendment, grace_months, grace_type, grace_discount_pct, rent_type, minimum_rent, mgmt_included_in_revenue, tenants(name), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,index_base_date,index_base_value,use_original_index,spaces(space_name,area))")
         .eq("property_id", propId)
         .in("status", ["active", "extended"])
         .eq("is_amendment", false);
       if (contractFilter !== "all") query = query.eq("id", contractFilter);
       var { data: contracts } = await query;
 
-      contracts = (contracts ?? []).filter(function(c: any) { return c.payment_method === "checks_advance"; });
+      contracts = (contracts ?? []).filter(function(c: any) {
+        if (c.payment_method !== "checks_advance") return false;
+        // Skip revenue-only contracts with no minimum rent AND mgmt included
+        // (nothing to advance — everything is % of revenue)
+        if (c.rent_type === "revenue_pct" && (!c.minimum_rent || Number(c.minimum_rent) === 0) && c.mgmt_included_in_revenue) return false;
+        return true;
+      });
       if (contracts.length === 0) { alert("אין חוזים עם שיקים מראש"); setComputing(false); return; }
 
       // Load price tiers for step-rent detection

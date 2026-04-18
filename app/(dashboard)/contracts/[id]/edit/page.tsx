@@ -585,7 +585,7 @@ export default function ContractEditPage() {
 
   // === SUBMIT (UPDATE) ===
   async function handleSubmit() {
-    var hasAnyRent = rentPerSqm || Object.keys(unitRentOverrides).some(function(k) { return unitRentOverrides[k]; });
+    var hasAnyRent = rentType === "revenue_pct" ? !!revenuePct : (rentPerSqm || Object.keys(unitRentOverrides).some(function(k) { return unitRentOverrides[k]; }));
     if (!tenantId || !propertyId || !startDate || !endDate || !hasAnyRent) {
       alert("נא מלא כל שדות חובה");
       return;
