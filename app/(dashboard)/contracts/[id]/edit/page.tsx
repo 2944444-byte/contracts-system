@@ -689,14 +689,12 @@ export default function ContractEditPage() {
       if (ue) throw new Error(ue.message);
 
       // Delete + re-insert contract_spaces
-      // IMPORTANT: if contract has amendments, only save the ORIGINAL base spaces
-      // (not amendment-added spaces). Otherwise amendment diff display breaks.
+      // IMPORTANT: if contract has amendments, save the ORIGINAL base spaces
+      // exactly as they were — don't let effective-spaces overwrite them.
       var spacesToSave = selSpaces;
       if (contractHasAmendments && originalBaseSpaceIds.length > 0) {
-        // Only save spaces that were in the original base contract
-        spacesToSave = selSpaces.filter(function(sid) {
-          return originalBaseSpaceIds.includes(sid);
-        });
+        // Save original base spaces AS-IS (not the intersection with selSpaces)
+        spacesToSave = originalBaseSpaceIds;
       }
       await supabase.from("contract_spaces").delete().eq("contract_id", id);
       if (spacesToSave.length > 0) {
