@@ -426,6 +426,27 @@ export default function ContractEditPage() {
           notes: t.notes ?? "",
         })));
       }
+    } else if (c.increase_steps && !Array.isArray(c.increase_steps) && typeof c.increase_steps === 'object') {
+      // Per-unit tiers stored as Record<space_id, tier[]>
+      setHasIncrease(true);
+      setIncreaseMode("per_unit");
+      var loaded: Record<string, PriceTier[]> = {};
+      Object.entries(c.increase_steps).forEach(function([sid, tiers]: [string, any]) {
+        if (!Array.isArray(tiers)) return;
+        loaded[sid] = tiers.map(function(s: any) {
+          return {
+            increase_type: s.increase_type ?? "pct",
+            increase_value: s.increase_value ?? 0,
+            from_year: s.from_year ?? 1,
+            to_year: s.to_year ?? 3,
+            is_recurring: s.is_recurring ?? false,
+            recurring_every_years: s.recurring_every_years ?? null,
+            calculated_rent_per_sqm: s.calculated_rent_per_sqm ?? null,
+            notes: s.notes ?? "",
+          };
+        });
+      });
+      setPerUnitTiers(loaded);
     } else if (c.increase_steps && Array.isArray(c.increase_steps) && c.increase_steps.length > 0) {
       // Fallback: load from legacy JSONB field — skip empty/broken tiers
       var validSteps = c.increase_steps.filter(function(s: any) {
@@ -639,7 +660,12 @@ export default function ContractEditPage() {
       }
 
       // Increase — save legacy fields from first tier
-      if (hasIncrease && priceTiers.length > 0) {
+      if (hasIncrease && increaseMode === "per_unit" && Object.keys(perUnitTiers).length > 0) {
+        // Per-unit mode: save indicator in legacy fields
+        updatePayload.price_increase_type = "per_unit";
+        updatePayload.price_increase_value = null;
+        updatePayload.increase_steps = perUnitTiers; // backup all per-unit tiers in JSONB
+      } else if (hasIncrease && priceTiers.length > 0) {
         const first = priceTiers[0];
         updatePayload.price_increase_type = first.increase_type;
         updatePayload.price_increase_value = first.increase_value || null;
@@ -2115,7 +2141,7 @@ export default function ContractEditPage() {
                 { l: "הצמדה", v: INDEX_METHODS.find((m) => m.v === indexMethod)?.l },
                 { l: 'מע"מ', v: vatType === "taxable" ? `${currentVatPct}%` : "פטור" },
                 { l: "גרייס", v: hasGrace ? `${graceMonths} חודשים` : "לא" },
-                { l: "עלייה מדורגת", v: hasIncrease && priceTiers.length > 0 ? `${priceTiers.length} שלבים` : "לא" },
+                { l: "עלייה מדורגת", v: hasIncrease ? (increaseMode === "per_unit" ? `לפי יחידה (${Object.keys(perUnitTiers).filter(k => perUnitTiers[k]?.length > 0).length} יחידות)` : priceTiers.length > 0 ? `${priceTiers.length} שלבים` : "לא") : "לא" },
                 { l: "אופציות", v: extensionOptions.length > 0 ? `${extensionOptions.length} אופציות` : "לא" },
                 { l: "ערבות", v: addGuarantee ? fmtMoney(Number(guaranteeAmt) || 0) : "לא" },
               ].map((r) =>
