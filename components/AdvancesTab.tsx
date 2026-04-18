@@ -619,8 +619,11 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
           await supabase.from("advance_payments").upsert({
             contract_id: r.contractId,
             space_id: r.spaceId,
+            property_id: propId,
+            tenant_name: r.tenantName,
+            space_name: r.spaceName,
             year: year,
-            period: p.label.split(" (")[0], // "רבעון 1" or "חודש 3" (clean, no extras)
+            period: p.label.split(" (")[0],
             base_rent: r.baseRentMonthly * p.months,
             indexed_rent: p.rentBeforeVat,
             management_advance: p.mgmtBeforeVat,

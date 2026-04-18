@@ -7,13 +7,14 @@ import BillingGroupsManager from '@/components/BillingGroupsManager';
 import { fetchCpiAdjusted } from '@/lib/cpi-server';
 import AdvancesTab from '@/components/AdvancesTab';
 import CpiDiffTab from '@/components/CpiDiffTab';
+import SavedAdvancesTab from '@/components/SavedAdvancesTab';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 
 function fmtMoney(n: number) { return "\u20AA" + (n ?? 0).toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "\u2014"; }
 
-type Tab = "management" | "insurance" | "waste" | "advances" | "cpi_diff";
+type Tab = "management" | "insurance" | "waste" | "advances" | "saved_advances" | "cpi_diff";
 
 interface MgmtResult { contractId: string; tenantName: string; chargedArea: number; advance: number; actualShare: number; difference: number; }
 interface InsResult { contractId: string; tenantName: string; area: number; pct: number; charge: number; }
@@ -47,6 +48,7 @@ export default function BillingPage() {
     { v: "insurance", l: "ביטוח מבנה" },
     { v: "waste", l: "פינוי אשפה" },
     { v: "advances", l: "מקדמות שכ\"ד" },
+    { v: "saved_advances", l: "📋 שייקים שמורים" },
     { v: "cpi_diff", l: "הפרשי הצמדה" },
   ];
 
@@ -82,6 +84,7 @@ export default function BillingPage() {
           {activeTab === "insurance" && <InsuranceTab properties={filteredProperties} />}
           {activeTab === "waste" && <WasteTab properties={filteredProperties} />}
           {activeTab === "advances" && <AdvancesTab properties={filteredProperties} />}
+          {activeTab === "saved_advances" && <SavedAdvancesTab properties={filteredProperties} />}
           {activeTab === "cpi_diff" && <CpiDiffTab properties={filteredProperties} />}
         </>
       )}
