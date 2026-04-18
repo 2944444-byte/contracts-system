@@ -797,12 +797,14 @@ export default function ContractEditPage() {
       }
 
       // Delete + re-insert price tiers (save ORIGINAL tiers, not expanded)
+      console.log("TIERS SAVE: hasIncrease=" + hasIncrease + " increaseMode=" + increaseMode + " perUnitTiers=" + JSON.stringify(Object.keys(perUnitTiers)) + " priceTiers.length=" + priceTiers.length);
       await supabase.from("contract_price_tiers").delete().eq("contract_id", id);
       if (hasIncrease) {
         const contractStart = new Date(startDate);
         var allTiersToInsert: any[] = [];
 
         if (increaseMode === "per_unit" && Object.keys(perUnitTiers).length > 0) {
+          console.log("TIERS: per_unit path, spaces:", Object.keys(perUnitTiers));
           Object.entries(perUnitTiers).forEach(function([sid, uTiers]) {
             if (!uTiers || uTiers.length === 0) return;
             var rVal = Number(unitRentOverrides[sid]) || Number(rentPerSqm) || 0;
@@ -860,7 +862,14 @@ export default function ContractEditPage() {
         }
 
         if (allTiersToInsert.length > 0) {
-          await supabase.from("contract_price_tiers").insert(allTiersToInsert);
+          console.log("Inserting " + allTiersToInsert.length + " price tiers:", JSON.stringify(allTiersToInsert));
+          var { error: tiersErr } = await supabase.from("contract_price_tiers").insert(allTiersToInsert);
+          if (tiersErr) {
+            console.error("Failed to insert price tiers:", tiersErr);
+            alert("שגיאה בשמירת מדרגות מחיר: " + tiersErr.message);
+          }
+        } else {
+          console.log("No tiers to insert. hasIncrease=" + hasIncrease + " increaseMode=" + increaseMode + " perUnitTiers keys=" + Object.keys(perUnitTiers).length + " priceTiers=" + priceTiers.length);
         }
       }
 
