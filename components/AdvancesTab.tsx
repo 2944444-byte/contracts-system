@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
 import { logAudit } from "@/lib/audit-log";
 import { fetchCpiAdjusted } from "@/lib/cpi-server";
@@ -62,15 +62,19 @@ interface AdvanceRow {
 export default function AdvancesTab({ properties }: { properties: any[] }) {
   const currentYear = new Date().getFullYear();
   const [propId, setPropId] = useState("");
-  const [contractFilter, setContractFilter] = useState("all"); // "all" or specific contract ID
+  const [contractFilter, setContractFilter] = useState("all");
   const [availableContracts, setAvailableContracts] = useState<any[]>([]);
   const [year, setYear] = useState(currentYear + 1);
-  // User-specified CPI calculation date (e.g. Nov 15 = use Oct CPI)
   const [cpiCalcDate, setCpiCalcDate] = useState(currentYear + "-11-15");
   const [computing, setComputing] = useState(false);
   const [results, setResults] = useState<AdvanceRow[]>([]);
   const [creatingCharges, setCreatingCharges] = useState(false);
   const [creatingLetters, setCreatingLetters] = useState(false);
+
+  // Saved advances state
+  const [savedMode, setSavedMode] = useState(false); // true = showing saved data
+  const [savedInfo, setSavedInfo] = useState<{ count: number; savedAt: string; otherDates: string[] } | null>(null);
+  const [checkingSaved, setCheckingSaved] = useState(false);
 
   // Load available contracts when property changes
   function loadAvailableContracts(pid: string) {
@@ -82,6 +86,81 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
         setAvailableContracts((data ?? []).filter(function(c: any) { return c.payment_method === "checks_advance"; }));
       });
   }
+
+  // Check for saved advances when property/year changes
+  async function checkSavedAdvances(pid: string, yr: number, cFilter: string) {
+    if (!pid) { setSavedInfo(null); return; }
+    setCheckingSaved(true);
+    try {
+      var query = supabase.from("advance_payments")
+        .select("id, contract_id, space_id, tenant_name, space_name, period, check_date, base_rent, indexed_rent, management_advance, total_before_vat, vat_amount, total_with_vat, cpi_base_value, cpi_at_payment, status, created_at")
+        .eq("property_id", pid).eq("year", yr)
+        .order("tenant_name").order("space_name").order("check_date");
+      if (cFilter !== "all") query = query.eq("contract_id", cFilter);
+      var { data: saved } = await query;
+      if (saved && saved.length > 0) {
+        // Convert saved data to display format (grouped by tenant+space)
+        var grouped: Record<string, any[]> = {};
+        saved.forEach(function(s: any) {
+          var key = s.contract_id + "|" + s.space_id;
+          if (!grouped[key]) grouped[key] = [];
+          grouped[key].push(s);
+        });
+        // Build AdvanceRow[] from saved data
+        var rows: AdvanceRow[] = [];
+        Object.values(grouped).forEach(function(items: any[]) {
+          var first = items[0];
+          var checks: CheckRow[] = items.map(function(s: any) {
+            return {
+              label: s.period, months: 1, partialDays: 0, totalDaysInMonth: 30,
+              checkDate: s.check_date, rentBeforeVat: Number(s.indexed_rent) || 0,
+              mgmtBeforeVat: Number(s.management_advance) || 0,
+              totalBeforeVat: Number(s.total_before_vat) || 0,
+              vat: Number(s.vat_amount) || 0, totalWithVat: Number(s.total_with_vat) || 0,
+            };
+          });
+          rows.push({
+            contractId: first.contract_id, spaceId: first.space_id,
+            tenantName: first.tenant_name || "—", spaceName: first.space_name || "—",
+            spaceArea: 0, baseRentMonthly: Number(first.base_rent) || 0,
+            indexedRentMonthly: Number(first.indexed_rent) || 0,
+            mgmtAdvanceMonthly: Number(first.management_advance) || 0,
+            parkingMonthly: 0, parkingSpots: 0,
+            totalMonthly: Number(first.total_with_vat) || 0,
+            cpiBaseValue: Number(first.cpi_base_value) || 0, cpiBaseDate: "",
+            cbsFromDate: "", cpiCurrentValue: Number(first.cpi_at_payment) || 0,
+            cpiCurrentDate: "", cpiRatio: 0, indexationMethod: "",
+            startDate: first.check_date || "", checks: checks,
+          });
+        });
+        setResults(rows);
+        setSavedMode(true);
+        // Find saved date
+        var latestCreated = saved.reduce(function(latest: string, s: any) {
+          return s.created_at > latest ? s.created_at : latest;
+        }, "");
+        // Check for other dates (different calc dates)
+        var { data: otherSaved } = await supabase.from("advance_payments")
+          .select("created_at").eq("property_id", pid).eq("year", yr)
+          .not("created_at", "eq", latestCreated).limit(1);
+        setSavedInfo({
+          count: saved.length,
+          savedAt: latestCreated,
+          otherDates: (otherSaved || []).length > 0 ? ["קיימות מקדמות נוספות מתאריך אחר"] : [],
+        });
+      } else {
+        setSavedInfo(null);
+        setSavedMode(false);
+        setResults([]);
+      }
+    } catch (e) { console.error(e); }
+    finally { setCheckingSaved(false); }
+  }
+
+  // Auto-check when property/year/filter changes
+  useEffect(function() {
+    if (propId) checkSavedAdvances(propId, year, contractFilter);
+  }, [propId, year, contractFilter]);
 
   async function compute() {
     if (!propId) { alert("יש לבחור נכס"); return; }
@@ -775,15 +854,41 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
           </div>
           <div>
             <label className="mb-1 block text-xs font-semibold text-slate-700">תאריך חישוב מדד</label>
-            <input type="date" value={cpiCalcDate} onChange={function(e) { setCpiCalcDate(e.target.value); setResults([]); }} className={ic} />
+            <input type="date" value={cpiCalcDate} onChange={function(e) { setCpiCalcDate(e.target.value); if (!savedMode) setResults([]); }} className={ic} />
             <div className="text-xs text-slate-400 mt-0.5">המערכת תיקח את המדד הידוע בתאריך זה (t-2)</div>
           </div>
         </div>
 
-        <button onClick={compute} disabled={computing || !propId}
-          className="rounded-lg bg-blue-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-blue-800 disabled:opacity-50">
-          {computing ? "מחשב..." : "חשב מקדמות"}
-        </button>
+        {/* Saved advances banner */}
+        {savedInfo && savedMode && (
+          <div className="rounded-lg bg-green-50 border border-green-300 px-4 py-3 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <span className="text-green-600 text-xl">✅</span>
+              <div>
+                <div className="font-bold text-green-800 text-sm">נמצאו מקדמות שמורות לשנת {year}</div>
+                <div className="text-xs text-green-600">{savedInfo.count} שייקים | נשמר ב-{fmtDate(savedInfo.savedAt)}</div>
+                {savedInfo.otherDates.length > 0 && (
+                  <div className="text-xs text-amber-600 mt-0.5">⚠️ {savedInfo.otherDates[0]}</div>
+                )}
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={function() { setSavedMode(false); setResults([]); setSavedInfo(null); }}
+                className="rounded-lg border border-blue-300 bg-white px-3 py-1.5 text-xs font-bold text-blue-700 hover:bg-blue-50">
+                🔄 חשב מחדש
+              </button>
+            </div>
+          </div>
+        )}
+
+        {!savedMode && (
+          <button onClick={function() { setSavedMode(false); compute(); }} disabled={computing || !propId}
+            className="rounded-lg bg-blue-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-blue-800 disabled:opacity-50">
+            {computing ? "מחשב..." : "חשב מקדמות"}
+          </button>
+        )}
+
+        {checkingSaved && <div className="text-center py-4 text-slate-400 text-sm">בודק מקדמות שמורות...</div>}
 
         {results.length > 0 && (
           <div className="mt-5 space-y-4">
