@@ -64,9 +64,94 @@ export default function LettersPage() {
   }
 
   function handlePrint(l: any) {
+    var title = l.title || l.subject || "מכתב";
+    var bodyText = "";
+    if (l.content_json) {
+      var cj = typeof l.content_json === "string" ? JSON.parse(l.content_json) : l.content_json;
+      bodyText = cj?.body || "";
+    }
+    bodyText = bodyText || l.body || "";
+
+    // Parse the text into sections for professional formatting
+    var sections = bodyText.split("═══════════════════════════════");
+    var mainBody = (sections[0] || "").trim();
+    var appendixBody = (sections[1] || "").trim();
+
+    // Format main body: convert check table to HTML table
+    var htmlMain = mainBody
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+    // Convert checks table lines to HTML table
+    var lines = htmlMain.split("\n");
+    var inTable = false;
+    var htmlLines: string[] = [];
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i];
+      if (line.includes("המחאה") && line.includes("לתאריך") && line.includes("בסכום")) {
+        inTable = true;
+        htmlLines.push('<table class="checks"><thead><tr><th>המחאה</th><th>לתאריך</th><th>בסכום בש"ח</th></tr></thead><tbody>');
+        continue;
+      }
+      if (line.match(/^─/) || line.trim() === "") { if (inTable && line.trim() === "") { continue; } if (!inTable) htmlLines.push("<br>"); continue; }
+      if (inTable && line.match(/^\d+\t/)) {
+        var parts = line.split("\t");
+        htmlLines.push('<tr><td>' + parts[0] + '</td><td>' + (parts[1]||"") + '</td><td class="amount">' + (parts[2]||"") + '</td></tr>');
+        continue;
+      }
+      if (inTable && line.includes("סה")) {
+        htmlLines.push('</tbody><tfoot><tr><td colspan="2"><strong>סה"כ</strong></td><td class="amount total">' + line.replace(/.*סה"כ:?\s*/, "") + '</td></tr></tfoot></table>');
+        inTable = false;
+        continue;
+      }
+      if (inTable && !line.match(/^\d+\t/)) {
+        htmlLines.push("</tbody></table>");
+        inTable = false;
+      }
+      htmlLines.push(line + "<br>");
+    }
+    if (inTable) htmlLines.push("</tbody></table>");
+    var htmlMainFormatted = htmlLines.join("\n");
+
+    // Format appendix
+    var htmlAppendix = "";
+    if (appendixBody) {
+      htmlAppendix = appendixBody
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+        .replace(/\n/g, "<br>")
+        .replace(/📐 (.+?)(<br>)/g, '<div class="unit-title">📐 $1</div>')
+        .replace(/🅿️/g, "🅿️")
+        .replace(/⬆/g, '<span style="color:#d97706">⬆</span>')
+        .replace(/   /g, '&nbsp;&nbsp;&nbsp;');
+    }
+
+    var tenant = l.contracts?.tenants?.name || "";
     const w=window.open("","_blank","width=800,height=900");
     if (!w) return;
-    w.document.write(`<!DOCTYPE html><html dir="rtl"><head><meta charset="UTF-8"><style>body{font-family:Arial;padding:40px;direction:rtl}h2{border-bottom:2px solid #3b82f6;padding-bottom:8px}.body{line-height:1.8;white-space:pre-wrap}.footer{margin-top:40px;border-top:1px solid #e2e8f0;padding-top:12px;font-size:11px;color:#94a3b8}@media print{body{padding:20px}}</style></head><body><h2>${l.subject}</h2><div class="meta" style="color:#64748b;font-size:12px;margin-bottom:24px">תאריך: ${fmtDate(l.created_at)} | ${l.contracts?.tenants?.name} | ${l.contracts?.properties?.name}</div><div class="body">${l.body??""}</div><div class="footer">PropManager v4</div><script>window.print();<\/script></body></html>`);
+    w.document.write('<!DOCTYPE html><html dir="rtl"><head><meta charset="UTF-8"><style>' +
+      'body{font-family:"David","Arial","Helvetica";padding:40px 60px;direction:rtl;font-size:13px;line-height:1.6;color:#1e293b}' +
+      'h1{text-align:center;font-size:18px;color:#1e40af;border-bottom:2px solid #3b82f6;padding-bottom:8px;margin-bottom:4px}' +
+      '.meta{text-align:center;color:#64748b;font-size:11px;margin-bottom:30px}' +
+      '.content{line-height:1.7;font-size:13px}' +
+      '.checks{width:100%;border-collapse:collapse;margin:15px 0;font-size:12px}' +
+      '.checks th{background:#1e40af;color:white;padding:8px 12px;text-align:right;font-weight:bold}' +
+      '.checks td{padding:6px 12px;border-bottom:1px solid #e2e8f0}' +
+      '.checks tr:nth-child(even){background:#f8fafc}' +
+      '.checks .amount{font-weight:bold;color:#1e40af;font-family:monospace;direction:ltr;text-align:left}' +
+      '.checks .total{font-size:14px;color:#059669;border-top:2px solid #059669}' +
+      '.checks tfoot td{background:#f0fdf4;padding:10px 12px}' +
+      '.appendix{margin-top:30px;border-top:2px solid #3b82f6;padding-top:15px}' +
+      '.appendix h3{color:#1e40af;font-size:15px;margin-bottom:10px}' +
+      '.unit-title{background:#eff6ff;border-right:3px solid #3b82f6;padding:6px 10px;margin:12px 0 6px 0;font-weight:bold;font-size:13px}' +
+      '.footer{margin-top:40px;border-top:1px solid #e2e8f0;padding-top:8px;font-size:9px;color:#94a3b8;text-align:center}' +
+      '@media print{body{padding:15px 30px}.checks th{background:#1e40af !important;color:white !important;-webkit-print-color-adjust:exact}}' +
+      '</style></head><body>' +
+      '<h1>' + title + '</h1>' +
+      '<div class="meta">' + tenant + ' | ' + fmtDate(l.created_at) + '</div>' +
+      '<div class="content">' + htmlMainFormatted + '</div>' +
+      (htmlAppendix ? '<div class="appendix"><h3>נספח א\' — פירוט חישוב מקדמות</h3>' + htmlAppendix + '</div>' : '') +
+      '<div class="footer">PropManager v4</div>' +
+      '<script>window.print();<\/script>' +
+      '</body></html>');
     w.document.close();
   }
 
@@ -76,6 +161,21 @@ export default function LettersPage() {
   }
 
   const typeInfo = function(v: string) { return LETTER_TYPES.find(function(t){return t.v===v;})??LETTER_TYPES[4]; };
+
+  function handleEmail(l: any) {
+    var title = l.title || l.subject || "מכתב";
+    var tenant = l.contracts?.tenants?.name || "";
+    var email = l.contracts?.tenants?.primary_email || "";
+    var subject = encodeURIComponent(title);
+    var emailBody = encodeURIComponent(
+      "שלום " + tenant + ",\n\n" +
+      "מצורף בזאת " + title + ".\n" +
+      "נא לעיין ולפעול בהתאם.\n\n" +
+      "בברכה,\n" +
+      "הנהלת הנכס"
+    );
+    window.open("mailto:" + email + "?subject=" + subject + "&body=" + emailBody, "_self");
+  }
 
   return (
     <div dir="rtl">
@@ -106,6 +206,7 @@ export default function LettersPage() {
                       <div className="flex gap-1">
                         <button onClick={function(){setPreview(l);}} className="text-xs border border-slate-200 rounded px-2 py-1 text-slate-600 hover:bg-slate-50">👁</button>
                         <button onClick={function(){handlePrint(l);}} className="text-xs border border-blue-200 rounded px-2 py-1 text-blue-600 hover:bg-blue-50">🖨</button>
+                        <button onClick={function(){handleEmail(l);}} className="text-xs border border-green-200 rounded px-2 py-1 text-green-600 hover:bg-green-50">📧</button>
                         <button onClick={function(){deleteLetter(l.id);}} className="text-xs border border-red-100 rounded px-2 py-1 text-red-400 hover:bg-red-50">🗑</button>
                       </div>
                     </td>

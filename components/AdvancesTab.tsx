@@ -667,17 +667,21 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
         var tenantName = firstRow.tenantName;
         var today = new Date().toLocaleDateString("he-IL");
 
-        // Build checks table
-        var checksTable = "";
-        var checkNum = 1;
+        // Consolidate checks by date across all units (one check per month/quarter)
+        var checksByDate: Record<string, { date: string; total: number }> = {};
         var grandTotal = 0;
         for (var ur of unitRows) {
           for (var ch of ur.checks) {
-            checksTable += checkNum + "\t" + fmtDate(ch.checkDate) + "\t" + fmtMoney(ch.totalWithVat) + "\n";
+            if (!checksByDate[ch.checkDate]) checksByDate[ch.checkDate] = { date: ch.checkDate, total: 0 };
+            checksByDate[ch.checkDate].total += ch.totalWithVat;
             grandTotal += ch.totalWithVat;
-            checkNum++;
           }
         }
+        var sortedChecks = Object.values(checksByDate).sort(function(a, b) { return a.date.localeCompare(b.date); });
+        var checksTable = "";
+        sortedChecks.forEach(function(ck, i) {
+          checksTable += (i + 1) + "\t" + fmtDate(ck.date) + "\t" + fmtMoney(ck.total) + "\n";
+        });
 
         // Build appendix: per-unit calculation details
         var appendix = "נספח א' — פירוט חישוב מקדמות\n";
@@ -701,7 +705,10 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
         var body = "לכבוד\n" + tenantName + "\n\nשלום רב,\n\n";
         body += "הנדון: המחאות עבור שנת שכירות " + year + "\n\n";
         body += "בהתאם להסכם השכירות ביננו נבקשכם להעביר אלינו:\n\n";
-        body += (checkNum - 1) + " המחאות עבור שנת שכירות " + year + ", כמפורט להלן:\n\n";
+        // Build unit list for the letter
+        var unitsList = unitRows.map(function(u) { return u.spaceName; }).join(", ");
+        body += sortedChecks.length + " המחאות עבור שנת שכירות " + year + ", כמפורט להלן:\n";
+        body += "מקדמות עבור: " + propName + " — " + unitsList + "\n\n";
         body += "המחאה\tלתאריך\tבסכום בש\"ח\n";
         body += "─────\t──────\t─────────\n";
         body += checksTable;
