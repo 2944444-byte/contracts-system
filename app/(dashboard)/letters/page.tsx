@@ -65,91 +65,112 @@ export default function LettersPage() {
 
   function handlePrint(l: any) {
     var title = l.title || l.subject || "מכתב";
-    var bodyText = "";
-    if (l.content_json) {
-      var cj = typeof l.content_json === "string" ? JSON.parse(l.content_json) : l.content_json;
-      bodyText = cj?.body || "";
+    var cj = l.content_json ? (typeof l.content_json === "string" ? JSON.parse(l.content_json) : l.content_json) : {};
+    var bodyText = cj.body || l.body || "";
+    var companyName = cj.companyName || "";
+    var companyAddress = cj.companyAddress || "";
+    var companyPhone = cj.companyPhone || "";
+    var logoUrl = cj.logoUrl || "";
+    var appendixRaw = cj.appendix || "";
+    var tenant = l.contracts?.tenants?.name || cj.tenant || "";
+
+    // Build header with logo or company name
+    var headerHtml = logoUrl
+      ? '<div class="header"><img src="' + logoUrl + '" class="logo" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'block\'"><div class="company-name" style="display:none">' + companyName + '</div></div>'
+      : '<div class="header"><div class="company-name">' + companyName + '</div></div>';
+    if (companyAddress || companyPhone) {
+      headerHtml += '<div class="company-details">' + [companyAddress, companyPhone ? 'טל: ' + companyPhone : ''].filter(Boolean).join(' | ') + '</div>';
     }
-    bodyText = bodyText || l.body || "";
 
-    // Parse the text into sections for professional formatting
-    var sections = bodyText.split("═══════════════════════════════");
-    var mainBody = (sections[0] || "").trim();
-    var appendixBody = (sections[1] || "").trim();
-
-    // Format main body: convert check table to HTML table
-    var htmlMain = mainBody
-      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-
-    // Convert checks table lines to HTML table
-    var lines = htmlMain.split("\n");
+    // Parse body: convert checks table to HTML
+    var bodyHtml = bodyText.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    var lines = bodyHtml.split("\n");
+    var htmlParts: string[] = [];
     var inTable = false;
-    var htmlLines: string[] = [];
     for (var i = 0; i < lines.length; i++) {
-      var line = lines[i];
-      if (line.includes("המחאה") && line.includes("לתאריך") && line.includes("בסכום")) {
+      var line = lines[i].trim();
+      if (!line) { if (!inTable) htmlParts.push("<br>"); continue; }
+      if (line.startsWith("הנדון:")) { htmlParts.push('<div class="subject">' + line + '</div>'); continue; }
+      if (line.includes("המחאה") && line.includes("לתאריך")) {
         inTable = true;
-        htmlLines.push('<table class="checks"><thead><tr><th>המחאה</th><th>לתאריך</th><th>בסכום בש"ח</th></tr></thead><tbody>');
+        htmlParts.push('<table class="checks"><thead><tr><th>המחאה</th><th>לתאריך</th><th>בסכום בש"ח</th></tr></thead><tbody>');
         continue;
       }
-      if (line.match(/^─/) || line.trim() === "") { if (inTable && line.trim() === "") { continue; } if (!inTable) htmlLines.push("<br>"); continue; }
-      if (inTable && line.match(/^\d+\t/)) {
-        var parts = line.split("\t");
-        htmlLines.push('<tr><td>' + parts[0] + '</td><td>' + (parts[1]||"") + '</td><td class="amount">' + (parts[2]||"") + '</td></tr>');
+      if (inTable && /^\d+\t/.test(line)) {
+        var p = line.split("\t");
+        htmlParts.push('<tr><td>' + p[0] + '</td><td>' + (p[1]||"") + '</td><td class="amount">' + (p[2]||"") + '</td></tr>');
         continue;
       }
-      if (inTable && line.includes("סה")) {
-        htmlLines.push('</tbody><tfoot><tr><td colspan="2"><strong>סה"כ</strong></td><td class="amount total">' + line.replace(/.*סה"כ:?\s*/, "") + '</td></tr></tfoot></table>');
+      if (inTable && line.includes("סה\"כ")) {
+        var totalVal = line.replace(/.*סה"כ:?\s*/, "");
+        htmlParts.push('</tbody><tfoot><tr><td colspan="2"><strong>סה"כ</strong></td><td class="amount total">' + totalVal + '</td></tr></tfoot></table>');
         inTable = false;
         continue;
       }
-      if (inTable && !line.match(/^\d+\t/)) {
-        htmlLines.push("</tbody></table>");
-        inTable = false;
-      }
-      htmlLines.push(line + "<br>");
+      if (inTable && !/^\d+\t/.test(line)) { htmlParts.push("</tbody></table>"); inTable = false; }
+      htmlParts.push('<p>' + line + '</p>');
     }
-    if (inTable) htmlLines.push("</tbody></table>");
-    var htmlMainFormatted = htmlLines.join("\n");
+    if (inTable) htmlParts.push("</tbody></table>");
 
-    // Format appendix
-    var htmlAppendix = "";
-    if (appendixBody) {
-      htmlAppendix = appendixBody
-        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-        .replace(/\n/g, "<br>")
-        .replace(/📐 (.+?)(<br>)/g, '<div class="unit-title">📐 $1</div>')
-        .replace(/🅿️/g, "🅿️")
-        .replace(/⬆/g, '<span style="color:#d97706">⬆</span>')
-        .replace(/   /g, '&nbsp;&nbsp;&nbsp;');
+    // Parse appendix
+    var appendixHtml = "";
+    if (appendixRaw) {
+      var unitBlocks = appendixRaw.split("UNIT_END").filter(Boolean);
+      appendixHtml = '<div class="appendix"><h3>נספח א\' — פירוט חישוב מקדמות</h3>';
+      unitBlocks.forEach(function(block: string) {
+        var match = block.match(/UNIT_START\|(.+?)\|(.+)/);
+        if (!match) return;
+        var spaceName = match[1];
+        var area = match[2].trim();
+        var details = block.split("\n").filter(function(l) { return l && !l.includes("UNIT_START"); });
+        appendixHtml += '<div class="unit-card"><div class="unit-header">📐 ' + spaceName + ' | ' + area + ' מ"ר</div>';
+        appendixHtml += '<div class="unit-details">';
+        details.forEach(function(d: string) {
+          d = d.trim();
+          if (!d) return;
+          appendixHtml += '<div class="detail-row">' + d.replace(/&/g,"&amp;").replace(/</g,"&lt;") + '</div>';
+        });
+        appendixHtml += '</div></div>';
+      });
+      appendixHtml += '</div>';
     }
 
-    var tenant = l.contracts?.tenants?.name || "";
-    const w=window.open("","_blank","width=800,height=900");
+    const w=window.open("","_blank","width=800,height=1000");
     if (!w) return;
     w.document.write('<!DOCTYPE html><html dir="rtl"><head><meta charset="UTF-8"><style>' +
-      'body{font-family:"David","Arial","Helvetica";padding:40px 60px;direction:rtl;font-size:13px;line-height:1.6;color:#1e293b}' +
-      'h1{text-align:center;font-size:18px;color:#1e40af;border-bottom:2px solid #3b82f6;padding-bottom:8px;margin-bottom:4px}' +
-      '.meta{text-align:center;color:#64748b;font-size:11px;margin-bottom:30px}' +
-      '.content{line-height:1.7;font-size:13px}' +
-      '.checks{width:100%;border-collapse:collapse;margin:15px 0;font-size:12px}' +
-      '.checks th{background:#1e40af;color:white;padding:8px 12px;text-align:right;font-weight:bold}' +
-      '.checks td{padding:6px 12px;border-bottom:1px solid #e2e8f0}' +
+      '@page{margin:15mm 20mm}' +
+      'body{font-family:"David","Arial";padding:0;direction:rtl;font-size:13px;line-height:1.5;color:#1e293b;margin:0}' +
+      '.page{padding:30px 50px}' +
+      '.header{text-align:center;margin-bottom:5px}' +
+      '.logo{max-height:60px;margin-bottom:5px}' +
+      '.company-name{font-size:22px;font-weight:bold;color:#1e3a5f}' +
+      '.company-details{text-align:center;font-size:10px;color:#64748b;margin-bottom:15px;border-bottom:2px solid #1e3a5f;padding-bottom:8px}' +
+      '.date{text-align:left;font-size:11px;color:#64748b;margin-bottom:15px}' +
+      'p{margin:3px 0;font-size:13px}' +
+      '.subject{text-align:center;font-weight:bold;font-size:15px;margin:15px 0;text-decoration:underline}' +
+      '.checks{width:100%;border-collapse:collapse;margin:12px 0;font-size:12px}' +
+      '.checks th{background:#1e3a5f;color:white;padding:7px 12px;text-align:right}' +
+      '.checks td{padding:5px 12px;border-bottom:1px solid #e2e8f0}' +
       '.checks tr:nth-child(even){background:#f8fafc}' +
-      '.checks .amount{font-weight:bold;color:#1e40af;font-family:monospace;direction:ltr;text-align:left}' +
-      '.checks .total{font-size:14px;color:#059669;border-top:2px solid #059669}' +
-      '.checks tfoot td{background:#f0fdf4;padding:10px 12px}' +
-      '.appendix{margin-top:30px;border-top:2px solid #3b82f6;padding-top:15px}' +
-      '.appendix h3{color:#1e40af;font-size:15px;margin-bottom:10px}' +
-      '.unit-title{background:#eff6ff;border-right:3px solid #3b82f6;padding:6px 10px;margin:12px 0 6px 0;font-weight:bold;font-size:13px}' +
-      '.footer{margin-top:40px;border-top:1px solid #e2e8f0;padding-top:8px;font-size:9px;color:#94a3b8;text-align:center}' +
-      '@media print{body{padding:15px 30px}.checks th{background:#1e40af !important;color:white !important;-webkit-print-color-adjust:exact}}' +
-      '</style></head><body>' +
-      '<h1>' + title + '</h1>' +
-      '<div class="meta">' + tenant + ' | ' + fmtDate(l.created_at) + '</div>' +
-      '<div class="content">' + htmlMainFormatted + '</div>' +
-      (htmlAppendix ? '<div class="appendix"><h3>נספח א\' — פירוט חישוב מקדמות</h3>' + htmlAppendix + '</div>' : '') +
-      '<div class="footer">PropManager v4</div>' +
+      '.checks .amount{font-weight:bold;color:#1e3a5f;direction:ltr;text-align:left}' +
+      '.checks .total{font-size:13px;color:#059669;border-top:2px solid #059669}' +
+      '.checks tfoot td{background:#f0fdf4;padding:8px 12px}' +
+      '.appendix{page-break-before:always;padding-top:20px}' +
+      '.appendix h3{color:#1e3a5f;font-size:16px;border-bottom:2px solid #1e3a5f;padding-bottom:5px}' +
+      '.unit-card{border:1px solid #e2e8f0;border-radius:8px;margin:10px 0;overflow:hidden}' +
+      '.unit-header{background:#eff6ff;border-right:4px solid #3b82f6;padding:8px 12px;font-weight:bold;font-size:13px;color:#1e3a5f}' +
+      '.unit-details{padding:8px 15px;font-size:11px;line-height:1.8}' +
+      '.detail-row{color:#334155}' +
+      '.signature{margin-top:30px;text-align:left}' +
+      '.footer-bar{margin-top:30px;border-top:1px solid #cbd5e1;padding-top:6px;text-align:center;font-size:9px;color:#94a3b8}' +
+      '@media print{.checks th{background:#1e3a5f !important;color:white !important;-webkit-print-color-adjust:exact}.unit-header{background:#eff6ff !important;-webkit-print-color-adjust:exact}.checks tr:nth-child(even){background:#f8fafc !important;-webkit-print-color-adjust:exact}.checks tfoot td{background:#f0fdf4 !important;-webkit-print-color-adjust:exact}}' +
+      '</style></head><body><div class="page">' +
+      headerHtml +
+      '<div class="date">' + fmtDate(l.created_at) + '</div>' +
+      '<div class="content">' + htmlParts.join("\n") + '</div>' +
+      '</div>' +
+      appendixHtml +
+      '<div class="footer-bar">' + (companyAddress ? companyAddress + ' | ' : '') + (companyPhone ? 'טל: ' + companyPhone : '') + '</div>' +
       '<script>window.print();<\/script>' +
       '</body></html>');
     w.document.close();

@@ -23,6 +23,10 @@ export default function CompaniesPage() {
   const [fEmail,   setFEmail]   = useState("");
   const [fContact, setFContact] = useState("");
   const [fNotes,   setFNotes]   = useState("");
+  const [fLogoUrl, setFLogoUrl] = useState("");
+  const [fBankName, setFBankName] = useState("");
+  const [fBankBranch, setFBankBranch] = useState("");
+  const [fBankAccount, setFBankAccount] = useState("");
 
   useEffect(function() { loadAll(); }, []);
 
@@ -35,14 +39,14 @@ export default function CompaniesPage() {
     if (!selected && (c??[]).length>0) setSelected((c??[])[0].id);
   }
 
-  function openNew() { setIsNew(true); setEditingId("new"); setFName(""); setFId(""); setFAddress(""); setFCity(""); setFPhone(""); setFEmail(""); setFContact(""); setFNotes(""); }
-  function openEdit(c: any) { setIsNew(false); setEditingId(c.id); setFName(c.company_name??""); setFId(c.company_id??""); setFAddress(c.address??""); setFCity(c.city??""); setFPhone(c.phone??""); setFEmail(c.email??""); setFContact(c.contact_name??""); setFNotes(c.notes??""); }
+  function openNew() { setIsNew(true); setEditingId("new"); setFName(""); setFId(""); setFAddress(""); setFCity(""); setFPhone(""); setFEmail(""); setFContact(""); setFNotes(""); setFLogoUrl(""); setFBankName(""); setFBankBranch(""); setFBankAccount(""); }
+  function openEdit(c: any) { setIsNew(false); setEditingId(c.id); setFName(c.company_name??""); setFId(c.company_id??""); setFAddress(c.address??""); setFCity(c.city??""); setFPhone(c.phone??""); setFEmail(c.email??""); setFContact(c.contact_name??""); setFNotes(c.notes??""); setFLogoUrl(c.logo_url??""); setFBankName(c.bank_name??""); setFBankBranch(c.bank_branch??""); setFBankAccount(c.bank_account??""); }
 
   async function handleSave() {
     if (!fName.trim()) { alert("חובה: שם חברה"); return; }
     setSaving(true);
     try {
-      const payload={company_name:fName.trim(),company_id:fId||null,address:fAddress||null,city:fCity||null,phone:fPhone||null,email:fEmail||null,contact_name:fContact||null,notes:fNotes||null};
+      const payload={company_name:fName.trim(),company_id:fId||null,address:fAddress||null,city:fCity||null,phone:fPhone||null,email:fEmail||null,contact_name:fContact||null,notes:fNotes||null,logo_url:fLogoUrl||null,bank_name:fBankName||null,bank_branch:fBankBranch||null,bank_account:fBankAccount||null};
       if (isNew) { const { data, error: ie } = await supabase.from("companies").insert(payload).select().single(); if (ie) throw new Error(ie.message); await logAudit({entity_type:"company",entity_id:data!.id,action:"create"}); setSelected(data!.id); }
       else { await supabase.from("companies").update(payload).eq("id",editingId); await logAudit({entity_type:"company",entity_id:editingId,action:"update"}); }
       setEditingId(""); await loadAll();
@@ -152,6 +156,19 @@ export default function CompaniesPage() {
                 <div><label className="mb-1 block text-xs font-semibold text-slate-700">טלפון</label><input type="tel" value={fPhone} onChange={function(e){setFPhone(e.target.value);}} className={ic} dir="ltr"/></div>
                 <div><label className="mb-1 block text-xs font-semibold text-slate-700">אימייל</label><input type="email" value={fEmail} onChange={function(e){setFEmail(e.target.value);}} className={ic} dir="ltr"/></div>
                 <div className="col-span-2"><label className="mb-1 block text-xs font-semibold text-slate-700">הערות</label><textarea value={fNotes} onChange={function(e){setFNotes(e.target.value);}} rows={2} className={ic}/></div>
+                <div className="col-span-2 border-t border-slate-200 pt-3 mt-1">
+                  <div className="text-xs font-bold text-slate-600 mb-2">🏦 פרטי בנק (למכתבי דרישה)</div>
+                  <div className="grid grid-cols-3 gap-3">
+                    <div><label className="mb-1 block text-xs text-slate-600">שם בנק</label><input value={fBankName} onChange={function(e){setFBankName(e.target.value);}} className={ic} placeholder="בנק הפועלים"/></div>
+                    <div><label className="mb-1 block text-xs text-slate-600">סניף</label><input value={fBankBranch} onChange={function(e){setFBankBranch(e.target.value);}} className={ic} placeholder="159"/></div>
+                    <div><label className="mb-1 block text-xs text-slate-600">מס׳ חשבון</label><input value={fBankAccount} onChange={function(e){setFBankAccount(e.target.value);}} className={ic} placeholder="15156"/></div>
+                  </div>
+                </div>
+                <div className="col-span-2">
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">🖼️ לוגו חברה (URL)</label>
+                  <input value={fLogoUrl} onChange={function(e){setFLogoUrl(e.target.value);}} className={ic} placeholder="https://..." dir="ltr"/>
+                  {fLogoUrl && <img src={fLogoUrl} alt="logo" className="h-12 mt-1 object-contain" onError={function(e){(e.target as any).style.display='none';}}/>}
+                </div>
               </div>
               <div className="flex gap-3 pt-2">
                 <button onClick={function(){setEditingId("");}} className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm text-slate-600">ביטול</button>

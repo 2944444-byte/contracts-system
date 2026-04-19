@@ -735,21 +735,33 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
   async function createLetters() {
     setCreatingLetters(true);
     try {
-      // Group rows by contract for consolidated letter
+      // Load company details (property owner)
+      var { data: propData } = await supabase.from("properties")
+        .select("name, company_id, companies(company_name, address, city, phone, email, logo_url, bank_name, bank_branch, bank_account)")
+        .eq("id", propId).single();
+      var company = (propData?.companies as any) || {};
+      var companyName = company.company_name || propData?.name || "";
+      var companyAddress = [company.address, company.city].filter(Boolean).join(", ");
+      var companyPhone = company.phone || "";
+      var bankLine = "";
+      if (company.bank_name && company.bank_account) {
+        bankLine = "את ההמחאות יש לרשום לפקודת " + companyName + " חשבון " + company.bank_account + " סניף " + (company.bank_branch || "") + " " + company.bank_name + ".";
+      }
+      var logoUrl = company.logo_url || "";
+
+      // Group rows by contract
       var byContract: Record<string, AdvanceRow[]> = {};
       for (var r of results) {
         if (!byContract[r.contractId]) byContract[r.contractId] = [];
         byContract[r.contractId].push(r);
       }
-      // Load property details for the letter header
-      var propName = properties.find(function(p: any) { return p.id === propId; })?.name || "";
+      var propName = propData?.name || "";
       var count = 0;
       for (var [cid, unitRows] of Object.entries(byContract)) {
         var firstRow = unitRows[0];
         var tenantName = firstRow.tenantName;
-        var today = new Date().toLocaleDateString("he-IL");
 
-        // Consolidate checks by date across all units (one check per month/quarter)
+        // Consolidate checks by date
         var checksByDate: Record<string, { date: string; total: number }> = {};
         var grandTotal = 0;
         for (var ur of unitRows) {
@@ -765,51 +777,55 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
           checksTable += (i + 1) + "\t" + fmtDate(ck.date) + "\t" + fmtMoney(ck.total) + "\n";
         });
 
-        // Build appendix: per-unit calculation details
-        var appendix = "נספח א' — פירוט חישוב מקדמות\n";
-        appendix += "═══════════════════════════════\n\n";
+        // Build appendix
+        var appendix = "";
         for (var ur2 of unitRows) {
-          appendix += "📐 " + ur2.spaceName + " | " + ur2.spaceArea + ' מ"ר\n';
-          appendix += "   שכ\"ד בסיס: " + fmtMoney(ur2.baseRentMonthly) + "/חודש";
+          appendix += "UNIT_START|" + ur2.spaceName + "|" + ur2.spaceArea + '\n';
+          appendix += "שכ\"ד בסיס: " + fmtMoney(ur2.baseRentMonthly) + "/חודש";
           if (ur2.spaceArea > 0) appendix += " (" + (ur2.baseRentMonthly / ur2.spaceArea).toFixed(2) + '₪/מ"ר)';
           appendix += "\n";
-          appendix += "   שכ\"ד צמוד: " + fmtMoney(ur2.indexedRentMonthly) + "/חודש";
+          appendix += "שכ\"ד צמוד: " + fmtMoney(ur2.indexedRentMonthly) + "/חודש";
           if (ur2.spaceArea > 0) appendix += " (" + (ur2.indexedRentMonthly / ur2.spaceArea).toFixed(2) + '₪/מ"ר)';
           appendix += "\n";
-          appendix += "   מקדמת ד.נ.: " + fmtMoney(ur2.mgmtAdvanceMonthly) + "/חודש\n";
-          if (ur2.parkingMonthly > 0) appendix += "   🅿️ חניה: " + fmtMoney(ur2.parkingMonthly) + "/חודש\n";
-          appendix += "   מדד בסיס: " + (ur2.cpiBaseValue || "—") + " | מדד לחישוב: " + (ur2.cpiCurrentValue || "—") + " | יחס: " + (ur2.cpiRatio || 1).toFixed(6) + "\n";
-          if (ur2.rentChangeDate) appendix += "   ⬆ עליית שכ\"ד מ-" + fmtDate(ur2.rentChangeDate) + "\n";
-          appendix += "\n";
+          appendix += "מקדמת ד.נ.: " + fmtMoney(ur2.mgmtAdvanceMonthly) + "/חודש\n";
+          if (ur2.parkingMonthly > 0) appendix += "חניה: " + fmtMoney(ur2.parkingMonthly) + "/חודש\n";
+          appendix += "מדד בסיס: " + (ur2.cpiBaseValue || "—") + " | מדד לחישוב: " + (ur2.cpiCurrentValue || "—") + " | יחס: " + (ur2.cpiRatio || 1).toFixed(6) + "\n";
+          if (ur2.rentChangeDate) appendix += "עליית שכ\"ד מ-" + fmtDate(ur2.rentChangeDate) + "\n";
+          appendix += "UNIT_END\n";
         }
 
-        // Full letter body matching the Word template format
+        var unitsList = unitRows.map(function(u) { return u.spaceName; }).join(", ");
+
+        // Build letter body
         var body = "לכבוד\n" + tenantName + "\n\nשלום רב,\n\n";
         body += "הנדון: המחאות עבור שנת שכירות " + year + "\n\n";
         body += "בהתאם להסכם השכירות ביננו נבקשכם להעביר אלינו:\n\n";
-        // Build unit list for the letter
-        var unitsList = unitRows.map(function(u) { return u.spaceName; }).join(", ");
         body += sortedChecks.length + " המחאות עבור שנת שכירות " + year + ", כמפורט להלן:\n";
         body += "מקדמות עבור: " + propName + " — " + unitsList + "\n\n";
         body += "המחאה\tלתאריך\tבסכום בש\"ח\n";
-        body += "─────\t──────\t─────────\n";
         body += checksTable;
         body += "\nסה\"כ: " + fmtMoney(grandTotal) + "\n\n";
         body += "תחשיב סכום כל המחאה מפורט בנספח א'.\n\n";
-        body += "בכבוד רב ובברכה,\n\n\n";
-        body += "הנהלת " + propName + "\n\n";
-        body += "═══════════════════════════════\n\n";
-        body += appendix;
+        if (bankLine) body += bankLine + "\n\n";
+        body += "בכבוד רב ובברכה,\n\n" + companyName;
 
-        var propertyId = "";
-        var { data: cData } = await supabase.from("contracts").select("property_id").eq("id", cid).single();
-        if (cData) propertyId = cData.property_id;
-        await supabase.from("letters").insert({
+        var propertyId = propId;
+        var { error: insertErr } = await supabase.from("letters").insert({
           contract_id: cid,
-          property_id: propertyId || null,
+          property_id: propertyId,
           letter_type: "demand",
           title: "דרישת מקדמות שכ\"ד ודמי ניהול " + year,
-          content_json: { body: body, year: year, tenant: firstRow.tenantName },
+          content_json: {
+            body: body,
+            appendix: appendix,
+            year: year,
+            tenant: tenantName,
+            companyName: companyName,
+            companyAddress: companyAddress,
+            companyPhone: companyPhone,
+            logoUrl: logoUrl,
+            bankLine: bankLine,
+          },
           billing_year: year,
           billing_type: "advances",
         });
