@@ -777,20 +777,48 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
           checksTable += (i + 1) + "\t" + fmtDate(ck.date) + "\t" + fmtMoney(ck.total) + "\n";
         });
 
-        // Build appendix
+        // Build appendix with full details
         var appendix = "";
         for (var ur2 of unitRows) {
           appendix += "UNIT_START|" + ur2.spaceName + "|" + ur2.spaceArea + '\n';
+          appendix += "שטח מחויב: " + ur2.spaceArea + ' מ"ר\n';
           appendix += "שכ\"ד בסיס: " + fmtMoney(ur2.baseRentMonthly) + "/חודש";
           if (ur2.spaceArea > 0) appendix += " (" + (ur2.baseRentMonthly / ur2.spaceArea).toFixed(2) + '₪/מ"ר)';
           appendix += "\n";
-          appendix += "שכ\"ד צמוד: " + fmtMoney(ur2.indexedRentMonthly) + "/חודש";
+          appendix += "שכ\"ד צמוד למדד: " + fmtMoney(ur2.indexedRentMonthly) + "/חודש";
           if (ur2.spaceArea > 0) appendix += " (" + (ur2.indexedRentMonthly / ur2.spaceArea).toFixed(2) + '₪/מ"ר)';
           appendix += "\n";
-          appendix += "מקדמת ד.נ.: " + fmtMoney(ur2.mgmtAdvanceMonthly) + "/חודש\n";
-          if (ur2.parkingMonthly > 0) appendix += "חניה: " + fmtMoney(ur2.parkingMonthly) + "/חודש\n";
-          appendix += "מדד בסיס: " + (ur2.cpiBaseValue || "—") + " | מדד לחישוב: " + (ur2.cpiCurrentValue || "—") + " | יחס: " + (ur2.cpiRatio || 1).toFixed(6) + "\n";
-          if (ur2.rentChangeDate) appendix += "עליית שכ\"ד מ-" + fmtDate(ur2.rentChangeDate) + "\n";
+          appendix += "מקדמת דמי ניהול: " + fmtMoney(ur2.mgmtAdvanceMonthly) + "/חודש";
+          if (ur2.spaceArea > 0) appendix += " (" + (ur2.mgmtAdvanceMonthly / ur2.spaceArea).toFixed(2) + '₪/מ"ר)';
+          appendix += "\n";
+          if (ur2.parkingMonthly > 0) {
+            appendix += "🅿️ חניה: " + fmtMoney(ur2.parkingMonthly) + "/חודש";
+            if (ur2.parkingSpots > 0) appendix += " (" + ur2.parkingSpots + " מקומות)";
+            appendix += "\n";
+          }
+          // CPI details with month names
+          var cpiBaseLabel = ur2.cbsFromDate || "";
+          var cpiCurrentLabel = ur2.cpiCurrentDate || "";
+          appendix += "מדד בסיס: " + (ur2.cpiBaseValue || "—");
+          if (cpiBaseLabel) {
+            var bParts = String(cpiBaseLabel).split("-");
+            if (bParts.length >= 2) {
+              var hebMonths = ["","ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
+              appendix += " (" + (hebMonths[Number(bParts[1])] || bParts[1]) + " " + bParts[0] + ")";
+            }
+          }
+          appendix += "\n";
+          appendix += "מדד לחישוב: " + (ur2.cpiCurrentValue || "—");
+          if (cpiCurrentLabel) {
+            var cParts = String(cpiCurrentLabel).split("-");
+            if (cParts.length >= 2) {
+              var hebMonths2 = ["","ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
+              appendix += " (" + (hebMonths2[Number(cParts[1])] || cParts[1]) + " " + cParts[0] + ")";
+            }
+          }
+          appendix += "\n";
+          appendix += "יחס הצמדה: " + (ur2.cpiRatio || 1).toFixed(6) + "\n";
+          if (ur2.rentChangeDate) appendix += "⬆ עליית שכ\"ד מ-" + fmtDate(ur2.rentChangeDate) + "\n";
           appendix += "UNIT_END\n";
         }
 

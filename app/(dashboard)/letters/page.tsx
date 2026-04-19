@@ -74,12 +74,19 @@ export default function LettersPage() {
     var appendixRaw = cj.appendix || "";
     var tenant = l.contracts?.tenants?.name || cj.tenant || "";
 
-    // Build header with logo or company name
-    var headerHtml = logoUrl
-      ? '<div class="header"><img src="' + logoUrl + '" class="logo" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'block\'"><div class="company-name" style="display:none">' + companyName + '</div></div>'
-      : '<div class="header"><div class="company-name">' + companyName + '</div></div>';
-    if (companyAddress || companyPhone) {
-      headerHtml += '<div class="company-details">' + [companyAddress, companyPhone ? 'טל: ' + companyPhone : ''].filter(Boolean).join(' | ') + '</div>';
+    // Build header: logo (or company name) BIG, then address small below
+    var headerHtml = '<div class="header">';
+    if (logoUrl) {
+      headerHtml += '<img src="' + logoUrl + '" class="logo" onerror="this.parentElement.innerHTML=\'<div class=company-name>' + companyName + '</div>\'">';
+    } else {
+      headerHtml += '<div class="company-name">' + companyName + '</div>';
+    }
+    headerHtml += '</div>';
+    var detailParts = [];
+    if (companyAddress) detailParts.push(companyAddress);
+    if (companyPhone) detailParts.push('טל: ' + companyPhone);
+    if (detailParts.length > 0) {
+      headerHtml += '<div class="company-details">' + detailParts.join(' | ') + '</div>';
     }
 
     // Parse body: convert checks table to HTML
@@ -108,7 +115,12 @@ export default function LettersPage() {
         continue;
       }
       if (inTable && !/^\d+\t/.test(line)) { htmlParts.push("</tbody></table>"); inTable = false; }
-      htmlParts.push('<p>' + line + '</p>');
+      // Signature lines → align left
+      if (line.includes("בכבוד רב") || line.includes("בברכה") || line === companyName.replace(/&amp;/g,"&").replace(/&lt;/g,"<").replace(/&gt;/g,">")) {
+        htmlParts.push('<p class="signature-line">' + line + '</p>');
+      } else {
+        htmlParts.push('<p>' + line + '</p>');
+      }
     }
     if (inTable) htmlParts.push("</tbody></table>");
 
@@ -161,7 +173,7 @@ export default function LettersPage() {
       '.unit-header{background:#eff6ff;border-right:4px solid #3b82f6;padding:8px 12px;font-weight:bold;font-size:13px;color:#1e3a5f}' +
       '.unit-details{padding:8px 15px;font-size:11px;line-height:1.8}' +
       '.detail-row{color:#334155}' +
-      '.signature{margin-top:30px;text-align:left}' +
+      '.signature-line{text-align:left;margin:2px 0}' +
       '.footer-bar{margin-top:30px;border-top:1px solid #cbd5e1;padding-top:6px;text-align:center;font-size:9px;color:#94a3b8}' +
       '@media print{.checks th{background:#1e3a5f !important;color:white !important;-webkit-print-color-adjust:exact}.unit-header{background:#eff6ff !important;-webkit-print-color-adjust:exact}.checks tr:nth-child(even){background:#f8fafc !important;-webkit-print-color-adjust:exact}.checks tfoot td{background:#f0fdf4 !important;-webkit-print-color-adjust:exact}}' +
       '</style></head><body><div class="page">' +
