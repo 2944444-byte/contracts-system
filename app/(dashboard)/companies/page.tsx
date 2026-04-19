@@ -165,9 +165,29 @@ export default function CompaniesPage() {
                   </div>
                 </div>
                 <div className="col-span-2">
-                  <label className="mb-1 block text-xs font-semibold text-slate-700">🖼️ לוגו חברה (URL)</label>
-                  <input value={fLogoUrl} onChange={function(e){setFLogoUrl(e.target.value);}} className={ic} placeholder="https://..." dir="ltr"/>
-                  {fLogoUrl && <img src={fLogoUrl} alt="logo" className="h-12 mt-1 object-contain" onError={function(e){(e.target as any).style.display='none';}}/>}
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">🖼️ לוגו חברה</label>
+                  <div className="flex items-center gap-3">
+                    <label className="cursor-pointer rounded-lg border border-blue-300 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100">
+                      📁 בחר קובץ
+                      <input type="file" accept="image/*" className="hidden" onChange={async function(e) {
+                        var file = e.target.files?.[0];
+                        if (!file) return;
+                        var ext = file.name.split(".").pop() || "png";
+                        var path = "company-" + (editingId || "new") + "-" + Date.now() + "." + ext;
+                        var { error } = await supabase.storage.from("logos").upload(path, file, { upsert: true });
+                        if (error) { alert("שגיאה בהעלאה: " + error.message); return; }
+                        var { data: urlData } = supabase.storage.from("logos").getPublicUrl(path);
+                        setFLogoUrl(urlData.publicUrl);
+                      }} />
+                    </label>
+                    {fLogoUrl && (
+                      <div className="flex items-center gap-2">
+                        <img src={fLogoUrl} alt="logo" className="h-12 object-contain rounded border" />
+                        <button type="button" onClick={function(){setFLogoUrl("");}} className="text-xs text-red-500 hover:text-red-700">🗑</button>
+                      </div>
+                    )}
+                    {!fLogoUrl && <span className="text-xs text-slate-400">אין לוגו — שם החברה יוצג במכתבים</span>}
+                  </div>
                 </div>
               </div>
               <div className="flex gap-3 pt-2">
