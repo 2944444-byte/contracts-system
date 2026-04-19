@@ -98,7 +98,7 @@ export default function LettersPage() {
                 const ti=typeInfo(l.letter_type);
                 return (
                   <tr key={l.id} className="border-t border-slate-100 hover:bg-slate-50">
-                    <td className="px-4 py-3"><div className="font-semibold text-slate-800">{l.subject}</div>{l.body&&<div className="text-xs text-slate-400 truncate max-w-xs">{l.body.substring(0,50)}...</div>}</td>
+                    <td className="px-4 py-3"><div className="font-semibold text-slate-800">{l.title || l.subject || "—"}</div></td>
                     <td className="px-4 py-3"><div className="font-medium text-slate-700">{l.contracts?.tenants?.name}</div><div className="text-xs text-slate-400">{l.contracts?.properties?.name}</div></td>
                     <td className="px-4 py-3"><span className="text-base">{ti.icon}</span><span className="text-xs text-slate-500 mr-1">{ti.l}</span></td>
                     <td className="px-4 py-3 text-xs text-slate-500">{fmtDate(l.created_at)}</td>
@@ -157,7 +157,7 @@ export default function LettersPage() {
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={function(){setPreview(null);}}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={function(e){e.stopPropagation();}} dir="rtl">
             <div className="sticky top-0 bg-white border-b px-6 py-4 flex items-center justify-between">
-              <h2 className="font-bold text-slate-800">{preview.subject}</h2>
+              <h2 className="font-bold text-slate-800">{preview.title || preview.subject || "מכתב"}</h2>
               <div className="flex gap-2">
                 <button onClick={function(){handlePrint(preview);}} className="rounded-lg bg-blue-700 px-4 py-2 text-sm font-bold text-white">🖨 הדפס</button>
                 <button onClick={function(){setPreview(null);}} className="text-2xl text-slate-400">×</button>
@@ -165,7 +165,7 @@ export default function LettersPage() {
             </div>
             <div className="p-6">
               <div className="text-xs text-slate-400 mb-4">{fmtDate(preview.created_at)} | {preview.contracts?.tenants?.name}</div>
-              <div className="text-sm text-slate-800 leading-relaxed whitespace-pre-wrap bg-slate-50 rounded-xl p-4 border">{preview.body??"אין תוכן"}</div>
+              <div className="text-sm text-slate-800 leading-relaxed whitespace-pre-wrap bg-slate-50 rounded-xl p-4 border">{(typeof preview.content_json === "string" ? JSON.parse(preview.content_json)?.body : preview.content_json?.body) ?? preview.body ?? "אין תוכן"}</div>
             </div>
           </div>
         </div>

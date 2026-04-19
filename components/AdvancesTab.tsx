@@ -659,27 +659,60 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
         if (!byContract[r.contractId]) byContract[r.contractId] = [];
         byContract[r.contractId].push(r);
       }
+      // Load property details for the letter header
+      var propName = properties.find(function(p: any) { return p.id === propId; })?.name || "";
       var count = 0;
       for (var [cid, unitRows] of Object.entries(byContract)) {
-        var body = "שוכר/ת נכבד/ה,\n\nלהלן דרישת מקדמות שכ\"ד ודמי ניהול לשנת " + year + ":\n";
-        body += "תאריך חישוב מדד: " + fmtDate(cpiCalcDate) + "\n\n";
+        var firstRow = unitRows[0];
+        var tenantName = firstRow.tenantName;
+        var today = new Date().toLocaleDateString("he-IL");
 
+        // Build checks table
+        var checksTable = "";
+        var checkNum = 1;
         var grandTotal = 0;
         for (var ur of unitRows) {
-          body += "📐 " + ur.spaceName + " (" + ur.spaceArea + " מ\"ר)\n";
-          body += "   שכ\"ד בסיס: " + fmtMoney(ur.baseRentMonthly) + " | צמוד: " + fmtMoney(ur.indexedRentMonthly) + " | ד.נ.: " + fmtMoney(ur.mgmtAdvanceMonthly) + "\n";
-          body += "   מדד בסיס: " + ur.cpiBaseValue + " → מדד לחישוב: " + (ur.cpiCurrentValue || "—") + "\n\n";
           for (var ch of ur.checks) {
-            body += "   " + ch.label + " (" + fmtDate(ch.checkDate) + "): " + fmtMoney(ch.totalWithVat) + " כולל מע\"מ\n";
+            checksTable += checkNum + "\t" + fmtDate(ch.checkDate) + "\t" + fmtMoney(ch.totalWithVat) + "\n";
             grandTotal += ch.totalWithVat;
+            checkNum++;
           }
-          body += "\n";
         }
-        body += "סה\"כ שנתי: " + fmtMoney(grandTotal) + "\n\nבברכה,\nהנהלת הנכס";
 
-        var firstRow = unitRows[0];
+        // Build appendix: per-unit calculation details
+        var appendix = "נספח א' — פירוט חישוב מקדמות\n";
+        appendix += "═══════════════════════════════\n\n";
+        for (var ur2 of unitRows) {
+          appendix += "📐 " + ur2.spaceName + " | " + ur2.spaceArea + ' מ"ר\n';
+          appendix += "   שכ\"ד בסיס: " + fmtMoney(ur2.baseRentMonthly) + "/חודש";
+          if (ur2.spaceArea > 0) appendix += " (" + (ur2.baseRentMonthly / ur2.spaceArea).toFixed(2) + '₪/מ"ר)';
+          appendix += "\n";
+          appendix += "   שכ\"ד צמוד: " + fmtMoney(ur2.indexedRentMonthly) + "/חודש";
+          if (ur2.spaceArea > 0) appendix += " (" + (ur2.indexedRentMonthly / ur2.spaceArea).toFixed(2) + '₪/מ"ר)';
+          appendix += "\n";
+          appendix += "   מקדמת ד.נ.: " + fmtMoney(ur2.mgmtAdvanceMonthly) + "/חודש\n";
+          if (ur2.parkingMonthly > 0) appendix += "   🅿️ חניה: " + fmtMoney(ur2.parkingMonthly) + "/חודש\n";
+          appendix += "   מדד בסיס: " + (ur2.cpiBaseValue || "—") + " | מדד לחישוב: " + (ur2.cpiCurrentValue || "—") + " | יחס: " + (ur2.cpiRatio || 1).toFixed(6) + "\n";
+          if (ur2.rentChangeDate) appendix += "   ⬆ עליית שכ\"ד מ-" + fmtDate(ur2.rentChangeDate) + "\n";
+          appendix += "\n";
+        }
+
+        // Full letter body matching the Word template format
+        var body = "לכבוד\n" + tenantName + "\n\nשלום רב,\n\n";
+        body += "הנדון: המחאות עבור שנת שכירות " + year + "\n\n";
+        body += "בהתאם להסכם השכירות ביננו נבקשכם להעביר אלינו:\n\n";
+        body += (checkNum - 1) + " המחאות עבור שנת שכירות " + year + ", כמפורט להלן:\n\n";
+        body += "המחאה\tלתאריך\tבסכום בש\"ח\n";
+        body += "─────\t──────\t─────────\n";
+        body += checksTable;
+        body += "\nסה\"כ: " + fmtMoney(grandTotal) + "\n\n";
+        body += "תחשיב סכום כל המחאה מפורט בנספח א'.\n\n";
+        body += "בכבוד רב ובברכה,\n\n\n";
+        body += "הנהלת " + propName + "\n\n";
+        body += "═══════════════════════════════\n\n";
+        body += appendix;
+
         var propertyId = "";
-        // Get property_id from the contract
         var { data: cData } = await supabase.from("contracts").select("property_id").eq("id", cid).single();
         if (cData) propertyId = cData.property_id;
         await supabase.from("letters").insert({
