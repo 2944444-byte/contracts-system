@@ -1138,8 +1138,8 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
 
             <div className="flex gap-3">
               <button onClick={createCharges} disabled={creatingCharges}
-                className="rounded-lg bg-blue-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-blue-800 disabled:opacity-50">
-                {creatingCharges ? "יוצר..." : "💾 שמור מקדמות"}
+                className={"rounded-lg px-5 py-2.5 text-sm font-bold disabled:opacity-50 " + (savedMode ? "border-2 border-green-500 bg-green-50 text-green-700 hover:bg-green-100" : "bg-blue-700 text-white hover:bg-blue-800")}>
+                {creatingCharges ? "שומר..." : savedMode ? "✅ נשמר — לחץ לשמור מחדש" : "💾 שמור מקדמות"}
               </button>
               <button onClick={createLetters} disabled={creatingLetters}
                 className="rounded-lg border border-blue-200 bg-blue-50 px-5 py-2.5 text-sm font-bold text-blue-700 hover:bg-blue-100 disabled:opacity-50">
