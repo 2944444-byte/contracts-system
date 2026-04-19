@@ -73,7 +73,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
 
   // Saved advances state
   const [savedMode, setSavedMode] = useState(false); // true = showing saved data
-  const [savedInfo, setSavedInfo] = useState<{ count: number; savedAt: string; otherDates: string[] } | null>(null);
+  const [savedInfo, setSavedInfo] = useState<{ count: number; savedAt: string; cpiCalcDate: string; otherDates: string[] } | null>(null);
   const [checkingSaved, setCheckingSaved] = useState(false);
 
   // Load available contracts when property changes
@@ -93,7 +93,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
     setCheckingSaved(true);
     try {
       var query = supabase.from("advance_payments")
-        .select("id, contract_id, space_id, tenant_name, space_name, period, check_date, base_rent, indexed_rent, management_advance, total_before_vat, vat_amount, total_with_vat, cpi_base_value, cpi_at_payment, status, created_at")
+        .select("id, contract_id, space_id, tenant_name, space_name, period, check_date, base_rent, indexed_rent, management_advance, total_before_vat, vat_amount, total_with_vat, cpi_base_value, cpi_at_payment, cpi_calc_date, status, created_at")
         .eq("property_id", pid).eq("year", yr)
         .order("tenant_name").order("space_name").order("check_date");
       if (cFilter !== "all") query = query.eq("contract_id", cFilter);
@@ -143,9 +143,11 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
         var { data: otherSaved } = await supabase.from("advance_payments")
           .select("created_at").eq("property_id", pid).eq("year", yr)
           .not("created_at", "eq", latestCreated).limit(1);
+        var calcDate = saved[0]?.cpi_calc_date || "";
         setSavedInfo({
           count: saved.length,
           savedAt: latestCreated,
+          cpiCalcDate: calcDate,
           otherDates: (otherSaved || []).length > 0 ? ["קיימות מקדמות נוספות מתאריך אחר"] : [],
         });
       } else {
@@ -718,6 +720,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
             check_date: p.checkDate,
             cpi_base_value: r.cpiBaseValue,
             cpi_at_payment: r.cpiCurrentValue,
+            cpi_calc_date: cpiCalcDate,
             status: "pending",
           }, { onConflict: "contract_id,space_id,year,period" });
           count++;
@@ -866,7 +869,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
               <span className="text-green-600 text-xl">✅</span>
               <div>
                 <div className="font-bold text-green-800 text-sm">נמצאו מקדמות שמורות לשנת {year}</div>
-                <div className="text-xs text-green-600">{savedInfo.count} שייקים | נשמר ב-{fmtDate(savedInfo.savedAt)}</div>
+                <div className="text-xs text-green-600">{savedInfo.count} שייקים | נשמר ב-{fmtDate(savedInfo.savedAt)} | תאריך ערך מדד: {savedInfo.cpiCalcDate ? fmtDate(savedInfo.cpiCalcDate) : "—"}</div>
                 {savedInfo.otherDates.length > 0 && (
                   <div className="text-xs text-amber-600 mt-0.5">⚠️ {savedInfo.otherDates[0]}</div>
                 )}
