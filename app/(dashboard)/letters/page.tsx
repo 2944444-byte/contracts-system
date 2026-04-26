@@ -74,13 +74,12 @@ export default function LettersPage() {
     var appendixRaw = cj.appendix || "";
     var tenant = l.contracts?.tenants?.name || cj.tenant || "";
 
-    // Build header: logo (or company name) BIG, then address small below
+    // Build header: logo + company name (both shown), then address small below
     var headerHtml = '<div class="header">';
     if (logoUrl) {
-      headerHtml += '<img src="' + logoUrl + '" class="logo" onerror="this.parentElement.innerHTML=\'<div class=company-name>' + companyName + '</div>\'">';
-    } else {
-      headerHtml += '<div class="company-name">' + companyName + '</div>';
+      headerHtml += '<img src="' + logoUrl + '" class="logo" id="company-logo">';
     }
+    headerHtml += '<div class="company-name">' + companyName + '</div>';
     headerHtml += '</div>';
     var detailParts = [];
     if (companyAddress) detailParts.push(companyAddress);
@@ -150,24 +149,24 @@ export default function LettersPage() {
     const w=window.open("","_blank","width=800,height=1000");
     if (!w) return;
     w.document.write('<!DOCTYPE html><html dir="rtl"><head><meta charset="UTF-8"><style>' +
-      '@page{margin:15mm 20mm}' +
-      'body{font-family:"David","Arial";padding:0;direction:rtl;font-size:13px;line-height:1.5;color:#1e293b;margin:0}' +
-      '.page{padding:30px 50px}' +
-      '.header{text-align:center;margin-bottom:5px}' +
-      '.logo{max-height:60px;margin-bottom:5px}' +
-      '.company-name{font-size:22px;font-weight:bold;color:#1e3a5f}' +
-      '.company-details{text-align:center;font-size:10px;color:#64748b;margin-bottom:15px;border-bottom:2px solid #1e3a5f;padding-bottom:8px}' +
-      '.date{text-align:left;font-size:11px;color:#64748b;margin-bottom:15px}' +
-      'p{margin:3px 0;font-size:13px}' +
-      '.subject{text-align:center;font-weight:bold;font-size:15px;margin:15px 0;text-decoration:underline}' +
-      '.checks{width:100%;border-collapse:collapse;margin:12px 0;font-size:12px}' +
-      '.checks th{background:#1e3a5f;color:white;padding:7px 12px;text-align:right}' +
-      '.checks td{padding:5px 12px;border-bottom:1px solid #e2e8f0}' +
+      '@page{margin:12mm 18mm}' +
+      'body{font-family:"David","Arial";padding:0;direction:rtl;font-size:11.5px;line-height:1.4;color:#1e293b;margin:0}' +
+      '.page{padding:0 30px}' +
+      '.header{text-align:center;margin-bottom:3px;display:flex;align-items:center;justify-content:center;gap:12px}' +
+      '.logo{max-height:55px;max-width:120px}' +
+      '.company-name{font-size:20px;font-weight:bold;color:#1e3a5f}' +
+      '.company-details{text-align:center;font-size:10px;color:#64748b;margin-bottom:10px;border-bottom:2px solid #1e3a5f;padding-bottom:6px}' +
+      '.date{text-align:left;font-size:10px;color:#64748b;margin-bottom:8px}' +
+      'p{margin:2px 0;font-size:12px}' +
+      '.subject{text-align:center;font-weight:bold;font-size:14px;margin:10px 0;text-decoration:underline}' +
+      '.checks{width:100%;border-collapse:collapse;margin:8px 0;font-size:11px}' +
+      '.checks th{background:#1e3a5f;color:white;padding:5px 10px;text-align:right}' +
+      '.checks td{padding:3px 10px;border-bottom:1px solid #e2e8f0}' +
       '.checks tr:nth-child(even){background:#f8fafc}' +
       '.checks .amount{font-weight:bold;color:#1e3a5f;direction:ltr;text-align:left}' +
-      '.checks .total{font-size:13px;color:#059669;border-top:2px solid #059669}' +
-      '.checks tfoot td{background:#f0fdf4;padding:8px 12px}' +
-      '.appendix{page-break-before:always;padding-top:20px}' +
+      '.checks .total{font-size:12px;color:#059669;border-top:2px solid #059669}' +
+      '.checks tfoot td{background:#f0fdf4;padding:5px 10px}' +
+      '.appendix{page-break-before:always;padding-top:15px}' +
       '.appendix h3{color:#1e3a5f;font-size:16px;border-bottom:2px solid #1e3a5f;padding-bottom:5px}' +
       '.unit-card{border:1px solid #e2e8f0;border-radius:8px;margin:10px 0;overflow:hidden}' +
       '.unit-header{background:#eff6ff;border-right:4px solid #3b82f6;padding:8px 12px;font-weight:bold;font-size:13px;color:#1e3a5f}' +
@@ -183,7 +182,11 @@ export default function LettersPage() {
       '</div>' +
       appendixHtml +
       '<div class="footer-bar">' + (companyAddress ? companyAddress + ' | ' : '') + (companyPhone ? 'טל: ' + companyPhone : '') + '</div>' +
-      '<script>window.print();<\/script>' +
+      '<script>' +
+      'function doPrint(){window.print();}' +
+      'var img = document.getElementById("company-logo");' +
+      'if (img) { if (img.complete) doPrint(); else { img.onload = doPrint; img.onerror = doPrint; setTimeout(doPrint, 3000); } } else { setTimeout(doPrint, 200); }' +
+      '<\/script>' +
       '</body></html>');
     w.document.close();
   }
