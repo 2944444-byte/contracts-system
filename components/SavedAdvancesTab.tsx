@@ -490,22 +490,23 @@ export default function SavedAdvancesTab({ properties }: Props) {
                   ⛔ לא הגיע
                 </button>
               </div>
-              {(editModal.status === "received") && (
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="mb-1 block text-xs text-slate-600">תאריך בפועל</label>
-                    <input type="date" value={editModal.date} onChange={function (e) { setEditModal({ ...editModal, date: e.target.value }); }} className={ic} />
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-xs text-slate-600">סכום בפועל (₪)</label>
-                    <input type="number" step="0.01" value={editModal.amount} onChange={function (e) { setEditModal({ ...editModal, amount: Number(e.target.value) }); }} className={ic} />
-                  </div>
-                  <div className="col-span-2">
-                    <label className="mb-1 block text-xs text-slate-600">מס׳ שייק</label>
-                    <input type="text" value={editModal.checkNum} onChange={function (e) { setEditModal({ ...editModal, checkNum: e.target.value }); }} className={ic} placeholder="0001234" />
-                  </div>
+              {/* Always show check details — for received OR for editing existing */}
+              <div className="grid grid-cols-2 gap-3 mt-2">
+                <div>
+                  <label className="mb-1 block text-xs text-slate-600">תאריך השייק בפועל</label>
+                  <input type="date" value={editModal.date} onChange={function (e) { setEditModal({ ...editModal, date: e.target.value }); }} className={ic} />
+                  <div className="text-[10px] text-slate-400 mt-0.5">אם שונה מהתאריך הנדרש</div>
                 </div>
-              )}
+                <div>
+                  <label className="mb-1 block text-xs text-slate-600">סכום בפועל (₪)</label>
+                  <input type="number" step="0.01" value={editModal.amount} onChange={function (e) { setEditModal({ ...editModal, amount: Number(e.target.value) }); }} className={ic} />
+                  <div className="text-[10px] text-slate-400 mt-0.5">אם שונה מהסכום הנדרש</div>
+                </div>
+                <div className="col-span-2">
+                  <label className="mb-1 block text-xs text-slate-600">מס׳ שייק</label>
+                  <input type="text" value={editModal.checkNum} onChange={function (e) { setEditModal({ ...editModal, checkNum: e.target.value }); }} className={ic} placeholder="0001234" />
+                </div>
+              </div>
             </div>
 
             {/* Stage 2: Clearing (only if received) */}
