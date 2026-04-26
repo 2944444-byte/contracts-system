@@ -40,8 +40,9 @@ export default function SavedAdvancesTab({ properties }: Props) {
     if (propId) loadAdvances();
   }, [propId, year]);
 
-  async function loadAdvances() {
-    setLoading(true);
+  async function loadAdvances(preserveScroll: boolean = false) {
+    var scrollY = preserveScroll ? window.scrollY : 0;
+    if (!preserveScroll) setLoading(true);
     var { data } = await supabase.from("advance_payments")
       .select("*")
       .eq("property_id", propId)
@@ -50,7 +51,11 @@ export default function SavedAdvancesTab({ properties }: Props) {
       .order("space_name")
       .order("check_date");
     setAdvances(data ?? []);
-    setLoading(false);
+    if (!preserveScroll) setLoading(false);
+    if (preserveScroll) {
+      // Restore scroll position after React re-renders
+      setTimeout(function () { window.scrollTo({ top: scrollY, behavior: "instant" as any }); }, 0);
+    }
   }
 
   async function toggleReceivedGroup(ids: string[], currentStatus: string) {
@@ -59,7 +64,18 @@ export default function SavedAdvancesTab({ properties }: Props) {
     if (newStatus === "received") update.received_date = new Date().toISOString().split("T")[0];
     else update.received_date = null;
     await supabase.from("advance_payments").update(update).in("id", ids);
-    loadAdvances();
+    loadAdvances(true);
+  }
+
+  async function markAllForContract(contractId: string, markReceived: boolean) {
+    var msg = markReceived ? "לסמן את כל השייקים של חוזה זה כהתקבלו?" : "לבטל סימון התקבל מכל השייקים של חוזה זה?";
+    if (!confirm(msg)) return;
+    var update: any = { status: markReceived ? "received" : "pending" };
+    if (markReceived) update.received_date = new Date().toISOString().split("T")[0];
+    else update.received_date = null;
+    await supabase.from("advance_payments").update(update)
+      .eq("contract_id", contractId).eq("year", year);
+    loadAdvances(true);
   }
 
   async function saveCheckGroupDetails(ids: string[]) {
@@ -68,13 +84,13 @@ export default function SavedAdvancesTab({ properties }: Props) {
       notes: editNotes || null,
     }).in("id", ids);
     setEditingId(null);
-    loadAdvances();
+    loadAdvances(true);
   }
 
   async function deleteAdvanceGroup(ids: string[]) {
     if (!confirm("למחוק את כל השייקים בקבוצה זו?")) return;
     await supabase.from("advance_payments").delete().in("id", ids);
-    loadAdvances();
+    loadAdvances(true);
   }
 
   // Load contracts for manual add
@@ -275,10 +291,23 @@ export default function SavedAdvancesTab({ properties }: Props) {
                     <span className="text-xs text-slate-500 mr-2">{g.spaces.join(", ")}</span>
                     <span className="text-xs text-slate-400 mr-2">| {g.checks.length} שייקים | {fmtMoney(contractTotal)}</span>
                   </div>
-                  <div className="text-xs">
-                    <span className="text-green-600 font-semibold">{contractReceived} התקבלו</span>
-                    <span className="text-slate-400 mx-1">|</span>
-                    <span className="text-amber-600 font-semibold">{g.checks.length - contractReceived} ממתינים</span>
+                  <div className="flex items-center gap-3">
+                    <div className="text-xs">
+                      <span className="text-green-600 font-semibold">{contractReceived} התקבלו</span>
+                      <span className="text-slate-400 mx-1">|</span>
+                      <span className="text-amber-600 font-semibold">{g.checks.length - contractReceived} ממתינים</span>
+                    </div>
+                    {contractReceived === g.checks.length ? (
+                      <button onClick={function () { markAllForContract(g.contractId, false); }}
+                        className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-1 text-xs font-bold text-amber-700 hover:bg-amber-100">
+                        ☐ בטל סימון לכל השייקים
+                      </button>
+                    ) : (
+                      <button onClick={function () { markAllForContract(g.contractId, true); }}
+                        className="rounded-lg border border-green-300 bg-green-50 px-3 py-1 text-xs font-bold text-green-700 hover:bg-green-100">
+                        ✅ סמן את כל השייקים כהתקבלו
+                      </button>
+                    )}
                   </div>
                 </div>
                 <table className="w-full text-sm text-right">
