@@ -701,6 +701,9 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
   }
 
   async function createCharges() {
+    if (savedMode) {
+      if (!confirm("המקדמות הנוכחיות נטענו מנתונים שמורים. שמירה תדרוס את הנתונים הקיימים. האם להמשיך?\n\nמומלץ: לחץ 'חשב מחדש' לפני שמירה כדי לחשב CPI מהלמ\"ס.")) return;
+    }
     setCreatingCharges(true);
     try {
       var count = 0;
