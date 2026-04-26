@@ -20,6 +20,10 @@ export default function SavedAdvancesTab({ properties }: Props) {
   const [editCheckNum, setEditCheckNum] = useState("");
   const [editNotes, setEditNotes] = useState("");
 
+  // Detail edit modal
+  const [editModal, setEditModal] = useState<{ ids: string[]; date: string; amount: number; checkNum: string; status: string; tenantName: string; period: string; interestPct: string } | null>(null);
+  const [editSaving, setEditSaving] = useState(false);
+
   // Manual add state
   const [showAddModal, setShowAddModal] = useState(false);
   const [addContracts, setAddContracts] = useState<any[]>([]);
@@ -93,6 +97,29 @@ export default function SavedAdvancesTab({ properties }: Props) {
     loadAdvances(true);
   }
 
+  async function saveCheckEdit() {
+    if (!editModal) return;
+    setEditSaving(true);
+    try {
+      var update: any = {
+        check_number: editModal.checkNum || null,
+        actual_check_date: editModal.date || null,
+        actual_amount: Number(editModal.amount) || null,
+        status: editModal.status,
+        interest_pct: Number(editModal.interestPct) || null,
+      };
+      if (editModal.status === "received") update.received_date = new Date().toISOString().split("T")[0];
+      // Calculate interest if status=bounced and we have interest_pct
+      if (editModal.status === "bounced" && Number(editModal.interestPct) > 0) {
+        // Will be calculated at year-end CPI diff time
+      }
+      await supabase.from("advance_payments").update(update).in("id", editModal.ids);
+      setEditModal(null);
+      loadAdvances(true);
+    } catch (e: any) { alert("שגיאה: " + (e?.message || e)); }
+    finally { setEditSaving(false); }
+  }
+
   // Load contracts for manual add
   async function openAddModal() {
     var { data } = await supabase.from("contracts")
@@ -154,7 +181,7 @@ export default function SavedAdvancesTab({ properties }: Props) {
   });
 
   // Group by contract → consolidate by check_date (one check per contract per date)
-  type CheckGroup = { date: string; period: string; ids: string[]; totalRent: number; totalMgmt: number; totalParking: number; totalBeforeVat: number; totalVat: number; total: number; status: string; checkNumber: string; spaceNames: string[] };
+  type CheckGroup = { date: string; period: string; ids: string[]; totalRent: number; totalMgmt: number; totalParking: number; totalBeforeVat: number; totalVat: number; total: number; status: string; checkNumber: string; spaceNames: string[]; actualDate: string; actualAmount: number; interestPct: number };
   type ContractGroup = { contractId: string; tenantName: string; spaces: string[]; checks: CheckGroup[] };
   var byContract: Record<string, ContractGroup> = {};
   filtered.forEach(function (a) {
@@ -169,6 +196,9 @@ export default function SavedAdvancesTab({ properties }: Props) {
         totalBeforeVat: 0, totalVat: 0, total: 0,
         status: a.status, checkNumber: a.check_number || "",
         spaceNames: [],
+        actualDate: a.actual_check_date || "",
+        actualAmount: Number(a.actual_amount) || 0,
+        interestPct: Number(a.interest_pct) || 0,
       };
       byContract[cid].checks.push(existing);
     }
@@ -198,15 +228,18 @@ export default function SavedAdvancesTab({ properties }: Props) {
   var tenantNames = Array.from(new Set(advances.map(function (a) { return a.tenant_name || "—"; }))).sort();
 
   // KPIs based on consolidated checks
-  var totalChecks = 0, receivedChecks = 0, totalAmount = 0, receivedAmount = 0;
+  var totalChecks = 0, receivedChecks = 0, bouncedChecks = 0;
+  var totalAmount = 0, receivedAmount = 0, bouncedAmount = 0;
   Object.values(byContract).forEach(function (g) {
     g.checks.forEach(function (c) {
       totalChecks++;
+      var amt = c.actualAmount > 0 ? c.actualAmount : c.total;
       totalAmount += c.total;
-      if (c.status === "received") { receivedChecks++; receivedAmount += c.total; }
+      if (c.status === "received") { receivedChecks++; receivedAmount += amt; }
+      else if (c.status === "bounced") { bouncedChecks++; bouncedAmount += c.total; }
     });
   });
-  var pendingAmount = totalAmount - receivedAmount;
+  var pendingAmount = totalAmount - receivedAmount - bouncedAmount;
 
   var ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm";
 
@@ -237,12 +270,13 @@ export default function SavedAdvancesTab({ properties }: Props) {
             <option value="all">הכל</option>
             <option value="pending">ממתין</option>
             <option value="received">התקבל</option>
+            <option value="bounced">לא נפדה</option>
           </select>
         </div>
       </div>
 
       {/* KPIs */}
-      <div className="grid grid-cols-4 gap-3">
+      <div className="grid grid-cols-5 gap-3">
         <div className="rounded-xl bg-blue-50 border border-blue-200 p-3 text-center">
           <div className="text-lg font-black text-blue-800">{totalChecks}</div>
           <div className="text-xs text-blue-600">סה&quot;כ שייקים</div>
@@ -257,7 +291,11 @@ export default function SavedAdvancesTab({ properties }: Props) {
         </div>
         <div className="rounded-xl bg-amber-50 border border-amber-200 p-3 text-center">
           <div className="text-lg font-black text-amber-800">{fmtMoney(pendingAmount)}</div>
-          <div className="text-xs text-amber-600">ממתינים ({totalChecks - receivedChecks})</div>
+          <div className="text-xs text-amber-600">ממתינים ({totalChecks - receivedChecks - bouncedChecks})</div>
+        </div>
+        <div className="rounded-xl bg-red-50 border border-red-200 p-3 text-center">
+          <div className="text-lg font-black text-red-800">{fmtMoney(bouncedAmount)}</div>
+          <div className="text-xs text-red-600">לא נפדו ({bouncedChecks})</div>
         </div>
       </div>
 
@@ -310,62 +348,50 @@ export default function SavedAdvancesTab({ properties }: Props) {
                     )}
                   </div>
                 </div>
-                <table className="w-full text-sm text-right">
+                <table className="w-full text-xs text-right">
                   <thead className="bg-slate-50 text-xs text-slate-600">
                     <tr>
-                      <th className="px-3 py-2 font-semibold">תקופה</th>
-                      <th className="px-3 py-2 font-semibold">תאריך שייק</th>
-                      <th className="px-3 py-2 font-semibold">שכ&quot;ד צמוד</th>
-                      <th className="px-3 py-2 font-semibold">ד.נ.</th>
-                      <th className="px-3 py-2 font-semibold">חניה</th>
-                      <th className="px-3 py-2 font-semibold">לפני מע&quot;מ</th>
-                      <th className="px-3 py-2 font-semibold">מע&quot;מ</th>
-                      <th className="px-3 py-2 font-semibold">סכום שייק</th>
-                      <th className="px-3 py-2 font-semibold">מס׳ שייק</th>
-                      <th className="px-3 py-2 font-semibold w-24">סטטוס</th>
-                      <th className="px-3 py-2 font-semibold w-16"></th>
+                      <th className="px-2 py-2 font-semibold">תקופה</th>
+                      <th className="px-2 py-2 font-semibold">תאריך נדרש</th>
+                      <th className="px-2 py-2 font-semibold">סכום נדרש</th>
+                      <th className="px-2 py-2 font-semibold">תאריך בפועל</th>
+                      <th className="px-2 py-2 font-semibold">סכום בפועל</th>
+                      <th className="px-2 py-2 font-semibold">מס׳ שייק</th>
+                      <th className="px-2 py-2 font-semibold w-28">סטטוס</th>
+                      <th className="px-2 py-2 font-semibold w-12"></th>
                     </tr>
                   </thead>
                   <tbody>
                     {g.checks.map(function (c) {
                       var editKey = g.contractId + "|" + c.date;
-                      var isEditing = editingId === editKey;
+                      var rowClass = "border-t border-slate-100 ";
+                      if (c.status === "received") rowClass += "bg-green-50/50";
+                      else if (c.status === "bounced") rowClass += "bg-red-50/50";
+                      else rowClass += "hover:bg-slate-50";
+                      var statusLabel = c.status === "received" ? "✅ התקבל" : c.status === "bounced" ? "❌ לא נפדה" : "☐ ממתין";
+                      var statusColor = c.status === "received" ? "bg-green-100 text-green-700 border-green-300" : c.status === "bounced" ? "bg-red-100 text-red-700 border-red-300" : "bg-slate-100 text-slate-500 border-slate-200 hover:bg-green-50 hover:text-green-600";
                       return (
-                        <tr key={editKey} className={"border-t border-slate-100 " + (c.status === "received" ? "bg-green-50/50" : "hover:bg-slate-50")}>
-                          <td className="px-3 py-2 font-medium text-slate-700">{c.period}</td>
-                          <td className="px-3 py-2 text-slate-600">{fmtDate(c.date)}</td>
-                          <td className="px-3 py-2 text-green-700 font-semibold">{fmtMoney(c.totalRent)}</td>
-                          <td className="px-3 py-2 text-slate-600">{fmtMoney(c.totalMgmt)}</td>
-                          <td className="px-3 py-2 text-slate-500">{c.totalParking > 0 ? fmtMoney(c.totalParking) : "—"}</td>
-                          <td className="px-3 py-2">{fmtMoney(c.totalBeforeVat)}</td>
-                          <td className="px-3 py-2 text-slate-500">{fmtMoney(c.totalVat)}</td>
-                          <td className="px-3 py-2 font-bold text-blue-700">{fmtMoney(c.total)}</td>
-                          <td className="px-3 py-2">
-                            {isEditing ? (
-                              <input type="text" value={editCheckNum} onChange={function (e) { setEditCheckNum(e.target.value); }}
-                                className="w-20 rounded border border-slate-300 px-1 py-0.5 text-xs" placeholder="מספר" />
-                            ) : (
-                              <span className="text-xs text-slate-500">{c.checkNumber || "—"}</span>
-                            )}
+                        <tr key={editKey} className={rowClass}>
+                          <td className="px-2 py-2 font-medium text-slate-700">{c.period}</td>
+                          <td className="px-2 py-2 text-slate-600">{fmtDate(c.date)}</td>
+                          <td className="px-2 py-2 font-bold text-blue-700">{fmtMoney(c.total)}</td>
+                          <td className="px-2 py-2 text-slate-600">{c.actualDate ? fmtDate(c.actualDate) : <span className="text-slate-300">—</span>}</td>
+                          <td className="px-2 py-2 font-semibold">
+                            {c.actualAmount > 0 ? (
+                              <span className={c.actualAmount !== c.total ? "text-amber-700" : "text-slate-700"}>{fmtMoney(c.actualAmount)}</span>
+                            ) : <span className="text-slate-300">—</span>}
                           </td>
-                          <td className="px-3 py-2">
+                          <td className="px-2 py-2"><span className="text-xs text-slate-500">{c.checkNumber || "—"}</span></td>
+                          <td className="px-2 py-2">
                             <button onClick={function () { toggleReceivedGroup(c.ids, c.status); }}
-                              className={"rounded-full px-2.5 py-1 text-xs font-bold transition-all " +
-                                (c.status === "received"
-                                  ? "bg-green-100 text-green-700 border border-green-300"
-                                  : "bg-slate-100 text-slate-500 border border-slate-200 hover:bg-green-50 hover:text-green-600")}>
-                              {c.status === "received" ? "✅ התקבל" : "☐ ממתין"}
+                              className={"rounded-full px-2.5 py-1 text-xs font-bold transition-all border " + statusColor}>
+                              {statusLabel}
                             </button>
                           </td>
-                          <td className="px-3 py-2">
+                          <td className="px-2 py-2">
                             <div className="flex gap-1">
-                              {isEditing ? (
-                                <button onClick={function () { saveCheckGroupDetails(c.ids); }}
-                                  className="text-xs text-blue-600 hover:text-blue-800">💾</button>
-                              ) : (
-                                <button onClick={function () { setEditingId(editKey); setEditCheckNum(c.checkNumber || ""); setEditNotes(""); }}
-                                  className="text-xs text-slate-400 hover:text-slate-600">✏️</button>
-                              )}
+                              <button onClick={function () { setEditModal({ ids: c.ids, date: c.actualDate || c.date, amount: c.actualAmount || c.total, checkNum: c.checkNumber, status: c.status, tenantName: g.tenantName, period: c.period, interestPct: String(c.interestPct || "") }); }}
+                                className="text-xs text-slate-500 hover:text-blue-600" title="ערוך פרטי שייק">✏️</button>
                               <button onClick={function () { deleteAdvanceGroup(c.ids); }}
                                 className="text-xs text-red-400 hover:text-red-600">🗑</button>
                             </div>
@@ -382,6 +408,67 @@ export default function SavedAdvancesTab({ properties }: Props) {
       )}
 
       {/* Manual Add Modal */}
+      {/* Edit Check Modal */}
+      {editModal && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={function () { setEditModal(null); }}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-4" onClick={function (e) { e.stopPropagation(); }}>
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-bold text-slate-800">✏️ עריכת פרטי שייק</h3>
+              <button onClick={function () { setEditModal(null); }} className="text-slate-400 hover:text-slate-600 text-xl">✕</button>
+            </div>
+            <div className="text-xs text-slate-500 bg-slate-50 rounded p-2">
+              <div><strong>{editModal.tenantName}</strong> | {editModal.period}</div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">תאריך השייק בפועל</label>
+                <input type="date" value={editModal.date} onChange={function (e) { setEditModal({ ...editModal, date: e.target.value }); }} className={ic} />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">סכום בפועל (₪)</label>
+                <input type="number" step="0.01" value={editModal.amount} onChange={function (e) { setEditModal({ ...editModal, amount: Number(e.target.value) }); }} className={ic} />
+              </div>
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-slate-700">מס׳ שייק</label>
+              <input type="text" value={editModal.checkNum} onChange={function (e) { setEditModal({ ...editModal, checkNum: e.target.value }); }} className={ic} placeholder="0001234" />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-slate-700">סטטוס</label>
+              <div className="grid grid-cols-3 gap-2">
+                <button type="button" onClick={function () { setEditModal({ ...editModal, status: "pending" }); }}
+                  className={"rounded-lg border px-3 py-2 text-xs font-bold " + (editModal.status === "pending" ? "border-slate-500 bg-slate-100 text-slate-700" : "border-slate-200 text-slate-500")}>
+                  ☐ ממתין
+                </button>
+                <button type="button" onClick={function () { setEditModal({ ...editModal, status: "received" }); }}
+                  className={"rounded-lg border px-3 py-2 text-xs font-bold " + (editModal.status === "received" ? "border-green-500 bg-green-100 text-green-700" : "border-slate-200 text-slate-500")}>
+                  ✅ התקבל
+                </button>
+                <button type="button" onClick={function () { setEditModal({ ...editModal, status: "bounced" }); }}
+                  className={"rounded-lg border px-3 py-2 text-xs font-bold " + (editModal.status === "bounced" ? "border-red-500 bg-red-100 text-red-700" : "border-slate-200 text-slate-500")}>
+                  ❌ לא נפדה
+                </button>
+              </div>
+            </div>
+            {editModal.status === "bounced" && (
+              <div className="rounded-lg bg-red-50 border border-red-200 p-3 space-y-2">
+                <div className="text-xs font-bold text-red-700">⚠️ חוב פיגורים</div>
+                <div className="text-xs text-red-600">החוב יחושב במכתב הפרשי הצמדה בסוף השנה.</div>
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">ריבית שנתית על החוב (%)</label>
+                  <input type="number" step="0.1" value={editModal.interestPct} onChange={function (e) { setEditModal({ ...editModal, interestPct: e.target.value }); }} className={ic} placeholder="0 = ללא ריבית" />
+                  <div className="text-xs text-slate-400 mt-0.5">לפי הסכם השכירות. תחושב מתאריך הנדרש עד תשלום בפועל.</div>
+                </div>
+              </div>
+            )}
+            <button onClick={saveCheckEdit} disabled={editSaving}
+              className="w-full rounded-lg bg-blue-600 py-2.5 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-50">
+              {editSaving ? "שומר..." : "💾 שמור שינויים"}
+            </button>
+          </div>
+        </div>
+      )}
+
       {showAddModal && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={function () { setShowAddModal(false); }}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6 space-y-4" onClick={function (e) { e.stopPropagation(); }}>
