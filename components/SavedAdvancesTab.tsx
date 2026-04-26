@@ -53,27 +53,27 @@ export default function SavedAdvancesTab({ properties }: Props) {
     setLoading(false);
   }
 
-  async function toggleReceived(id: string, currentStatus: string) {
+  async function toggleReceivedGroup(ids: string[], currentStatus: string) {
     var newStatus = currentStatus === "received" ? "pending" : "received";
     var update: any = { status: newStatus };
     if (newStatus === "received") update.received_date = new Date().toISOString().split("T")[0];
     else update.received_date = null;
-    await supabase.from("advance_payments").update(update).eq("id", id);
+    await supabase.from("advance_payments").update(update).in("id", ids);
     loadAdvances();
   }
 
-  async function saveCheckDetails(id: string) {
+  async function saveCheckGroupDetails(ids: string[]) {
     await supabase.from("advance_payments").update({
       check_number: editCheckNum || null,
       notes: editNotes || null,
-    }).eq("id", id);
+    }).in("id", ids);
     setEditingId(null);
     loadAdvances();
   }
 
-  async function deleteAdvance(id: string) {
-    if (!confirm("למחוק מקדמה זו?")) return;
-    await supabase.from("advance_payments").delete().eq("id", id);
+  async function deleteAdvanceGroup(ids: string[]) {
+    if (!confirm("למחוק את כל השייקים בקבוצה זו?")) return;
+    await supabase.from("advance_payments").delete().in("id", ids);
     loadAdvances();
   }
 
@@ -131,26 +131,66 @@ export default function SavedAdvancesTab({ properties }: Props) {
     finally { setAddSaving(false); }
   }
 
-  // Group by tenant+space
-  var grouped: Record<string, any[]> = {};
+  // Filter advances
   var filtered = advances.filter(function (a) {
     if (filterTenant !== "all" && a.tenant_name !== filterTenant) return false;
-    if (filterStatus !== "all" && a.status !== filterStatus) return false;
     return true;
   });
+
+  // Group by contract → consolidate by check_date (one check per contract per date)
+  type CheckGroup = { date: string; period: string; ids: string[]; totalRent: number; totalMgmt: number; totalParking: number; totalBeforeVat: number; totalVat: number; total: number; status: string; checkNumber: string; spaceNames: string[] };
+  type ContractGroup = { contractId: string; tenantName: string; spaces: string[]; checks: CheckGroup[] };
+  var byContract: Record<string, ContractGroup> = {};
   filtered.forEach(function (a) {
-    var key = (a.tenant_name || "—") + " — " + (a.space_name || "—");
-    if (!grouped[key]) grouped[key] = [];
-    grouped[key].push(a);
+    var cid = a.contract_id;
+    if (!byContract[cid]) byContract[cid] = { contractId: cid, tenantName: a.tenant_name || "—", spaces: [], checks: [] };
+    if (a.space_name && byContract[cid].spaces.indexOf(a.space_name) === -1) byContract[cid].spaces.push(a.space_name);
+    var existing = byContract[cid].checks.find(function (c) { return c.date === a.check_date; });
+    if (!existing) {
+      existing = {
+        date: a.check_date, period: a.period, ids: [],
+        totalRent: 0, totalMgmt: 0, totalParking: 0,
+        totalBeforeVat: 0, totalVat: 0, total: 0,
+        status: a.status, checkNumber: a.check_number || "",
+        spaceNames: [],
+      };
+      byContract[cid].checks.push(existing);
+    }
+    existing.ids.push(a.id);
+    existing.totalRent += Number(a.indexed_rent) || 0;
+    existing.totalMgmt += Number(a.management_advance) || 0;
+    existing.totalParking += Number(a.parking_monthly) || 0;
+    existing.totalBeforeVat += Number(a.total_before_vat) || 0;
+    existing.totalVat += Number(a.vat_amount) || 0;
+    existing.total += Number(a.total_with_vat) || 0;
+    if (a.status !== "received") existing.status = a.status; // if any pending, group is pending
+    if (a.check_number && !existing.checkNumber) existing.checkNumber = a.check_number;
+    if (a.space_name) existing.spaceNames.push(a.space_name);
   });
+  // Sort checks by date
+  Object.values(byContract).forEach(function (g) {
+    g.checks.sort(function (a, b) { return (a.date || "").localeCompare(b.date || ""); });
+  });
+  // Apply status filter on consolidated checks
+  if (filterStatus !== "all") {
+    Object.keys(byContract).forEach(function (cid) {
+      byContract[cid].checks = byContract[cid].checks.filter(function (c) { return c.status === filterStatus; });
+      if (byContract[cid].checks.length === 0) delete byContract[cid];
+    });
+  }
 
   var tenantNames = Array.from(new Set(advances.map(function (a) { return a.tenant_name || "—"; }))).sort();
 
-  // KPIs
-  var totalAmount = advances.reduce(function (s, a) { return s + Number(a.total_with_vat || 0); }, 0);
-  var receivedAmount = advances.filter(function (a) { return a.status === "received"; }).reduce(function (s, a) { return s + Number(a.total_with_vat || 0); }, 0);
+  // KPIs based on consolidated checks
+  var totalChecks = 0, receivedChecks = 0, totalAmount = 0, receivedAmount = 0;
+  Object.values(byContract).forEach(function (g) {
+    g.checks.forEach(function (c) {
+      totalChecks++;
+      totalAmount += c.total;
+      if (c.status === "received") { receivedChecks++; receivedAmount += c.total; }
+    });
+  });
   var pendingAmount = totalAmount - receivedAmount;
-  var receivedCount = advances.filter(function (a) { return a.status === "received"; }).length;
 
   var ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm";
 
@@ -188,7 +228,7 @@ export default function SavedAdvancesTab({ properties }: Props) {
       {/* KPIs */}
       <div className="grid grid-cols-4 gap-3">
         <div className="rounded-xl bg-blue-50 border border-blue-200 p-3 text-center">
-          <div className="text-lg font-black text-blue-800">{advances.length}</div>
+          <div className="text-lg font-black text-blue-800">{totalChecks}</div>
           <div className="text-xs text-blue-600">סה&quot;כ שייקים</div>
         </div>
         <div className="rounded-xl bg-green-50 border border-green-200 p-3 text-center">
@@ -197,11 +237,11 @@ export default function SavedAdvancesTab({ properties }: Props) {
         </div>
         <div className="rounded-xl bg-teal-50 border border-teal-200 p-3 text-center">
           <div className="text-lg font-black text-teal-800">{fmtMoney(receivedAmount)}</div>
-          <div className="text-xs text-teal-600">התקבלו ({receivedCount})</div>
+          <div className="text-xs text-teal-600">התקבלו ({receivedChecks})</div>
         </div>
         <div className="rounded-xl bg-amber-50 border border-amber-200 p-3 text-center">
           <div className="text-lg font-black text-amber-800">{fmtMoney(pendingAmount)}</div>
-          <div className="text-xs text-amber-600">ממתינים ({advances.length - receivedCount})</div>
+          <div className="text-xs text-amber-600">ממתינים ({totalChecks - receivedChecks})</div>
         </div>
       </div>
 
@@ -223,20 +263,22 @@ export default function SavedAdvancesTab({ properties }: Props) {
         </div>
       ) : (
         <div className="space-y-4">
-          {Object.entries(grouped).map(function ([groupKey, items]) {
-            var groupTotal = items.reduce(function (s, a) { return s + Number(a.total_with_vat || 0); }, 0);
-            var groupReceived = items.filter(function (a) { return a.status === "received"; }).length;
+          {Object.values(byContract).map(function (g) {
+            var contractTotal = g.checks.reduce(function (s, c) { return s + c.total; }, 0);
+            var contractReceived = g.checks.filter(function (c) { return c.status === "received"; }).length;
+            var groupKey = g.tenantName + " — " + g.spaces.join(", ");
             return (
-              <div key={groupKey} className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+              <div key={g.contractId} className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
                 <div className="px-4 py-2.5 bg-slate-50 border-b flex items-center justify-between">
                   <div>
-                    <span className="font-bold text-sm text-slate-800">{groupKey}</span>
-                    <span className="text-xs text-slate-400 mr-2">{items.length} שייקים | {fmtMoney(groupTotal)}</span>
+                    <span className="font-bold text-sm text-slate-800">{g.tenantName}</span>
+                    <span className="text-xs text-slate-500 mr-2">{g.spaces.join(", ")}</span>
+                    <span className="text-xs text-slate-400 mr-2">| {g.checks.length} שייקים | {fmtMoney(contractTotal)}</span>
                   </div>
                   <div className="text-xs">
-                    <span className="text-green-600 font-semibold">{groupReceived} התקבלו</span>
+                    <span className="text-green-600 font-semibold">{contractReceived} התקבלו</span>
                     <span className="text-slate-400 mx-1">|</span>
-                    <span className="text-amber-600 font-semibold">{items.length - groupReceived} ממתינים</span>
+                    <span className="text-amber-600 font-semibold">{g.checks.length - contractReceived} ממתינים</span>
                   </div>
                 </div>
                 <table className="w-full text-sm text-right">
@@ -246,6 +288,7 @@ export default function SavedAdvancesTab({ properties }: Props) {
                       <th className="px-3 py-2 font-semibold">תאריך שייק</th>
                       <th className="px-3 py-2 font-semibold">שכ&quot;ד צמוד</th>
                       <th className="px-3 py-2 font-semibold">ד.נ.</th>
+                      <th className="px-3 py-2 font-semibold">חניה</th>
                       <th className="px-3 py-2 font-semibold">לפני מע&quot;מ</th>
                       <th className="px-3 py-2 font-semibold">מע&quot;מ</th>
                       <th className="px-3 py-2 font-semibold">סכום שייק</th>
@@ -255,44 +298,46 @@ export default function SavedAdvancesTab({ properties }: Props) {
                     </tr>
                   </thead>
                   <tbody>
-                    {items.map(function (a) {
-                      var isEditing = editingId === a.id;
+                    {g.checks.map(function (c) {
+                      var editKey = g.contractId + "|" + c.date;
+                      var isEditing = editingId === editKey;
                       return (
-                        <tr key={a.id} className={"border-t border-slate-100 " + (a.status === "received" ? "bg-green-50/50" : "hover:bg-slate-50")}>
-                          <td className="px-3 py-2 font-medium text-slate-700">{a.period}</td>
-                          <td className="px-3 py-2 text-slate-600">{fmtDate(a.check_date)}</td>
-                          <td className="px-3 py-2 text-green-700 font-semibold">{fmtMoney(a.indexed_rent)}</td>
-                          <td className="px-3 py-2 text-slate-600">{fmtMoney(a.management_advance)}</td>
-                          <td className="px-3 py-2">{fmtMoney(a.total_before_vat)}</td>
-                          <td className="px-3 py-2 text-slate-500">{fmtMoney(a.vat_amount)}</td>
-                          <td className="px-3 py-2 font-bold text-blue-700">{fmtMoney(a.total_with_vat)}</td>
+                        <tr key={editKey} className={"border-t border-slate-100 " + (c.status === "received" ? "bg-green-50/50" : "hover:bg-slate-50")}>
+                          <td className="px-3 py-2 font-medium text-slate-700">{c.period}</td>
+                          <td className="px-3 py-2 text-slate-600">{fmtDate(c.date)}</td>
+                          <td className="px-3 py-2 text-green-700 font-semibold">{fmtMoney(c.totalRent)}</td>
+                          <td className="px-3 py-2 text-slate-600">{fmtMoney(c.totalMgmt)}</td>
+                          <td className="px-3 py-2 text-slate-500">{c.totalParking > 0 ? fmtMoney(c.totalParking) : "—"}</td>
+                          <td className="px-3 py-2">{fmtMoney(c.totalBeforeVat)}</td>
+                          <td className="px-3 py-2 text-slate-500">{fmtMoney(c.totalVat)}</td>
+                          <td className="px-3 py-2 font-bold text-blue-700">{fmtMoney(c.total)}</td>
                           <td className="px-3 py-2">
                             {isEditing ? (
                               <input type="text" value={editCheckNum} onChange={function (e) { setEditCheckNum(e.target.value); }}
                                 className="w-20 rounded border border-slate-300 px-1 py-0.5 text-xs" placeholder="מספר" />
                             ) : (
-                              <span className="text-xs text-slate-500">{a.check_number || "—"}</span>
+                              <span className="text-xs text-slate-500">{c.checkNumber || "—"}</span>
                             )}
                           </td>
                           <td className="px-3 py-2">
-                            <button onClick={function () { toggleReceived(a.id, a.status); }}
+                            <button onClick={function () { toggleReceivedGroup(c.ids, c.status); }}
                               className={"rounded-full px-2.5 py-1 text-xs font-bold transition-all " +
-                                (a.status === "received"
+                                (c.status === "received"
                                   ? "bg-green-100 text-green-700 border border-green-300"
                                   : "bg-slate-100 text-slate-500 border border-slate-200 hover:bg-green-50 hover:text-green-600")}>
-                              {a.status === "received" ? "✅ התקבל" : "☐ ממתין"}
+                              {c.status === "received" ? "✅ התקבל" : "☐ ממתין"}
                             </button>
                           </td>
                           <td className="px-3 py-2">
                             <div className="flex gap-1">
                               {isEditing ? (
-                                <button onClick={function () { saveCheckDetails(a.id); }}
+                                <button onClick={function () { saveCheckGroupDetails(c.ids); }}
                                   className="text-xs text-blue-600 hover:text-blue-800">💾</button>
                               ) : (
-                                <button onClick={function () { setEditingId(a.id); setEditCheckNum(a.check_number || ""); setEditNotes(a.notes || ""); }}
+                                <button onClick={function () { setEditingId(editKey); setEditCheckNum(c.checkNumber || ""); setEditNotes(""); }}
                                   className="text-xs text-slate-400 hover:text-slate-600">✏️</button>
                               )}
-                              <button onClick={function () { deleteAdvance(a.id); }}
+                              <button onClick={function () { deleteAdvanceGroup(c.ids); }}
                                 className="text-xs text-red-400 hover:text-red-600">🗑</button>
                             </div>
                           </td>
