@@ -21,7 +21,12 @@ export default function SavedAdvancesTab({ properties }: Props) {
   const [editNotes, setEditNotes] = useState("");
 
   // Detail edit modal
-  const [editModal, setEditModal] = useState<{ ids: string[]; date: string; amount: number; checkNum: string; status: string; tenantName: string; period: string; interestPct: string } | null>(null);
+  const [editModal, setEditModal] = useState<{
+    ids: string[]; date: string; amount: number; checkNum: string;
+    status: string; clearingStatus: string; clearingDate: string;
+    waived: boolean; chargeInterest: boolean; chargeCpiDiff: boolean;
+    tenantName: string; period: string; interestPct: string;
+  } | null>(null);
   const [editSaving, setEditSaving] = useState(false);
 
   // Manual add state
@@ -63,6 +68,7 @@ export default function SavedAdvancesTab({ properties }: Props) {
   }
 
   async function toggleReceivedGroup(ids: string[], currentStatus: string) {
+    // Cycle: pending → received → pending (the "not received" needs the modal for context)
     var newStatus = currentStatus === "received" ? "pending" : "received";
     var update: any = { status: newStatus };
     if (newStatus === "received") update.received_date = new Date().toISOString().split("T")[0];
@@ -106,13 +112,14 @@ export default function SavedAdvancesTab({ properties }: Props) {
         actual_check_date: editModal.date || null,
         actual_amount: Number(editModal.amount) || null,
         status: editModal.status,
+        clearing_status: editModal.clearingStatus || null,
+        clearing_date: editModal.clearingDate || null,
+        waived: editModal.waived,
+        charge_interest: editModal.chargeInterest,
+        charge_cpi_diff: editModal.chargeCpiDiff,
         interest_pct: Number(editModal.interestPct) || null,
       };
       if (editModal.status === "received") update.received_date = new Date().toISOString().split("T")[0];
-      // Calculate interest if status=bounced and we have interest_pct
-      if (editModal.status === "bounced" && Number(editModal.interestPct) > 0) {
-        // Will be calculated at year-end CPI diff time
-      }
       await supabase.from("advance_payments").update(update).in("id", editModal.ids);
       setEditModal(null);
       loadAdvances(true);
@@ -181,7 +188,7 @@ export default function SavedAdvancesTab({ properties }: Props) {
   });
 
   // Group by contract → consolidate by check_date (one check per contract per date)
-  type CheckGroup = { date: string; period: string; ids: string[]; totalRent: number; totalMgmt: number; totalParking: number; totalBeforeVat: number; totalVat: number; total: number; status: string; checkNumber: string; spaceNames: string[]; actualDate: string; actualAmount: number; interestPct: number };
+  type CheckGroup = { date: string; period: string; ids: string[]; totalRent: number; totalMgmt: number; totalParking: number; totalBeforeVat: number; totalVat: number; total: number; status: string; clearingStatus: string; clearingDate: string; waived: boolean; chargeInterest: boolean; chargeCpiDiff: boolean; checkNumber: string; spaceNames: string[]; actualDate: string; actualAmount: number; interestPct: number };
   type ContractGroup = { contractId: string; tenantName: string; spaces: string[]; checks: CheckGroup[] };
   var byContract: Record<string, ContractGroup> = {};
   filtered.forEach(function (a) {
@@ -195,6 +202,11 @@ export default function SavedAdvancesTab({ properties }: Props) {
         totalRent: 0, totalMgmt: 0, totalParking: 0,
         totalBeforeVat: 0, totalVat: 0, total: 0,
         status: a.status, checkNumber: a.check_number || "",
+        clearingStatus: a.clearing_status || "",
+        clearingDate: a.clearing_date || "",
+        waived: a.waived || false,
+        chargeInterest: a.charge_interest || false,
+        chargeCpiDiff: a.charge_cpi_diff !== false,
         spaceNames: [],
         actualDate: a.actual_check_date || "",
         actualAmount: Number(a.actual_amount) || 0,
@@ -220,7 +232,15 @@ export default function SavedAdvancesTab({ properties }: Props) {
   // Apply status filter on consolidated checks
   if (filterStatus !== "all") {
     Object.keys(byContract).forEach(function (cid) {
-      byContract[cid].checks = byContract[cid].checks.filter(function (c) { return c.status === filterStatus; });
+      byContract[cid].checks = byContract[cid].checks.filter(function (c) {
+        if (filterStatus === "waived") return c.waived;
+        if (filterStatus === "cleared") return c.clearingStatus === "cleared";
+        if (filterStatus === "bounced") return c.clearingStatus === "bounced";
+        if (filterStatus === "not_received") return c.status === "not_received";
+        if (filterStatus === "received") return c.status === "received" && !c.clearingStatus;
+        if (filterStatus === "pending") return c.status === "pending" && !c.waived;
+        return true;
+      });
       if (byContract[cid].checks.length === 0) delete byContract[cid];
     });
   }
@@ -228,18 +248,20 @@ export default function SavedAdvancesTab({ properties }: Props) {
   var tenantNames = Array.from(new Set(advances.map(function (a) { return a.tenant_name || "—"; }))).sort();
 
   // KPIs based on consolidated checks
-  var totalChecks = 0, receivedChecks = 0, bouncedChecks = 0;
-  var totalAmount = 0, receivedAmount = 0, bouncedAmount = 0;
+  var totalChecks = 0, clearedChecks = 0, problemChecks = 0, waivedChecks = 0;
+  var totalAmount = 0, clearedAmount = 0, problemAmount = 0;
   Object.values(byContract).forEach(function (g) {
     g.checks.forEach(function (c) {
       totalChecks++;
       var amt = c.actualAmount > 0 ? c.actualAmount : c.total;
       totalAmount += c.total;
-      if (c.status === "received") { receivedChecks++; receivedAmount += amt; }
-      else if (c.status === "bounced") { bouncedChecks++; bouncedAmount += c.total; }
+      if (c.waived) { waivedChecks++; }
+      else if (c.clearingStatus === "cleared") { clearedChecks++; clearedAmount += amt; }
+      else if (c.status === "not_received" || c.clearingStatus === "bounced") { problemChecks++; problemAmount += c.total; }
     });
   });
-  var pendingAmount = totalAmount - receivedAmount - bouncedAmount;
+  var pendingAmount = totalAmount - clearedAmount - problemAmount;
+  var pendingChecks = totalChecks - clearedChecks - problemChecks - waivedChecks;
 
   var ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm";
 
@@ -268,9 +290,12 @@ export default function SavedAdvancesTab({ properties }: Props) {
           <label className="mb-1 block text-xs font-semibold text-slate-700">סטטוס</label>
           <select value={filterStatus} onChange={function (e) { setFilterStatus(e.target.value); }} className={ic}>
             <option value="all">הכל</option>
-            <option value="pending">ממתין</option>
-            <option value="received">התקבל</option>
-            <option value="bounced">לא נפדה</option>
+            <option value="pending">ממתינים לקבלה</option>
+            <option value="received">התקבלו (טרם נפדו)</option>
+            <option value="cleared">נפדו</option>
+            <option value="bounced">לא נפדו</option>
+            <option value="not_received">לא הגיעו</option>
+            <option value="waived">ויתור</option>
           </select>
         </div>
       </div>
@@ -278,24 +303,24 @@ export default function SavedAdvancesTab({ properties }: Props) {
       {/* KPIs */}
       <div className="grid grid-cols-5 gap-3">
         <div className="rounded-xl bg-blue-50 border border-blue-200 p-3 text-center">
-          <div className="text-lg font-black text-blue-800">{totalChecks}</div>
-          <div className="text-xs text-blue-600">סה&quot;כ שייקים</div>
+          <div className="text-lg font-black text-blue-800">{fmtMoney(totalAmount)}</div>
+          <div className="text-xs text-blue-600">סה&quot;כ מקדמות ({totalChecks})</div>
         </div>
-        <div className="rounded-xl bg-green-50 border border-green-200 p-3 text-center">
-          <div className="text-lg font-black text-green-800">{fmtMoney(totalAmount)}</div>
-          <div className="text-xs text-green-600">סה&quot;כ מקדמות</div>
-        </div>
-        <div className="rounded-xl bg-teal-50 border border-teal-200 p-3 text-center">
-          <div className="text-lg font-black text-teal-800">{fmtMoney(receivedAmount)}</div>
-          <div className="text-xs text-teal-600">התקבלו ({receivedChecks})</div>
+        <div className="rounded-xl bg-emerald-50 border border-emerald-200 p-3 text-center">
+          <div className="text-lg font-black text-emerald-800">{fmtMoney(clearedAmount)}</div>
+          <div className="text-xs text-emerald-600">נפדו ({clearedChecks})</div>
         </div>
         <div className="rounded-xl bg-amber-50 border border-amber-200 p-3 text-center">
           <div className="text-lg font-black text-amber-800">{fmtMoney(pendingAmount)}</div>
-          <div className="text-xs text-amber-600">ממתינים ({totalChecks - receivedChecks - bouncedChecks})</div>
+          <div className="text-xs text-amber-600">ממתינים ({pendingChecks})</div>
         </div>
         <div className="rounded-xl bg-red-50 border border-red-200 p-3 text-center">
-          <div className="text-lg font-black text-red-800">{fmtMoney(bouncedAmount)}</div>
-          <div className="text-xs text-red-600">לא נפדו ({bouncedChecks})</div>
+          <div className="text-lg font-black text-red-800">{fmtMoney(problemAmount)}</div>
+          <div className="text-xs text-red-600">חוב פעיל ({problemChecks})</div>
+        </div>
+        <div className="rounded-xl bg-slate-100 border border-slate-200 p-3 text-center">
+          <div className="text-lg font-black text-slate-700">{waivedChecks}</div>
+          <div className="text-xs text-slate-600">🤝 ויתורים</div>
         </div>
       </div>
 
@@ -357,7 +382,8 @@ export default function SavedAdvancesTab({ properties }: Props) {
                       <th className="px-2 py-2 font-semibold">תאריך בפועל</th>
                       <th className="px-2 py-2 font-semibold">סכום בפועל</th>
                       <th className="px-2 py-2 font-semibold">מס׳ שייק</th>
-                      <th className="px-2 py-2 font-semibold w-28">סטטוס</th>
+                      <th className="px-2 py-2 font-semibold w-24">קבלה</th>
+                      <th className="px-2 py-2 font-semibold w-24">פדיון</th>
                       <th className="px-2 py-2 font-semibold w-12"></th>
                     </tr>
                   </thead>
@@ -365,14 +391,22 @@ export default function SavedAdvancesTab({ properties }: Props) {
                     {g.checks.map(function (c) {
                       var editKey = g.contractId + "|" + c.date;
                       var rowClass = "border-t border-slate-100 ";
-                      if (c.status === "received") rowClass += "bg-green-50/50";
-                      else if (c.status === "bounced") rowClass += "bg-red-50/50";
+                      if (c.waived) rowClass += "bg-slate-100 opacity-60";
+                      else if (c.clearingStatus === "bounced") rowClass += "bg-red-50/50";
+                      else if (c.clearingStatus === "cleared") rowClass += "bg-emerald-50/50";
+                      else if (c.status === "received") rowClass += "bg-green-50/50";
+                      else if (c.status === "not_received") rowClass += "bg-orange-50/50";
                       else rowClass += "hover:bg-slate-50";
-                      var statusLabel = c.status === "received" ? "✅ התקבל" : c.status === "bounced" ? "❌ לא נפדה" : "☐ ממתין";
-                      var statusColor = c.status === "received" ? "bg-green-100 text-green-700 border-green-300" : c.status === "bounced" ? "bg-red-100 text-red-700 border-red-300" : "bg-slate-100 text-slate-500 border-slate-200 hover:bg-green-50 hover:text-green-600";
+                      var receiptLabel = c.status === "received" ? "✅ התקבל" : c.status === "not_received" ? "⛔ לא הגיע" : "☐ ממתין";
+                      var receiptColor = c.status === "received" ? "bg-green-100 text-green-700 border-green-300" : c.status === "not_received" ? "bg-orange-100 text-orange-700 border-orange-300" : "bg-slate-100 text-slate-500 border-slate-200 hover:bg-green-50 hover:text-green-600";
+                      var clearingLabel = c.clearingStatus === "cleared" ? "✅ נפדה" : c.clearingStatus === "bounced" ? "❌ לא נפדה" : (c.status === "received" ? "⏳ ממתין" : "—");
+                      var clearingColor = c.clearingStatus === "cleared" ? "bg-emerald-100 text-emerald-700 border-emerald-300" : c.clearingStatus === "bounced" ? "bg-red-100 text-red-700 border-red-300" : "bg-slate-50 text-slate-400 border-slate-200";
                       return (
                         <tr key={editKey} className={rowClass}>
-                          <td className="px-2 py-2 font-medium text-slate-700">{c.period}</td>
+                          <td className="px-2 py-2 font-medium text-slate-700">
+                            {c.period}
+                            {c.waived && <span className="block text-[10px] text-slate-500 mt-0.5">🤝 ויתור</span>}
+                          </td>
                           <td className="px-2 py-2 text-slate-600">{fmtDate(c.date)}</td>
                           <td className="px-2 py-2 font-bold text-blue-700">{fmtMoney(c.total)}</td>
                           <td className="px-2 py-2 text-slate-600">{c.actualDate ? fmtDate(c.actualDate) : <span className="text-slate-300">—</span>}</td>
@@ -384,13 +418,32 @@ export default function SavedAdvancesTab({ properties }: Props) {
                           <td className="px-2 py-2"><span className="text-xs text-slate-500">{c.checkNumber || "—"}</span></td>
                           <td className="px-2 py-2">
                             <button onClick={function () { toggleReceivedGroup(c.ids, c.status); }}
-                              className={"rounded-full px-2.5 py-1 text-xs font-bold transition-all border " + statusColor}>
-                              {statusLabel}
+                              className={"rounded-full px-2 py-1 text-[10px] font-bold transition-all border " + receiptColor}>
+                              {receiptLabel}
                             </button>
                           </td>
                           <td className="px-2 py-2">
+                            <span className={"rounded-full px-2 py-1 text-[10px] font-bold border inline-block " + clearingColor}>
+                              {clearingLabel}
+                            </span>
+                          </td>
+                          <td className="px-2 py-2">
                             <div className="flex gap-1">
-                              <button onClick={function () { setEditModal({ ids: c.ids, date: c.actualDate || c.date, amount: c.actualAmount || c.total, checkNum: c.checkNumber, status: c.status, tenantName: g.tenantName, period: c.period, interestPct: String(c.interestPct || "") }); }}
+                              <button onClick={function () { setEditModal({
+                                ids: c.ids,
+                                date: c.actualDate || c.date,
+                                amount: c.actualAmount || c.total,
+                                checkNum: c.checkNumber,
+                                status: c.status,
+                                clearingStatus: c.clearingStatus || "",
+                                clearingDate: c.clearingDate || "",
+                                waived: c.waived,
+                                chargeInterest: c.chargeInterest,
+                                chargeCpiDiff: c.chargeCpiDiff,
+                                tenantName: g.tenantName,
+                                period: c.period,
+                                interestPct: String(c.interestPct || ""),
+                              }); }}
                                 className="text-xs text-slate-500 hover:text-blue-600" title="ערוך פרטי שייק">✏️</button>
                               <button onClick={function () { deleteAdvanceGroup(c.ids); }}
                                 className="text-xs text-red-400 hover:text-red-600">🗑</button>
@@ -410,8 +463,8 @@ export default function SavedAdvancesTab({ properties }: Props) {
       {/* Manual Add Modal */}
       {/* Edit Check Modal */}
       {editModal && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={function () { setEditModal(null); }}>
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-4" onClick={function (e) { e.stopPropagation(); }}>
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4 overflow-y-auto" onClick={function () { setEditModal(null); }}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6 space-y-4 my-8" onClick={function (e) { e.stopPropagation(); }}>
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-bold text-slate-800">✏️ עריכת פרטי שייק</h3>
               <button onClick={function () { setEditModal(null); }} className="text-slate-400 hover:text-slate-600 text-xl">✕</button>
@@ -419,22 +472,10 @@ export default function SavedAdvancesTab({ properties }: Props) {
             <div className="text-xs text-slate-500 bg-slate-50 rounded p-2">
               <div><strong>{editModal.tenantName}</strong> | {editModal.period}</div>
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="mb-1 block text-xs font-semibold text-slate-700">תאריך השייק בפועל</label>
-                <input type="date" value={editModal.date} onChange={function (e) { setEditModal({ ...editModal, date: e.target.value }); }} className={ic} />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs font-semibold text-slate-700">סכום בפועל (₪)</label>
-                <input type="number" step="0.01" value={editModal.amount} onChange={function (e) { setEditModal({ ...editModal, amount: Number(e.target.value) }); }} className={ic} />
-              </div>
-            </div>
-            <div>
-              <label className="mb-1 block text-xs font-semibold text-slate-700">מס׳ שייק</label>
-              <input type="text" value={editModal.checkNum} onChange={function (e) { setEditModal({ ...editModal, checkNum: e.target.value }); }} className={ic} placeholder="0001234" />
-            </div>
-            <div>
-              <label className="mb-1 block text-xs font-semibold text-slate-700">סטטוס</label>
+
+            {/* Stage 1: Receipt */}
+            <div className="rounded-lg border border-slate-200 p-3 space-y-3">
+              <div className="text-xs font-bold text-slate-700">📥 שלב 1 — קבלת השייק</div>
               <div className="grid grid-cols-3 gap-2">
                 <button type="button" onClick={function () { setEditModal({ ...editModal, status: "pending" }); }}
                   className={"rounded-lg border px-3 py-2 text-xs font-bold " + (editModal.status === "pending" ? "border-slate-500 bg-slate-100 text-slate-700" : "border-slate-200 text-slate-500")}>
@@ -444,23 +485,97 @@ export default function SavedAdvancesTab({ properties }: Props) {
                   className={"rounded-lg border px-3 py-2 text-xs font-bold " + (editModal.status === "received" ? "border-green-500 bg-green-100 text-green-700" : "border-slate-200 text-slate-500")}>
                   ✅ התקבל
                 </button>
-                <button type="button" onClick={function () { setEditModal({ ...editModal, status: "bounced" }); }}
-                  className={"rounded-lg border px-3 py-2 text-xs font-bold " + (editModal.status === "bounced" ? "border-red-500 bg-red-100 text-red-700" : "border-slate-200 text-slate-500")}>
-                  ❌ לא נפדה
+                <button type="button" onClick={function () { setEditModal({ ...editModal, status: "not_received" }); }}
+                  className={"rounded-lg border px-3 py-2 text-xs font-bold " + (editModal.status === "not_received" ? "border-orange-500 bg-orange-100 text-orange-700" : "border-slate-200 text-slate-500")}>
+                  ⛔ לא הגיע
                 </button>
               </div>
+              {(editModal.status === "received") && (
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="mb-1 block text-xs text-slate-600">תאריך בפועל</label>
+                    <input type="date" value={editModal.date} onChange={function (e) { setEditModal({ ...editModal, date: e.target.value }); }} className={ic} />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs text-slate-600">סכום בפועל (₪)</label>
+                    <input type="number" step="0.01" value={editModal.amount} onChange={function (e) { setEditModal({ ...editModal, amount: Number(e.target.value) }); }} className={ic} />
+                  </div>
+                  <div className="col-span-2">
+                    <label className="mb-1 block text-xs text-slate-600">מס׳ שייק</label>
+                    <input type="text" value={editModal.checkNum} onChange={function (e) { setEditModal({ ...editModal, checkNum: e.target.value }); }} className={ic} placeholder="0001234" />
+                  </div>
+                </div>
+              )}
             </div>
-            {editModal.status === "bounced" && (
-              <div className="rounded-lg bg-red-50 border border-red-200 p-3 space-y-2">
-                <div className="text-xs font-bold text-red-700">⚠️ חוב פיגורים</div>
-                <div className="text-xs text-red-600">החוב יחושב במכתב הפרשי הצמדה בסוף השנה.</div>
-                <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-700">ריבית שנתית על החוב (%)</label>
-                  <input type="number" step="0.1" value={editModal.interestPct} onChange={function (e) { setEditModal({ ...editModal, interestPct: e.target.value }); }} className={ic} placeholder="0 = ללא ריבית" />
-                  <div className="text-xs text-slate-400 mt-0.5">לפי הסכם השכירות. תחושב מתאריך הנדרש עד תשלום בפועל.</div>
+
+            {/* Stage 2: Clearing (only if received) */}
+            {editModal.status === "received" && (
+              <div className="rounded-lg border border-blue-200 bg-blue-50/30 p-3 space-y-3">
+                <div className="text-xs font-bold text-blue-700">🏦 שלב 2 — פדיון בבנק</div>
+                <div className="grid grid-cols-3 gap-2">
+                  <button type="button" onClick={function () { setEditModal({ ...editModal, clearingStatus: "" }); }}
+                    className={"rounded-lg border px-3 py-2 text-xs font-bold " + (!editModal.clearingStatus ? "border-slate-500 bg-slate-100 text-slate-700" : "border-slate-200 text-slate-500")}>
+                    ⏳ טרם הופקד
+                  </button>
+                  <button type="button" onClick={function () { setEditModal({ ...editModal, clearingStatus: "cleared", clearingDate: editModal.clearingDate || new Date().toISOString().split("T")[0] }); }}
+                    className={"rounded-lg border px-3 py-2 text-xs font-bold " + (editModal.clearingStatus === "cleared" ? "border-green-500 bg-green-100 text-green-700" : "border-slate-200 text-slate-500")}>
+                    ✅ נפדה
+                  </button>
+                  <button type="button" onClick={function () { setEditModal({ ...editModal, clearingStatus: "bounced" }); }}
+                    className={"rounded-lg border px-3 py-2 text-xs font-bold " + (editModal.clearingStatus === "bounced" ? "border-red-500 bg-red-100 text-red-700" : "border-slate-200 text-slate-500")}>
+                    ❌ לא נפדה
+                  </button>
+                </div>
+                {(editModal.clearingStatus === "cleared" || editModal.clearingStatus === "bounced") && (
+                  <div>
+                    <label className="mb-1 block text-xs text-slate-600">תאריך {editModal.clearingStatus === "cleared" ? "פדיון" : "ניסיון פדיון"}</label>
+                    <input type="date" value={editModal.clearingDate} onChange={function (e) { setEditModal({ ...editModal, clearingDate: e.target.value }); }} className={ic} />
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Debt handling — for not_received OR bounced */}
+            {(editModal.status === "not_received" || editModal.clearingStatus === "bounced") && (
+              <div className="rounded-lg border border-red-200 bg-red-50/30 p-3 space-y-3">
+                <div className="text-xs font-bold text-red-700">⚠️ טיפול בחוב</div>
+                <div className="space-y-2">
+                  <label className="flex items-start gap-2 cursor-pointer">
+                    <input type="checkbox" checked={editModal.waived} onChange={function (e) { setEditModal({ ...editModal, waived: e.target.checked }); }} className="mt-0.5" />
+                    <div>
+                      <div className="text-xs font-bold text-slate-700">🤝 ויתור על השייק</div>
+                      <div className="text-xs text-slate-500">המנהל ויתר על תשלום זה. לא ייכלל בחישוב חובות סוף שנה.</div>
+                    </div>
+                  </label>
+                  {!editModal.waived && (
+                    <>
+                      <label className="flex items-start gap-2 cursor-pointer">
+                        <input type="checkbox" checked={editModal.chargeCpiDiff} onChange={function (e) { setEditModal({ ...editModal, chargeCpiDiff: e.target.checked }); }} className="mt-0.5" />
+                        <div>
+                          <div className="text-xs font-bold text-slate-700">📈 חיוב הפרשי הצמדה</div>
+                          <div className="text-xs text-slate-500">הפרש מדד מתאריך השייק עד תאריך תשלום בפועל.</div>
+                        </div>
+                      </label>
+                      <label className="flex items-start gap-2 cursor-pointer">
+                        <input type="checkbox" checked={editModal.chargeInterest} onChange={function (e) { setEditModal({ ...editModal, chargeInterest: e.target.checked }); }} className="mt-0.5" />
+                        <div>
+                          <div className="text-xs font-bold text-slate-700">💰 חיוב ריבית פיגורים</div>
+                          <div className="text-xs text-slate-500">בנוסף להצמדה — לפי אחוז שנתי.</div>
+                        </div>
+                      </label>
+                      {editModal.chargeInterest && (
+                        <div>
+                          <label className="mb-1 block text-xs font-semibold text-slate-700">אחוז ריבית שנתית (%)</label>
+                          <input type="number" step="0.1" value={editModal.interestPct} onChange={function (e) { setEditModal({ ...editModal, interestPct: e.target.value }); }} className={ic} placeholder="לדוגמה: 5" />
+                          <div className="text-xs text-slate-400 mt-0.5">תחושב מתאריך הנדרש עד תאריך תשלום בפועל</div>
+                        </div>
+                      )}
+                    </>
+                  )}
                 </div>
               </div>
             )}
+
             <button onClick={saveCheckEdit} disabled={editSaving}
               className="w-full rounded-lg bg-blue-600 py-2.5 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-50">
               {editSaving ? "שומר..." : "💾 שמור שינויים"}
