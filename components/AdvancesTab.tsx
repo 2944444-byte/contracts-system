@@ -93,7 +93,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
     setCheckingSaved(true);
     try {
       var query = supabase.from("advance_payments")
-        .select("id, contract_id, space_id, tenant_name, space_name, period, check_date, base_rent, indexed_rent, management_advance, total_before_vat, vat_amount, total_with_vat, cpi_base_value, cpi_at_payment, cpi_calc_date, status, created_at")
+        .select("id, contract_id, space_id, tenant_name, space_name, space_area, period, check_date, base_rent, indexed_rent, management_advance, parking_monthly, total_before_vat, vat_amount, total_with_vat, cpi_base_value, cpi_at_payment, cpi_ratio, cbs_from_date, cpi_current_date, cpi_calc_date, status, created_at")
         .eq("property_id", pid).eq("year", yr)
         .order("tenant_name").order("space_name").order("check_date");
       if (cFilter !== "all") query = query.eq("contract_id", cFilter);
@@ -122,14 +122,17 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
           rows.push({
             contractId: first.contract_id, spaceId: first.space_id,
             tenantName: first.tenant_name || "—", spaceName: first.space_name || "—",
-            spaceArea: 0, baseRentMonthly: Number(first.base_rent) || 0,
+            spaceArea: Number(first.space_area) || 0,
+            baseRentMonthly: Number(first.base_rent) || 0,
             indexedRentMonthly: Number(first.indexed_rent) || 0,
             mgmtAdvanceMonthly: Number(first.management_advance) || 0,
-            parkingMonthly: 0, parkingSpots: 0,
+            parkingMonthly: Number(first.parking_monthly) || 0, parkingSpots: 0,
             totalMonthly: Number(first.total_with_vat) || 0,
             cpiBaseValue: Number(first.cpi_base_value) || 0, cpiBaseDate: "",
-            cbsFromDate: "", cpiCurrentValue: Number(first.cpi_at_payment) || 0,
-            cpiCurrentDate: "", cpiRatio: 0, indexationMethod: "",
+            cbsFromDate: first.cbs_from_date || "",
+            cpiCurrentValue: Number(first.cpi_at_payment) || 0,
+            cpiCurrentDate: first.cpi_current_date || "",
+            cpiRatio: Number(first.cpi_ratio) || 1, indexationMethod: "",
             startDate: first.check_date || "", checks: checks,
           });
         });
@@ -709,17 +712,22 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
             property_id: propId,
             tenant_name: r.tenantName,
             space_name: r.spaceName,
+            space_area: r.spaceArea,
             year: year,
             period: p.label.split(" (")[0],
             base_rent: r.baseRentMonthly * p.months,
             indexed_rent: p.rentBeforeVat,
             management_advance: p.mgmtBeforeVat,
+            parking_monthly: r.parkingMonthly || 0,
             total_before_vat: p.totalBeforeVat,
             vat_amount: p.vat,
             total_with_vat: p.totalWithVat,
             check_date: p.checkDate,
             cpi_base_value: r.cpiBaseValue,
             cpi_at_payment: r.cpiCurrentValue,
+            cpi_ratio: r.cpiRatio,
+            cbs_from_date: r.cbsFromDate,
+            cpi_current_date: r.cpiCurrentDate,
             cpi_calc_date: cpiCalcDate,
             status: "pending",
           }, { onConflict: "contract_id,space_id,year,period" });
