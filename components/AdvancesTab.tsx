@@ -583,6 +583,9 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
               var partialLabel = ratio < 0.99 ? " (חלקי — " + actualDays + " ימים)" : "";
               var graceLabel = gf.inGrace ? " (גרייס)" : "";
 
+              // Round check total to whole shekels (banks don't accept agorot on checks)
+              var rawTotal = totalBV + vat;
+              var roundedTotal = Math.round(rawTotal);
               checks.push({
                 label: "רבעון " + (q + 1) + partialLabel + labelExtra + graceLabel,
                 months: 3,
@@ -593,7 +596,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
                 mgmtBeforeVat: mgmtBV,
                 totalBeforeVat: totalBV,
                 vat: vat,
-                totalWithVat: totalBV + vat,
+                totalWithVat: roundedTotal,
               });
             }
           } else {
@@ -642,6 +645,9 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
               var partialLabelM = ratioM < 0.99 ? " (חלקי — " + actualDaysM + " ימים)" : "";
               var graceLabelM = gfM.inGrace ? " (גרייס)" : "";
 
+              // Round check total to whole shekels (banks don't accept agorot on checks)
+              var rawTotalM = totalBVM + vatM;
+              var roundedTotalM = Math.round(rawTotalM);
               checks.push({
                 label: "חודש " + (m + 1) + partialLabelM + labelExtraM + graceLabelM,
                 months: 1,
@@ -652,7 +658,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
                 mgmtBeforeVat: mgmtBVM,
                 totalBeforeVat: totalBVM,
                 vat: vatM,
-                totalWithVat: totalBVM + vatM,
+                totalWithVat: roundedTotalM,
               });
             }
           }
