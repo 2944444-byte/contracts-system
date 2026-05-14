@@ -90,16 +90,58 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
       var { data: existingAdvances } = await supabase.from("advance_payments")
         .select("*").in("contract_id", contracts.map(function(c: any) { return c.id; })).eq("year", year);
 
+      // Load price tiers for step-rent computation
+      var contractIds = contracts.map(function(c: any) { return c.id; });
+      var { data: allTiers } = await supabase.from("contract_price_tiers")
+        .select("*").in("contract_id", contractIds).order("tier_number");
+
       var rows: CpiDiffRow[] = [];
 
       for (var c of contracts) {
-        var baseMonthly = 0;
+        // Base rent at contract start (before any tiers)
+        var startMonthly = 0;
         (c.contract_spaces || []).forEach(function(cs: any) {
           var area = cs.spaces?.area || 0;
-          if (cs.charge_method === "fixed" && cs.fixed_rent) baseMonthly += Number(cs.fixed_rent);
-          else baseMonthly += (Number(cs.price_per_sqm) || Number(c.rent_per_sqm) || 0) * area;
+          if (cs.charge_method === "fixed" && cs.fixed_rent) startMonthly += Number(cs.fixed_rent);
+          else startMonthly += (Number(cs.price_per_sqm) || Number(c.rent_per_sqm) || 0) * area;
         });
-        if (baseMonthly === 0) baseMonthly = (Number(c.rent_per_sqm) || 0) * (Number(c.charged_area) || 0);
+        if (startMonthly === 0) startMonthly = (Number(c.rent_per_sqm) || 0) * (Number(c.charged_area) || 0);
+
+        // Compute step-rent: walk year by year from contract start, applying tiers
+        var contractStartDate = new Date(c.start_date);
+        var contractYearsFromStart = year - contractStartDate.getFullYear();
+        var contractTiers = (allTiers ?? []).filter(function(t: any) { return t.contract_id === c.id && !t.space_id; });
+        // Compute rents BEFORE and AFTER anniversary in target year
+        var rentBeforeAnniversary = startMonthly;
+        var rentAfterAnniversary = startMonthly;
+        if (contractTiers.length > 0 && contractYearsFromStart > 0) {
+          var currentRent = startMonthly;
+          for (var ty = 1; ty <= contractYearsFromStart; ty++) {
+            var tier = contractTiers.find(function(t: any) {
+              if (t.is_recurring) {
+                var every = t.recurring_every_years || 1;
+                return ty % every === 0;
+              }
+              return ty >= t.from_year && ty <= t.to_year;
+            });
+            if (tier) {
+              if (tier.increase_type === "pct") currentRent = currentRent * (1 + (Number(tier.increase_value) || 0) / 100);
+              else if (tier.increase_type === "fixed_sqm") {
+                var totalArea = (c.contract_spaces || []).reduce(function(s: number, cs: any) { return s + (cs.spaces?.area || 0); }, 0);
+                currentRent = currentRent + (Number(tier.increase_value) || 0) * totalArea;
+              } else if (tier.increase_type === "fixed_total") currentRent = currentRent + (Number(tier.increase_value) || 0);
+            }
+            if (ty === contractYearsFromStart - 1) rentBeforeAnniversary = currentRent;
+            if (ty === contractYearsFromStart) rentAfterAnniversary = currentRent;
+          }
+          if (contractYearsFromStart === 1) rentBeforeAnniversary = startMonthly;
+        }
+
+        // Anniversary date in target year
+        var anniversaryInYear = new Date(year, contractStartDate.getMonth(), contractStartDate.getDate());
+        var hasRentChange = Math.abs(rentAfterAnniversary - rentBeforeAnniversary) > 0.01
+          && anniversaryInYear > new Date(year, 0, 1)
+          && anniversaryInYear <= new Date(year, 11, 31);
 
         var mgmtMonthly = 0;
         (c.contract_spaces || []).forEach(function(cs: any) {
@@ -114,8 +156,6 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
         var isQuarterly = c.payment_frequency === "quarterly";
         var periodsCount = isQuarterly ? 4 : 12;
         var monthsPerPeriod = isQuarterly ? 3 : 1;
-        var baseRentPeriod = baseMonthly * monthsPerPeriod;
-        var baseRentPeriodWithVat = baseRentPeriod * (isVat ? 1 + vatPct : 1);
         var mgmtPeriod = mgmtMonthly * monthsPerPeriod;
         var mgmtPeriodWithVat = mgmtPeriod * (isVat ? 1 + vatPct : 1);
 
@@ -125,6 +165,39 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
           var payMonth = isQuarterly ? pi * 3 + 1 : pi + 1;
           var paymentDate = year + "-" + String(payMonth).padStart(2, "0") + "-01";
           var label = isQuarterly ? "רבעון " + (pi + 1) : "חודש " + payMonth;
+
+          // Period boundaries
+          var periodStart = new Date(year, isQuarterly ? pi * 3 : pi, 1);
+          var periodEnd = new Date(year, isQuarterly ? (pi + 1) * 3 : pi + 1, 0);
+          var daysInPeriod = Math.round((periodEnd.getTime() - periodStart.getTime()) / 86400000) + 1;
+
+          // Compute base rent for this period — split by anniversary if rent change mid-period
+          var periodBaseRent = 0;
+          if (hasRentChange && anniversaryInYear > periodStart && anniversaryInYear <= periodEnd) {
+            // Split: days at old rate + days at new rate (month-by-month within period)
+            for (var dm = 0; dm < monthsPerPeriod; dm++) {
+              var mIdx = isQuarterly ? pi * 3 + dm : pi;
+              var mStart = new Date(year, mIdx, 1);
+              var mEnd = new Date(year, mIdx + 1, 0);
+              var daysInMonth = mEnd.getDate();
+              if (mStart < anniversaryInYear && mEnd >= anniversaryInYear) {
+                // Split month
+                var daysOld = anniversaryInYear.getDate() - 1;
+                var daysNew = daysInMonth - daysOld;
+                periodBaseRent += (rentBeforeAnniversary * daysOld / daysInMonth) + (rentAfterAnniversary * daysNew / daysInMonth);
+              } else if (mEnd < anniversaryInYear) {
+                periodBaseRent += rentBeforeAnniversary;
+              } else {
+                periodBaseRent += rentAfterAnniversary;
+              }
+            }
+          } else if (hasRentChange && anniversaryInYear <= periodStart) {
+            periodBaseRent = rentAfterAnniversary * monthsPerPeriod;
+          } else {
+            periodBaseRent = rentBeforeAnniversary * monthsPerPeriod;
+          }
+
+          var baseRentPeriodWithVat = periodBaseRent * (isVat ? 1 + vatPct : 1);
 
           // Get CPI at payment date (t-2 known index)
           var toCbs = formatDateForCbs(paymentDate);
@@ -139,7 +212,7 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
               var cpiData = await fetchCpiAdjusted({ value: 10000, fromDate: fromCbs, toDate: toCbs });
               if (cpiData.success) {
                 var ratio = Number(cpiData.adjustedRentPerSqm) / 10000;
-                indexedRent = baseRentPeriod * ratio * (isVat ? 1 + vatPct : 1);
+                indexedRent = periodBaseRent * ratio * (isVat ? 1 + vatPct : 1);
                 cpiMonth = cpiData.toDate || "";
                 cpiValue = Number(cpiData.toIndexValue) || 0;
                 if (!cpiBaseValue) cpiBaseValue = Number(cpiData.fromIndexValue) || 0;
