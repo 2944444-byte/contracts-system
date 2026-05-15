@@ -2,8 +2,7 @@
 import React, { useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { logAudit } from "@/lib/audit-log";
-import { fetchCpiAdjusted } from "@/lib/cpi-server";
-import { fetchHighestCPI } from "@/lib/cpi-utils";
+import { fetchCpiAdjusted, fetchHighestChainedCpi } from "@/lib/cpi-server";
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 function fmtMoney(n: number) { return "₪" + (n ?? 0).toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -332,35 +331,46 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
                 cpiValue = Number(cpiData.toIndexValue) || 0;
                 if (!cpiBaseValue) cpiBaseValue = Number(cpiData.fromIndexValue) || 0;
 
-                // For "highest_in_period" mechanism — use the MAX CPI between contract
-                // start and payment date (per the contract terms — CPI never decreases).
-                var effectiveToIndex = cpiValue;
+                // Default ratio: precise chained value from CBS calculator
+                // (uses the value=10000 trick so we get the chained ratio
+                // straight from CBS — handles base-year changes correctly).
+                var ratio = Number(cpiData.adjustedRentPerSqm) / 10000;
                 var isHighest = c.indexation_method === "highest_in_period" || c.index_mechanism === "highest_in_period";
+
                 if (isHighest) {
-                  // Find highest CPI in range [base_date → payment_date]
+                  // "מדד גבוה ביותר" — find the highest CHAINED CPI in
+                  // [base_month .. payment_t2_month]. We must compare chained
+                  // values (not raw published values) because Israeli CPI
+                  // re-bases every 2 years and raw values are not comparable
+                  // across bases. fetchHighestChainedCpi calls CBS calculator
+                  // for each month and picks the peak by chained to_value.
                   var baseY = new Date(cpiBaseDate).getFullYear();
                   var baseM = new Date(cpiBaseDate).getMonth() + 1;
-                  var payY = new Date(paymentDate).getFullYear();
-                  var payM = new Date(paymentDate).getMonth() + 1;
-                  // Adjust to known month (t-2 logic)
+                  // Adjust payment date to "known index" month (t-2 logic)
                   var payDateObj = new Date(paymentDate);
                   if (payDateObj.getDate() < 16) {
                     payDateObj.setMonth(payDateObj.getMonth() - 2);
                   } else {
                     payDateObj.setMonth(payDateObj.getMonth() - 1);
                   }
-                  payY = payDateObj.getFullYear();
-                  payM = payDateObj.getMonth() + 1;
-                  var highestCpi = await fetchHighestCPI(baseY, baseM, payY, payM);
-                  if (highestCpi && highestCpi > effectiveToIndex) {
-                    effectiveToIndex = highestCpi;
-                    cpiValue = highestCpi;
+                  var payY = payDateObj.getFullYear();
+                  var payM = payDateObj.getMonth() + 1;
+                  var peak = await fetchHighestChainedCpi({
+                    baseFromDate: fromCbs!,
+                    scanFromYear: baseY,
+                    scanFromMonth: baseM,
+                    scanToYear: payY,
+                    scanToMonth: payM,
+                  });
+                  if (peak.success && peak.peakRatio && peak.peakRatio > ratio) {
+                    ratio = peak.peakRatio;
+                    // Update display fields so the UI shows the peak month
+                    cpiMonth = `${peak.peakYear}-${String(peak.peakMonth).padStart(2, "0")}`;
+                    // Note: cpiValue stays as the raw CBS toIndexValue for
+                    // display reference; the ratio drives the calculation.
                   }
                 }
 
-                var ratio = cpiBaseValue > 0 ? effectiveToIndex / cpiBaseValue : (Number(cpiData.adjustedRentPerSqm) / 10000);
-                // For non-highest, use CBS calculator ratio (handles chaining)
-                if (!isHighest) ratio = Number(cpiData.adjustedRentPerSqm) / 10000;
                 indexedRent = periodBaseRent * ratio * (isVat ? 1 + vatPct : 1);
               }
             } catch (e) { /* keep base */ }

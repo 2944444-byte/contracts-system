@@ -24,23 +24,31 @@ export async function fetchCPI(year: number, month: number): Promise<number | nu
 }
 
 /**
- * שליפת המדד הגבוה ביותר בתקופה (לפי שיטת "מדד גבוה ביותר")
+ * @deprecated DO NOT USE — returns null intentionally.
+ *
+ * Originally meant to fetch the highest published CPI value in a date range
+ * for "highest_in_period" contracts, but had two fundamental problems:
+ *
+ *   1. The URL it used (`startPeriod=YYYY/MM&endPeriod=YYYY/MM`) returns an
+ *      HTML error page from CBS — not JSON. Every call ended up in the
+ *      `catch` block and returned null silently.
+ *
+ *   2. Even if the URL worked, the returned values would be raw published
+ *      CPI values under DIFFERENT base years (Israeli CPI re-bases every 2
+ *      years). Comparing raw values across base years is invalid — e.g.,
+ *      Oct-24 = 109.1 (base 2022) appears > Apr-25 = 103.1 (base 2024) but
+ *      the chained values are actually 115.88 < 117.61.
+ *
+ * For "highest_in_period" calculations use `fetchHighestChainedCpi` in
+ * `lib/cpi-server.ts` instead — it scans chained values via CBS calculator.
+ *
+ * This function is kept (returning null) only to avoid breaking call sites
+ * that haven't been migrated yet (notably AdvancesTab, which has been
+ * thoroughly verified by the user with this function returning null and
+ * MUST NOT have its calculation behaviour changed).
  */
-export async function fetchHighestCPI(fromYear: number, fromMonth: number, toYear: number, toMonth: number): Promise<number | null> {
-  try {
-    const from = `${fromYear}/${String(fromMonth).padStart(2,"0")}`;
-    const to   = `${toYear}/${String(toMonth).padStart(2,"0")}`;
-    const url  = `https://api.cbs.gov.il/index/data/price?id=120010&startPeriod=${from}&endPeriod=${to}&format=json&download=false&lang=he`;
-    const res  = await fetch(url, { next: { revalidate: 86400 } });
-    if (!res.ok) return null;
-    const data = await res.json();
-    const rows = data?.DataSet?.Series?.[0]?.obs ?? [];
-    if (!rows.length) return null;
-    const values = rows.map(function(r: any) { return parseFloat(r.obsValue ?? r.value ?? "0"); });
-    return Math.max(...values);
-  } catch {
-    return null;
-  }
+export async function fetchHighestCPI(_fromYear: number, _fromMonth: number, _toYear: number, _toMonth: number): Promise<number | null> {
+  return null;
 }
 
 /**

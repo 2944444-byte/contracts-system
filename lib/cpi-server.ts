@@ -85,3 +85,87 @@ export async function fetchCpiAdjusted(params: {
     return { success: false, error: `Fetch failed: ${e.name} — ${e.message}` };
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// fetchHighestChainedCpi — for "highest_in_period" / "no_drop" contracts.
+//
+// Scans every month in [scanFromYear/Month .. scanToYear/Month], asks CBS
+// calculator for the precise chained ratio from baseFromDate to each month,
+// and returns the month with the HIGHEST chained value. This is the only
+// correct way to find the peak across Israeli base-year changes (every 2
+// years) — comparing raw published index values across bases is invalid.
+//
+// Caching: results are memoized per (baseFromDate, monthKey) for the lifetime
+// of the server process. ~30 unique CBS calls per contract per session.
+//
+// @param baseFromDate    MM-DD-YYYY — the contract's base date
+// @param scanFromYear/Month  inclusive — usually the base month
+// @param scanToYear/Month    inclusive — usually the t-2 known month at payment
+// ─────────────────────────────────────────────────────────────────────────────
+const _highestChainedCache = new Map<string, number>();
+
+export async function fetchHighestChainedCpi(params: {
+  baseFromDate: string;     // MM-DD-YYYY
+  scanFromYear: number;
+  scanFromMonth: number;    // 1..12
+  scanToYear: number;
+  scanToMonth: number;      // 1..12
+}): Promise<{
+  success: boolean;
+  peakYear?: number;
+  peakMonth?: number;
+  peakToValue?: number;     // precise CBS to_value for value=10000
+  peakRatio?: number;       // peakToValue / 10000
+  error?: string;
+}> {
+  const { baseFromDate, scanFromYear, scanFromMonth, scanToYear, scanToMonth } = params;
+  if (!baseFromDate) return { success: false, error: "Missing baseFromDate" };
+
+  const fromYM = scanFromYear * 12 + (scanFromMonth - 1);
+  const toYM = scanToYear * 12 + (scanToMonth - 1);
+  if (toYM < fromYM) return { success: false, error: "scanTo < scanFrom" };
+
+  let peakKey = "";
+  let peakValue = 0;
+  let peakY = 0, peakM = 0;
+
+  for (let ym = fromYM; ym <= toYM; ym++) {
+    const y = Math.floor(ym / 12);
+    const m = (ym % 12) + 1;
+    const cacheKey = `${baseFromDate}|${y}-${m}`;
+    let toValue = _highestChainedCache.get(cacheKey);
+
+    if (toValue === undefined) {
+      // CPI of month M becomes "known" on the 16th of month M+1.
+      // Use that publish date so CBS calculator treats month M as the to-index.
+      let pubY = y;
+      let pubM = m + 1;
+      if (pubM > 12) { pubM = 1; pubY++; }
+      const pubDate = `${String(pubM).padStart(2, "0")}-16-${pubY}`;
+
+      const result = await fetchCpiAdjusted({
+        value: 10000,
+        fromDate: baseFromDate,
+        toDate: pubDate,
+      });
+      toValue = result.success ? (Number(result.adjustedRentPerSqm) || 0) : 0;
+      _highestChainedCache.set(cacheKey, toValue);
+    }
+
+    if (toValue > peakValue) {
+      peakValue = toValue;
+      peakKey = `${y}-${m}`;
+      peakY = y;
+      peakM = m;
+    }
+  }
+
+  if (peakValue <= 0) return { success: false, error: "No data" };
+  return {
+    success: true,
+    peakYear: peakY,
+    peakMonth: peakM,
+    peakToValue: peakValue,
+    peakRatio: peakValue / 10000,
+  };
+}
