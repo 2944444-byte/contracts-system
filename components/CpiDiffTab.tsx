@@ -189,49 +189,70 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
       var rows: CpiDiffRow[] = [];
 
       for (var c of contracts) {
-        // Base rent at contract start (before any tiers)
-        var startMonthly = 0;
-        (c.contract_spaces || []).forEach(function(cs: any) {
-          var area = cs.spaces?.area || 0;
-          if (cs.charge_method === "fixed" && cs.fixed_rent) startMonthly += Number(cs.fixed_rent);
-          else startMonthly += (Number(cs.price_per_sqm) || Number(c.rent_per_sqm) || 0) * area;
-        });
-        if (startMonthly === 0) startMonthly = (Number(c.rent_per_sqm) || 0) * (Number(c.charged_area) || 0);
-
-        // Compute step-rent: walk year by year from contract start, applying tiers
+        // Step-rent: walk EACH SPACE year by year, applying its own tiers
+        // (per-space tiers take priority over contract-level tiers — same as
+        // AdvancesTab). Sum across spaces to get the contract's monthly rent.
+        // This is critical for contracts where tiers vary by unit (e.g. only
+        // offices escalate but commercial stays flat).
         var contractStartDate = new Date(c.start_date);
         var contractYearsFromStart = year - contractStartDate.getFullYear();
         var contractTiers = (allTiers ?? []).filter(function(t: any) { return t.contract_id === c.id && !t.space_id; });
-        // Compute rents BEFORE and AFTER anniversary in target year
-        var rentBeforeAnniversary = startMonthly;
-        var rentAfterAnniversary = startMonthly;
-        if (contractTiers.length > 0 && contractYearsFromStart > 0) {
-          var currentRent = startMonthly;
-          for (var ty = 1; ty <= contractYearsFromStart; ty++) {
-            var tier = contractTiers.find(function(t: any) {
-              if (t.is_recurring) {
-                var every = t.recurring_every_years || 1;
-                return ty % every === 0;
+
+        var startMonthly = 0;
+        var rentBeforeAnniversary = 0;
+        var rentAfterAnniversary = 0;
+
+        (c.contract_spaces || []).forEach(function(cs: any) {
+          var area = Number(cs.spaces?.area) || 0;
+          var isFixed = cs.charge_method === "fixed";
+          var baseRentPerSqm = Number(cs.price_per_sqm) || Number(c.rent_per_sqm) || 0;
+          var spaceStart = isFixed ? (Number(cs.fixed_rent) || 0) : baseRentPerSqm * area;
+          startMonthly += spaceStart;
+
+          var spaceTiers = (allTiers ?? []).filter(function(t: any) { return t.contract_id === c.id && t.space_id === cs.space_id; });
+          var activeTiers = spaceTiers.length > 0 ? spaceTiers : contractTiers;
+
+          var spaceBefore = spaceStart;
+          var spaceAfter = spaceStart;
+
+          if (activeTiers.length > 0 && contractYearsFromStart > 0) {
+            var currentRent = spaceStart;
+            for (var ty = 1; ty <= contractYearsFromStart; ty++) {
+              var tier = activeTiers.find(function(t: any) {
+                if (t.is_recurring) {
+                  var every = t.recurring_every_years || 1;
+                  return ty % every === 0;
+                }
+                return ty >= t.from_year && ty <= t.to_year;
+              });
+              if (tier) {
+                if (tier.increase_type === "pct") currentRent = currentRent * (1 + (Number(tier.increase_value) || 0) / 100);
+                else if (tier.increase_type === "fixed_sqm") currentRent = currentRent + (Number(tier.increase_value) || 0) * area;
+                else if (tier.increase_type === "fixed_total") currentRent = currentRent + (Number(tier.increase_value) || 0);
               }
-              return ty >= t.from_year && ty <= t.to_year;
-            });
-            if (tier) {
-              if (tier.increase_type === "pct") currentRent = currentRent * (1 + (Number(tier.increase_value) || 0) / 100);
-              else if (tier.increase_type === "fixed_sqm") {
-                var totalArea = (c.contract_spaces || []).reduce(function(s: number, cs: any) { return s + (cs.spaces?.area || 0); }, 0);
-                currentRent = currentRent + (Number(tier.increase_value) || 0) * totalArea;
-              } else if (tier.increase_type === "fixed_total") currentRent = currentRent + (Number(tier.increase_value) || 0);
+              if (ty === contractYearsFromStart - 1) spaceBefore = currentRent;
+              if (ty === contractYearsFromStart) spaceAfter = currentRent;
             }
-            if (ty === contractYearsFromStart - 1) rentBeforeAnniversary = currentRent;
-            if (ty === contractYearsFromStart) rentAfterAnniversary = currentRent;
+            if (contractYearsFromStart === 1) spaceBefore = spaceStart;
           }
-          if (contractYearsFromStart === 1) rentBeforeAnniversary = startMonthly;
+
+          rentBeforeAnniversary += spaceBefore;
+          rentAfterAnniversary += spaceAfter;
+        });
+
+        if (startMonthly === 0) {
+          startMonthly = (Number(c.rent_per_sqm) || 0) * (Number(c.charged_area) || 0);
+          rentBeforeAnniversary = startMonthly;
+          rentAfterAnniversary = startMonthly;
         }
 
         // Anniversary date in target year
         var anniversaryInYear = new Date(year, contractStartDate.getMonth(), contractStartDate.getDate());
+        // hasRentChange uses `>=` for the Jan 1 case: contracts starting on
+        // Jan 1 have their anniversary on the FIRST day of the year, so the
+        // entire year is at rentAfterAnniversary (not split).
         var hasRentChange = Math.abs(rentAfterAnniversary - rentBeforeAnniversary) > 0.01
-          && anniversaryInYear > new Date(year, 0, 1)
+          && anniversaryInYear >= new Date(year, 0, 1)
           && anniversaryInYear <= new Date(year, 11, 31);
 
         var mgmtMonthly = 0;
