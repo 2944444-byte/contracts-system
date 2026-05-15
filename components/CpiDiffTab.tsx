@@ -296,13 +296,51 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
     finally { setComputing(false); }
   }
 
-  function updateActualPaid(contractId: string, period: string, value: string) {
+  // Per-check interest rates (set when user edits actual paid)
+  const [interestRates, setInterestRates] = useState<Record<string, Record<string, number>>>({});
+
+  function updateActualPaid(contractId: string, period: string, value: string, shouldPay: number, paymentDate: string) {
     setActualPaidInputs(function(prev) {
       var copy = { ...prev };
       if (!copy[contractId]) copy[contractId] = {};
       copy[contractId][period] = value;
       return copy;
     });
+    // If user changed the amount AND it differs from shouldPay → ask about interest
+    var numVal = Number(value);
+    if (numVal > 0 && Math.abs(numVal - shouldPay) > 1) {
+      var existingRate = interestRates[contractId]?.[period];
+      if (existingRate === undefined) {
+        var ans = prompt("השינוי שהזנת יוצר הפרש מהסכום הנדרש.\nהאם להוסיף ריבית פיגורים? הזן אחוז שנתי (לדוגמה: 5).\nהשאר ריק או 0 ללא ריבית:", "0");
+        if (ans !== null) {
+          var rate = Number(ans) || 0;
+          setInterestRates(function(prev) {
+            var copy = { ...prev };
+            if (!copy[contractId]) copy[contractId] = {};
+            copy[contractId][period] = rate;
+            return copy;
+          });
+        }
+      }
+    }
+  }
+
+  // Compute live difference for a period (considering current input)
+  function liveDifference(p: any, contractId: string): { diff: number; interest: number; total: number } {
+    var input = actualPaidInputs[contractId]?.[p.label];
+    var actualPaid = input !== undefined && input !== "" ? Number(input) : p.actualPaid;
+    var diff = p.shouldPay - actualPaid;
+    var rate = interestRates[contractId]?.[p.label] || 0;
+    var interest = 0;
+    if (rate > 0 && Math.abs(diff) > 1) {
+      // Annual rate, prorated by days from period payment date to year end
+      var payDate = new Date(p.paymentDate);
+      var yearEnd = new Date(year, 11, 31);
+      var days = Math.max(0, Math.round((yearEnd.getTime() - payDate.getTime()) / 86400000));
+      interest = Math.abs(diff) * (rate / 100) * (days / 365);
+      if (diff < 0) interest = -interest;
+    }
+    return { diff: diff, interest: interest, total: diff + interest };
   }
 
   async function createCharges() {
@@ -433,18 +471,28 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
                               <td className="px-3 py-2 font-bold text-slate-800">{fmtMoney(p.shouldPay)}</td>
                               <td className="px-3 py-2">
                                 <input type="number" value={actualPaidInputs[r.contractId]?.[p.label] ?? String(p.actualPaid)}
-                                  onChange={function(e) { updateActualPaid(r.contractId, p.label, e.target.value); }}
+                                  onChange={function(e) { updateActualPaid(r.contractId, p.label, e.target.value, p.shouldPay, p.paymentDate); }}
                                   className="w-28 rounded border border-slate-300 px-2 py-1 text-sm text-right" />
                               </td>
-                              <td className={"px-3 py-2 rounded " + diffColor}>{fmtMoney(p.difference)}</td>
+                              <td className={"px-3 py-2 rounded " + diffColor}>
+                                {fmtMoney(liveDifference(p, r.contractId).total)}
+                                {liveDifference(p, r.contractId).interest !== 0 && (
+                                  <div className="text-[10px] text-amber-600">כולל ריבית {fmtMoney(liveDifference(p, r.contractId).interest)}</div>
+                                )}
+                              </td>
                             </tr>
                           );
                         })}
                       </tbody>
-                      <tfoot className={"border-t-2 border-slate-200 " + (r.totalDifference > 0 ? "bg-red-50" : r.totalDifference < 0 ? "bg-green-50" : "bg-slate-50")}>
+                      <tfoot className="border-t-2 border-slate-200 bg-slate-50">
                         <tr>
                           <td className="px-3 py-2 font-bold text-slate-700" colSpan={9}>סך הפרשי הצמדה בגין שכ&quot;ד ששולם ב-{year}</td>
-                          <td className={"px-3 py-2 font-black " + (r.totalDifference > 0 ? "text-red-700" : "text-green-700")}>{fmtMoney(r.totalDifference)}</td>
+                          <td className="px-3 py-2 font-black">
+                            {(function() {
+                              var liveTotal = r.periods.reduce(function(s: number, p: any) { return s + liveDifference(p, r.contractId).total; }, 0);
+                              return <span className={liveTotal > 0 ? "text-red-700" : liveTotal < 0 ? "text-green-700" : "text-slate-700"}>{fmtMoney(liveTotal)}</span>;
+                            })()}
+                          </td>
                         </tr>
                       </tfoot>
                     </table>
@@ -453,11 +501,18 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
               );
             })}
 
-            {/* Grand total */}
-            <div className={"rounded-xl border-2 p-4 text-center " + (grandTotalDiff > 0 ? "border-red-300 bg-red-50" : "border-green-300 bg-green-50")}>
-              <div className={"text-2xl font-black " + (grandTotalDiff > 0 ? "text-red-800" : "text-green-800")}>{fmtMoney(grandTotalDiff)}</div>
-              <div className="text-sm text-slate-600">סה&quot;כ הפרשי הצמדה לכל השוכרים — שנת {year}</div>
-            </div>
+            {/* Grand total (live) */}
+            {(function() {
+              var liveGrand = results.reduce(function(s, r) {
+                return s + r.periods.reduce(function(ss: number, p: any) { return ss + liveDifference(p, r.contractId).total; }, 0);
+              }, 0);
+              return (
+                <div className={"rounded-xl border-2 p-4 text-center " + (liveGrand > 0 ? "border-red-300 bg-red-50" : "border-green-300 bg-green-50")}>
+                  <div className={"text-2xl font-black " + (liveGrand > 0 ? "text-red-800" : "text-green-800")}>{fmtMoney(liveGrand)}</div>
+                  <div className="text-sm text-slate-600">סה&quot;כ הפרשי הצמדה לכל השוכרים — שנת {year}</div>
+                </div>
+              );
+            })()}
 
             <div className="flex gap-3">
               <button onClick={createCharges} disabled={creatingCharges}
