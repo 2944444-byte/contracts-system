@@ -484,9 +484,10 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
           if (unitExit && unitExit < effectiveEnd) effectiveEnd = unitExit;
 
           if (effectiveStart > effectiveEnd) continue; // Not active in this year
-          // Skip units that enter AFTER the target year (not after calc date —
-          // contracts starting mid-year but within the year should be included)
-          if (unitEntry > yearEnd) continue;
+          // Skip units that enter AFTER the CPI calc date — those units didn't
+          // exist yet when the advances were being prepared, so they can't be
+          // part of this year's check book.
+          if (unitEntry > cutoffDate) continue;
 
           // Grace helper: given a period [pStart, pEnd], compute how much of
           // the rent and management should actually be charged.
