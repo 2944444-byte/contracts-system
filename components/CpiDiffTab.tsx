@@ -186,6 +186,13 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
       var { data: allTiers } = await supabase.from("contract_price_tiers")
         .select("*").in("contract_id", contractIds).order("tier_number");
 
+      // Load exercised contract options (for mid-year price changes —
+      // same source AdvancesTab uses, so both screens stay in sync).
+      var { data: allOptions } = await supabase.from("contract_options")
+        .select("*").in("contract_id", contractIds)
+        .eq("is_exercised", true)
+        .order("start_date", { ascending: true });
+
       var rows: CpiDiffRow[] = [];
 
       for (var c of contracts) {
@@ -201,6 +208,10 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
         var startMonthly = 0;
         var rentBeforeAnniversary = 0;
         var rentAfterAnniversary = 0;
+        var contractOptions = (allOptions ?? []).filter(function(o: any) { return o.contract_id === c.id; });
+        // Anniversary date in target year (may be overridden by an option that
+        // starts mid-year — handled below per-space).
+        var anniversaryInYear = new Date(year, contractStartDate.getMonth(), contractStartDate.getDate());
 
         (c.contract_spaces || []).forEach(function(cs: any) {
           var area = Number(cs.spaces?.area) || 0;
@@ -236,6 +247,41 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
             if (contractYearsFromStart === 1) spaceBefore = spaceStart;
           }
 
+          // Apply exercised contract options (same logic as AdvancesTab):
+          // - Option starting in target year → mid-year change at optStart
+          // - Option starting before target year → entire year at option rate
+          var spaceBaseAfterOpts = spaceStart; // for "before target year" path
+          contractOptions.forEach(function(opt: any) {
+            if (!opt.start_date) return;
+            var optStart = new Date(opt.start_date);
+            var optYear = optStart.getFullYear();
+            if (optYear === year) {
+              var newRent = 0;
+              if (opt.rent_mechanism === "new_value" && opt.new_rent_value) {
+                newRent = isFixed ? Number(opt.new_rent_value) : Number(opt.new_rent_value) * area;
+              } else if (opt.rent_mechanism === "increase_pct" && opt.rent_increase_pct) {
+                newRent = spaceAfter * (1 + Number(opt.rent_increase_pct) / 100);
+              } else return;
+              if (newRent > 0) {
+                spaceBefore = spaceAfter;  // current rate is "before option"
+                spaceAfter = newRent;       // new rate is "after option"
+                anniversaryInYear = optStart; // anniversary shifts to option date
+              }
+            } else if (optYear < year) {
+              var optRent = 0;
+              if (opt.rent_mechanism === "new_value" && opt.new_rent_value) {
+                optRent = isFixed ? Number(opt.new_rent_value) : Number(opt.new_rent_value) * area;
+              } else if (opt.rent_mechanism === "increase_pct" && opt.rent_increase_pct) {
+                optRent = spaceBaseAfterOpts * (1 + Number(opt.rent_increase_pct) / 100);
+              }
+              if (optRent > 0) {
+                spaceBaseAfterOpts = optRent;
+                spaceBefore = optRent;
+                spaceAfter = optRent;
+              }
+            }
+          });
+
           rentBeforeAnniversary += spaceBefore;
           rentAfterAnniversary += spaceAfter;
         });
@@ -245,9 +291,6 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
           rentBeforeAnniversary = startMonthly;
           rentAfterAnniversary = startMonthly;
         }
-
-        // Anniversary date in target year
-        var anniversaryInYear = new Date(year, contractStartDate.getMonth(), contractStartDate.getDate());
         // hasRentChange uses `>=` for the Jan 1 case: contracts starting on
         // Jan 1 have their anniversary on the FIRST day of the year, so the
         // entire year is at rentAfterAnniversary (not split).
