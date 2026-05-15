@@ -3,7 +3,8 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit-log';
-import { fetchCpiAdjusted } from '@/lib/cpi-server';
+import { fetchCpiAdjusted, fetchHighestChainedCpi } from '@/lib/cpi-server';
+import { getKnownIndexMonth } from '@/lib/cpi-utils';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 
@@ -31,7 +32,7 @@ export default function TenantsPage() {
   const [fContactPhone, setFContactPhone] = useState("");
   const [fNotes, setFNotes] = useState("");
   const [fContacts, setFContacts] = useState<{name:string;role:string;email:string;phone:string}[]>([]);
-  const [cpiRatio, setCpiRatio] = useState(1);
+  const [cpiRatios, setCpiRatios] = useState<Record<string, number>>({});
 
   useEffect(() => { loadAll(); }, []);
 
@@ -39,24 +40,67 @@ export default function TenantsPage() {
     const [{ data: t }, { data: c }] = await Promise.all([
       supabase.from("tenants").select("*").order("name"),
       supabase.from("contracts")
-        .select("id, status, start_date, end_date, rent_per_sqm, charged_area, investment_addition, tenant_id, index_base_date, properties(name)")
+        .select("id, status, start_date, end_date, rent_per_sqm, charged_area, investment_addition, tenant_id, index_base_date, indexation_method, index_mechanism, properties(name)")
         .in("status", ["active","expiring","extended","upcoming"]).order("end_date"),
     ]);
     setTenants(t ?? []);
     setContracts(c ?? []);
     setLoading(false);
     if (!selected && (t ?? []).length > 0) setSelected((t ?? [])[0].id);
-    // Calculate CPI ratio for indexed revenue display
+    // Per-contract CPI ratios. Group by (base date + mechanism) to dedupe
+    // CBS calls; each contract still gets its own ratio.
     try {
-      var rep = (c ?? []).find(function(ct: any) { return ct.index_base_date; });
-      if (rep) {
-        var now = new Date();
-        var dt = new Date(rep.index_base_date); if (dt.getDate() === 15) dt.setDate(16);
-        var fromD = String(dt.getMonth()+1).padStart(2,"0")+"-"+String(dt.getDate()).padStart(2,"0")+"-"+dt.getFullYear();
-        var toD = String(now.getMonth()+1).padStart(2,"0")+"-"+String(now.getDate()).padStart(2,"0")+"-"+now.getFullYear();
-        var cpiData = await fetchCpiAdjusted({ value: 100, fromDate: fromD, toDate: toD });
-        if (cpiData.success && cpiData.adjustedRentPerSqm) setCpiRatio(cpiData.adjustedRentPerSqm / 100);
-      }
+      var toCbsDate = function(d: string): string {
+        var dt = new Date(d); if (dt.getDate() === 15) dt.setDate(16);
+        var mm = String(dt.getMonth()+1).padStart(2,"0");
+        var dd = String(dt.getDate()).padStart(2,"0");
+        return mm + "-" + dd + "-" + dt.getFullYear();
+      };
+      var now = new Date();
+      var todayCbs = String(now.getMonth()+1).padStart(2,"0")+"-"+String(now.getDate()).padStart(2,"0")+"-"+now.getFullYear();
+      var nowKnown = getKnownIndexMonth(now);
+
+      var validContracts = (c ?? []).filter(function(x: any) {
+        return x.index_base_date && x.indexation_method && x.indexation_method !== "none";
+      });
+
+      var groupMap: Record<string, { contractIds: string[]; fromDate: string; rawBase: string; isHighest: boolean }> = {};
+      validContracts.forEach(function(x: any) {
+        var fromDate = toCbsDate(x.index_base_date);
+        var isHighest = x.indexation_method === "highest_in_period" || x.indexation_method === "no_drop"
+          || x.index_mechanism === "highest_in_period" || x.index_mechanism === "no_drop";
+        var key = fromDate + "|" + (isHighest ? "H" : "S");
+        if (!groupMap[key]) groupMap[key] = { contractIds: [], fromDate: fromDate, rawBase: x.index_base_date, isHighest: isHighest };
+        groupMap[key].contractIds.push(x.id);
+      });
+
+      var groupResults = await Promise.all(Object.keys(groupMap).map(async function(k) {
+        var g = groupMap[k];
+        try {
+          if (g.isHighest) {
+            var baseDateObj = new Date(g.rawBase);
+            var peak = await fetchHighestChainedCpi({
+              baseFromDate: g.fromDate,
+              scanFromYear: baseDateObj.getFullYear(),
+              scanFromMonth: baseDateObj.getMonth() + 1,
+              scanToYear: nowKnown.year,
+              scanToMonth: nowKnown.month,
+            });
+            if (peak.success && peak.peakRatio) return { key: k, ratio: peak.peakRatio };
+          }
+          var data: any = await fetchCpiAdjusted({ value: 10000, fromDate: g.fromDate, toDate: todayCbs });
+          if (!data || !data.success) return { key: k, ratio: 1 };
+          return { key: k, ratio: (Number(data.adjustedRentPerSqm) || 10000) / 10000 };
+        } catch { return { key: k, ratio: 1 }; }
+      }));
+
+      var ratioMap: Record<string, number> = {};
+      groupResults.forEach(function(r: any) {
+        var g = groupMap[r.key];
+        if (!g) return;
+        g.contractIds.forEach(function(cid: string) { ratioMap[cid] = r.ratio; });
+      });
+      setCpiRatios(ratioMap);
     } catch(e) {}
   }
 
@@ -128,7 +172,12 @@ export default function TenantsPage() {
   const selTenant = tenants.find(t => t.id === selected);
   const selContracts = contracts.filter(c => c.tenant_id === selected);
   const selRevenueBase = selContracts.reduce((s, c) => s + (c.rent_per_sqm ?? 0) * (c.charged_area ?? 0) + (c.investment_addition ?? 0), 0);
-  const selRevenue = selRevenueBase * cpiRatio;
+  // Indexed revenue: each contract uses its own ratio (highest contracts get
+  // the chained peak; standard contracts get the base→today ratio).
+  const selRevenue = selContracts.reduce((s, c) => {
+    var r = cpiRatios[c.id] || 1;
+    return s + ((c.rent_per_sqm ?? 0) * (c.charged_area ?? 0) + (c.investment_addition ?? 0)) * r;
+  }, 0);
 
   const STATUS_MAP: Record<string, {label: string; color: string}> = {
     active:   { label: "פעיל",    color: "bg-green-100 text-green-700"   },
@@ -244,7 +293,7 @@ export default function TenantsPage() {
                   </div>
                   <div className="divide-y divide-slate-100">
                     {selContracts.map(c => {
-                      const mon = ((c.rent_per_sqm ?? 0) * (c.charged_area ?? 0) + (c.investment_addition ?? 0)) * cpiRatio;
+                      const mon = ((c.rent_per_sqm ?? 0) * (c.charged_area ?? 0) + (c.investment_addition ?? 0)) * (cpiRatios[c.id] || 1);
                       const days = c.end_date ? Math.ceil((new Date(c.end_date).getTime() - Date.now()) / 86400000) : null;
                       const si = STATUS_MAP[c.status] ?? { label: c.status, color: "bg-slate-100 text-slate-600" };
                       return (

@@ -3,7 +3,8 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit-log';
-import { fetchCpiAdjusted } from '@/lib/cpi-server';
+import { fetchCpiAdjusted, fetchHighestChainedCpi } from '@/lib/cpi-server';
+import { getKnownIndexMonth } from '@/lib/cpi-utils';
 import PropertyBudgetManager from '@/components/PropertyBudgetManager';
 
 function formatDateForCbs(dateStr: string): string | null {
@@ -77,16 +78,22 @@ export default function PropertiesPage() {
         var propContracts = contracts.filter(function(c) { return c.property_id === selected && !c.is_amendment; });
         if (propContracts.length === 0) { setCpiRatios({}); return; }
 
-        // Group contracts by base date to deduplicate API calls
-        var groups: Record<string, string[]> = {};
+        // Group contracts by (base date + mechanism). Contracts with same
+        // base date but different mechanisms (e.g. standard vs highest)
+        // need different ratios.
+        var groups: Record<string, { contractIds: string[]; fromDate: string; rawBase: string; isHighest: boolean }> = {};
         propContracts.forEach(function(c) {
           if (c.indexation_method === "none") return;
           var baseDate = c.index_base_date || null;
           if (!baseDate) return;
           var cbsDate = formatDateForCbs(baseDate);
           if (!cbsDate) return;
-          if (!groups[cbsDate]) groups[cbsDate] = [];
-          groups[cbsDate].push(c.id);
+          var mech = c.indexation_method || "standard";
+          var isHighest = mech === "highest_in_period" || mech === "no_drop"
+            || c.index_mechanism === "highest_in_period" || c.index_mechanism === "no_drop";
+          var key = cbsDate + "|" + (isHighest ? "H" : "S");
+          if (!groups[key]) groups[key] = { contractIds: [], fromDate: cbsDate, rawBase: baseDate, isHighest: isHighest };
+          groups[key].contractIds.push(c.id);
         });
 
         var groupKeys = Object.keys(groups);
@@ -96,20 +103,37 @@ export default function PropertiesPage() {
         var todayForCbs = formatDateForCbs(new Date().toISOString());
         if (!todayForCbs) { setCpiLoading(false); return; }
 
-        var results = await Promise.all(groupKeys.map(async function(fromDate) {
+        var results = await Promise.all(groupKeys.map(async function(key) {
+          var g = groups[key];
           try {
-            var data: any = await fetchCpiAdjusted({ value: 10000, fromDate: fromDate, toDate: todayForCbs as string });
-            if (!data || !data.success) return { fromDate: fromDate, ratio: 1 };
-            return { fromDate: fromDate, ratio: (Number(data.adjustedRentPerSqm) || 10000) / 10000 };
+            if (g.isHighest) {
+              var baseDateObj = new Date(g.rawBase);
+              var nowKnown = getKnownIndexMonth(new Date());
+              var peak = await fetchHighestChainedCpi({
+                baseFromDate: g.fromDate,
+                scanFromYear: baseDateObj.getFullYear(),
+                scanFromMonth: baseDateObj.getMonth() + 1,
+                scanToYear: nowKnown.year,
+                scanToMonth: nowKnown.month,
+              });
+              if (peak.success && peak.peakRatio) {
+                return { key: key, ratio: peak.peakRatio };
+              }
+              // fall through to standard if peak scan fails
+            }
+            var data: any = await fetchCpiAdjusted({ value: 10000, fromDate: g.fromDate, toDate: todayForCbs as string });
+            if (!data || !data.success) return { key: key, ratio: 1 };
+            return { key: key, ratio: (Number(data.adjustedRentPerSqm) || 10000) / 10000 };
           } catch {
-            return { fromDate: fromDate, ratio: 1 };
+            return { key: key, ratio: 1 };
           }
         }));
 
         var map: Record<string, number> = {};
-        results.forEach(function(r: any, i: number) {
-          var contractIds = groups[groupKeys[i]] || [];
-          contractIds.forEach(function(cid: string) { map[cid] = r.ratio; });
+        results.forEach(function(r: any) {
+          var g = groups[r.key];
+          if (!g) return;
+          g.contractIds.forEach(function(cid: string) { map[cid] = r.ratio; });
         });
         setCpiRatios(map);
         setCpiLoading(false);
@@ -124,7 +148,7 @@ export default function PropertiesPage() {
   async function loadAll() {
     const [{ data: p }, { data: c }, { data: sp }, { data: co }] = await Promise.all([
       supabase.from("properties").select("*, companies(company_name)").order("name"),
-      supabase.from("contracts").select("id, status, rent_per_sqm, charged_area, investment_addition, property_id, end_date, indexation_method, index_base_date, index_base_value, is_amendment, parent_contract_id, tenants(name), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area))").in("status",["active","expiring","extended"]),
+      supabase.from("contracts").select("id, status, rent_per_sqm, charged_area, investment_addition, property_id, end_date, indexation_method, index_mechanism, index_base_date, index_base_value, is_amendment, parent_contract_id, tenants(name), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area))").in("status",["active","expiring","extended"]),
       supabase.from("spaces").select("id, property_id, status, space_name, area").order("space_name"),
       supabase.from("companies").select("id,company_name").order("company_name"),
     ]);

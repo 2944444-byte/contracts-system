@@ -335,7 +335,13 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
                 // (uses the value=10000 trick so we get the chained ratio
                 // straight from CBS — handles base-year changes correctly).
                 var ratio = Number(cpiData.adjustedRentPerSqm) / 10000;
-                var isHighest = c.indexation_method === "highest_in_period" || c.index_mechanism === "highest_in_period";
+                // Treat "no_drop" the same as "highest_in_period": both mean
+                // the indexed rent never decreases, so we look for the peak
+                // CPI in the period.
+                var isHighest = c.indexation_method === "highest_in_period"
+                  || c.index_mechanism === "highest_in_period"
+                  || c.indexation_method === "no_drop"
+                  || c.index_mechanism === "no_drop";
 
                 if (isHighest) {
                   // "מדד גבוה ביותר" — find the highest CHAINED CPI in

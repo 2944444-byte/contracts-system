@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { supabase } from '@/lib/supabase';
 import { syncContractStatuses } from '@/lib/contractSync';
 import { logAudit } from '@/lib/audit-log';
-import { fetchCpiAdjusted } from '@/lib/cpi-server';
+import { fetchCpiAdjusted, fetchHighestChainedCpi } from '@/lib/cpi-server';
 import { calcChainingCoefficient, formatPeriod } from '@/lib/cpi-utils';
 import { buildPriceTimeline, calculateTierPreviews, type PriceTier } from '@/lib/contract-utils';
 // CPI + price timeline
@@ -300,33 +300,27 @@ export default function ContractsPage() {
     const knownTo = getKnownIndexMonth(new Date());
     const idxMethod = selContract.indexation_method || "standard";
 
-    // For "highest_in_period" / "no_drop": find highest CPI between base and today
-    async function findHighestCpi() {
-      var { data: records } = await supabase.from("cpi_records")
-        .select("year,month,value,base_year")
-        .order("year").order("month");
-      if (!records || records.length === 0) return null;
-      var baseDateObj = new Date(refDateStr);
-      var baseYM = baseDateObj.getFullYear() * 12 + baseDateObj.getMonth();
-      var todayYM = new Date().getFullYear() * 12 + new Date().getMonth();
-      var inPeriod = records.filter(function(r: any) {
-        var ym = r.year * 12 + (r.month - 1);
-        return ym >= baseYM && ym <= todayYM;
-      });
-      if (inPeriod.length === 0) return null;
-      var highest = inPeriod.reduce(function(a: any, b: any) { return Number(b.value) > Number(a.value) ? b : a; });
-      return highest;
-    }
+    // For "highest_in_period" / "no_drop": find the highest CHAINED CPI
+    // between base and today via CBS calculator. Scanning DB cpi_records by
+    // raw value gives wrong peaks across base-year changes (Israeli CPI
+    // re-bases every 2 years — raw values not comparable across bases).
 
     async function runCpiCalculation() {
       // For highest/no_drop methods, find peak CPI and use that as "current"
       if (idxMethod === "highest_in_period" || idxMethod === "no_drop") {
-        var highest = await findHighestCpi();
-        if (highest) {
+        var baseDateObj = new Date(refDateStr);
+        var nowKnown = getKnownIndexMonth(new Date());
+        var peak = await fetchHighestChainedCpi({
+          baseFromDate: baseDate,
+          scanFromYear: baseDateObj.getFullYear(),
+          scanFromMonth: baseDateObj.getMonth() + 1,
+          scanToYear: nowKnown.year,
+          scanToMonth: nowKnown.month,
+        });
+        if (peak.success && peak.peakYear && peak.peakMonth) {
           // CBS t-2 rule: to make month X the "known" index, send date = month (X+1), day 16+
-          // Peak in 8/2025 → send 9/16/2025 so CBS knows about August's CPI
-          var publishYear = highest.year;
-          var publishMonth = highest.month + 1;
+          var publishYear = peak.peakYear;
+          var publishMonth = peak.peakMonth + 1;
           if (publishMonth > 12) { publishMonth = 1; publishYear++; }
           var highestDate = `${String(publishMonth).padStart(2, "0")}-16-${publishYear}`;
           var data = await fetchCpiAdjusted({ value: totalRentPerSqm, fromDate: baseDate, toDate: highestDate });
@@ -337,14 +331,14 @@ export default function ContractsPage() {
               adjustedRentPerSqm: data.adjustedRentPerSqm,
               changePct: data.changePct,
               fromDate: data.fromDate,
-              toDate: `${highest.month}/${highest.year} (שיא)`,
+              toDate: `${peak.peakMonth}/${peak.peakYear} (שיא)`,
               fromIndexValue: data.fromIndexValue,
               toIndexValue: data.toIndexValue,
               baseYear: data.baseYear,
               verificationUrl: data.verificationUrl,
               method: idxMethod,
-              peakMonth: `${highest.month}/${highest.year}`,
-              peakValue: highest.value,
+              peakMonth: `${peak.peakMonth}/${peak.peakYear}`,
+              peakValue: data.toIndexValue,
             });
             setCpiLoading(false);
             return;
@@ -437,15 +431,6 @@ export default function ContractsPage() {
         var idxMethod = selContract.indexation_method || "standard";
         var useHighest = idxMethod === "highest_in_period" || idxMethod === "no_drop";
 
-        // For highest_in_period: pre-load all CPI records once, find peak per base date
-        var allCpiRecords: any[] | null = null;
-        if (useHighest) {
-          var { data: records } = await supabase.from("cpi_records")
-            .select("year,month,value,base_year")
-            .order("year").order("month");
-          allCpiRecords = records || [];
-        }
-
         var todayForCbs = formatDateForCbs(new Date().toISOString());
         if (!todayForCbs) { setPerUnitCpi({}); return; }
 
@@ -466,32 +451,31 @@ export default function ContractsPage() {
         var groupKeys = Object.keys(groups);
         if (groupKeys.length === 0) { setPerUnitCpi({}); return; }
 
-        // For each group, determine target date (today or peak)
+        // For each group, determine the precise ratio.
+        // - Standard: 1 CBS call from base to today.
+        // - Highest / no_drop: scan all months in period via CBS calculator
+        //   to find the chained peak (raw-value comparison via cpi_records
+        //   gives wrong peaks across base-year changes).
         var results = await Promise.all(groupKeys.map(async function(fromDate) {
-          var toDate = todayForCbs as string;
-          if (useHighest && allCpiRecords && allCpiRecords.length > 0) {
+          if (useHighest) {
             var rawBase = groupBaseDates[fromDate];
             var baseDateObj = new Date(rawBase);
-            var baseYM = baseDateObj.getFullYear() * 12 + baseDateObj.getMonth();
-            var todayYM = new Date().getFullYear() * 12 + new Date().getMonth();
-            var inPeriod = allCpiRecords.filter(function(r: any) {
-              var ym = r.year * 12 + (r.month - 1);
-              return ym >= baseYM && ym <= todayYM;
+            var nowKnown = getKnownIndexMonth(new Date());
+            var peak = await fetchHighestChainedCpi({
+              baseFromDate: fromDate,
+              scanFromYear: baseDateObj.getFullYear(),
+              scanFromMonth: baseDateObj.getMonth() + 1,
+              scanToYear: nowKnown.year,
+              scanToMonth: nowKnown.month,
             });
-            if (inPeriod.length > 0) {
-              var highest = inPeriod.reduce(function(a: any, b: any) {
-                return Number(b.value) > Number(a.value) ? b : a;
-              });
-              // t-2 rule: peak month X is "known" from month (X+1) day 16
-              var pubYear = highest.year;
-              var pubMonth = highest.month + 1;
-              if (pubMonth > 12) { pubMonth = 1; pubYear++; }
-              toDate = `${String(pubMonth).padStart(2, "0")}-16-${pubYear}`;
+            if (peak.success && peak.peakRatio) {
+              return { fromDate: fromDate, ratio: peak.peakRatio, source: "cbs" };
             }
+            // Fall through to standard if peak scan fails
           }
           try {
             // Use 10000 instead of 1 to avoid rounding errors (CBS rounds to 2 decimals)
-            var data: any = await fetchCpiAdjusted({ value: 10000, fromDate: fromDate, toDate: toDate });
+            var data: any = await fetchCpiAdjusted({ value: 10000, fromDate: fromDate, toDate: todayForCbs });
             if (!data || !data.success) return { fromDate: fromDate, ratio: 1, source: "error" };
             var preciseRatio = (Number(data.adjustedRentPerSqm) || 10000) / 10000;
             return { fromDate: fromDate, ratio: preciseRatio, source: "cbs" };

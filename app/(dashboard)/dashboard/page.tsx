@@ -2,7 +2,8 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from '@/lib/supabase';
-import { fetchCpiAdjusted } from '@/lib/cpi-server';
+import { fetchCpiAdjusted, fetchHighestChainedCpi } from '@/lib/cpi-server';
+import { getKnownIndexMonth } from '@/lib/cpi-utils';
 
 function fmtMoney(n: number) { return "₪" + (n ?? 0).toLocaleString("he-IL",{minimumFractionDigits:2,maximumFractionDigits:2}); }
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
@@ -29,7 +30,7 @@ export default function DashboardPage() {
   const [spaces, setSpaces] = useState<any[]>([]);
   const [guarantees, setGuarantees] = useState<any[]>([]);
   const [alerts, setAlerts] = useState<any[]>([]);
-  const [cpiRatio, setCpiRatio] = useState(1);
+  const [cpiRatios, setCpiRatios] = useState<Record<string, number>>({});
 
   // Filters
   const [filterGroup, setFilterGroup] = useState("all");
@@ -45,7 +46,7 @@ export default function DashboardPage() {
     const [{ data: pg }, { data: p }, { data: c }, { data: sp }, { data: gu }, { data: al }] = await Promise.all([
       supabase.from("property_groups").select("id,group_name").order("group_name"),
       supabase.from("properties").select("id,name,group_id,city,total_area,property_type"),
-      supabase.from("contracts").select("id,status,rent_per_sqm,charged_area,investment_addition,property_id,end_date,start_date,index_base_date,is_amendment,tenants(name),properties(name),contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area))").in("status",["active","extended","expiring"]),
+      supabase.from("contracts").select("id,status,rent_per_sqm,charged_area,investment_addition,property_id,end_date,start_date,index_base_date,indexation_method,index_mechanism,is_amendment,tenants(name),properties(name),contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area))").in("status",["active","extended","expiring"]),
       supabase.from("spaces").select("id,property_id,status,space_name,area"),
       supabase.from("guarantees").select("id,contract_id,amount_required,amount_actual,end_date,guarantee_type").eq("status","active"),
       supabase.from("alerts").select("id,title,severity,due_date,entity_type,contract_id").eq("is_resolved",false).order("severity").order("due_date").limit(20),
@@ -58,24 +59,66 @@ export default function DashboardPage() {
     setGuarantees(gu ?? []);
     setAlerts(al ?? []);
 
-    // Fetch CPI ratio using a representative contract's base date
+    // Compute per-contract CPI ratios.
+    // Group contracts by (base date + mechanism) to dedupe CBS calls — but
+    // each contract still receives its own ratio based on its own base date
+    // and indexation method. For highest_in_period / no_drop contracts, scan
+    // the chained peak via CBS calculator. Standard contracts use a single
+    // base→today call.
     try {
-      var repContract = (c??[]).find(function(x: any){return x.index_base_date && !x.is_amendment;});
-      if (repContract) {
-        var fromDate = (function(d: string) {
-          var dt = new Date(d); if (dt.getDate() === 15) dt.setDate(16);
-          var mm = String(dt.getMonth()+1).padStart(2,"0");
-          var dd = String(dt.getDate()).padStart(2,"0");
-          return mm+"-"+dd+"-"+dt.getFullYear();
-        })(repContract.index_base_date);
-        var now = new Date();
-        var toDate = String(now.getMonth()+1).padStart(2,"0")+"-"+String(now.getDate()).padStart(2,"0")+"-"+now.getFullYear();
-        var cpiData = await fetchCpiAdjusted({ value: 10000, fromDate: fromDate, toDate: toDate });
-        if (cpiData.success && cpiData.adjustedRentPerSqm) {
-          setCpiRatio(Number(cpiData.adjustedRentPerSqm) / 10000);
-        }
-      }
-    } catch(e) { /* keep ratio = 1 */ }
+      var validContracts = (c ?? []).filter(function(x: any) {
+        return !x.is_amendment && x.index_base_date
+          && x.indexation_method && x.indexation_method !== "none";
+      });
+
+      var toCbsDate = function(d: string): string {
+        var dt = new Date(d); if (dt.getDate() === 15) dt.setDate(16);
+        var mm = String(dt.getMonth()+1).padStart(2,"0");
+        var dd = String(dt.getDate()).padStart(2,"0");
+        return mm + "-" + dd + "-" + dt.getFullYear();
+      };
+      var now = new Date();
+      var todayCbs = String(now.getMonth()+1).padStart(2,"0")+"-"+String(now.getDate()).padStart(2,"0")+"-"+now.getFullYear();
+      var nowKnown = getKnownIndexMonth(now);
+
+      var groupMap: Record<string, { contractIds: string[]; fromDate: string; rawBase: string; isHighest: boolean }> = {};
+      validContracts.forEach(function(x: any) {
+        var fromDate = toCbsDate(x.index_base_date);
+        var isHighest = x.indexation_method === "highest_in_period" || x.indexation_method === "no_drop"
+          || x.index_mechanism === "highest_in_period" || x.index_mechanism === "no_drop";
+        var key = fromDate + "|" + (isHighest ? "H" : "S");
+        if (!groupMap[key]) groupMap[key] = { contractIds: [], fromDate: fromDate, rawBase: x.index_base_date, isHighest: isHighest };
+        groupMap[key].contractIds.push(x.id);
+      });
+
+      var groupResults = await Promise.all(Object.keys(groupMap).map(async function(k) {
+        var g = groupMap[k];
+        try {
+          if (g.isHighest) {
+            var baseDateObj = new Date(g.rawBase);
+            var peak = await fetchHighestChainedCpi({
+              baseFromDate: g.fromDate,
+              scanFromYear: baseDateObj.getFullYear(),
+              scanFromMonth: baseDateObj.getMonth() + 1,
+              scanToYear: nowKnown.year,
+              scanToMonth: nowKnown.month,
+            });
+            if (peak.success && peak.peakRatio) return { key: k, ratio: peak.peakRatio };
+          }
+          var data: any = await fetchCpiAdjusted({ value: 10000, fromDate: g.fromDate, toDate: todayCbs });
+          if (!data || !data.success) return { key: k, ratio: 1 };
+          return { key: k, ratio: (Number(data.adjustedRentPerSqm) || 10000) / 10000 };
+        } catch { return { key: k, ratio: 1 }; }
+      }));
+
+      var ratioMap: Record<string, number> = {};
+      groupResults.forEach(function(r: any) {
+        var g = groupMap[r.key];
+        if (!g) return;
+        g.contractIds.forEach(function(cid: string) { ratioMap[cid] = r.ratio; });
+      });
+      setCpiRatios(ratioMap);
+    } catch(e) { /* keep ratios empty */ }
     setLoading(false);
   }
 
@@ -92,8 +135,14 @@ export default function DashboardPage() {
   });
 
   // ─── Calculations ───
+  // Base revenue: sum of contract base rents (no CPI applied).
+  // Indexed revenue: sum of (base × ratio) per contract — each contract gets
+  // its own ratio based on its own base date and indexation method.
   const baseRevenue = filteredContracts.reduce(function(s,c){return s+calcContractRent(c);},0);
-  const indexedRevenue = baseRevenue * cpiRatio;
+  const indexedRevenue = filteredContracts.reduce(function(s,c){
+    var r = cpiRatios[c.id] || 1;
+    return s + calcContractRent(c) * r;
+  },0);
 
   const totalArea = filteredSpaces.reduce(function(s,sp){return s+(Number(sp.area)||0);},0);
   const occupiedArea = filteredSpaces.filter(function(s){return s.status==="occupied";}).reduce(function(s,sp){return s+(Number(sp.area)||0);},0);
