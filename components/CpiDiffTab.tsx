@@ -446,26 +446,75 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
             } catch (e) { /* keep base */ }
           }
 
-          // Apply grace period factors (zero rent during grace; mgmt depends on type)
-          var gf = graceFactors(periodStart, periodEnd);
-          indexedRent = indexedRent * gf.rentFactor;
-          var mgmtAfterGrace = mgmtPeriodWithVat * gf.mgmtFactor;
+          // ─── GENERIC SOURCE-OF-TRUTH PATH ────────────────────────────
+          // If AdvancesTab already saved checks for this period, USE THEM
+          // as the rent base instead of recomputing rent from contract
+          // fields. This automatically inherits every adjustment the
+          // advances calc applies (per-space tiers, contract_options,
+          // parking, amendments, mid-year unit add/remove, grace…) — so
+          // CpiDiff stays in sync with AdvancesTab without duplicating
+          // logic. We only swap in the CURRENT CPI ratio.
+          //
+          //   saved_total       = sum(total_with_vat)
+          //   saved_indexed     = sum(indexed_rent)  (rent component, no VAT)
+          //   saved_ratio       = cpi_ratio at save time
+          //   rent_base         = saved_indexed / saved_ratio   ← contract rent at this period (no CPI)
+          //   non_rent_with_vat = saved_total − saved_indexed × VAT  ← mgmt + parking + anything else
+          //   new_indexed_vat   = rent_base × current_ratio × VAT
+          //   shouldPay         = new_indexed_vat + non_rent_with_vat
+          //   diff              = (current_ratio − saved_ratio) × rent_base × VAT
+          //
+          // Falls back to the fresh computation above when no saved data
+          // exists (or cpi_ratio/indexed_rent are missing).
+          var matchingAdvances = (savedAdvances ?? []).filter(function(a: any) { return a.contract_id === c.id && a.period === label; });
+          var hasSavedRent = matchingAdvances.length > 0
+            && matchingAdvances.every(function(a: any) {
+              return Number(a.cpi_ratio) > 0 && Number(a.indexed_rent) > 0;
+            });
+
+          var mgmtAfterGrace: number;
+          var actualPaid: number;
+          var userInput = actualPaidInputs[c.id]?.[label];
+
+          if (hasSavedRent) {
+            var savedTotalSum = matchingAdvances.reduce(function(s: number, a: any) {
+              return s + (Number(a.total_with_vat) || 0);
+            }, 0);
+            var savedRentIndexedSum = matchingAdvances.reduce(function(s: number, a: any) {
+              return s + (Number(a.indexed_rent) || 0);
+            }, 0);
+            var savedRatio = Number(matchingAdvances[0].cpi_ratio);
+            var savedRentBaseSum = savedRentIndexedSum / savedRatio;
+
+            // Override fresh indexedRent with delta-based value
+            indexedRent = savedRentBaseSum * ratio * (isVat ? 1 + vatPct : 1);
+            // Non-rent (mgmt + parking + whatever) = saved_total minus saved rent
+            var savedRentWithVat = savedRentIndexedSum * (isVat ? 1 + vatPct : 1);
+            mgmtAfterGrace = savedTotalSum - savedRentWithVat;
+            // actualPaid: user input > saved actual_paid > saved total_with_vat
+            var savedActualPaid = matchingAdvances.reduce(function(s: number, a: any) {
+              return s + (Number(a.actual_paid) || Number(a.total_with_vat) || 0);
+            }, 0);
+            actualPaid = userInput ? Number(userInput) : savedActualPaid;
+          } else {
+            // Fallback: apply grace to the fresh computation
+            var gf = graceFactors(periodStart, periodEnd);
+            indexedRent = indexedRent * gf.rentFactor;
+            mgmtAfterGrace = mgmtPeriodWithVat * gf.mgmtFactor;
+            var savedTotalForPeriod = matchingAdvances.reduce(function(s: number, a: any) {
+              return s + (Number(a.actual_paid) || Number(a.total_with_vat) || 0);
+            }, 0);
+            actualPaid = userInput ? Number(userInput) : (savedTotalForPeriod > 0 ? savedTotalForPeriod : baseRentPeriodWithVat + mgmtPeriodWithVat);
+          }
 
           var shouldPay = indexedRent + mgmtAfterGrace;
-
-          // Pre-fill actual paid:
-          // 1. User input (if edited in this session)
-          // 2. Saved actual_paid from advance_payments (if user previously confirmed payment)
-          // 3. Saved total_with_vat from advance_payments (= the check amount that was written)
-          // 4. Fallback: computed base rent + mgmt (if no saved advances exist)
-          var matchingAdvances = (savedAdvances ?? []).filter(function(a: any) { return a.contract_id === c.id && a.period === label; });
-          var savedTotalForPeriod = matchingAdvances.reduce(function(s: number, a: any) { return s + (Number(a.actual_paid) || Number(a.total_with_vat) || 0); }, 0);
-          var userInput = actualPaidInputs[c.id]?.[label];
-          var actualPaid = userInput ? Number(userInput) : (savedTotalForPeriod > 0 ? savedTotalForPeriod : baseRentPeriodWithVat + mgmtPeriodWithVat);
+          var baseRentDisplay = hasSavedRent
+            ? (matchingAdvances.reduce(function(s: number, a: any) { return s + (Number(a.indexed_rent) || 0) / Number(a.cpi_ratio); }, 0)) * (isVat ? 1 + vatPct : 1)
+            : baseRentPeriodWithVat * graceFactors(periodStart, periodEnd).rentFactor;
 
           periods.push({
             label: label,
-            baseRentQuarter: baseRentPeriodWithVat * gf.rentFactor,
+            baseRentQuarter: baseRentDisplay,
             paymentDate: paymentDate,
             cpiMonth: cpiMonth,
             cpiValue: cpiValue,
