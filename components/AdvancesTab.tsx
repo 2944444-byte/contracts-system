@@ -3,6 +3,7 @@ import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
 import { logAudit } from "@/lib/audit-log";
 import { fetchCpiAdjusted } from "@/lib/cpi-server";
+import { fetchHighestCPI } from "@/lib/cpi-utils";
 import { formatPeriod } from "@/lib/cpi-utils";
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
@@ -174,7 +175,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
     try {
       // Load contracts
       var query = supabase.from("contracts")
-        .select("id, rent_per_sqm, charged_area, investment_addition, payment_method, payment_frequency, vat_type, indexation_method, index_base_date, index_base_value, start_date, end_date, is_amendment, grace_months, grace_type, grace_discount_pct, rent_type, minimum_rent, mgmt_included_in_revenue, tenants(name), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,index_base_date,index_base_value,use_original_index,spaces(space_name,area))")
+        .select("id, rent_per_sqm, charged_area, investment_addition, payment_method, payment_frequency, vat_type, indexation_method, index_mechanism, index_base_date, index_base_value, start_date, end_date, is_amendment, grace_months, grace_type, grace_discount_pct, rent_type, minimum_rent, mgmt_included_in_revenue, tenants(name), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,index_base_date,index_base_value,use_original_index,spaces(space_name,area))")
         .eq("property_id", propId)
         .in("status", ["active", "extended"])
         .eq("is_amendment", false);
@@ -425,19 +426,29 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
             try {
               var cpiData = await fetchCpiAdjusted({ value: 10000, fromDate: fromCbs, toDate: toCbs });
               if (cpiData.success) {
-                // ALWAYS use CBS calculator ratio — it handles base-year chaining
-                // (מקדמי קשר) automatically. Direct division of index values
-                // from different base years would give wrong results.
                 cpiRatio = Number(cpiData.adjustedRentPerSqm) / 10000;
                 cpiCurrentValue = Number(cpiData.toIndexValue) || 0;
                 cpiCurrentDate = cpiData.toDate || "";
                 cbsFromDate = cpiData.fromDate || "";
-                // Use CBS-returned base value if contract doesn't have one
                 if (!cpiBaseValue) cpiBaseValue = Number(cpiData.fromIndexValue) || 0;
-                // Always show CBS's actual from-index value for accuracy
                 if (cpiData.fromIndexValue) cpiBaseValue = Number(cpiData.fromIndexValue);
                 cbsVerifyUrl = cpiData.verificationUrl || "";
-                console.log("CBS for " + spaceName + ": from=" + fromCbs + " to=" + toCbs + " ratio=" + cpiRatio.toFixed(6) + " fromIdx=" + cpiData.fromIndexValue + " toIdx=" + cpiData.toIndexValue + " url=" + cbsVerifyUrl);
+
+                // "מדד גבוה ביותר" mechanism — CPI never decreases
+                var isHighest = c.indexation_method === "highest_in_period" || c.index_mechanism === "highest_in_period";
+                if (isHighest && cpiBaseDate) {
+                  var bD = new Date(cpiBaseDate);
+                  var pD = new Date(cpiCalcDate);
+                  if (pD.getDate() < 16) pD.setMonth(pD.getMonth() - 2);
+                  else pD.setMonth(pD.getMonth() - 1);
+                  var highestCpi = await fetchHighestCPI(bD.getFullYear(), bD.getMonth() + 1, pD.getFullYear(), pD.getMonth() + 1);
+                  if (highestCpi && highestCpi > cpiCurrentValue) {
+                    cpiCurrentValue = highestCpi;
+                    if (cpiBaseValue > 0) cpiRatio = highestCpi / cpiBaseValue;
+                  }
+                }
+
+                console.log("CBS for " + spaceName + ": ratio=" + cpiRatio.toFixed(6));
               }
             } catch (e) { /* keep ratio 1 */ }
           }

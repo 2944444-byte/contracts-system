@@ -3,6 +3,7 @@ import React, { useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { logAudit } from "@/lib/audit-log";
 import { fetchCpiAdjusted } from "@/lib/cpi-server";
+import { fetchHighestCPI } from "@/lib/cpi-utils";
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 function fmtMoney(n: number) { return "₪" + (n ?? 0).toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -138,7 +139,7 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
     setResults([]);
     try {
       var { data: contracts } = await supabase.from("contracts")
-        .select("id, rent_per_sqm, charged_area, investment_addition, payment_method, payment_frequency, vat_type, indexation_method, index_base_date, index_base_value, start_date, end_date, is_amendment, grace_months, grace_type, grace_discount_pct, rent_type, minimum_rent, mgmt_included_in_revenue, tenants(name), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area))")
+        .select("id, rent_per_sqm, charged_area, investment_addition, payment_method, payment_frequency, vat_type, indexation_method, index_mechanism, index_base_date, index_base_value, start_date, end_date, is_amendment, grace_months, grace_type, grace_discount_pct, rent_type, minimum_rent, mgmt_included_in_revenue, tenants(name), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area))")
         .eq("property_id", propId)
         .in("status", ["active", "extended"])
         .eq("is_amendment", false);
@@ -327,11 +328,40 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
             try {
               var cpiData = await fetchCpiAdjusted({ value: 10000, fromDate: fromCbs, toDate: toCbs });
               if (cpiData.success) {
-                var ratio = Number(cpiData.adjustedRentPerSqm) / 10000;
-                indexedRent = periodBaseRent * ratio * (isVat ? 1 + vatPct : 1);
                 cpiMonth = cpiData.toDate || "";
                 cpiValue = Number(cpiData.toIndexValue) || 0;
                 if (!cpiBaseValue) cpiBaseValue = Number(cpiData.fromIndexValue) || 0;
+
+                // For "highest_in_period" mechanism — use the MAX CPI between contract
+                // start and payment date (per the contract terms — CPI never decreases).
+                var effectiveToIndex = cpiValue;
+                var isHighest = c.indexation_method === "highest_in_period" || c.index_mechanism === "highest_in_period";
+                if (isHighest) {
+                  // Find highest CPI in range [base_date → payment_date]
+                  var baseY = new Date(cpiBaseDate).getFullYear();
+                  var baseM = new Date(cpiBaseDate).getMonth() + 1;
+                  var payY = new Date(paymentDate).getFullYear();
+                  var payM = new Date(paymentDate).getMonth() + 1;
+                  // Adjust to known month (t-2 logic)
+                  var payDateObj = new Date(paymentDate);
+                  if (payDateObj.getDate() < 16) {
+                    payDateObj.setMonth(payDateObj.getMonth() - 2);
+                  } else {
+                    payDateObj.setMonth(payDateObj.getMonth() - 1);
+                  }
+                  payY = payDateObj.getFullYear();
+                  payM = payDateObj.getMonth() + 1;
+                  var highestCpi = await fetchHighestCPI(baseY, baseM, payY, payM);
+                  if (highestCpi && highestCpi > effectiveToIndex) {
+                    effectiveToIndex = highestCpi;
+                    cpiValue = highestCpi;
+                  }
+                }
+
+                var ratio = cpiBaseValue > 0 ? effectiveToIndex / cpiBaseValue : (Number(cpiData.adjustedRentPerSqm) / 10000);
+                // For non-highest, use CBS calculator ratio (handles chaining)
+                if (!isHighest) ratio = Number(cpiData.adjustedRentPerSqm) / 10000;
+                indexedRent = periodBaseRent * ratio * (isVat ? 1 + vatPct : 1);
               }
             } catch (e) { /* keep base */ }
           }
