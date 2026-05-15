@@ -123,18 +123,22 @@ export default function LettersPage() {
     }
     if (inTable) htmlParts.push("</tbody></table>");
 
-    // Parse appendix
+    // Parse appendix — supports both unit-based (advances) and period-based (cpi_diff)
     var appendixHtml = "";
+    var isCpiDiff = (cj.body || "").includes("הפרשי הצמדה") || cj.body?.includes("נספח א'");
     if (appendixRaw) {
-      var unitBlocks = appendixRaw.split("UNIT_END").filter(Boolean);
-      appendixHtml = '<div class="appendix"><h3>נספח א\' — פירוט חישוב מקדמות</h3>';
-      unitBlocks.forEach(function(block: string) {
+      var blocks = appendixRaw.split("UNIT_END").filter(Boolean);
+      var appendixTitle = isCpiDiff ? "נספח א' — פירוט חישוב הפרשי הצמדה" : "נספח א' — פירוט חישוב מקדמות";
+      appendixHtml = '<div class="appendix"><h3>' + appendixTitle + '</h3>';
+      blocks.forEach(function(block: string) {
         var match = block.match(/UNIT_START\|(.+?)\|(.+)/);
         if (!match) return;
-        var spaceName = match[1];
-        var area = match[2].trim();
+        var header1 = match[1];
+        var header2 = match[2].trim();
         var details = block.split("\n").filter(function(l) { return l && !l.includes("UNIT_START"); });
-        appendixHtml += '<div class="unit-card"><div class="unit-header">📐 ' + spaceName + ' | ' + area + ' מ"ר</div>';
+        var icon = isCpiDiff ? "📅" : "📐";
+        var headerExtra = isCpiDiff ? "תשלום: " + header2 : header2 + ' מ"ר';
+        appendixHtml += '<div class="unit-card"><div class="unit-header">' + icon + ' ' + header1 + ' | ' + headerExtra + '</div>';
         appendixHtml += '<div class="unit-details">';
         details.forEach(function(d: string) {
           d = d.trim();

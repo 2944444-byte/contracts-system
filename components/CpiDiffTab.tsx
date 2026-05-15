@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import React, { useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { logAudit } from "@/lib/audit-log";
 import { fetchCpiAdjusted } from "@/lib/cpi-server";
@@ -45,6 +45,92 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
   const [actualPaidInputs, setActualPaidInputs] = useState<Record<string, Record<string, string>>>({});
   const [creatingCharges, setCreatingCharges] = useState(false);
   const [creatingLetters, setCreatingLetters] = useState(false);
+  const [savedMode, setSavedMode] = useState(false);
+  const [savedInfo, setSavedInfo] = useState<{ count: number; savedAt: string } | null>(null);
+  const [saving, setSaving] = useState(false);
+  // Option for combined letter
+  const [includeAdvances, setIncludeAdvances] = useState(true);
+  const [nextYear, setNextYear] = useState(currentYear + 1);
+
+  // Auto-load saved on property/year change
+  React.useEffect(function() {
+    if (propId) checkSavedDiff();
+  }, [propId, year]);
+
+  async function checkSavedDiff() {
+    var { data } = await supabase.from("cpi_diff_calculations")
+      .select("*").eq("property_id", propId).eq("year", year);
+    if (data && data.length > 0) {
+      // Reconstruct CpiDiffRow[] from DB
+      var byContract: Record<string, any> = {};
+      data.forEach(function(d: any) {
+        if (!byContract[d.contract_id]) byContract[d.contract_id] = {
+          contractId: d.contract_id, tenantName: d.tenant_name, periods: [], totalDifference: 0
+        };
+        byContract[d.contract_id].periods.push({
+          label: d.period,
+          baseRentQuarter: Number(d.base_rent) || 0,
+          paymentDate: d.payment_date,
+          cpiMonth: d.cpi_current_month || "",
+          cpiValue: Number(d.cpi_current_value) || 0,
+          cpiBaseMonth: d.cpi_base_month || "",
+          cpiBaseValue: Number(d.cpi_base_value) || 0,
+          indexedRent: Number(d.indexed_rent) || 0,
+          mgmtAdvance: Number(d.mgmt_advance) || 0,
+          shouldPay: Number(d.should_pay) || 0,
+          actualPaid: Number(d.actual_paid) || 0,
+          difference: Number(d.difference) || 0,
+        });
+        byContract[d.contract_id].totalDifference += Number(d.total_diff || d.difference) || 0;
+        if (d.interest_pct) {
+          if (!interestRates[d.contract_id]) {
+            interestRates[d.contract_id] = {};
+          }
+          interestRates[d.contract_id][d.period] = Number(d.interest_pct);
+        }
+      });
+      setResults(Object.values(byContract));
+      setSavedMode(true);
+      var savedAt = data.reduce(function(latest: string, d: any) { return d.created_at > latest ? d.created_at : latest; }, "");
+      setSavedInfo({ count: data.length, savedAt: savedAt });
+    } else {
+      setSavedInfo(null); setSavedMode(false); setResults([]);
+    }
+  }
+
+  async function saveDiffCalculation() {
+    if (savedMode && !confirm("המקדמות הנוכחיות נטענו מנתונים שמורים. שמירה תדרוס. האם להמשיך?")) return;
+    setSaving(true);
+    try {
+      // Delete existing for this prop+year then insert new
+      await supabase.from("cpi_diff_calculations").delete().eq("property_id", propId).eq("year", year);
+      var rows: any[] = [];
+      results.forEach(function(r) {
+        r.periods.forEach(function(p) {
+          var live = liveDifference(p, r.contractId);
+          var rate = interestRates[r.contractId]?.[p.label] || null;
+          rows.push({
+            contract_id: r.contractId, property_id: propId, tenant_name: r.tenantName,
+            year: year, period: p.label, payment_date: p.paymentDate,
+            base_rent: p.baseRentQuarter, indexed_rent: p.indexedRent,
+            mgmt_advance: p.mgmtAdvance, should_pay: p.shouldPay,
+            actual_paid: actualPaidInputs[r.contractId]?.[p.label] ? Number(actualPaidInputs[r.contractId][p.label]) : p.actualPaid,
+            difference: live.diff, interest_pct: rate, interest_amount: live.interest,
+            total_diff: live.total,
+            cpi_base_value: p.cpiBaseValue, cpi_base_month: p.cpiBaseMonth,
+            cpi_current_value: p.cpiValue, cpi_current_month: p.cpiMonth,
+          });
+        });
+      });
+      if (rows.length > 0) {
+        var { error } = await supabase.from("cpi_diff_calculations").insert(rows);
+        if (error) throw error;
+      }
+      alert("✅ נשמרו " + rows.length + " חישובי הפרשי הצמדה");
+      checkSavedDiff();
+    } catch (e: any) { alert("שגיאה: " + (e?.message || e)); }
+    finally { setSaving(false); }
+  }
 
   async function compute() {
     if (!propId) { alert("יש לבחור נכס"); return; }
@@ -373,31 +459,125 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
   async function createLetters() {
     setCreatingLetters(true);
     try {
+      // Load company details
+      var { data: propData } = await supabase.from("properties")
+        .select("name, companies(company_name, address, city, phone, email, logo_url, bank_name, bank_branch, bank_account)")
+        .eq("id", propId).single();
+      var company = (propData?.companies as any) || {};
+      var companyName = company.company_name || propData?.name || "";
+      var companyAddress = [company.address, company.city].filter(Boolean).join(", ");
+      var companyPhone = company.phone || "";
+      var logoUrl = company.logo_url || "";
+      var propName = propData?.name || "";
+      var bankLine = "";
+      if (company.bank_name && company.bank_account) {
+        bankLine = "את ההמחאות יש לרשום לפקודת " + companyName + " חשבון " + company.bank_account + " סניף " + (company.bank_branch || "") + " " + company.bank_name + ".";
+      }
+
+      // If includeAdvances → load saved advances for nextYear per contract
+      var savedAdvancesByContract: Record<string, any[]> = {};
+      if (includeAdvances) {
+        var { data: nextAdv } = await supabase.from("advance_payments")
+          .select("*").eq("property_id", propId).eq("year", nextYear);
+        (nextAdv || []).forEach(function(a: any) {
+          if (!savedAdvancesByContract[a.contract_id]) savedAdvancesByContract[a.contract_id] = [];
+          savedAdvancesByContract[a.contract_id].push(a);
+        });
+      }
+
       var count = 0;
       for (var r of results) {
-        if (Math.abs(r.totalDifference) < 1) continue;
-        var body = "שוכר/ת נכבד/ה,\n\nלהלן חישוב הפרשי הצמדה בגין שכ\"ד ששולם בשנת " + year + ":\n\n";
-        for (var p of r.periods) {
-          body += p.label + " (תשלום " + fmtDate(p.paymentDate) + "):\n";
-          body += "  שכ\"ד צמוד: " + fmtMoney(p.indexedRent) + " | מקדמת ד.נ.: " + fmtMoney(p.mgmtAdvance) + "\n";
-          body += "  סה\"כ לשלם: " + fmtMoney(p.shouldPay) + " | ששולם: " + fmtMoney(p.actualPaid) + "\n";
-          body += "  הפרש: " + fmtMoney(p.difference) + "\n\n";
+        var liveTotal = r.periods.reduce(function(s: number, p: any) { return s + liveDifference(p, r.contractId).total; }, 0);
+        var advChecks = savedAdvancesByContract[r.contractId] || [];
+        if (Math.abs(liveTotal) < 1 && advChecks.length === 0) continue;
+
+        var hebMonths = ["", "ינואר", "פברואר", "מרץ", "אפריל", "מאי", "יוני", "יולי", "אוגוסט", "ספטמבר", "אוקטובר", "נובמבר", "דצמבר"];
+
+        // === BODY ===
+        var body = "לכבוד\n" + r.tenantName + "\n\nשלום רב,\n\n";
+
+        var titleParts = [];
+        if (advChecks.length > 0) titleParts.push("המחאות מקדמות " + nextYear);
+        if (Math.abs(liveTotal) >= 1) titleParts.push("הפרשי הצמדה " + year);
+        var letterTitle = titleParts.join(" + ");
+
+        body += "הנדון: " + letterTitle + "\n\n";
+
+        // === Section 1: Advances (if included) ===
+        if (advChecks.length > 0) {
+          // Consolidate by check_date
+          var byDate: Record<string, number> = {};
+          var advTotal = 0;
+          advChecks.forEach(function(a: any) {
+            byDate[a.check_date] = (byDate[a.check_date] || 0) + Number(a.total_with_vat || 0);
+            advTotal += Number(a.total_with_vat || 0);
+          });
+          var sortedDates = Object.keys(byDate).sort();
+          body += "1. דרישת מקדמות שכ\"ד ודמי ניהול לשנת " + nextYear + ":\n";
+          body += "בהתאם להסכם השכירות, נבקשכם להעביר אלינו " + sortedDates.length + " המחאות:\n\n";
+          body += "המחאה\tלתאריך\tבסכום בש\"ח\n";
+          sortedDates.forEach(function(d, i) {
+            body += (i + 1) + "\t" + fmtDate(d) + "\t" + fmtMoney(byDate[d]) + "\n";
+          });
+          body += "\nסה\"כ מקדמות: " + fmtMoney(advTotal) + "\n\n";
         }
-        body += "סך הפרשי הצמדה לשנת " + year + ": " + fmtMoney(r.totalDifference) + "\n";
-        body += r.totalDifference > 0 ? "\nנודה לתשלום ההפרש בהקדם.\n" : "\nההפרש יקוזז מהתשלום הבא.\n";
-        body += "\nבברכה,\nהנהלת הנכס";
+
+        // === Section 2: CPI diff (if applicable) ===
+        if (Math.abs(liveTotal) >= 1) {
+          var sectionNum = advChecks.length > 0 ? "2" : "1";
+          body += sectionNum + ". דרישת תשלום הפרשי הצמדה לשנת " + year + ":\n";
+          body += "בהתאם לחישוב המפורט בנספח א', נדרש " + (liveTotal > 0 ? "תשלום" : "זיכוי") + " הפרשי הצמדה בסכום של:\n\n";
+          body += "סה\"כ: " + fmtMoney(Math.abs(liveTotal)) + " " + (liveTotal > 0 ? "(חוב)" : "(זכות)") + "\n\n";
+          if (liveTotal > 0) {
+            body += "אנא העבירו שיק מזומן בנפרד עבור סכום זה. תחשיב מלא מצורף בנספח א'.\n\n";
+          } else {
+            body += "הזיכוי יקוזז מהמקדמה הראשונה של השנה הבאה.\n\n";
+          }
+        }
+
+        if (bankLine) body += bankLine + "\n\n";
+        body += "בכבוד רב ובברכה,\n" + companyName;
+
+        // === APPENDIX ===
+        var appendix = "";
+        if (Math.abs(liveTotal) >= 1) {
+          r.periods.forEach(function(p: any) {
+            var live = liveDifference(p, r.contractId);
+            appendix += "UNIT_START|" + p.label + "|" + fmtDate(p.paymentDate) + "\n";
+            appendix += "שכ\"ד צמוד: " + fmtMoney(p.indexedRent) + "\n";
+            appendix += "מקדמת ד.נ.: " + fmtMoney(p.mgmtAdvance) + "\n";
+            appendix += "סה\"כ נדרש: " + fmtMoney(p.shouldPay) + "\n";
+            appendix += "ששולם בפועל: " + fmtMoney(actualPaidInputs[r.contractId]?.[p.label] ? Number(actualPaidInputs[r.contractId][p.label]) : p.actualPaid) + "\n";
+            appendix += "הפרש: " + fmtMoney(live.diff) + "\n";
+            if (p.cpiBaseValue && p.cpiValue) {
+              appendix += "מדד בסיס: " + p.cpiBaseValue + " | מדד תשלום: " + p.cpiValue + "\n";
+            }
+            if (live.interest !== 0) {
+              var rate = interestRates[r.contractId]?.[p.label] || 0;
+              appendix += "ריבית פיגורים " + rate + "%: " + fmtMoney(live.interest) + "\n";
+            }
+            appendix += "סה\"כ כולל ריבית: " + fmtMoney(live.total) + "\n";
+            appendix += "UNIT_END\n";
+          });
+        }
 
         await supabase.from("letters").insert({
           contract_id: r.contractId,
+          property_id: propId,
           letter_type: "demand",
-          subject: r.totalDifference > 0 ? "חיוב הפרשי הצמדה שנת " + year : "זיכוי הפרשי הצמדה שנת " + year,
-          body: body,
-          status: "draft",
+          title: letterTitle,
+          billing_year: year,
+          billing_type: advChecks.length > 0 ? "combined" : "cpi_diff",
+          content_json: {
+            body: body, appendix: appendix, year: year, tenant: r.tenantName,
+            companyName: companyName, companyAddress: companyAddress,
+            companyPhone: companyPhone, logoUrl: logoUrl, bankLine: bankLine,
+          },
         });
         count++;
       }
       await logAudit({ entity_type: "billing", entity_id: propId, action: "create_cpi_diff_letters", notes: count + " מכתבים" });
-      alert("✅ נוצרו " + count + " מכתבי הפרשי הצמדה");
+      alert("✅ נוצרו " + count + " מכתבים");
     } catch (e: any) { alert("שגיאה: " + (e?.message || e)); }
     finally { setCreatingLetters(false); }
   }
@@ -424,10 +604,28 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
           </div>
         </div>
 
-        <button onClick={compute} disabled={computing || !propId}
-          className="rounded-lg bg-purple-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-purple-800 disabled:opacity-50">
-          {computing ? "מחשב..." : "חשב הפרשי הצמדה"}
-        </button>
+        {savedInfo && savedMode && (
+          <div className="rounded-lg bg-green-50 border border-green-300 px-4 py-3 flex items-center justify-between mb-4">
+            <div className="flex items-center gap-3">
+              <span className="text-green-600 text-xl">✅</span>
+              <div>
+                <div className="font-bold text-green-800 text-sm">נמצאו חישובי הפרשי הצמדה שמורים לשנת {year}</div>
+                <div className="text-xs text-green-600">{savedInfo.count} שורות | נשמר ב-{fmtDate(savedInfo.savedAt)}</div>
+              </div>
+            </div>
+            <button onClick={function() { setSavedMode(false); setResults([]); setSavedInfo(null); }}
+              className="rounded-lg border border-blue-300 bg-white px-3 py-1.5 text-xs font-bold text-blue-700 hover:bg-blue-50">
+              🔄 חשב מחדש
+            </button>
+          </div>
+        )}
+
+        {!savedMode && (
+          <button onClick={compute} disabled={computing || !propId}
+            className="rounded-lg bg-purple-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-purple-800 disabled:opacity-50">
+            {computing ? "מחשב..." : "חשב הפרשי הצמדה"}
+          </button>
+        )}
 
         {results.length > 0 && (
           <div className="mt-5 space-y-4">
@@ -514,14 +712,35 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
               );
             })()}
 
-            <div className="flex gap-3">
+            {/* Combined letter options */}
+            <div className="rounded-lg border border-purple-200 bg-purple-50/30 p-4 space-y-3">
+              <div className="text-xs font-bold text-purple-700">📄 אפשרויות מכתב</div>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={includeAdvances} onChange={function(e) { setIncludeAdvances(e.target.checked); }} className="rounded" />
+                <span className="text-xs text-slate-700">צרף למכתב גם דרישת מקדמות לשנה הבאה</span>
+              </label>
+              {includeAdvances && (
+                <div className="flex items-center gap-2">
+                  <label className="text-xs text-slate-600">שנת המקדמות:</label>
+                  <input type="number" value={nextYear} onChange={function(e) { setNextYear(Number(e.target.value)); }}
+                    className="w-24 rounded border border-slate-300 px-2 py-1 text-sm" />
+                  <span className="text-xs text-slate-400">(תיקח שייקים שמורים מטאב המקדמות)</span>
+                </div>
+              )}
+            </div>
+
+            <div className="flex gap-3 flex-wrap">
+              <button onClick={saveDiffCalculation} disabled={saving}
+                className={"rounded-lg px-5 py-2.5 text-sm font-bold disabled:opacity-50 " + (savedMode ? "border-2 border-green-500 bg-green-50 text-green-700 hover:bg-green-100" : "bg-blue-700 text-white hover:bg-blue-800")}>
+                {saving ? "שומר..." : savedMode ? "✅ נשמר — לחץ לשמור מחדש" : "💾 שמור חישוב"}
+              </button>
               <button onClick={createCharges} disabled={creatingCharges}
-                className="rounded-lg bg-blue-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-blue-800 disabled:opacity-50">
-                {creatingCharges ? "יוצר..." : "💾 צור חיובי הפרשים"}
+                className="rounded-lg bg-slate-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-slate-700 disabled:opacity-50">
+                {creatingCharges ? "יוצר..." : "📊 צור חיובי הפרשים"}
               </button>
               <button onClick={createLetters} disabled={creatingLetters}
-                className="rounded-lg border border-blue-200 bg-blue-50 px-5 py-2.5 text-sm font-bold text-blue-700 hover:bg-blue-100 disabled:opacity-50">
-                {creatingLetters ? "יוצר..." : "📄 צור מכתבי הפרשי הצמדה"}
+                className="rounded-lg border-2 border-purple-500 bg-purple-50 px-5 py-2.5 text-sm font-bold text-purple-700 hover:bg-purple-100 disabled:opacity-50">
+                {creatingLetters ? "יוצר..." : (includeAdvances ? "📄 צור מכתבים משולבים (מקדמות + הפרשים)" : "📄 צור מכתבי הפרשי הצמדה")}
               </button>
             </div>
           </div>
