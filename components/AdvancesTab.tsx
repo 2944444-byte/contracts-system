@@ -488,9 +488,16 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
           // If contract ends before year end, use contract end
           var contractEnd = c.end_date ? new Date(c.end_date) : yearEnd;
           var effectiveEnd = contractEnd < yearEnd ? contractEnd : yearEnd;
-          // If unit was removed via amendment, cap at exit date
+          // If unit was removed via amendment, cap at exit date — BUT only
+          // for amendments that already exist as of the CPI calc date.
+          // Future amendments (effective after cpiCalcDate) don't exist yet
+          // from the perspective of the advance checks we're preparing now;
+          // we must treat the unit as still belonging to the contract for
+          // the full year, exactly mirroring the unit-entry cutoff above.
           var unitExit = spaceExit[cs.space_id];
-          if (unitExit && unitExit < effectiveEnd) effectiveEnd = unitExit;
+          if (unitExit && unitExit < effectiveEnd && unitExit.getTime() <= cutoffDate.getTime()) {
+            effectiveEnd = unitExit;
+          }
 
           if (effectiveStart > effectiveEnd) continue; // Not active in this year
           // Skip units that enter AFTER the CPI calc date — those units didn't
@@ -691,7 +698,14 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
               tenantName: (c.tenants as any)?.name || "—",
               spaceName: spaceName,
               spaceArea: area,
-              baseRentMonthly: hasRentChange ? rentBeforeAnniversary : baseMonthly,
+              // Use the year's effective rate (post-anniversary if mid-year
+              // change, or the stable rate if no change). Previously this
+              // fell back to `baseMonthly` (= contract-start rate), which
+              // misleadingly displayed e.g. ₪40/m² for ג'ובניל 2026 even
+              // though the option had bumped it to ₪42.5/m² in 2025.
+              // The calculation always used rentAfter/rentBefore correctly;
+              // only the displayed "שכ"ד בסיס" was wrong.
+              baseRentMonthly: hasRentChange ? rentBeforeAnniversary : rentAfterAnniversary,
               indexedRentMonthly: hasRentChange ? indexedAfter : indexedMonthly,
               rentChangeDate: hasRentChange ? anniversaryInYear.toISOString().split("T")[0] : undefined,
               rentBefore: hasRentChange ? rentBeforeAnniversary : undefined,
