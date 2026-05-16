@@ -108,6 +108,43 @@ export function validatePriceTiers(
 }
 
 /**
+ * Single source of truth for "does this tier apply at contract year N?"
+ *
+ * Used everywhere a year-by-year tier walk happens (AdvancesTab,
+ * CpiDiffTab fallback, anywhere else that iterates tiers per contract year).
+ *
+ * Semantics — matched against `expandRecurringTiers` below so the rate
+ * timeline shown in the contract details page agrees with what advances /
+ * CPI-diff compute:
+ *
+ * - Recurring tier (from_year=F, to_year=T, every=E):
+ *     fires when `F ≤ ty < T` AND `(ty - F) % E === 0`
+ *     i.e. firings produce (T − F) / E increments by year T.
+ *     The year-T rent IS the result of all firings; ty=T does NOT fire.
+ *
+ * - Non-recurring tier (from_year=F, to_year=T):
+ *     fires inclusively across [F, T]. Existing behaviour preserved.
+ *
+ * Pass any tier-shaped object — tests like `t.is_recurring`,
+ * `t.from_year`, `t.to_year`, `t.recurring_every_years` are duck-typed
+ * so DB rows and PriceTier objects both work.
+ */
+export function tierAppliesAtYear(
+  tier: { is_recurring?: boolean | null; from_year?: number | null; to_year?: number | null; recurring_every_years?: number | null; },
+  contractYear: number,
+): boolean {
+  if (tier.is_recurring) {
+    const every = Number(tier.recurring_every_years) || 1;
+    const fromY = Number(tier.from_year) || 1;
+    const toY = Number(tier.to_year) || 999;
+    return contractYear >= fromY && contractYear < toY && (contractYear - fromY) % every === 0;
+  }
+  const fromY = Number(tier.from_year) || 1;
+  const toY = Number(tier.to_year) || fromY;
+  return contractYear >= fromY && contractYear <= toY;
+}
+
+/**
  * Expand recurring tiers into individual year-by-year tiers.
  * Example: { is_recurring: true, recurring_every_years: 1, from_year: 1, to_year: 10 }
  * → 10 individual tiers: year 1-2, 2-3, 3-4, ..., 9-10

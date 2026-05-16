@@ -4,6 +4,7 @@ import { supabase } from "@/lib/supabase";
 import { logAudit } from "@/lib/audit-log";
 import { fetchCpiAdjusted, fetchHighestChainedCpi } from "@/lib/cpi-server";
 import CalcProgress, { CalcProgressState } from "./CalcProgress";
+import { tierAppliesAtYear } from "@/lib/contract-utils";
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 function fmtMoney(n: number) { return "₪" + (n ?? 0).toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -242,13 +243,10 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
           if (activeTiers.length > 0 && contractYearsFromStart > 0) {
             var currentRent = spaceStart;
             for (var ty = 1; ty <= contractYearsFromStart; ty++) {
-              var tier = activeTiers.find(function(t: any) {
-                if (t.is_recurring) {
-                  var every = t.recurring_every_years || 1;
-                  return ty % every === 0;
-                }
-                return ty >= t.from_year && ty <= t.to_year;
-              });
+              // Single source of truth (lib/contract-utils.ts) — matches
+              // expandRecurringTiers so the price timeline shown in the
+              // contract details page agrees with what CpiDiff produces.
+              var tier = activeTiers.find(function(t: any) { return tierAppliesAtYear(t, ty); });
               if (tier) {
                 if (tier.increase_type === "pct") currentRent = currentRent * (1 + (Number(tier.increase_value) || 0) / 100);
                 else if (tier.increase_type === "fixed_sqm") currentRent = currentRent + (Number(tier.increase_value) || 0) * area;

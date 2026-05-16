@@ -6,6 +6,7 @@ import { fetchCpiAdjusted } from "@/lib/cpi-server";
 import { fetchHighestCPI } from "@/lib/cpi-utils";
 import { formatPeriod } from "@/lib/cpi-utils";
 import CalcProgress, { CalcProgressState } from "./CalcProgress";
+import { tierAppliesAtYear } from "@/lib/contract-utils";
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 function fmtMoney(n: number) { return "₪" + (n ?? 0).toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -358,14 +359,9 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
             // Calculate rent progression year by year
             var currentRent = isFixed ? (Number(cs.fixed_rent) || 0) : baseRentPerSqm * area;
             for (var tierYear = 1; tierYear <= contractYearsFromStart; tierYear++) {
-              // Find tier that covers this contract year
-              var tier = activeTiers.find(function(t: any) {
-                if (t.is_recurring) {
-                  var every = t.recurring_every_years || 1;
-                  return tierYear % every === 0;
-                }
-                return tierYear >= t.from_year && tierYear <= t.to_year;
-              });
+              // Single source of truth (lib/contract-utils.ts) — matches
+              // expandRecurringTiers so price timeline & advances agree.
+              var tier = activeTiers.find(function(t: any) { return tierAppliesAtYear(t, tierYear); });
               if (tier) {
                 if (tier.increase_type === "pct") currentRent = currentRent * (1 + (tier.increase_value || 0) / 100);
                 else if (tier.increase_type === "fixed_sqm") currentRent = currentRent + (tier.increase_value || 0) * area;
