@@ -34,6 +34,10 @@ interface CpiDiffRow {
     shouldPay: number;
     actualPaid: number;
     difference: number;
+    // Marks periods where a contract amendment changed which units are
+    // active. Filled with human-readable notes like "+ קומה 3 (1.2.2026)"
+    // or "↔ חנות 4 → חנות 6 (13.3.2026)". Undefined = no change.
+    amendmentNote?: string;
   }>;
   totalDifference: number;
 }
@@ -198,6 +202,17 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
         .eq("is_exercised", true)
         .order("start_date", { ascending: true });
 
+      // Load amendments to detect mid-year unit changes. Each amendment
+      // carries its own snapshot of contract_spaces. Unlike AdvancesTab
+      // (which freezes the snapshot at cpiCalcDate), CpiDiff DOES want
+      // to respect mid-year amendments — the diff calc reflects what
+      // each unit ACTUALLY required at each moment in time.
+      var { data: allAmendments } = await supabase.from("contracts")
+        .select("id, parent_contract_id, amendment_date, amendment_notes, start_date, end_date, contract_spaces(space_id, charge_method, fixed_rent, price_per_sqm, spaces(space_name, area))")
+        .in("parent_contract_id", contractIds)
+        .eq("is_amendment", true)
+        .order("amendment_date", { ascending: true });
+
       var rows: CpiDiffRow[] = [];
       var totalContracts = contracts.length;
       var contractIdx = 0;
@@ -218,6 +233,80 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
         var contractStartDate = new Date(c.start_date);
         var contractTiers = (allTiers ?? []).filter(function(t: any) { return t.contract_id === c.id && !t.space_id; });
         var contractOptions = (allOptions ?? []).filter(function(o: any) { return o.contract_id === c.id && o.is_exercised; });
+
+        // Amendment-aware snapshots — base + each amendment carries its
+        // own contract_spaces. We use them to determine which units are
+        // active at each moment during the target year. CpiDiff DOES want
+        // to reflect mid-year amendments (unlike AdvancesTab which freezes
+        // at cpiCalcDate) — at year-end reconciliation the diff captures
+        // what the tenant actually owed each month based on real unit state.
+        type Snapshot = { date: Date; spaces: any[]; notes: string | null; prevSpaceIds: Set<string> | null };
+        var cAmendments = (allAmendments ?? []).filter(function(a: any) { return a.parent_contract_id === c.id; });
+        var snapshots: Snapshot[] = [{ date: new Date(c.start_date), spaces: c.contract_spaces || [], notes: null, prevSpaceIds: null }];
+        cAmendments.forEach(function(am: any) {
+          snapshots.push({
+            date: new Date(am.amendment_date || am.start_date),
+            spaces: am.contract_spaces || [],
+            notes: am.amendment_notes || null,
+            prevSpaceIds: null,
+          });
+        });
+        snapshots.sort(function(a, b) { return a.date.getTime() - b.date.getTime(); });
+        for (var si = 1; si < snapshots.length; si++) {
+          snapshots[si].prevSpaceIds = new Set(snapshots[si-1].spaces.map(function(s: any) { return s.space_id; }));
+        }
+        var activeSnapshotAt = function(date: Date): Snapshot {
+          var active = snapshots[0];
+          for (var s of snapshots) {
+            if (s.date.getTime() <= date.getTime()) active = s;
+          }
+          return active;
+        };
+        var describeSnapshotChange = function(snap: Snapshot): string {
+          if (!snap.prevSpaceIds) return "שינוי בהסכם";
+          var currentIds = new Set(snap.spaces.map(function(s: any) { return s.space_id; }));
+          var added: string[] = [];
+          snap.spaces.forEach(function(s: any) {
+            if (!snap.prevSpaceIds!.has(s.space_id)) added.push(s.spaces?.space_name || "יחידה חדשה");
+          });
+          var removedCount = 0;
+          snap.prevSpaceIds.forEach(function(id: string) {
+            if (!currentIds.has(id)) removedCount++;
+          });
+          var dateStr = snap.date.toLocaleDateString("he-IL");
+          var parts: string[] = [];
+          if (added.length) parts.push("+ " + added.join(", "));
+          if (removedCount > 0) parts.push("− " + removedCount + " יחידות");
+          if (snap.notes) parts.push("(" + snap.notes.substring(0, 40) + ")");
+          return (parts.length > 0 ? parts.join(" / ") : "שינוי בהסכם") + " — " + dateStr;
+        };
+
+        // Helper: compute rent + mgmt for a given snapshot at a given date.
+        // Each space uses buildSpaceRentSchedule (same as AdvancesTab).
+        var computeSnapshotRentAt = function(snap: Snapshot, atDate: Date): { rent: number; mgmt: number } {
+          var totalRent = 0;
+          var totalMgmt = 0;
+          (snap.spaces || []).forEach(function(cs: any) {
+            var area = Number(cs.spaces?.area) || 0;
+            var isFixed = cs.charge_method === "fixed";
+            var baseRentPerSqm = Number(cs.price_per_sqm) || Number(c.rent_per_sqm) || 0;
+            var spaceStart = isFixed ? (Number(cs.fixed_rent) || 0) : baseRentPerSqm * area;
+            var spaceTiers = (allTiers ?? []).filter(function(t: any) { return t.contract_id === c.id && t.space_id === cs.space_id; });
+            var sched = buildSpaceRentSchedule({
+              contractStartDate: c.start_date,
+              spaceArea: area,
+              isFixed: isFixed,
+              spaceBaseRent: spaceStart,
+              spaceTiers: spaceTiers,
+              contractTiers: contractTiers,
+              exercisedOptions: contractOptions,
+            });
+            totalRent += rentAtDate(sched, atDate);
+            var mgmtRate = spaceMgmtRate[cs.space_id] ?? defaultMgmtRate;
+            totalMgmt += mgmtRate * area;
+          });
+          return { rent: totalRent, mgmt: totalMgmt };
+        };
 
         var yearStart = new Date(year, 0, 1);
         var yearEnd = new Date(year, 11, 31);
@@ -327,6 +416,21 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
           var periodEnd = new Date(year, isQuarterly ? (pi + 1) * 3 : pi + 1, 0);
           var daysInPeriod = Math.round((periodEnd.getTime() - periodStart.getTime()) / 86400000) + 1;
 
+          // ── Snapshot-aware: pick active spaces at period start ──
+          // For periods affected by an amendment (later than the contract
+          // base or any prior amendment), recompute rent + mgmt from the
+          // ACTIVE snapshot's spaces. This is how CpiDiff captures mid-year
+          // unit additions/removals as additional differences against the
+          // saved advance amounts.
+          var activeSnap = activeSnapshotAt(periodStart);
+          var prevPeriodStart = new Date(year, isQuarterly ? (pi - 1) * 3 : pi - 1, 1);
+          var prevActiveSnap = pi > 0 ? activeSnapshotAt(prevPeriodStart) : null;
+          var snapshotChangedThisPeriod = prevActiveSnap != null && activeSnap.date.getTime() !== prevActiveSnap.date.getTime();
+          var amendmentNote: string | undefined = undefined;
+          if (snapshotChangedThisPeriod && activeSnap.prevSpaceIds) {
+            amendmentNote = describeSnapshotChange(activeSnap);
+          }
+
           // Compute base rent for this period — split by anniversary if rent change mid-period
           var periodBaseRent = 0;
           if (hasRentChange && anniversaryInYear > periodStart && anniversaryInYear <= periodEnd) {
@@ -351,6 +455,19 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
             periodBaseRent = rentAfterAnniversary * monthsPerPeriod;
           } else {
             periodBaseRent = rentBeforeAnniversary * monthsPerPeriod;
+          }
+
+          // ── Snapshot override ──
+          // If an amendment is active for this period (different snapshot
+          // than the contract base), recompute periodBaseRent + mgmt from
+          // that snapshot's actual spaces. Uses the same buildSpaceRentSchedule
+          // helper as AdvancesTab — so unit additions add their rent and
+          // unit removals subtract theirs.
+          var snapshotMgmtPeriod: number | null = null;
+          if (activeSnap.date.getTime() > new Date(c.start_date).getTime()) {
+            var snapMonthly = computeSnapshotRentAt(activeSnap, periodStart);
+            periodBaseRent = snapMonthly.rent * monthsPerPeriod;
+            snapshotMgmtPeriod = snapMonthly.mgmt * monthsPerPeriod;
           }
 
           var baseRentPeriodWithVat = periodBaseRent * (isVat ? 1 + vatPct : 1);
@@ -443,10 +560,15 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
           // Falls back to the fresh computation above when no saved data
           // exists (or cpi_ratio/indexed_rent are missing).
           var matchingAdvances = (savedAdvances ?? []).filter(function(a: any) { return a.contract_id === c.id && a.period === label; });
-          var hasSavedRent = matchingAdvances.length > 0
+          var hasSavedRentBase = matchingAdvances.length > 0
             && matchingAdvances.every(function(a: any) {
               return Number(a.cpi_ratio) > 0 && Number(a.indexed_rent) > 0;
             });
+          // If an amendment is active for THIS period, saved data (frozen at
+          // cpiCalcDate) is stale for the rent base — force fresh compute.
+          // actualPaid still comes from saved (= what was actually charged).
+          var snapshotIsAmended = activeSnap.date.getTime() > new Date(c.start_date).getTime();
+          var hasSavedRent = hasSavedRentBase && !snapshotIsAmended;
 
           var mgmtAfterGrace: number;
           var actualPaid: number;
@@ -473,14 +595,20 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
             }, 0);
             actualPaid = userInput ? Number(userInput) : savedActualPaid;
           } else {
-            // Fallback: apply grace to the fresh computation
+            // Fallback: apply grace to the fresh computation. When the
+            // active snapshot is amended, use the snapshot's mgmt rate
+            // instead of the base mgmt (e.g. an added unit also adds its
+            // own mgmt charge).
             var gf = graceFactors(periodStart, periodEnd);
             indexedRent = indexedRent * gf.rentFactor;
-            mgmtAfterGrace = mgmtPeriodWithVat * gf.mgmtFactor;
+            var basePeriodMgmt = snapshotMgmtPeriod !== null
+              ? snapshotMgmtPeriod * (isVat ? 1 + vatPct : 1)
+              : mgmtPeriodWithVat;
+            mgmtAfterGrace = basePeriodMgmt * gf.mgmtFactor;
             var savedTotalForPeriod = matchingAdvances.reduce(function(s: number, a: any) {
               return s + (Number(a.actual_paid) || Number(a.total_with_vat) || 0);
             }, 0);
-            actualPaid = userInput ? Number(userInput) : (savedTotalForPeriod > 0 ? savedTotalForPeriod : baseRentPeriodWithVat + mgmtPeriodWithVat);
+            actualPaid = userInput ? Number(userInput) : (savedTotalForPeriod > 0 ? savedTotalForPeriod : baseRentPeriodWithVat + basePeriodMgmt);
           }
 
           var shouldPay = indexedRent + mgmtAfterGrace;
@@ -501,6 +629,7 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
             shouldPay: shouldPay,
             actualPaid: actualPaid,
             difference: shouldPay - actualPaid,
+            amendmentNote: amendmentNote,
           });
         }
 
@@ -798,9 +927,24 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
                       <tbody>
                         {r.periods.map(function(p, pi) {
                           var diffColor = p.difference > 1 ? "text-red-700 bg-red-50 font-bold" : p.difference < -1 ? "text-green-700 bg-green-50 font-bold" : "text-slate-500";
+                          var hasAmendment = !!p.amendmentNote;
                           return (
-                            <tr key={pi} className="border-t border-slate-100 hover:bg-slate-50">
-                              <td className="px-3 py-2 font-semibold text-slate-800">{p.label}</td>
+                            <tr key={pi} className={"border-t border-slate-100 hover:bg-slate-50 " + (hasAmendment ? "bg-amber-50/40" : "")}>
+                              <td className="px-3 py-2 font-semibold text-slate-800">
+                                <div className="flex items-center gap-1.5">
+                                  {hasAmendment && (
+                                    <span title={p.amendmentNote} className="inline-flex items-center gap-0.5 rounded-full bg-amber-100 text-amber-700 px-1.5 py-0.5 text-[10px] font-bold border border-amber-200 cursor-help">
+                                      🔄 שינוי
+                                    </span>
+                                  )}
+                                  <span>{p.label}</span>
+                                </div>
+                                {hasAmendment && (
+                                  <div className="text-[10px] text-amber-700 mt-0.5 font-normal" dir="rtl">
+                                    {p.amendmentNote}
+                                  </div>
+                                )}
+                              </td>
                               <td className="px-3 py-2 text-slate-600">{fmtMoney(p.baseRentQuarter)}</td>
                               <td className="px-3 py-2 text-slate-600">{fmtDate(p.paymentDate)}</td>
                               <td className="px-3 py-2 text-xs text-slate-500">{p.cpiMonth}</td>
