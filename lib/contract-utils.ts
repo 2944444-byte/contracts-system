@@ -145,6 +145,124 @@ export function tierAppliesAtYear(
 }
 
 /**
+ * SINGLE SOURCE OF TRUTH for "what rent does the contract require at date X"
+ * for one specific space.
+ *
+ * Returns a chronological schedule of rent changes (one entry per change
+ * point). To find the rent at any date: take the last entry whose
+ * `date <= queryDate`.
+ *
+ * Handles every escalation mechanism the system supports:
+ *   • Base rent at contract start (per-sqm × area or fixed)
+ *   • Per-space tiers (override contract-level when present)
+ *   • Contract-level tiers (used when no per-space tiers)
+ *   • Exercised options with rent_mechanism = new_value / increase_pct / no_change
+ *   • Each option's internal price_tiers (the JSONB array on contract_options)
+ *
+ * Both AdvancesTab and CpiDiffTab's fallback call this — so the rent
+ * timeline shown in the contract details page (which already uses
+ * buildPriceTimeline correctly) STAYS IN AGREEMENT with what advances
+ * and CPI-diff produce.
+ */
+export type RentScheduleEntry = { date: Date; rentMonthly: number; source: string };
+
+export function buildSpaceRentSchedule(params: {
+  contractStartDate: string;
+  spaceArea: number;
+  isFixed: boolean;
+  spaceBaseRent: number;
+  spaceTiers: any[];
+  contractTiers: any[];
+  exercisedOptions: any[];
+}): RentScheduleEntry[] {
+  const { contractStartDate, spaceArea, isFixed, spaceBaseRent, spaceTiers, contractTiers, exercisedOptions } = params;
+  const schedule: RentScheduleEntry[] = [];
+  const contractStart = new Date(contractStartDate);
+
+  function applyTier(rent: number, tier: any): number {
+    const v = Number(tier.increase_value) || 0;
+    if (tier.increase_type === "pct") return rent * (1 + v / 100);
+    if (tier.increase_type === "fixed_sqm") return rent + v * spaceArea;
+    if (tier.increase_type === "fixed_total") return rent + v;
+    return rent;
+  }
+
+  let currentRent = spaceBaseRent;
+  schedule.push({ date: contractStart, rentMonthly: currentRent, source: "base" });
+
+  // Phase 1 — apply contract-level / per-space tiers up to some horizon
+  // (use max to_year of any tier so we cover them all).
+  const activeTiers = spaceTiers.length > 0 ? spaceTiers : contractTiers;
+  const maxTierYear = activeTiers.reduce((m: number, t: any) => Math.max(m, Number(t.to_year) || 1), 0);
+  for (let ty = 1; ty <= maxTierYear; ty++) {
+    const tier = activeTiers.find((t: any) => tierAppliesAtYear(t, ty));
+    if (tier) {
+      const annDate = new Date(contractStart);
+      annDate.setFullYear(annDate.getFullYear() + ty);
+      const newRent = applyTier(currentRent, tier);
+      if (Math.abs(newRent - currentRent) > 0.005) {
+        schedule.push({ date: annDate, rentMonthly: newRent, source: `tier_y${ty}` });
+        currentRent = newRent;
+      }
+    }
+  }
+
+  // Phase 2 — apply exercised options (chronologically by start_date)
+  const opts = [...(exercisedOptions || [])]
+    .filter((o: any) => o && o.is_exercised && o.start_date)
+    .sort((a: any, b: any) => new Date(a.start_date).getTime() - new Date(b.start_date).getTime());
+
+  for (const opt of opts) {
+    const optStart = new Date(opt.start_date);
+
+    // Option's base rate change
+    let rentAtOpt = currentRent;
+    if (opt.rent_mechanism === "new_value" && opt.new_rent_value) {
+      rentAtOpt = isFixed ? Number(opt.new_rent_value) : Number(opt.new_rent_value) * spaceArea;
+    } else if (opt.rent_mechanism === "increase_pct" && opt.rent_increase_pct) {
+      rentAtOpt = currentRent * (1 + Number(opt.rent_increase_pct) / 100);
+    }
+    // "no_change" → keep currentRent
+    if (Math.abs(rentAtOpt - currentRent) > 0.005) {
+      schedule.push({ date: optStart, rentMonthly: rentAtOpt, source: `opt_${opt.option_number || "?"}_base` });
+      currentRent = rentAtOpt;
+    }
+
+    // Option's internal price_tiers (JSONB on contract_options)
+    const optTiers = Array.isArray(opt.price_tiers) ? opt.price_tiers : [];
+    const optMaxYear = optTiers.reduce((m: number, t: any) => Math.max(m, Number(t.to_year) || 1), 0);
+    for (let oy = 1; oy <= optMaxYear; oy++) {
+      const tier = optTiers.find((t: any) => tierAppliesAtYear(t, oy));
+      if (tier) {
+        const optAnnDate = new Date(optStart);
+        optAnnDate.setFullYear(optAnnDate.getFullYear() + oy - 1);
+        const newRent = applyTier(currentRent, tier);
+        if (Math.abs(newRent - currentRent) > 0.005) {
+          schedule.push({ date: optAnnDate, rentMonthly: newRent, source: `opt_${opt.option_number || "?"}_y${oy}` });
+          currentRent = newRent;
+        }
+      }
+    }
+  }
+
+  schedule.sort((a, b) => a.date.getTime() - b.date.getTime());
+  return schedule;
+}
+
+/**
+ * Pick the rent applicable at a specific date from a schedule.
+ * Returns the last entry whose `date <= queryDate`.
+ */
+export function rentAtDate(schedule: RentScheduleEntry[], queryDate: Date): number {
+  let r = schedule[0]?.rentMonthly ?? 0;
+  for (const e of schedule) {
+    if (e.date.getTime() <= queryDate.getTime()) r = e.rentMonthly;
+    else break;
+  }
+  return r;
+}
+
+/**
  * Expand recurring tiers into individual year-by-year tiers.
  * Example: { is_recurring: true, recurring_every_years: 1, from_year: 1, to_year: 10 }
  * → 10 individual tiers: year 1-2, 2-3, 3-4, ..., 9-10

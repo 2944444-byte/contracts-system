@@ -4,7 +4,7 @@ import { supabase } from "@/lib/supabase";
 import { logAudit } from "@/lib/audit-log";
 import { fetchCpiAdjusted, fetchHighestChainedCpi } from "@/lib/cpi-server";
 import CalcProgress, { CalcProgressState } from "./CalcProgress";
-import { tierAppliesAtYear } from "@/lib/contract-utils";
+import { tierAppliesAtYear, buildSpaceRentSchedule, rentAtDate } from "@/lib/contract-utils";
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 function fmtMoney(n: number) { return "₪" + (n ?? 0).toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -210,21 +210,21 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
           label: "מחשב הפרשי הצמדה — " + ((c.tenants as any)?.name || "—"),
           startedAt: calcStart,
         });
-        // Step-rent: walk EACH SPACE year by year, applying its own tiers
-        // (per-space tiers take priority over contract-level tiers — same as
-        // AdvancesTab). Sum across spaces to get the contract's monthly rent.
-        // This is critical for contracts where tiers vary by unit (e.g. only
-        // offices escalate but commercial stays flat).
+        // ─── SINGLE SOURCE OF TRUTH ───
+        // Same helper AdvancesTab uses — guarantees rent base agreement
+        // across screens. Handles per-space tiers, contract-level tiers,
+        // options (new_value / increase_pct / no_change), and the option's
+        // internal price_tiers JSONB.
         var contractStartDate = new Date(c.start_date);
-        var contractYearsFromStart = year - contractStartDate.getFullYear();
         var contractTiers = (allTiers ?? []).filter(function(t: any) { return t.contract_id === c.id && !t.space_id; });
+        var contractOptions = (allOptions ?? []).filter(function(o: any) { return o.contract_id === c.id && o.is_exercised; });
+
+        var yearStart = new Date(year, 0, 1);
+        var yearEnd = new Date(year, 11, 31);
 
         var startMonthly = 0;
         var rentBeforeAnniversary = 0;
         var rentAfterAnniversary = 0;
-        var contractOptions = (allOptions ?? []).filter(function(o: any) { return o.contract_id === c.id; });
-        // Anniversary date in target year (may be overridden by an option that
-        // starts mid-year — handled below per-space).
         var anniversaryInYear = new Date(year, contractStartDate.getMonth(), contractStartDate.getDate());
 
         (c.contract_spaces || []).forEach(function(cs: any) {
@@ -235,66 +235,31 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
           startMonthly += spaceStart;
 
           var spaceTiers = (allTiers ?? []).filter(function(t: any) { return t.contract_id === c.id && t.space_id === cs.space_id; });
-          var activeTiers = spaceTiers.length > 0 ? spaceTiers : contractTiers;
-
-          var spaceBefore = spaceStart;
-          var spaceAfter = spaceStart;
-
-          if (activeTiers.length > 0 && contractYearsFromStart > 0) {
-            var currentRent = spaceStart;
-            for (var ty = 1; ty <= contractYearsFromStart; ty++) {
-              // Single source of truth (lib/contract-utils.ts) — matches
-              // expandRecurringTiers so the price timeline shown in the
-              // contract details page agrees with what CpiDiff produces.
-              var tier = activeTiers.find(function(t: any) { return tierAppliesAtYear(t, ty); });
-              if (tier) {
-                if (tier.increase_type === "pct") currentRent = currentRent * (1 + (Number(tier.increase_value) || 0) / 100);
-                else if (tier.increase_type === "fixed_sqm") currentRent = currentRent + (Number(tier.increase_value) || 0) * area;
-                else if (tier.increase_type === "fixed_total") currentRent = currentRent + (Number(tier.increase_value) || 0);
-              }
-              if (ty === contractYearsFromStart - 1) spaceBefore = currentRent;
-              if (ty === contractYearsFromStart) spaceAfter = currentRent;
-            }
-            if (contractYearsFromStart === 1) spaceBefore = spaceStart;
-          }
-
-          // Apply exercised contract options (same logic as AdvancesTab):
-          // - Option starting in target year → mid-year change at optStart
-          // - Option starting before target year → entire year at option rate
-          var spaceBaseAfterOpts = spaceStart; // for "before target year" path
-          contractOptions.forEach(function(opt: any) {
-            if (!opt.start_date) return;
-            var optStart = new Date(opt.start_date);
-            var optYear = optStart.getFullYear();
-            if (optYear === year) {
-              var newRent = 0;
-              if (opt.rent_mechanism === "new_value" && opt.new_rent_value) {
-                newRent = isFixed ? Number(opt.new_rent_value) : Number(opt.new_rent_value) * area;
-              } else if (opt.rent_mechanism === "increase_pct" && opt.rent_increase_pct) {
-                newRent = spaceAfter * (1 + Number(opt.rent_increase_pct) / 100);
-              } else return;
-              if (newRent > 0) {
-                spaceBefore = spaceAfter;  // current rate is "before option"
-                spaceAfter = newRent;       // new rate is "after option"
-                anniversaryInYear = optStart; // anniversary shifts to option date
-              }
-            } else if (optYear < year) {
-              var optRent = 0;
-              if (opt.rent_mechanism === "new_value" && opt.new_rent_value) {
-                optRent = isFixed ? Number(opt.new_rent_value) : Number(opt.new_rent_value) * area;
-              } else if (opt.rent_mechanism === "increase_pct" && opt.rent_increase_pct) {
-                optRent = spaceBaseAfterOpts * (1 + Number(opt.rent_increase_pct) / 100);
-              }
-              if (optRent > 0) {
-                spaceBaseAfterOpts = optRent;
-                spaceBefore = optRent;
-                spaceAfter = optRent;
-              }
-            }
+          var schedule = buildSpaceRentSchedule({
+            contractStartDate: c.start_date,
+            spaceArea: area,
+            isFixed: isFixed,
+            spaceBaseRent: spaceStart,
+            spaceTiers: spaceTiers,
+            contractTiers: contractTiers,
+            exercisedOptions: contractOptions,
           });
 
-          rentBeforeAnniversary += spaceBefore;
-          rentAfterAnniversary += spaceAfter;
+          rentBeforeAnniversary += rentAtDate(schedule, yearStart);
+          rentAfterAnniversary += rentAtDate(schedule, yearEnd);
+
+          // First per-space change inside target year → contract-level anniversary
+          var firstChangeInYear = schedule.find(function(e) {
+            return e.date.getTime() >= yearStart.getTime() && e.date.getTime() <= yearEnd.getTime();
+          });
+          if (firstChangeInYear && firstChangeInYear.date.getTime() !== anniversaryInYear.getTime()) {
+            // If multiple spaces have different change dates, prefer the EARLIEST
+            // (so the split-month logic handles the first transition; later ones
+            // are rare and handled by re-running fresh advances if needed).
+            if (firstChangeInYear.date.getTime() < anniversaryInYear.getTime() || !rentBeforeAnniversary) {
+              anniversaryInYear = firstChangeInYear.date;
+            }
+          }
         });
 
         if (startMonthly === 0) {

@@ -6,7 +6,8 @@ import { fetchCpiAdjusted } from "@/lib/cpi-server";
 import { fetchHighestCPI } from "@/lib/cpi-utils";
 import { formatPeriod } from "@/lib/cpi-utils";
 import CalcProgress, { CalcProgressState } from "./CalcProgress";
-import { tierAppliesAtYear } from "@/lib/contract-utils";
+import { tierAppliesAtYear, buildSpaceRentSchedule, rentAtDate } from "@/lib/contract-utils";
+import { fetchHighestChainedCpi } from "@/lib/cpi-server";
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 function fmtMoney(n: number) { return "₪" + (n ?? 0).toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -340,81 +341,50 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
           var baseRentPerSqm = Number(cs.price_per_sqm) || Number(c.rent_per_sqm) || 0;
           var isFixed = cs.charge_method === "fixed";
           var baseMonthly = isFixed ? Number(cs.fixed_rent) || 0 : baseRentPerSqm * area;
-
-          // Step-rent: find if rent changes during the target year
-          // Anniversary = contract start date's day+month in the target year
           var contractStartDate = new Date(c.start_date);
-          var anniversaryInYear = new Date(year, contractStartDate.getMonth(), contractStartDate.getDate());
-          // Build rent schedule: [{from, to, rentMonthly}] for the year
+
+          // ─── SINGLE SOURCE OF TRUTH ───
+          // Delegate the "what rent does the contract require at date X" question
+          // to lib/contract-utils.ts. Same helper is used by CpiDiffTab fallback
+          // and (eventually) by every screen that needs to know the contract's
+          // effective rent at a point in time. Handles per-space tiers,
+          // contract-level tiers, exercised options (new_value / increase_pct /
+          // no_change), AND each option's internal price_tiers JSONB.
           var contractTiers = (allTiers ?? []).filter(function(t: any) { return t.contract_id === c.id && !t.space_id; });
           var spaceTiers = (allTiers ?? []).filter(function(t: any) { return t.contract_id === c.id && t.space_id === cs.space_id; });
-          var activeTiers = spaceTiers.length > 0 ? spaceTiers : contractTiers;
+          var contractOptions = (allOptions ?? []).filter(function(o: any) { return o.contract_id === c.id && o.is_exercised; });
 
-          // Determine which "contract year" we're in and what rent applies before/after anniversary
-          var contractYearsFromStart = year - contractStartDate.getFullYear();
-          var rentBeforeAnniversary = baseMonthly; // previous year's rate
-          var rentAfterAnniversary = baseMonthly;  // new year's rate
+          var schedule = buildSpaceRentSchedule({
+            contractStartDate: c.start_date,
+            spaceArea: area,
+            isFixed: isFixed,
+            spaceBaseRent: baseMonthly,
+            spaceTiers: spaceTiers,
+            contractTiers: contractTiers,
+            exercisedOptions: contractOptions,
+          });
 
-          if (activeTiers.length > 0 && contractYearsFromStart > 0) {
-            // Calculate rent progression year by year
-            var currentRent = isFixed ? (Number(cs.fixed_rent) || 0) : baseRentPerSqm * area;
-            for (var tierYear = 1; tierYear <= contractYearsFromStart; tierYear++) {
-              // Single source of truth (lib/contract-utils.ts) — matches
-              // expandRecurringTiers so price timeline & advances agree.
-              var tier = activeTiers.find(function(t: any) { return tierAppliesAtYear(t, tierYear); });
-              if (tier) {
-                if (tier.increase_type === "pct") currentRent = currentRent * (1 + (tier.increase_value || 0) / 100);
-                else if (tier.increase_type === "fixed_sqm") currentRent = currentRent + (tier.increase_value || 0) * area;
-                else if (tier.increase_type === "fixed_total") currentRent = currentRent + (tier.increase_value || 0);
-              }
-              if (tierYear === contractYearsFromStart - 1) rentBeforeAnniversary = currentRent;
-              if (tierYear === contractYearsFromStart) rentAfterAnniversary = currentRent;
-            }
-            if (contractYearsFromStart === 1) rentBeforeAnniversary = baseMonthly;
-          }
-          // Check exercised options: if an option starts during the target year,
-          // it overrides the rent from that date forward.
-          var contractOptions = (allOptions ?? []).filter(function(o: any) { return o.contract_id === c.id; });
-          for (var opt of contractOptions) {
-            if (!opt.start_date) continue;
-            var optStart = new Date(opt.start_date);
-            var optYear = optStart.getFullYear();
-            // Option starts in the target year → price change mid-year
-            if (optYear === year) {
-              var newRent = 0;
-              if (opt.rent_mechanism === "new_value" && opt.new_rent_value) {
-                newRent = isFixed ? Number(opt.new_rent_value) : Number(opt.new_rent_value) * area;
-              } else if (opt.rent_mechanism === "increase_pct" && opt.rent_increase_pct) {
-                newRent = rentAfterAnniversary * (1 + Number(opt.rent_increase_pct) / 100);
-              } else {
-                continue; // no rent change from this option
-              }
-              if (newRent > 0) {
-                rentBeforeAnniversary = rentAfterAnniversary; // current rate becomes "before"
-                rentAfterAnniversary = newRent;
-                anniversaryInYear = optStart; // the change date is the option start
-              }
-            }
-            // Option started BEFORE target year → entire year at option rent
-            if (optYear < year) {
-              var optRent = 0;
-              if (opt.rent_mechanism === "new_value" && opt.new_rent_value) {
-                optRent = isFixed ? Number(opt.new_rent_value) : Number(opt.new_rent_value) * area;
-              } else if (opt.rent_mechanism === "increase_pct" && opt.rent_increase_pct) {
-                optRent = baseMonthly * (1 + Number(opt.rent_increase_pct) / 100);
-              }
-              if (optRent > 0) {
-                baseMonthly = optRent;
-                rentBeforeAnniversary = optRent;
-                rentAfterAnniversary = optRent;
-              }
-            }
-          }
+          var yearStart = new Date(year, 0, 1);
+          var yearEnd = new Date(year, 11, 31);
+          var rentBeforeAnniversary = rentAtDate(schedule, yearStart);
+          var rentAfterAnniversary = rentAtDate(schedule, yearEnd);
 
-          // If anniversary is Jan 1 or before year start, no split needed
+          // Anniversary = first schedule entry whose date falls in target year.
+          // If no change in year, fall back to contract anniversary (used by
+          // hasRentChange test below; if rentBefore === rentAfter the date is
+          // irrelevant).
+          var firstChangeInYear = schedule.find(function(e) {
+            return e.date.getTime() >= yearStart.getTime() && e.date.getTime() <= yearEnd.getTime();
+          });
+          var anniversaryInYear = firstChangeInYear
+            ? firstChangeInYear.date
+            : new Date(year, contractStartDate.getMonth(), contractStartDate.getDate());
+
+          // hasRentChange uses `>=` for Jan 1 contracts: an anniversary that
+          // falls on Jan 1 still means the whole year is at the post-change rate.
           var hasRentChange = Math.abs(rentAfterAnniversary - rentBeforeAnniversary) > 0.01
-            && anniversaryInYear > new Date(year, 0, 1)
-            && anniversaryInYear <= new Date(year, 11, 31);
+            && anniversaryInYear.getTime() >= yearStart.getTime()
+            && anniversaryInYear.getTime() <= yearEnd.getTime();
 
           // Management advance for this space
           var mgmtMonthly = (spaceMgmtRate[cs.space_id] ?? defaultMgmtRate) * area;
@@ -443,17 +413,32 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
                 if (cpiData.fromIndexValue) cpiBaseValue = Number(cpiData.fromIndexValue);
                 cbsVerifyUrl = cpiData.verificationUrl || "";
 
-                // "מדד גבוה ביותר" mechanism — CPI never decreases
-                var isHighest = c.indexation_method === "highest_in_period" || c.index_mechanism === "highest_in_period";
+                // "מדד גבוה ביותר" / "no_drop" — CPI never decreases.
+                // Use fetchHighestChainedCpi (server-side, scans CBS calculator
+                // month-by-month for the PRECISE chained peak). Raw-value
+                // comparison via the old fetchHighestCPI returned null when
+                // CBS rejected the URL, AND would have given wrong peaks
+                // across base-year boundaries (Israeli CPI re-bases every 2
+                // years — raw values are not comparable across bases).
+                var isHighest = c.indexation_method === "highest_in_period"
+                  || c.index_mechanism === "highest_in_period"
+                  || c.indexation_method === "no_drop"
+                  || c.index_mechanism === "no_drop";
                 if (isHighest && cpiBaseDate) {
                   var bD = new Date(cpiBaseDate);
                   var pD = new Date(cpiCalcDate);
                   if (pD.getDate() < 16) pD.setMonth(pD.getMonth() - 2);
                   else pD.setMonth(pD.getMonth() - 1);
-                  var highestCpi = await fetchHighestCPI(bD.getFullYear(), bD.getMonth() + 1, pD.getFullYear(), pD.getMonth() + 1);
-                  if (highestCpi && highestCpi > cpiCurrentValue) {
-                    cpiCurrentValue = highestCpi;
-                    if (cpiBaseValue > 0) cpiRatio = highestCpi / cpiBaseValue;
+                  var peak = await fetchHighestChainedCpi({
+                    baseFromDate: fromCbs!,
+                    scanFromYear: bD.getFullYear(),
+                    scanFromMonth: bD.getMonth() + 1,
+                    scanToYear: pD.getFullYear(),
+                    scanToMonth: pD.getMonth() + 1,
+                  });
+                  if (peak.success && peak.peakRatio && peak.peakRatio > cpiRatio) {
+                    cpiRatio = peak.peakRatio;
+                    cpiCurrentDate = `${peak.peakYear}-${String(peak.peakMonth).padStart(2, "0")}`;
                   }
                 }
 
