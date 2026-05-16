@@ -469,6 +469,27 @@ export function buildPriceTimeline(params: {
   const { contractStart, contractEnd, baseRentPerSqm, mainTiers, options } = params;
   const timeline: TimelineEntry[] = [];
 
+  // ── Main-period effective end ──────────────────────────────────────
+  // When an option is exercised, the system extends contract.end_date to
+  // reflect the new "active until" date. That loses the original "where
+  // the main period actually ends" information — except it's still
+  // recoverable from the first exercised sequential option's start_date,
+  // because that's exactly when the main rate transitions to the option
+  // rate.
+  // Without this cap the timeline shows the main period overlapping with
+  // the option (e.g. main "2025-2028" + option 1 "2026-2028" — both
+  // displayed as separate stripes even though the rent really transitions
+  // on the option's start date). Functional calculations (advances /
+  // CPI-diff) already pick the later-starting period, but the display
+  // misled users into thinking the main period ran until contractEnd.
+  const firstExercisedSeqOption = options.find(o =>
+    o && (o as any).is_exercised && !o.option_group && o.start_date
+  );
+  const mainEffectiveEnd = firstExercisedSeqOption?.start_date
+    && new Date(firstExercisedSeqOption.start_date) < new Date(contractEnd)
+      ? firstExercisedSeqOption.start_date
+      : contractEnd;
+
   // Base period (year 0 = before any tier kicks in)
   const mainPreviews = calculateTierPreviews(mainTiers, baseRentPerSqm);
 
@@ -476,7 +497,7 @@ export function buildPriceTimeline(params: {
     timeline.push({
       label: "תקופה ראשית",
       startDate: contractStart,
-      endDate: contractEnd,
+      endDate: mainEffectiveEnd,
       rentPerSqm: baseRentPerSqm,
       fixedAmount: null,
       source: "main",
@@ -485,32 +506,38 @@ export function buildPriceTimeline(params: {
   } else {
     // Always add base year (year 1) at base price
     const firstPreviewYear = mainPreviews[0]?.from_year ?? 2;
+    const mainEndObj = new Date(mainEffectiveEnd);
     if (firstPreviewYear >= 1) {
       const baseEnd = new Date(contractStart);
       baseEnd.setFullYear(baseEnd.getFullYear() + 1);
-      timeline.push({
-        label: "שנה 1",
-        startDate: contractStart,
-        endDate: format(baseEnd, "yyyy-MM-dd"),
-        rentPerSqm: baseRentPerSqm,
-        fixedAmount: null,
-        source: "main",
-        type: "base",
-      });
+      const clippedBaseEnd = baseEnd < mainEndObj ? baseEnd : mainEndObj;
+      if (clippedBaseEnd > new Date(contractStart)) {
+        timeline.push({
+          label: "שנה 1",
+          startDate: contractStart,
+          endDate: format(clippedBaseEnd, "yyyy-MM-dd"),
+          rentPerSqm: baseRentPerSqm,
+          fixedAmount: null,
+          source: "main",
+          type: "base",
+        });
+      }
     }
-    // Add each expanded tier as individual year
+    // Add each expanded tier as individual year, clipping at mainEffectiveEnd
     mainPreviews.forEach((tier) => {
       const tStart = new Date(contractStart);
       tStart.setFullYear(tStart.getFullYear() + tier.from_year);
+      if (tStart >= mainEndObj) return; // tier starts after main period — skip
       const tEnd = new Date(contractStart);
       tEnd.setFullYear(tEnd.getFullYear() + tier.to_year);
+      const clippedEnd = tEnd < mainEndObj ? tEnd : mainEndObj;
       const yearLabel = (tier.to_year - tier.from_year === 1)
         ? `שנה ${tier.to_year}`
         : `שנים ${tier.from_year + 1}-${tier.to_year}`;
       timeline.push({
         label: yearLabel,
         startDate: format(tStart, "yyyy-MM-dd"),
-        endDate: format(tEnd, "yyyy-MM-dd"),
+        endDate: format(clippedEnd, "yyyy-MM-dd"),
         rentPerSqm: tier.calculated_rent_per_sqm,
         fixedAmount: null,
         source: "main",
