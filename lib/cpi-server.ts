@@ -169,3 +169,62 @@ export async function fetchHighestChainedCpi(params: {
     peakRatio: peakValue / 10000,
   };
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Retry wrappers — transient CBS API failures (network timeouts, 5xx, brief
+// outages) must NOT silently fall back to `cpiRatio = 1`, because that would
+// produce a "looks plausible" check amount with no indexation applied. We
+// retry 3 times with exponential backoff (200ms, 400ms, 800ms). If every
+// attempt fails, the caller gets `{success:false}` and must surface the
+// error to the user — never compute a check from a failed lookup.
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function _delay(ms: number) {
+  return new Promise(function(resolve) { setTimeout(resolve, ms); });
+}
+
+export async function fetchCpiAdjustedWithRetry(params: {
+  value: number;
+  fromDate: string;
+  toDate: string;
+}, options?: { maxRetries?: number }): Promise<any> {
+  const maxRetries = options?.maxRetries ?? 3;
+  let lastError: string | undefined;
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const result = await fetchCpiAdjusted(params);
+      if (result && result.success) return result;
+      lastError = (result && result.error) || "CBS returned no data";
+    } catch (e: any) {
+      lastError = e?.message || String(e);
+    }
+    if (attempt < maxRetries - 1) {
+      await _delay(200 * Math.pow(2, attempt));
+    }
+  }
+  return { success: false, error: lastError || "CBS unavailable after " + maxRetries + " retries" };
+}
+
+export async function fetchHighestChainedCpiWithRetry(params: {
+  baseFromDate: string;
+  scanFromYear: number;
+  scanFromMonth: number;
+  scanToYear: number;
+  scanToMonth: number;
+}, options?: { maxRetries?: number }): Promise<any> {
+  const maxRetries = options?.maxRetries ?? 3;
+  let lastError: string | undefined;
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const result = await fetchHighestChainedCpi(params);
+      if (result && result.success) return result;
+      lastError = (result && result.error) || "Peak scan returned no data";
+    } catch (e: any) {
+      lastError = e?.message || String(e);
+    }
+    if (attempt < maxRetries - 1) {
+      await _delay(200 * Math.pow(2, attempt));
+    }
+  }
+  return { success: false, error: lastError || "Peak scan unavailable after " + maxRetries + " retries" };
+}

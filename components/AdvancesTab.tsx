@@ -2,7 +2,7 @@
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
 import { logAudit } from "@/lib/audit-log";
-import { fetchCpiAdjusted } from "@/lib/cpi-server";
+import { fetchCpiAdjusted, fetchCpiAdjustedWithRetry, fetchHighestChainedCpiWithRetry } from "@/lib/cpi-server";
 import { fetchHighestCPI } from "@/lib/cpi-utils";
 import { formatPeriod } from "@/lib/cpi-utils";
 import CalcProgress, { CalcProgressState } from "./CalcProgress";
@@ -71,6 +71,11 @@ interface AdvanceRow {
   cpiPeakMonth?: string;
   vatPct?: number;
   isQuarterly?: boolean;
+  // Error / suspicion flags — when set, the row CANNOT be saved without
+  // user action. These are the trust-layer that prevents silent failures.
+  cpiError?: string;            // CBS API failed after retries
+  cpiInconsistent?: string;     // ratio differs from sibling spaces in same group
+  cpiSuspicious?: string;       // ratio = 1 on an indexed contract (almost certainly a bug)
   checks: CheckRow[];
 }
 
@@ -414,11 +419,18 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
           var cbsFromDate = ""; // CBS's actual from-index period (e.g. "2021-7")
           var cbsVerifyUrl = "";
           var cpiPeakMonth: string | undefined = undefined;
+          var cpiErrorMsg: string | undefined = undefined;
 
           if (c.indexation_method !== "none" && fromCbs && toCbs) {
-            try {
-              var cpiData = await fetchCpiAdjusted({ value: 10000, fromDate: fromCbs, toDate: toCbs });
-              if (cpiData.success) {
+            // Use retry wrapper — transient CBS failures (timeout / 5xx / brief
+            // outage) auto-retried 3× with backoff before giving up. If we
+            // still fail, the row gets a `cpiError` flag and the save-button
+            // is blocked downstream. NO silent fallback to ratio=1.
+            var cpiData = await fetchCpiAdjustedWithRetry({ value: 10000, fromDate: fromCbs, toDate: toCbs });
+            if (!cpiData.success) {
+              cpiErrorMsg = "CBS API נכשל אחרי 3 ניסיונות: " + (cpiData.error || "—");
+            } else {
+              try {
                 cpiRatio = Number(cpiData.adjustedRentPerSqm) / 10000;
                 cpiCurrentValue = Number(cpiData.toIndexValue) || 0;
                 cpiCurrentDate = cpiData.toDate || "";
@@ -443,7 +455,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
                   var pD = new Date(cpiCalcDate);
                   if (pD.getDate() < 16) pD.setMonth(pD.getMonth() - 2);
                   else pD.setMonth(pD.getMonth() - 1);
-                  var peak = await fetchHighestChainedCpi({
+                  var peak = await fetchHighestChainedCpiWithRetry({
                     baseFromDate: fromCbs!,
                     scanFromYear: bD.getFullYear(),
                     scanFromMonth: bD.getMonth() + 1,
@@ -454,12 +466,19 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
                     cpiRatio = peak.peakRatio;
                     cpiCurrentDate = `${peak.peakYear}-${String(peak.peakMonth).padStart(2, "0")}`;
                     cpiPeakMonth = `${peak.peakYear}-${String(peak.peakMonth).padStart(2, "0")}`;
+                  } else if (!peak.success) {
+                    // Highest scan failed — fall back to standard ratio (already
+                    // computed above) but flag it: for highest contracts the
+                    // standard ratio is approximate.
+                    cpiErrorMsg = "סריקת שיא מדד נכשלה: " + (peak.error || "—") + " (משתמש ביחס t-2 בלבד)";
                   }
                 }
 
                 console.log("CBS for " + spaceName + ": ratio=" + cpiRatio.toFixed(6));
+              } catch (e: any) {
+                cpiErrorMsg = "שגיאת חישוב מדד: " + (e?.message || String(e));
               }
-            } catch (e) { /* keep ratio 1 */ }
+            }
           }
 
           // Indexed rent for before/after anniversary
@@ -712,6 +731,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
               rentAfter: hasRentChange ? rentAfterAnniversary : undefined,
               rentSchedule: schedule.map(function(e) { return { date: e.date.toISOString().split("T")[0], rentMonthly: e.rentMonthly, source: e.source }; }),
               cpiPeakMonth: cpiPeakMonth,
+              cpiError: cpiErrorMsg,
               vatPct: vatPct,
               isQuarterly: isQuarterly,
               mgmtAdvanceMonthly: mgmtMonthly,
@@ -738,6 +758,44 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
         if (seenSpaceIds.has(r.spaceId)) return false;
         seenSpaceIds.add(r.spaceId);
         return true;
+      });
+
+      // ─── TRUST LAYER: post-compute validation ───
+      // Catches silent-failure patterns the calculation might have produced.
+      // After this pass the user CANNOT save unless every row passes:
+      //
+      //   (1) Cross-space consistency: spaces in the same contract that
+      //       share an index_base_date MUST get the same cpiRatio. A
+      //       difference means at least one CBS call failed mid-batch.
+      //
+      //   (2) Suspicious ratio=1 on an indexed contract — the only way
+      //       this should happen is if CBS itself returns identical from
+      //       and to indices, which is virtually impossible for a real
+      //       contract with multi-year span.
+      var consistencyGroups: Record<string, AdvanceRow[]> = {};
+      rows.forEach(function(r: AdvanceRow) {
+        if (!r.cbsFromDate && !r.cpiBaseDate) return;
+        var key = r.contractId + "|" + (r.cbsFromDate || r.cpiBaseDate);
+        if (!consistencyGroups[key]) consistencyGroups[key] = [];
+        consistencyGroups[key].push(r);
+      });
+      Object.values(consistencyGroups).forEach(function(group) {
+        if (group.length < 2) return;
+        var ratios = group.map(function(r) { return r.cpiRatio || 0; });
+        var maxR = Math.max(...ratios);
+        var minR = Math.min(...ratios);
+        if (maxR - minR > 0.001) {
+          group.forEach(function(r) {
+            r.cpiInconsistent = "אי-עקביות בין יחידות עם אותו בסיס מדד (יחסים: " + minR.toFixed(6) + " — " + maxR.toFixed(6) + "). סביר שאחת הקריאות ל-CBS נכשלה — לחץ 'חשב מחדש'.";
+          });
+        }
+      });
+      rows.forEach(function(r: AdvanceRow) {
+        if (r.indexationMethod && r.indexationMethod !== "none"
+          && r.cpiRatio && Math.abs(r.cpiRatio - 1) < 0.0001
+          && !r.cpiError) {
+          r.cpiSuspicious = "יחס מדד = 1.0 על חוזה מוצמד — כמעט תמיד באג. לחץ 'חשב מחדש'.";
+        }
       });
 
       setResults(rows);
@@ -999,6 +1057,32 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
 
         {checkingSaved && <div className="text-center py-4 text-slate-400 text-sm">בודק מקדמות שמורות...</div>}
 
+        {results.length > 0 && (function() {
+          var problemRows = results.filter(function(r: any) { return r.cpiError || r.cpiInconsistent || r.cpiSuspicious; });
+          if (problemRows.length === 0) return null;
+          return (
+            <div className="mt-5 rounded-xl border-2 border-red-300 bg-red-50 p-4">
+              <div className="font-bold text-red-800 mb-2">⚠️ נמצאו {problemRows.length} בעיות בחישוב — לא ניתן לשמור</div>
+              <div className="text-xs text-red-700 space-y-1 mb-3">
+                {problemRows.slice(0, 8).map(function(r: any, i: number) {
+                  var msg = r.cpiError || r.cpiInconsistent || r.cpiSuspicious;
+                  return (
+                    <div key={i} className="border-r-2 border-red-300 pr-2">
+                      <span className="font-semibold">{r.tenantName} — {r.spaceName}:</span> {msg}
+                    </div>
+                  );
+                })}
+                {problemRows.length > 8 && <div className="text-red-600">+ עוד {problemRows.length - 8} בעיות...</div>}
+              </div>
+              <div className="text-xs text-red-700">
+                💡 הסיבה הנפוצה: כשל זמני של API הלמ"ס.
+                לחץ <span className="font-bold">"חשב מחדש"</span> כדי לנסות שוב.
+                ה-API נוסה אוטומטית 3 פעמים — אם זה עדיין נכשל, ייתכן עומס בצד הלמ"ס.
+              </div>
+            </div>
+          );
+        })()}
+
         {results.length > 0 && (
           <div className="mt-5 space-y-4">
             {/* Summary KPIs */}
@@ -1246,14 +1330,25 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
             </div>
 
             <div className="flex gap-3">
-              <button onClick={createCharges} disabled={creatingCharges}
-                className={"rounded-lg px-5 py-2.5 text-sm font-bold disabled:opacity-50 " + (savedMode ? "border-2 border-green-500 bg-green-50 text-green-700 hover:bg-green-100" : "bg-blue-700 text-white hover:bg-blue-800")}>
-                {creatingCharges ? "שומר..." : savedMode ? "✅ נשמר — לחץ לשמור מחדש" : "💾 שמור מקדמות"}
-              </button>
-              <button onClick={createLetters} disabled={creatingLetters}
-                className="rounded-lg border border-blue-200 bg-blue-50 px-5 py-2.5 text-sm font-bold text-blue-700 hover:bg-blue-100 disabled:opacity-50">
-                {creatingLetters ? "יוצר..." : "📄 צור מכתבי דרישה"}
-              </button>
+              {(function() {
+                var hasProblems = results.some(function(r: any) {
+                  return r.cpiError || r.cpiInconsistent || r.cpiSuspicious;
+                });
+                return (
+                  <>
+                    <button onClick={createCharges} disabled={creatingCharges || hasProblems}
+                      title={hasProblems ? "לא ניתן לשמור כאשר יש בעיות חישוב — לחץ 'חשב מחדש'" : ""}
+                      className={"rounded-lg px-5 py-2.5 text-sm font-bold disabled:opacity-50 disabled:cursor-not-allowed " + (savedMode ? "border-2 border-green-500 bg-green-50 text-green-700 hover:bg-green-100" : "bg-blue-700 text-white hover:bg-blue-800")}>
+                      {creatingCharges ? "שומר..." : hasProblems ? "🚫 לא ניתן לשמור — יש בעיות חישוב" : savedMode ? "✅ נשמר — לחץ לשמור מחדש" : "💾 שמור מקדמות"}
+                    </button>
+                    <button onClick={createLetters} disabled={creatingLetters || hasProblems}
+                      title={hasProblems ? "לא ניתן ליצור מכתבים כאשר יש בעיות חישוב" : ""}
+                      className="rounded-lg border border-blue-200 bg-blue-50 px-5 py-2.5 text-sm font-bold text-blue-700 hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed">
+                      {creatingLetters ? "יוצר..." : "📄 צור מכתבי דרישה"}
+                    </button>
+                  </>
+                );
+              })()}
             </div>
           </div>
         )}

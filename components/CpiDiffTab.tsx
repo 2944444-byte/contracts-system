@@ -2,7 +2,7 @@
 import React, { useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { logAudit } from "@/lib/audit-log";
-import { fetchCpiAdjusted, fetchHighestChainedCpi } from "@/lib/cpi-server";
+import { fetchCpiAdjusted, fetchHighestChainedCpi, fetchCpiAdjustedWithRetry, fetchHighestChainedCpiWithRetry } from "@/lib/cpi-server";
 import CalcProgress, { CalcProgressState } from "./CalcProgress";
 import { tierAppliesAtYear, buildSpaceRentSchedule, rentAtDate } from "@/lib/contract-utils";
 
@@ -482,7 +482,11 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
 
           if (c.indexation_method !== "none" && fromCbs && toCbs) {
             try {
-              var cpiData = await fetchCpiAdjusted({ value: 10000, fromDate: fromCbs, toDate: toCbs });
+              // Retry on transient CBS failures — see lib/cpi-server.ts.
+              // 3 attempts with exponential backoff; if all fail the catch
+              // below records the error and the period's diff stays at the
+              // saved-baseline result (ratio doesn't update).
+              var cpiData = await fetchCpiAdjustedWithRetry({ value: 10000, fromDate: fromCbs, toDate: toCbs });
               if (cpiData.success) {
                 cpiMonth = cpiData.toDate || "";
                 cpiValue = Number(cpiData.toIndexValue) || 0;
@@ -518,7 +522,7 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
                   }
                   var payY = payDateObj.getFullYear();
                   var payM = payDateObj.getMonth() + 1;
-                  var peak = await fetchHighestChainedCpi({
+                  var peak = await fetchHighestChainedCpiWithRetry({
                     baseFromDate: fromCbs!,
                     scanFromYear: baseY,
                     scanFromMonth: baseM,
