@@ -6,6 +6,7 @@ import { fetchCpiAdjusted } from "@/lib/cpi-server";
 import { fetchHighestCPI } from "@/lib/cpi-utils";
 import { formatPeriod } from "@/lib/cpi-utils";
 import CalcProgress, { CalcProgressState } from "./CalcProgress";
+import CalcBreakdown from "./CalcBreakdown";
 import { tierAppliesAtYear, buildSpaceRentSchedule, rentAtDate } from "@/lib/contract-utils";
 import { fetchHighestChainedCpi } from "@/lib/cpi-server";
 
@@ -60,6 +61,16 @@ interface AdvanceRow {
   rentChangeDate?: string;   // date of step-rent increase within year
   rentBefore?: number;       // rent before step-rent increase
   rentAfter?: number;        // rent after step-rent increase
+  // Full rent change schedule for this space (drives the "show your work"
+  // breakdown panel). Each entry = one moment in contract life where the
+  // space's monthly rent changed, with the source: "base" / "tier_yN" /
+  // "opt_N_base" / "opt_N_yN". Optional: undefined for rows loaded from
+  // saved data prior to this feature.
+  rentSchedule?: Array<{ date: string; rentMonthly: number; source: string }>;
+  // CPI peak month (filled when highest_in_period override fires)
+  cpiPeakMonth?: string;
+  vatPct?: number;
+  isQuarterly?: boolean;
   checks: CheckRow[];
 }
 
@@ -80,6 +91,8 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
   const [savedMode, setSavedMode] = useState(false); // true = showing saved data
   const [savedInfo, setSavedInfo] = useState<{ count: number; savedAt: string; cpiCalcDate: string; otherDates: string[] } | null>(null);
   const [checkingSaved, setCheckingSaved] = useState(false);
+  // Which rows have their "show your work" breakdown expanded (by index)
+  const [expandedBreakdowns, setExpandedBreakdowns] = useState<Record<number, boolean>>({});
 
   // Load available contracts when property changes
   function loadAvailableContracts(pid: string) {
@@ -400,6 +413,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
           var cpiCurrentDate = "";
           var cbsFromDate = ""; // CBS's actual from-index period (e.g. "2021-7")
           var cbsVerifyUrl = "";
+          var cpiPeakMonth: string | undefined = undefined;
 
           if (c.indexation_method !== "none" && fromCbs && toCbs) {
             try {
@@ -439,6 +453,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
                   if (peak.success && peak.peakRatio && peak.peakRatio > cpiRatio) {
                     cpiRatio = peak.peakRatio;
                     cpiCurrentDate = `${peak.peakYear}-${String(peak.peakMonth).padStart(2, "0")}`;
+                    cpiPeakMonth = `${peak.peakYear}-${String(peak.peakMonth).padStart(2, "0")}`;
                   }
                 }
 
@@ -681,6 +696,10 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
               rentChangeDate: hasRentChange ? anniversaryInYear.toISOString().split("T")[0] : undefined,
               rentBefore: hasRentChange ? rentBeforeAnniversary : undefined,
               rentAfter: hasRentChange ? rentAfterAnniversary : undefined,
+              rentSchedule: schedule.map(function(e) { return { date: e.date.toISOString().split("T")[0], rentMonthly: e.rentMonthly, source: e.source }; }),
+              cpiPeakMonth: cpiPeakMonth,
+              vatPct: vatPct,
+              isQuarterly: isQuarterly,
               mgmtAdvanceMonthly: mgmtMonthly,
               parkingMonthly: thisParkingMonthly,
               parkingSpots: thisParkingSpots,
@@ -989,16 +1008,35 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
               var unitTotal = r.checks.reduce(function(s, p) { return s + p.totalWithVat; }, 0);
               return (
                 <div key={ri} className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-                  <div className="px-5 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
-                    <div>
+                  <div className="px-5 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-3">
+                    <div className="flex-1">
                       <div className="font-bold text-slate-800 text-sm">{r.tenantName}</div>
                       <div className="text-xs text-slate-500">📐 {r.spaceName} | {r.spaceArea} מ&quot;ר | תחילה: {fmtDate(r.startDate)}</div>
                     </div>
+                    <button
+                      type="button"
+                      onClick={function() {
+                        setExpandedBreakdowns(function(prev) {
+                          var next = Object.assign({}, prev);
+                          next[ri] = !prev[ri];
+                          return next;
+                        });
+                      }}
+                      className="rounded-lg border border-blue-300 bg-blue-50 px-3 py-1.5 text-xs font-bold text-blue-700 hover:bg-blue-100 transition-colors whitespace-nowrap"
+                      title="הצג את כל שלבי החישוב — בסיס, עליות, מדד, ניהול, חניה, מע&quot;מ"
+                    >
+                      {expandedBreakdowns[ri] ? "🔼 הסתר חישוב" : "🔍 תראה לי איך חישבת"}
+                    </button>
                     <div className="text-left">
                       <div className="text-sm font-bold text-green-700">{fmtMoney(unitTotal)}</div>
                       <div className="text-xs text-slate-500">סה&quot;כ שנתי כולל מע&quot;מ</div>
                     </div>
                   </div>
+
+                  {/* "Show your work" breakdown panel */}
+                  {expandedBreakdowns[ri] && (
+                    <CalcBreakdown row={r as any} targetYear={year} />
+                  )}
 
                   {/* Contract details */}
                   <div className="px-5 py-2 grid grid-cols-5 gap-2 text-xs border-b border-slate-100 bg-blue-50/30">
