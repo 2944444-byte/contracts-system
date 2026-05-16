@@ -504,24 +504,30 @@ export function buildPriceTimeline(params: {
       type: "base",
     });
   } else {
-    // Always add base year (year 1) at base price
-    const firstPreviewYear = mainPreviews[0]?.from_year ?? 2;
+    // Base period — runs at base rent from contract start UNTIL the first
+    // tier kicks in. Previously this was hardcoded to a fixed 1-year base
+    // entry ("שנה 1"), which left a visible gap whenever the first tier
+    // started at year 2+ (e.g. recurring "+4% every 5 years starting year 5"
+    // showed `שנה 1 (2021-2022)` then jumped to `שנים 6-10 (2026-2031)` —
+    // years 2-5 invisible). Functionally calculations were correct because
+    // buildSpaceRentSchedule only emits change points, not gap fills; this
+    // is a display-only fix to make the timeline match the contract terms.
+    const firstPreviewYear = mainPreviews[0]?.from_year ?? 1;
     const mainEndObj = new Date(mainEffectiveEnd);
-    if (firstPreviewYear >= 1) {
-      const baseEnd = new Date(contractStart);
-      baseEnd.setFullYear(baseEnd.getFullYear() + 1);
-      const clippedBaseEnd = baseEnd < mainEndObj ? baseEnd : mainEndObj;
-      if (clippedBaseEnd > new Date(contractStart)) {
-        timeline.push({
-          label: "שנה 1",
-          startDate: contractStart,
-          endDate: format(clippedBaseEnd, "yyyy-MM-dd"),
-          rentPerSqm: baseRentPerSqm,
-          fixedAmount: null,
-          source: "main",
-          type: "base",
-        });
-      }
+    const baseEnd = new Date(contractStart);
+    baseEnd.setFullYear(baseEnd.getFullYear() + firstPreviewYear);
+    const clippedBaseEnd = baseEnd < mainEndObj ? baseEnd : mainEndObj;
+    if (clippedBaseEnd > new Date(contractStart)) {
+      const baseLabel = firstPreviewYear === 1 ? "שנה 1" : `שנים 1-${firstPreviewYear}`;
+      timeline.push({
+        label: baseLabel,
+        startDate: contractStart,
+        endDate: format(clippedBaseEnd, "yyyy-MM-dd"),
+        rentPerSqm: baseRentPerSqm,
+        fixedAmount: null,
+        source: "main",
+        type: "base",
+      });
     }
     // Add each expanded tier as individual year, clipping at mainEffectiveEnd
     mainPreviews.forEach((tier) => {
