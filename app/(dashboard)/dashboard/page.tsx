@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { supabase } from '@/lib/supabase';
 import { fetchCpiAdjusted, fetchHighestChainedCpi } from '@/lib/cpi-server';
 import { getKnownIndexMonth } from '@/lib/cpi-utils';
+import CalcProgress, { CalcProgressState } from '@/components/CalcProgress';
 
 function fmtMoney(n: number) { return "₪" + (n ?? 0).toLocaleString("he-IL",{minimumFractionDigits:2,maximumFractionDigits:2}); }
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
@@ -31,6 +32,7 @@ export default function DashboardPage() {
   const [guarantees, setGuarantees] = useState<any[]>([]);
   const [alerts, setAlerts] = useState<any[]>([]);
   const [cpiRatios, setCpiRatios] = useState<Record<string, number>>({});
+  const [cpiProgress, setCpiProgress] = useState<CalcProgressState | null>(null);
 
   // Filters
   const [filterGroup, setFilterGroup] = useState("all");
@@ -91,9 +93,25 @@ export default function DashboardPage() {
         groupMap[key].contractIds.push(x.id);
       });
 
-      var groupResults = await Promise.all(Object.keys(groupMap).map(async function(k) {
+      var calcStart = Date.now();
+      var groupKeys = Object.keys(groupMap);
+      var totalGroups = groupKeys.length;
+      setCpiProgress({ current: 0, total: totalGroups, label: "מחשב יחס מדד לכל החוזים...", startedAt: calcStart });
+
+      // Process groups sequentially to update progress; each group is one
+      // base-date × mechanism pair (peak scan can be ~30 CBS calls).
+      var groupResults: any[] = [];
+      for (var gi = 0; gi < groupKeys.length; gi++) {
+        var k = groupKeys[gi];
         var g = groupMap[k];
+        setCpiProgress({
+          current: gi + 1,
+          total: totalGroups,
+          label: g.isHighest ? "סורק שיא מדד..." : "מביא יחס מדד...",
+          startedAt: calcStart,
+        });
         try {
+          var groupRatio = 1;
           if (g.isHighest) {
             var baseDateObj = new Date(g.rawBase);
             var peak = await fetchHighestChainedCpi({
@@ -103,13 +121,16 @@ export default function DashboardPage() {
               scanToYear: nowKnown.year,
               scanToMonth: nowKnown.month,
             });
-            if (peak.success && peak.peakRatio) return { key: k, ratio: peak.peakRatio };
+            if (peak.success && peak.peakRatio) {
+              groupResults.push({ key: k, ratio: peak.peakRatio });
+              continue;
+            }
           }
           var data: any = await fetchCpiAdjusted({ value: 10000, fromDate: g.fromDate, toDate: todayCbs });
-          if (!data || !data.success) return { key: k, ratio: 1 };
-          return { key: k, ratio: (Number(data.adjustedRentPerSqm) || 10000) / 10000 };
-        } catch { return { key: k, ratio: 1 }; }
-      }));
+          groupRatio = (data && data.success) ? (Number(data.adjustedRentPerSqm) || 10000) / 10000 : 1;
+          groupResults.push({ key: k, ratio: groupRatio });
+        } catch { groupResults.push({ key: k, ratio: 1 }); }
+      }
 
       var ratioMap: Record<string, number> = {};
       groupResults.forEach(function(r: any) {
@@ -119,6 +140,7 @@ export default function DashboardPage() {
       });
       setCpiRatios(ratioMap);
     } catch(e) { /* keep ratios empty */ }
+    setCpiProgress(null);
     setLoading(false);
   }
 
@@ -230,6 +252,11 @@ export default function DashboardPage() {
         </div>
       ) : (
         <>
+          {cpiProgress && (
+            <div className="mb-3">
+              <CalcProgress {...cpiProgress} />
+            </div>
+          )}
           {/* Row 1 — main KPIs */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
             <button onClick={function(){router.push("/cashflow");}}

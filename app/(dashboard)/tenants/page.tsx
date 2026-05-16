@@ -5,6 +5,7 @@ import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit-log';
 import { fetchCpiAdjusted, fetchHighestChainedCpi } from '@/lib/cpi-server';
 import { getKnownIndexMonth } from '@/lib/cpi-utils';
+import CalcProgress, { CalcProgressState } from '@/components/CalcProgress';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 
@@ -33,6 +34,7 @@ export default function TenantsPage() {
   const [fNotes, setFNotes] = useState("");
   const [fContacts, setFContacts] = useState<{name:string;role:string;email:string;phone:string}[]>([]);
   const [cpiRatios, setCpiRatios] = useState<Record<string, number>>({});
+  const [cpiProgress, setCpiProgress] = useState<CalcProgressState | null>(null);
 
   useEffect(() => { loadAll(); }, []);
 
@@ -74,8 +76,19 @@ export default function TenantsPage() {
         groupMap[key].contractIds.push(x.id);
       });
 
-      var groupResults = await Promise.all(Object.keys(groupMap).map(async function(k) {
+      var groupKeysT = Object.keys(groupMap);
+      var calcStartT = Date.now();
+      setCpiProgress({ current: 0, total: groupKeysT.length, label: "מחשב יחס מדד לחוזי השוכרים...", startedAt: calcStartT });
+      var groupResults: any[] = [];
+      for (var gi = 0; gi < groupKeysT.length; gi++) {
+        var k = groupKeysT[gi];
         var g = groupMap[k];
+        setCpiProgress({
+          current: gi + 1,
+          total: groupKeysT.length,
+          label: g.isHighest ? "סורק שיא מדד..." : "מביא יחס מדד...",
+          startedAt: calcStartT,
+        });
         try {
           if (g.isHighest) {
             var baseDateObj = new Date(g.rawBase);
@@ -86,13 +99,15 @@ export default function TenantsPage() {
               scanToYear: nowKnown.year,
               scanToMonth: nowKnown.month,
             });
-            if (peak.success && peak.peakRatio) return { key: k, ratio: peak.peakRatio };
+            if (peak.success && peak.peakRatio) {
+              groupResults.push({ key: k, ratio: peak.peakRatio });
+              continue;
+            }
           }
           var data: any = await fetchCpiAdjusted({ value: 10000, fromDate: g.fromDate, toDate: todayCbs });
-          if (!data || !data.success) return { key: k, ratio: 1 };
-          return { key: k, ratio: (Number(data.adjustedRentPerSqm) || 10000) / 10000 };
-        } catch { return { key: k, ratio: 1 }; }
-      }));
+          groupResults.push({ key: k, ratio: (data && data.success) ? (Number(data.adjustedRentPerSqm) || 10000) / 10000 : 1 });
+        } catch { groupResults.push({ key: k, ratio: 1 }); }
+      }
 
       var ratioMap: Record<string, number> = {};
       groupResults.forEach(function(r: any) {
@@ -102,6 +117,7 @@ export default function TenantsPage() {
       });
       setCpiRatios(ratioMap);
     } catch(e) {}
+    setCpiProgress(null);
   }
 
   function openNew() {
@@ -253,6 +269,11 @@ export default function TenantsPage() {
                       className="rounded-lg border border-red-100 px-3 py-1.5 text-xs font-semibold text-red-500 hover:bg-red-50">🗑</button>
                   </div>
                 </div>
+                {cpiProgress && (
+                  <div className="mb-3">
+                    <CalcProgress {...cpiProgress} />
+                  </div>
+                )}
                 {/* KPI */}
                 <div className="grid grid-cols-3 gap-3 mb-4">
                   {[

@@ -5,6 +5,7 @@ import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit-log';
 import { fetchCpiAdjusted, fetchHighestChainedCpi } from '@/lib/cpi-server';
 import { getKnownIndexMonth } from '@/lib/cpi-utils';
+import CalcProgress, { CalcProgressState } from '@/components/CalcProgress';
 import PropertyBudgetManager from '@/components/PropertyBudgetManager';
 
 function formatDateForCbs(dateStr: string): string | null {
@@ -47,6 +48,7 @@ export default function PropertiesPage() {
   const [budgetFor,  setBudgetFor]  = useState<any>(null);
   const [cpiRatios,  setCpiRatios]  = useState<Record<string, number>>({}); // contract_id → ratio
   const [cpiLoading, setCpiLoading] = useState(false);
+  const [cpiProgress, setCpiProgress] = useState<CalcProgressState | null>(null);
 
   const [fName,       setFName]       = useState("");
   const [fCompanyId,  setFCompanyId]  = useState("");
@@ -103,8 +105,19 @@ export default function PropertiesPage() {
         var todayForCbs = formatDateForCbs(new Date().toISOString());
         if (!todayForCbs) { setCpiLoading(false); return; }
 
-        var results = await Promise.all(groupKeys.map(async function(key) {
+        // Sequential so progress can update; each group can take seconds for highest scan.
+        var calcStart = Date.now();
+        setCpiProgress({ current: 0, total: groupKeys.length, label: "מחשב יחס מדד לחוזי הנכס...", startedAt: calcStart });
+        var results: any[] = [];
+        for (var gi = 0; gi < groupKeys.length; gi++) {
+          var key = groupKeys[gi];
           var g = groups[key];
+          setCpiProgress({
+            current: gi + 1,
+            total: groupKeys.length,
+            label: g.isHighest ? "סורק שיא מדד..." : "מביא יחס מדד...",
+            startedAt: calcStart,
+          });
           try {
             if (g.isHighest) {
               var baseDateObj = new Date(g.rawBase);
@@ -117,17 +130,16 @@ export default function PropertiesPage() {
                 scanToMonth: nowKnown.month,
               });
               if (peak.success && peak.peakRatio) {
-                return { key: key, ratio: peak.peakRatio };
+                results.push({ key: key, ratio: peak.peakRatio });
+                continue;
               }
-              // fall through to standard if peak scan fails
             }
             var data: any = await fetchCpiAdjusted({ value: 10000, fromDate: g.fromDate, toDate: todayForCbs as string });
-            if (!data || !data.success) return { key: key, ratio: 1 };
-            return { key: key, ratio: (Number(data.adjustedRentPerSqm) || 10000) / 10000 };
+            results.push({ key: key, ratio: (data && data.success) ? (Number(data.adjustedRentPerSqm) || 10000) / 10000 : 1 });
           } catch {
-            return { key: key, ratio: 1 };
+            results.push({ key: key, ratio: 1 });
           }
-        }));
+        }
 
         var map: Record<string, number> = {};
         results.forEach(function(r: any) {
@@ -137,10 +149,12 @@ export default function PropertiesPage() {
         });
         setCpiRatios(map);
         setCpiLoading(false);
+        setCpiProgress(null);
       } catch (e) {
         console.error("property cpi error:", e);
         setCpiRatios({});
         setCpiLoading(false);
+        setCpiProgress(null);
       }
     })();
   }, [selected, contracts.length]);
@@ -351,6 +365,12 @@ export default function PropertiesPage() {
                     <button onClick={function(){handleDelete(selProp.id);}} className="rounded-lg border border-red-100 px-3 py-1.5 text-xs font-semibold text-red-500 hover:bg-red-50">🗑</button>
                   </div>
                 </div>
+
+                {cpiProgress && (
+                  <div className="mb-3">
+                    <CalcProgress {...cpiProgress} />
+                  </div>
+                )}
 
                 {/* KPI */}
                 <div className="grid grid-cols-5 gap-2">

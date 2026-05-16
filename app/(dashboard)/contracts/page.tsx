@@ -6,6 +6,7 @@ import { syncContractStatuses } from '@/lib/contractSync';
 import { logAudit } from '@/lib/audit-log';
 import { fetchCpiAdjusted, fetchHighestChainedCpi } from '@/lib/cpi-server';
 import { calcChainingCoefficient, formatPeriod } from '@/lib/cpi-utils';
+import CalcProgress, { CalcProgressState } from '@/components/CalcProgress';
 import { buildPriceTimeline, calculateTierPreviews, type PriceTier } from '@/lib/contract-utils';
 // CPI + price timeline
 
@@ -71,6 +72,7 @@ export default function ContractsPage() {
   const [search,    setSearch]    = useState("");
   const [cpiResult, setCpiResult] = useState<any>(null);
   const [cpiLoading, setCpiLoading] = useState(false);
+  const [cpiProgress, setCpiProgress] = useState<CalcProgressState | null>(null);
   const [perUnitCpi, setPerUnitCpi] = useState<Record<string, {ratio: number, source: string}>>({});
   const [priceTiers, setPriceTiers] = useState<PriceTier[]>([]);
   const [rawTiersWithSpace, setRawTiersWithSpace] = useState<any[]>([]);
@@ -294,6 +296,8 @@ export default function ContractsPage() {
     if (!todayForCbs) { setCpiResult(null); return; }
 
     setCpiLoading(true);
+    var cpiCalcStart = Date.now();
+    setCpiProgress({ current: 0, total: 0, label: "מחשב יחס מדד לחוזה...", startedAt: cpiCalcStart });
 
     // Known index months for fallback
     const knownFrom = getKnownIndexMonth(new Date(refDateStr));
@@ -340,7 +344,7 @@ export default function ContractsPage() {
               peakMonth: `${peak.peakMonth}/${peak.peakYear}`,
               peakValue: data.toIndexValue,
             });
-            setCpiLoading(false);
+            setCpiLoading(false); setCpiProgress(null);
             return;
           }
         }
@@ -362,7 +366,7 @@ export default function ContractsPage() {
           verificationUrl: stdData.verificationUrl,
           method: idxMethod,
         });
-        setCpiLoading(false);
+        setCpiLoading(false); setCpiProgress(null);
       } else {
         throw new Error("CBS failed");
       }
@@ -385,7 +389,7 @@ export default function ContractsPage() {
           var baseRec = results[0].data;
           var currentRec = results[1].data;
           var coefficients = results[2].data;
-          if (!baseRec || !currentRec || !coefficients) { setCpiResult(null); setCpiLoading(false); return; }
+          if (!baseRec || !currentRec || !coefficients) { setCpiResult(null); setCpiLoading(false); setCpiProgress(null); return; }
           var baseIdx = Number(baseRec.value);
           var currentIdx = Number(currentRec.value);
           // Calculate chaining coefficient between base years
@@ -407,8 +411,8 @@ export default function ContractsPage() {
             baseYear: baseRec.base_year || null,
             verificationUrl: null,
           });
-          setCpiLoading(false);
-        }).catch(function() { setCpiResult(null); setCpiLoading(false); });
+          setCpiLoading(false); setCpiProgress(null);
+        }).catch(function() { setCpiResult(null); setCpiLoading(false); setCpiProgress(null); });
       });
   }, [selected, priceTimeline.length]);
 
@@ -1034,7 +1038,12 @@ export default function ContractsPage() {
                 ) : null}
 
                 {/* CPI-adjusted price via CBS calculator */}
-                {cpiLoading && (
+                {cpiLoading && cpiProgress && (
+                  <div className="mb-3">
+                    <CalcProgress {...cpiProgress} />
+                  </div>
+                )}
+                {cpiLoading && !cpiProgress && (
                   <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 mb-3 text-xs text-amber-600 animate-pulse">
                     📊 מחשב הצמדה למדד (API למ&quot;ס)...
                   </div>

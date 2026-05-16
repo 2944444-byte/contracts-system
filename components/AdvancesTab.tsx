@@ -5,6 +5,7 @@ import { logAudit } from "@/lib/audit-log";
 import { fetchCpiAdjusted } from "@/lib/cpi-server";
 import { fetchHighestCPI } from "@/lib/cpi-utils";
 import { formatPeriod } from "@/lib/cpi-utils";
+import CalcProgress, { CalcProgressState } from "./CalcProgress";
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 function fmtMoney(n: number) { return "₪" + (n ?? 0).toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -68,6 +69,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
   const [year, setYear] = useState(currentYear + 1);
   const [cpiCalcDate, setCpiCalcDate] = useState(currentYear + "-11-15");
   const [computing, setComputing] = useState(false);
+  const [progress, setProgress] = useState<CalcProgressState | null>(null);
   const [results, setResults] = useState<AdvanceRow[]>([]);
   const [creatingCharges, setCreatingCharges] = useState(false);
   const [creatingLetters, setCreatingLetters] = useState(false);
@@ -172,6 +174,8 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
     if (!propId) { alert("יש לבחור נכס"); return; }
     setComputing(true);
     setResults([]);
+    var calcStart = Date.now();
+    setProgress({ current: 0, total: 0, label: "טוען נתוני חוזים...", startedAt: calcStart });
     try {
       // Load contracts
       var query = supabase.from("contracts")
@@ -259,8 +263,17 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
       var toCbs = formatDateForCbs(cpiCalcDate);
 
       var rows: AdvanceRow[] = [];
+      var totalContracts = contracts.length;
+      var contractIdx = 0;
 
       for (var c of contracts) {
+        contractIdx++;
+        setProgress({
+          current: contractIdx,
+          total: totalContracts,
+          label: "מחשב מקדמות — " + ((c.tenants as any)?.name || "—"),
+          startedAt: calcStart,
+        });
         var isVat = c.vat_type === "taxable";
         var isQuarterly = c.payment_frequency === "quarterly";
 
@@ -715,7 +728,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
 
       setResults(rows);
     } catch (e: any) { alert("שגיאה: " + (e?.message || e)); }
-    finally { setComputing(false); }
+    finally { setComputing(false); setProgress(null); }
   }
 
   async function createCharges() {
@@ -962,6 +975,12 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
             className="rounded-lg bg-blue-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-blue-800 disabled:opacity-50">
             {computing ? "מחשב..." : "חשב מקדמות"}
           </button>
+        )}
+
+        {progress && (
+          <div className="mt-3">
+            <CalcProgress {...progress} />
+          </div>
         )}
 
         {checkingSaved && <div className="text-center py-4 text-slate-400 text-sm">בודק מקדמות שמורות...</div>}

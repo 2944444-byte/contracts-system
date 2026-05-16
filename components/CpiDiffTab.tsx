@@ -3,6 +3,7 @@ import React, { useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { logAudit } from "@/lib/audit-log";
 import { fetchCpiAdjusted, fetchHighestChainedCpi } from "@/lib/cpi-server";
+import CalcProgress, { CalcProgressState } from "./CalcProgress";
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 function fmtMoney(n: number) { return "₪" + (n ?? 0).toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -41,6 +42,7 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
   const [propId, setPropId] = useState("");
   const [year, setYear] = useState(currentYear);
   const [computing, setComputing] = useState(false);
+  const [progress, setProgress] = useState<CalcProgressState | null>(null);
   const [results, setResults] = useState<CpiDiffRow[]>([]);
   const [actualPaidInputs, setActualPaidInputs] = useState<Record<string, Record<string, string>>>({});
   const [creatingCharges, setCreatingCharges] = useState(false);
@@ -136,6 +138,8 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
     if (!propId) { alert("יש לבחור נכס"); return; }
     setComputing(true);
     setResults([]);
+    var calcStart = Date.now();
+    setProgress({ current: 0, total: 0, label: "טוען נתוני חוזים...", startedAt: calcStart });
     try {
       var { data: contracts } = await supabase.from("contracts")
         .select("id, rent_per_sqm, charged_area, investment_addition, payment_method, payment_frequency, vat_type, indexation_method, index_mechanism, index_base_date, index_base_value, start_date, end_date, is_amendment, grace_months, grace_type, grace_discount_pct, rent_type, minimum_rent, mgmt_included_in_revenue, tenants(name), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area))")
@@ -194,8 +198,17 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
         .order("start_date", { ascending: true });
 
       var rows: CpiDiffRow[] = [];
+      var totalContracts = contracts.length;
+      var contractIdx = 0;
 
       for (var c of contracts) {
+        contractIdx++;
+        setProgress({
+          current: contractIdx,
+          total: totalContracts,
+          label: "מחשב הפרשי הצמדה — " + ((c.tenants as any)?.name || "—"),
+          startedAt: calcStart,
+        });
         // Step-rent: walk EACH SPACE year by year, applying its own tiers
         // (per-space tiers take priority over contract-level tiers — same as
         // AdvancesTab). Sum across spaces to get the contract's monthly rent.
@@ -538,7 +551,7 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
       }
       setResults(rows);
     } catch (e: any) { alert("שגיאה: " + (e?.message || e)); }
-    finally { setComputing(false); }
+    finally { setComputing(false); setProgress(null); }
   }
 
   // Per-check interest rates (set when user edits actual paid)
@@ -784,6 +797,12 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
             className="rounded-lg bg-purple-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-purple-800 disabled:opacity-50">
             {computing ? "מחשב..." : "חשב הפרשי הצמדה"}
           </button>
+        )}
+
+        {progress && (
+          <div className="mt-3">
+            <CalcProgress {...progress} />
+          </div>
         )}
 
         {results.length > 0 && (
