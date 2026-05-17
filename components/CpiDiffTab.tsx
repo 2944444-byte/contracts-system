@@ -1029,6 +1029,13 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
               )}
             </div>
 
+            {/* Progress shown right above the action buttons — visible
+                during save / charge / letter generation without the user
+                needing to scroll back up to the compute area. */}
+            {progress && (
+              <CalcProgress {...progress} />
+            )}
+
             <div className="flex gap-3 flex-wrap">
               <button onClick={saveDiffCalculation} disabled={saving}
                 className={"rounded-lg px-5 py-2.5 text-sm font-bold disabled:opacity-50 " + (savedMode ? "border-2 border-green-500 bg-green-50 text-green-700 hover:bg-green-100" : "bg-blue-700 text-white hover:bg-blue-800")}>

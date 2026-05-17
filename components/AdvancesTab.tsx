@@ -1348,6 +1348,13 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
               <div className="text-sm text-purple-600">סה&quot;כ מקדמות לכל היחידות — שנת {year}</div>
             </div>
 
+            {/* Progress shown right above the action buttons so the user
+                doesn't need to scroll back up during long save / letter
+                operations. Same `progress` state as the one near compute. */}
+            {progress && (
+              <CalcProgress {...progress} />
+            )}
+
             <div className="flex gap-3">
               {(function() {
                 var hasProblems = results.some(function(r: any) {
