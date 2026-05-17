@@ -759,6 +759,29 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
         });
       }
 
+      // Pre-fetch contract→units so titles can list units (e.g. "קומה 1, קומה 2 ועוד 2").
+      // This is the disambiguator when one tenant has multiple contracts on the same property
+      // (e.g. Yehonatan has both an offices contract and a logistics contract).
+      var contractIds = results.map(function(r: any) { return r.contractId; });
+      var spacesByContract: Record<string, string[]> = {};
+      if (contractIds.length > 0) {
+        var { data: csData } = await supabase
+          .from("contract_spaces")
+          .select("contract_id, spaces(space_name)")
+          .in("contract_id", contractIds);
+        (csData || []).forEach(function(cs: any) {
+          var nm = (cs.spaces as any)?.space_name;
+          if (!nm) return;
+          if (!spacesByContract[cs.contract_id]) spacesByContract[cs.contract_id] = [];
+          if (spacesByContract[cs.contract_id].indexOf(nm) === -1) spacesByContract[cs.contract_id].push(nm);
+        });
+      }
+      var summarizeUnits = function(names: string[]): string {
+        if (!names || names.length === 0) return "";
+        if (names.length <= 3) return names.join(", ");
+        return names.slice(0, 2).join(", ") + " ועוד " + (names.length - 2);
+      };
+
       var count = 0;
       var letterStart = Date.now();
       setProgress({ current: 0, total: results.length, label: "יוצר מכתבי דרישה...", startedAt: letterStart });
@@ -778,7 +801,14 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
         var titleParts = [];
         if (advChecks.length > 0) titleParts.push("המחאות מקדמות " + nextYear);
         if (Math.abs(liveTotal) >= 1) titleParts.push("הפרשי הצמדה " + year);
-        var letterTitle = titleParts.join(" + ");
+        // Enrich the unit list from advance_payments rows too (covers units that exist
+        // for this contract but might not yet be in contract_spaces).
+        var unitNamesForLetter = (spacesByContract[r.contractId] || []).slice();
+        advChecks.forEach(function(a: any) {
+          if (a.space_name && unitNamesForLetter.indexOf(a.space_name) === -1) unitNamesForLetter.push(a.space_name);
+        });
+        var unitsLabel = summarizeUnits(unitNamesForLetter);
+        var letterTitle = titleParts.join(" + ") + (unitsLabel ? " — " + unitsLabel : "");
 
         body += "הנדון: " + letterTitle + "\n\n";
 
@@ -878,8 +908,9 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
           appendix += "KV|מספר המחאות|" + sortedAdvDates.length + " לשנת " + nextYear + "\n";
           appendix += "KV|מע\"מ|" + vatPct + "%\n";
 
-          // Per-space table
-          appendix += "TABLE_HEADER|יחידה|שטח (מ\"ר)|שכ\"ד למ\"ר|שכ\"ד צמוד/חודש|מקדמת ניהול|חניה|מדד בסיס|מדד עדכון|סכום לתקופה (כולל מע\"מ)\n";
+          // Per-space table — includes יחס הצמדה (CPI ratio) so the tenant can verify
+          // the calculation without doing the division themselves.
+          appendix += "TABLE_HEADER|יחידה|שטח (מ\"ר)|שכ\"ד למ\"ר|שכ\"ד צמוד/חודש|מקדמת ניהול|חניה|מדד בסיס|מדד עדכון|יחס הצמדה|סכום לתקופה (כולל מע\"מ)\n";
 
           var perPeriodTotal = 0;
           firstPeriodChecks.forEach(function(a: any) {
@@ -892,6 +923,13 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
             var currLabel = a.cpi_current_date
               ? hebMonthYear(a.cpi_current_date) + " (" + (a.cpi_at_payment || "—") + ")"
               : (a.cpi_at_payment || "—");
+            // Prefer the stored ratio (already CBS-corrected for base-year chaining)
+            // and fall back to a simple division if it's missing.
+            var ratioNum = Number(a.cpi_ratio);
+            if (!ratioNum && Number(a.cpi_base_value) > 0) {
+              ratioNum = Number(a.cpi_at_payment) / Number(a.cpi_base_value);
+            }
+            var ratioStr = ratioNum ? ratioNum.toFixed(4) : "—";
             var parking = Number(a.parking_monthly) > 0 ? fmtMoney(Number(a.parking_monthly)) : "—";
             appendix += "TABLE_ROW|"
               + (a.space_name || "—") + "|"
@@ -902,19 +940,20 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
               + parking + "|"
               + baseLabel + "|"
               + currLabel + "|"
+              + ratioStr + "|"
               + fmtMoney(Number(a.total_with_vat))
               + "\n";
             perPeriodTotal += Number(a.total_with_vat) || 0;
           });
 
-          appendix += "TABLE_FOOTER|סה\"כ המחאה ל" + freqLabel.replace(/^(\S+).*$/, "$1") + "||||||||" + fmtMoney(perPeriodTotal) + "\n";
+          appendix += "TABLE_FOOTER|סה\"כ המחאה ל" + freqLabel.replace(/^(\S+).*$/, "$1") + "|||||||||" + fmtMoney(perPeriodTotal) + "\n";
         }
 
         // === SECTION ב' (or א') — CPI diff (period table) ===
         if (Math.abs(liveTotal) >= 1) {
           appendixIdx++;
           appendix += "SECTION|cpi_diff|נספח " + hebLetters[appendixIdx] + " — פירוט הפרשי הצמדה " + year + "\n";
-          appendix += "TABLE_HEADER|תקופה|תאריך תשלום|שכ\"ד צמוד|מקדמת ד.נ.|סה\"כ נדרש|ששולם בפועל|הפרש|מדד בסיס|מדד תשלום|ריבית|סה\"כ\n";
+          appendix += "TABLE_HEADER|תקופה|תאריך תשלום|שכ\"ד צמוד|מקדמת ד.נ.|סה\"כ נדרש|ששולם בפועל|הפרש|מדד בסיס|מדד תשלום|יחס|ריבית|סה\"כ\n";
 
           var totalDiffSum = 0;
           r.periods.forEach(function(p: any) {
@@ -926,6 +965,11 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
             var interestStr = live.interest !== 0
               ? rate + "% (" + fmtMoney(live.interest) + ")"
               : "—";
+            // יחס הצמדה לתקופה — כך הלקוח רואה ישירות שהמדד עלה X% מבסיס לתקופת התשלום
+            var pRatio = (Number(p.cpiBaseValue) > 0)
+              ? (Number(p.cpiValue) / Number(p.cpiBaseValue))
+              : 0;
+            var pRatioStr = pRatio ? pRatio.toFixed(4) : "—";
             appendix += "TABLE_ROW|"
               + p.label + "|"
               + fmtDate(p.paymentDate) + "|"
@@ -936,13 +980,14 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
               + fmtMoney(live.diff) + "|"
               + (p.cpiBaseValue || "—") + "|"
               + (p.cpiValue || "—") + "|"
+              + pRatioStr + "|"
               + interestStr + "|"
               + fmtMoney(live.total)
               + "\n";
             totalDiffSum += live.total;
           });
 
-          appendix += "TABLE_FOOTER|סה\"כ הפרשי הצמדה ||||||||||" + fmtMoney(totalDiffSum) + "\n";
+          appendix += "TABLE_FOOTER|סה\"כ הפרשי הצמדה |||||||||||" + fmtMoney(totalDiffSum) + "\n";
         }
 
         await supabase.from("letters").insert({

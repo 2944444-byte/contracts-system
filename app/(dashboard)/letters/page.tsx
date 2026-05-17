@@ -248,7 +248,12 @@ export default function LettersPage() {
     const w=window.open("","_blank","width=800,height=1000");
     if (!w) return;
     w.document.write('<!DOCTYPE html><html dir="rtl"><head><meta charset="UTF-8"><style>' +
-      '@page{margin:12mm 18mm}' +
+      // Cover page stays portrait; each appendix section automatically prints
+      // landscape via a named @page rule. The recipient sees a portrait cover
+      // letter then a landscape page per appendix — no manual rotation needed
+      // when they hit Print, and the wide calc tables fit without truncation.
+      '@page{size:A4 portrait;margin:12mm 18mm}' +
+      '@page apxLandscape{size:A4 landscape;margin:10mm 12mm}' +
       'body{font-family:"David","Arial";padding:0;direction:rtl;font-size:11.5px;line-height:1.4;color:#1e293b;margin:0}' +
       '.page{padding:0 30px}' +
       '.header{text-align:center;margin-bottom:3px;display:flex;align-items:center;justify-content:center;gap:12px}' +
@@ -265,17 +270,24 @@ export default function LettersPage() {
       '.checks .amount{font-weight:bold;color:#1e3a5f;direction:ltr;text-align:left}' +
       '.checks .total{font-size:12px;color:#059669;border-top:2px solid #059669}' +
       '.checks tfoot td{background:#f0fdf4;padding:5px 10px}' +
-      '.appendix{page-break-before:always;padding:15px 30px 0}' +
+      '.appendix{page:apxLandscape;page-break-before:always;padding:10px 20px 0}' +
       '.appendix h3,.apx-title{color:#1e3a5f;font-size:15px;border-bottom:2px solid #1e3a5f;padding-bottom:5px;margin:0 0 10px 0}' +
-      '.apx-section{margin-bottom:18px;page-break-inside:avoid}' +
-      '.apx-section+.apx-section{page-break-before:auto;margin-top:18px}' +
+      // Each appendix section starts on its own landscape page so wide tables
+      // (10–12 columns) never get cut off.
+      '.apx-section{page:apxLandscape;margin-bottom:18px;page-break-inside:avoid}' +
+      '.apx-section+.apx-section{page-break-before:always;margin-top:0}' +
       '.apx-kv{display:flex;flex-wrap:wrap;gap:4px 14px;margin:6px 0 10px 0;font-size:11px;background:#f8fafc;border-radius:6px;padding:8px 12px}' +
       '.apx-kv-row{display:flex;gap:6px}' +
       '.apx-kv-label{color:#64748b}' +
       '.apx-kv-value{font-weight:bold;color:#1e3a5f}' +
-      '.apx-table{width:100%;border-collapse:collapse;margin:6px 0;font-size:10.5px}' +
+      '.apx-table{width:100%;border-collapse:collapse;margin:6px 0;font-size:10px;table-layout:auto}' +
       '.apx-table th{background:#1e3a5f;color:white;padding:5px 6px;text-align:right;font-weight:bold;white-space:nowrap}' +
-      '.apx-table td{padding:4px 6px;border-bottom:1px solid #e2e8f0;color:#334155}' +
+      // nowrap on cells so values don't break into multi-line stacks (which
+      // happened in portrait mode and ruined the layout in the previous build).
+      '.apx-table td{padding:4px 6px;border-bottom:1px solid #e2e8f0;color:#334155;white-space:nowrap}' +
+      // Allow only the first column (typically unit name) to wrap, since names
+      // like "חנות 5 ממערב למזרח" are long and unique.
+      '.apx-table td:first-child{white-space:normal}' +
       '.apx-table tbody tr:nth-child(even){background:#f8fafc}' +
       '.apx-table tfoot td{background:#f0fdf4;padding:6px;border-top:2px solid #059669;font-weight:bold;color:#059669}' +
       '.apx-foot-label{text-align:right}' +
