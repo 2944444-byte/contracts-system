@@ -337,8 +337,28 @@ export default function ContractEditPage() {
     setStartDate(c.start_date?.split("T")[0] ?? "");
     var effEnd = (effectiveEndDate || c.end_date)?.split("T")[0] ?? "";
     setEndDate(effEnd);
-    // Recalculate period from effective dates
-    if (c.start_date && effEnd) {
+    // ALWAYS use the stored base period (lease_period_value). DO NOT
+    // recompute from end_date — contract.end_date may already include
+    // exercised-option extensions (so it ends years AFTER the base
+    // period ends), and recomputing from it would inflate the period
+    // every save cycle: each click on "Edit" would push the contract
+    // forward by the option duration (4 years for ג'ובניל), the option
+    // start/end dates would shift accordingly, and on the NEXT edit the
+    // newly-inflated end_date would push it again.
+    //
+    // Architecture:
+    //   - lease_period_value = BASE period the user originally agreed to
+    //   - end_date            = "active until" (= base end OR last
+    //                           exercised option's end, whichever is later)
+    // Edit page treats lease_period_value as the source of truth for the
+    // period; end_date is derived from it + exercised options at save time.
+    //
+    // Fallback (rare): legacy contracts without lease_period_value stored
+    // — infer from dates as before.
+    if (c.lease_period_value && c.lease_period_unit) {
+      setLeasePeriodValue(c.lease_period_value);
+      setLeasePeriodUnit(c.lease_period_unit);
+    } else if (c.start_date && effEnd) {
       var startMs = new Date(c.start_date).getTime();
       var endMs = new Date(effEnd).getTime();
       var diffMonths = Math.round((endMs - startMs) / (30.44 * 24 * 60 * 60 * 1000));
@@ -350,8 +370,8 @@ export default function ContractEditPage() {
         setLeasePeriodUnit("months");
       }
     } else {
-      setLeasePeriodValue(c.lease_period_value ?? 12);
-      setLeasePeriodUnit(c.lease_period_unit ?? "months");
+      setLeasePeriodValue(12);
+      setLeasePeriodUnit("months");
     }
     setRentType(c.rent_type === "revenue_pct" ? "revenue_pct" : "fixed");
     setRevenuePct(c.revenue_pct?.toString() ?? "");
