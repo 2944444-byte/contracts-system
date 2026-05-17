@@ -817,27 +817,132 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
         if (bankLine) body += bankLine + "\n\n";
         body += "בכבוד רב ובברכה,\n" + companyName;
 
-        // === APPENDIX ===
+        // === APPENDIX — structured sections (parsed by letters/page.tsx renderer) ===
+        // Format:
+        //   SECTION|key|title              — start a new appendix section
+        //   KV|label|value                  — key/value row (info block above table)
+        //   TABLE_HEADER|col1|col2|...      — table header row
+        //   TABLE_ROW|c1|c2|...             — body row
+        //   TABLE_FOOTER|c1|c2|...          — total row (bold + colored)
+        //
+        // We emit up to two sections per letter:
+        //   נספח א' — תחשיב המחאות מקדמות (only when advances are included)
+        //   נספח ב' — פירוט הפרשי הצמדה (only when there's a CPI diff)
+        // Numbering shifts to "א'" alone when only one section is present.
         var appendix = "";
+        var appendixIdx = 0;
+        var hebLetters = ["", "א'", "ב'", "ג'"];
+
+        var hebMonthYear = function(ds: string): string {
+          // Accepts "YYYY-MM", "YYYY-MM-DD", or "MM-DD-YYYY". Returns "מאי 2025".
+          if (!ds) return "—";
+          var parts = ds.split("-");
+          var y = 0, m = 0;
+          if (parts.length >= 2 && parts[0].length === 4) {
+            // YYYY-MM[-DD]
+            y = Number(parts[0]); m = Number(parts[1]);
+          } else if (parts.length === 3 && parts[2].length === 4) {
+            // MM-DD-YYYY
+            m = Number(parts[0]); y = Number(parts[2]);
+          } else {
+            return ds;
+          }
+          if (!y || !m) return ds;
+          return hebMonths[m] + " " + y;
+        };
+
+        // === SECTION א' — Advances (only when combined letter) ===
+        if (advChecks.length > 0) {
+          appendixIdx++;
+          appendix += "SECTION|advances|נספח " + hebLetters[appendixIdx] + " — תחשיב המחאות מקדמות " + nextYear + "\n";
+
+          // Group by check_date to determine payment frequency
+          var datesSet: Record<string, boolean> = {};
+          advChecks.forEach(function(a: any) { datesSet[a.check_date] = true; });
+          var sortedAdvDates = Object.keys(datesSet).sort();
+          var freqLabel = sortedAdvDates.length === 4 ? "רבעוני"
+                        : sortedAdvDates.length === 12 ? "חודשי"
+                        : sortedAdvDates.length === 1 ? "שנתי"
+                        : sortedAdvDates.length + " תשלומים";
+
+          var firstDate = sortedAdvDates[0];
+          var firstPeriodChecks = advChecks.filter(function(a: any) { return a.check_date === firstDate; });
+
+          // Pull VAT % from the first check (vat_amount / total_before_vat)
+          var firstCheck = firstPeriodChecks[0] || advChecks[0];
+          var vatPct = firstCheck && firstCheck.total_before_vat > 0
+            ? Math.round((Number(firstCheck.vat_amount) / Number(firstCheck.total_before_vat)) * 100)
+            : 18;
+
+          appendix += "KV|תנאי תשלום|" + freqLabel + "\n";
+          appendix += "KV|מספר המחאות|" + sortedAdvDates.length + " לשנת " + nextYear + "\n";
+          appendix += "KV|מע\"מ|" + vatPct + "%\n";
+
+          // Per-space table
+          appendix += "TABLE_HEADER|יחידה|שטח (מ\"ר)|שכ\"ד למ\"ר|שכ\"ד צמוד/חודש|מקדמת ניהול|חניה|מדד בסיס|מדד עדכון|סכום לתקופה (כולל מע\"מ)\n";
+
+          var perPeriodTotal = 0;
+          firstPeriodChecks.forEach(function(a: any) {
+            var rentPerSqm = a.space_area > 0 && a.base_rent
+              ? (Number(a.base_rent) / Number(a.space_area)).toFixed(2)
+              : "—";
+            var baseLabel = a.cbs_from_date
+              ? hebMonthYear(a.cbs_from_date) + " (" + (a.cpi_base_value || "—") + ")"
+              : (a.cpi_base_value || "—");
+            var currLabel = a.cpi_current_date
+              ? hebMonthYear(a.cpi_current_date) + " (" + (a.cpi_at_payment || "—") + ")"
+              : (a.cpi_at_payment || "—");
+            var parking = Number(a.parking_monthly) > 0 ? fmtMoney(Number(a.parking_monthly)) : "—";
+            appendix += "TABLE_ROW|"
+              + (a.space_name || "—") + "|"
+              + (a.space_area || "—") + "|"
+              + rentPerSqm + "|"
+              + fmtMoney(Number(a.indexed_rent)) + "|"
+              + fmtMoney(Number(a.management_advance)) + "|"
+              + parking + "|"
+              + baseLabel + "|"
+              + currLabel + "|"
+              + fmtMoney(Number(a.total_with_vat))
+              + "\n";
+            perPeriodTotal += Number(a.total_with_vat) || 0;
+          });
+
+          appendix += "TABLE_FOOTER|סה\"כ המחאה ל" + freqLabel.replace(/^(\S+).*$/, "$1") + "||||||||" + fmtMoney(perPeriodTotal) + "\n";
+        }
+
+        // === SECTION ב' (or א') — CPI diff (period table) ===
         if (Math.abs(liveTotal) >= 1) {
+          appendixIdx++;
+          appendix += "SECTION|cpi_diff|נספח " + hebLetters[appendixIdx] + " — פירוט הפרשי הצמדה " + year + "\n";
+          appendix += "TABLE_HEADER|תקופה|תאריך תשלום|שכ\"ד צמוד|מקדמת ד.נ.|סה\"כ נדרש|ששולם בפועל|הפרש|מדד בסיס|מדד תשלום|ריבית|סה\"כ\n";
+
+          var totalDiffSum = 0;
           r.periods.forEach(function(p: any) {
             var live = liveDifference(p, r.contractId);
-            appendix += "UNIT_START|" + p.label + "|" + fmtDate(p.paymentDate) + "\n";
-            appendix += "שכ\"ד צמוד: " + fmtMoney(p.indexedRent) + "\n";
-            appendix += "מקדמת ד.נ.: " + fmtMoney(p.mgmtAdvance) + "\n";
-            appendix += "סה\"כ נדרש: " + fmtMoney(p.shouldPay) + "\n";
-            appendix += "ששולם בפועל: " + fmtMoney(actualPaidInputs[r.contractId]?.[p.label] ? Number(actualPaidInputs[r.contractId][p.label]) : p.actualPaid) + "\n";
-            appendix += "הפרש: " + fmtMoney(live.diff) + "\n";
-            if (p.cpiBaseValue && p.cpiValue) {
-              appendix += "מדד בסיס: " + p.cpiBaseValue + " | מדד תשלום: " + p.cpiValue + "\n";
-            }
-            if (live.interest !== 0) {
-              var rate = interestRates[r.contractId]?.[p.label] || 0;
-              appendix += "ריבית פיגורים " + rate + "%: " + fmtMoney(live.interest) + "\n";
-            }
-            appendix += "סה\"כ כולל ריבית: " + fmtMoney(live.total) + "\n";
-            appendix += "UNIT_END\n";
+            var actualPaidVal = actualPaidInputs[r.contractId]?.[p.label]
+              ? Number(actualPaidInputs[r.contractId][p.label])
+              : p.actualPaid;
+            var rate = interestRates[r.contractId]?.[p.label] || 0;
+            var interestStr = live.interest !== 0
+              ? rate + "% (" + fmtMoney(live.interest) + ")"
+              : "—";
+            appendix += "TABLE_ROW|"
+              + p.label + "|"
+              + fmtDate(p.paymentDate) + "|"
+              + fmtMoney(p.indexedRent) + "|"
+              + fmtMoney(p.mgmtAdvance) + "|"
+              + fmtMoney(p.shouldPay) + "|"
+              + fmtMoney(actualPaidVal) + "|"
+              + fmtMoney(live.diff) + "|"
+              + (p.cpiBaseValue || "—") + "|"
+              + (p.cpiValue || "—") + "|"
+              + interestStr + "|"
+              + fmtMoney(live.total)
+              + "\n";
+            totalDiffSum += live.total;
           });
+
+          appendix += "TABLE_FOOTER|סה\"כ הפרשי הצמדה ||||||||||" + fmtMoney(totalDiffSum) + "\n";
         }
 
         await supabase.from("letters").insert({

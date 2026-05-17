@@ -30,11 +30,22 @@ export default function LettersPage() {
   const [fBody,      setFBody]      =useState("");
   const [fTemplateId,setFTemplateId]=useState("");
 
+  // Listing filters + grouping
+  const [search,       setSearch]       = useState("");
+  const [filterYear,   setFilterYear]   = useState<string>("");
+  const [filterType,   setFilterType]   = useState<string>("");
+  const [filterProp,   setFilterProp]   = useState<string>("");
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+
+  function toggleGroup(key: string) {
+    setCollapsedGroups(function(prev) { return { ...prev, [key]: !prev[key] }; });
+  }
+
   useEffect(function() { loadAll(); }, []);
 
   async function loadAll() {
     const [{ data: l }, { data: c }, { data: t }] = await Promise.all([
-      supabase.from("letters").select("*, contracts(tenants(name),properties(name))").order("created_at",{ascending:false}),
+      supabase.from("letters").select("*, contracts(tenants(name),properties(id,name))").order("created_at",{ascending:false}),
       supabase.from("contracts").select("id,tenants(name,contact_name),properties(name,address)").in("status",["active","expiring","extended"]),
       supabase.from("document_templates").select("*").eq("is_active",true).order("name"),
     ]);
@@ -123,31 +134,115 @@ export default function LettersPage() {
     }
     if (inTable) htmlParts.push("</tbody></table>");
 
-    // Parse appendix — supports both unit-based (advances) and period-based (cpi_diff)
+    // Parse appendix — two formats supported:
+    //   1) NEW structured: SECTION / KV / TABLE_HEADER / TABLE_ROW / TABLE_FOOTER
+    //      Used by combined letters (advances + CPI diff). Renders compact tables.
+    //   2) LEGACY: UNIT_START / UNIT_END blocks. Renders per-unit/per-period cards.
+    //      Still produced by AdvancesTab and older letters — kept for backward compat.
     var appendixHtml = "";
-    var isCpiDiff = (cj.body || "").includes("הפרשי הצמדה") || cj.body?.includes("נספח א'");
+    function esc(s: string) { return String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
     if (appendixRaw) {
-      var blocks = appendixRaw.split("UNIT_END").filter(Boolean);
-      var appendixTitle = isCpiDiff ? "נספח א' — פירוט חישוב הפרשי הצמדה" : "נספח א' — פירוט חישוב מקדמות";
-      appendixHtml = '<div class="appendix"><h3>' + appendixTitle + '</h3>';
-      blocks.forEach(function(block: string) {
-        var match = block.match(/UNIT_START\|(.+?)\|(.+)/);
-        if (!match) return;
-        var header1 = match[1];
-        var header2 = match[2].trim();
-        var details = block.split("\n").filter(function(l) { return l && !l.includes("UNIT_START"); });
-        var icon = isCpiDiff ? "📅" : "📐";
-        var headerExtra = isCpiDiff ? "תשלום: " + header2 : header2 + ' מ"ר';
-        appendixHtml += '<div class="unit-card"><div class="unit-header">' + icon + ' ' + header1 + ' | ' + headerExtra + '</div>';
-        appendixHtml += '<div class="unit-details">';
-        details.forEach(function(d: string) {
-          d = d.trim();
-          if (!d) return;
-          appendixHtml += '<div class="detail-row">' + d.replace(/&/g,"&amp;").replace(/</g,"&lt;") + '</div>';
+      var hasStructured = /^\s*SECTION\|/m.test(appendixRaw);
+      if (hasStructured) {
+        // ─── NEW format ───
+        appendixHtml = '<div class="appendix">';
+        var lines = appendixRaw.split("\n");
+        var inSection = false;
+        var inTable = false;
+        var inKvBlock = false;
+        var pendingHeader = "";
+        var closeTable = function() {
+          if (inTable) { appendixHtml += '</tbody></table>'; inTable = false; }
+        };
+        var closeKv = function() {
+          if (inKvBlock) { appendixHtml += '</div>'; inKvBlock = false; }
+        };
+        for (var li = 0; li < lines.length; li++) {
+          var raw = lines[li];
+          if (!raw.trim()) continue;
+          var parts = raw.split("|");
+          var tag = parts[0];
+          if (tag === "SECTION") {
+            closeTable(); closeKv();
+            if (inSection) appendixHtml += '</div>'; // close prior section
+            inSection = true;
+            var sectionTitle = esc(parts[2] || "נספח");
+            appendixHtml += '<div class="apx-section"><h3 class="apx-title">' + sectionTitle + '</h3>';
+            continue;
+          }
+          if (tag === "KV") {
+            closeTable();
+            if (!inKvBlock) { appendixHtml += '<div class="apx-kv">'; inKvBlock = true; }
+            appendixHtml += '<div class="apx-kv-row"><span class="apx-kv-label">' + esc(parts[1]) + '</span><span class="apx-kv-value">' + esc(parts[2]) + '</span></div>';
+            continue;
+          }
+          if (tag === "TABLE_HEADER") {
+            closeKv(); closeTable();
+            appendixHtml += '<table class="apx-table"><thead><tr>';
+            for (var hi = 1; hi < parts.length; hi++) appendixHtml += '<th>' + esc(parts[hi]) + '</th>';
+            appendixHtml += '</tr></thead><tbody>';
+            inTable = true;
+            continue;
+          }
+          if (tag === "TABLE_ROW" && inTable) {
+            appendixHtml += '<tr>';
+            for (var ri = 1; ri < parts.length; ri++) appendixHtml += '<td>' + esc(parts[ri]) + '</td>';
+            appendixHtml += '</tr>';
+            continue;
+          }
+          if (tag === "TABLE_FOOTER" && inTable) {
+            appendixHtml += '</tbody><tfoot><tr>';
+            // Find the first non-empty cell as label (will span empties), last as value
+            var label = "";
+            var labelSpan = 1;
+            var fi = 1;
+            for (; fi < parts.length; fi++) {
+              if (parts[fi]) { label = parts[fi]; break; }
+            }
+            // count empty cells after the label until last value
+            var lastIdx = parts.length - 1;
+            for (var ei = fi + 1; ei < lastIdx; ei++) {
+              if (parts[ei] === "") labelSpan++;
+              else break;
+            }
+            // Build: [label colspan=labelSpan+1] [remaining values...]
+            var totalCols = parts.length - 1;
+            var spanForLabel = totalCols - 1; // label takes all but last
+            appendixHtml += '<td colspan="' + spanForLabel + '" class="apx-foot-label">' + esc(label) + '</td>';
+            appendixHtml += '<td class="apx-foot-value">' + esc(parts[lastIdx]) + '</td>';
+            appendixHtml += '</tr></tfoot></table>';
+            inTable = false;
+            continue;
+          }
+        }
+        closeTable(); closeKv();
+        if (inSection) appendixHtml += '</div>';
+        appendixHtml += '</div>';
+      } else {
+        // ─── LEGACY UNIT_START format (advances-only letters from AdvancesTab) ───
+        var isCpiDiff = (cj.body || "").includes("הפרשי הצמדה") || cj.body?.includes("נספח א'");
+        var blocks = appendixRaw.split("UNIT_END").filter(Boolean);
+        var appendixTitle = isCpiDiff ? "נספח א' — פירוט חישוב הפרשי הצמדה" : "נספח א' — פירוט חישוב מקדמות";
+        appendixHtml = '<div class="appendix"><h3 class="apx-title">' + appendixTitle + '</h3>';
+        blocks.forEach(function(block: string) {
+          var match = block.match(/UNIT_START\|(.+?)\|(.+)/);
+          if (!match) return;
+          var header1 = match[1];
+          var header2 = match[2].trim();
+          var details = block.split("\n").filter(function(l) { return l && !l.includes("UNIT_START"); });
+          var icon = isCpiDiff ? "📅" : "📐";
+          var headerExtra = isCpiDiff ? "תשלום: " + header2 : header2 + ' מ"ר';
+          appendixHtml += '<div class="unit-card"><div class="unit-header">' + icon + ' ' + header1 + ' | ' + headerExtra + '</div>';
+          appendixHtml += '<div class="unit-details">';
+          details.forEach(function(d: string) {
+            d = d.trim();
+            if (!d) return;
+            appendixHtml += '<div class="detail-row">' + esc(d) + '</div>';
+          });
+          appendixHtml += '</div></div>';
         });
-        appendixHtml += '</div></div>';
-      });
-      appendixHtml += '</div>';
+        appendixHtml += '</div>';
+      }
     }
 
     const w=window.open("","_blank","width=800,height=1000");
@@ -170,15 +265,28 @@ export default function LettersPage() {
       '.checks .amount{font-weight:bold;color:#1e3a5f;direction:ltr;text-align:left}' +
       '.checks .total{font-size:12px;color:#059669;border-top:2px solid #059669}' +
       '.checks tfoot td{background:#f0fdf4;padding:5px 10px}' +
-      '.appendix{page-break-before:always;padding-top:15px}' +
-      '.appendix h3{color:#1e3a5f;font-size:16px;border-bottom:2px solid #1e3a5f;padding-bottom:5px}' +
+      '.appendix{page-break-before:always;padding:15px 30px 0}' +
+      '.appendix h3,.apx-title{color:#1e3a5f;font-size:15px;border-bottom:2px solid #1e3a5f;padding-bottom:5px;margin:0 0 10px 0}' +
+      '.apx-section{margin-bottom:18px;page-break-inside:avoid}' +
+      '.apx-section+.apx-section{page-break-before:auto;margin-top:18px}' +
+      '.apx-kv{display:flex;flex-wrap:wrap;gap:4px 14px;margin:6px 0 10px 0;font-size:11px;background:#f8fafc;border-radius:6px;padding:8px 12px}' +
+      '.apx-kv-row{display:flex;gap:6px}' +
+      '.apx-kv-label{color:#64748b}' +
+      '.apx-kv-value{font-weight:bold;color:#1e3a5f}' +
+      '.apx-table{width:100%;border-collapse:collapse;margin:6px 0;font-size:10.5px}' +
+      '.apx-table th{background:#1e3a5f;color:white;padding:5px 6px;text-align:right;font-weight:bold;white-space:nowrap}' +
+      '.apx-table td{padding:4px 6px;border-bottom:1px solid #e2e8f0;color:#334155}' +
+      '.apx-table tbody tr:nth-child(even){background:#f8fafc}' +
+      '.apx-table tfoot td{background:#f0fdf4;padding:6px;border-top:2px solid #059669;font-weight:bold;color:#059669}' +
+      '.apx-foot-label{text-align:right}' +
+      '.apx-foot-value{text-align:left;direction:ltr}' +
       '.unit-card{border:1px solid #e2e8f0;border-radius:8px;margin:10px 0;overflow:hidden}' +
       '.unit-header{background:#eff6ff;border-right:4px solid #3b82f6;padding:8px 12px;font-weight:bold;font-size:13px;color:#1e3a5f}' +
       '.unit-details{padding:8px 15px;font-size:11px;line-height:1.8}' +
       '.detail-row{color:#334155}' +
       '.signature-line{text-align:left;margin:2px 0}' +
       '.footer-bar{margin-top:30px;border-top:1px solid #cbd5e1;padding-top:6px;text-align:center;font-size:9px;color:#94a3b8}' +
-      '@media print{.checks th{background:#1e3a5f !important;color:white !important;-webkit-print-color-adjust:exact}.unit-header{background:#eff6ff !important;-webkit-print-color-adjust:exact}.checks tr:nth-child(even){background:#f8fafc !important;-webkit-print-color-adjust:exact}.checks tfoot td{background:#f0fdf4 !important;-webkit-print-color-adjust:exact}}' +
+      '@media print{.checks th,.apx-table th{background:#1e3a5f !important;color:white !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}.unit-header{background:#eff6ff !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}.checks tr:nth-child(even),.apx-table tbody tr:nth-child(even){background:#f8fafc !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}.checks tfoot td,.apx-table tfoot td{background:#f0fdf4 !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}.apx-kv{background:#f8fafc !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}}' +
       '</style></head><body><div class="page">' +
       headerHtml +
       '<div class="date">' + fmtDate(l.created_at) + '</div>' +
@@ -229,34 +337,134 @@ export default function LettersPage() {
           <div className="text-5xl mb-3">✉️</div><div>אין מכתבים</div>
           <button onClick={openNew} className="mt-3 text-blue-600 hover:underline text-sm">+ מכתב חדש</button>
         </div>
-      ) : (
-        <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-          <table className="w-full text-right text-sm">
-            <thead className="bg-slate-50 border-b"><tr><th className="px-4 py-3 font-semibold text-slate-700">נושא</th><th className="px-4 py-3 font-semibold text-slate-700">שוכר/נכס</th><th className="px-4 py-3 font-semibold text-slate-700">סוג</th><th className="px-4 py-3 font-semibold text-slate-700">תאריך</th><th className="px-4 py-3 font-semibold text-slate-700">פעולות</th></tr></thead>
-            <tbody>
-              {letters.map(function(l) {
-                const ti=typeInfo(l.letter_type);
-                return (
-                  <tr key={l.id} className="border-t border-slate-100 hover:bg-slate-50">
-                    <td className="px-4 py-3"><div className="font-semibold text-slate-800">{l.title || l.subject || "—"}</div></td>
-                    <td className="px-4 py-3"><div className="font-medium text-slate-700">{l.contracts?.tenants?.name}</div><div className="text-xs text-slate-400">{l.contracts?.properties?.name}</div></td>
-                    <td className="px-4 py-3"><span className="text-base">{ti.icon}</span><span className="text-xs text-slate-500 mr-1">{ti.l}</span></td>
-                    <td className="px-4 py-3 text-xs text-slate-500">{fmtDate(l.created_at)}</td>
-                    <td className="px-4 py-3">
-                      <div className="flex gap-1">
-                        <button onClick={function(){setPreview(l);}} className="text-xs border border-slate-200 rounded px-2 py-1 text-slate-600 hover:bg-slate-50">👁</button>
-                        <button onClick={function(){handlePrint(l);}} className="text-xs border border-blue-200 rounded px-2 py-1 text-blue-600 hover:bg-blue-50">🖨</button>
-                        <button onClick={function(){handleEmail(l);}} className="text-xs border border-green-200 rounded px-2 py-1 text-green-600 hover:bg-green-50">📧</button>
-                        <button onClick={function(){deleteLetter(l.id);}} className="text-xs border border-red-100 rounded px-2 py-1 text-red-400 hover:bg-red-50">🗑</button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
+      ) : (() => {
+        // ─── Build filter options + apply filters ───
+        var allYears: number[] = [];
+        var allProps: Record<string, string> = {};
+        letters.forEach(function(l: any) {
+          var y = l.billing_year || (l.created_at ? new Date(l.created_at).getFullYear() : 0);
+          if (y && allYears.indexOf(y) === -1) allYears.push(y);
+          var pid = l.property_id || l.contracts?.properties?.id || "";
+          var pname = l.contracts?.properties?.name || "ללא נכס";
+          if (pid || pname) allProps[pid || pname] = pname;
+        });
+        allYears.sort(function(a, b) { return b - a; });
+
+        var filtered = letters.filter(function(l: any) {
+          if (filterType && l.letter_type !== filterType) return false;
+          var ly = l.billing_year || (l.created_at ? new Date(l.created_at).getFullYear() : 0);
+          if (filterYear && String(ly) !== filterYear) return false;
+          var pid = l.property_id || l.contracts?.properties?.id || "";
+          var pname = l.contracts?.properties?.name || "ללא נכס";
+          if (filterProp && (pid || pname) !== filterProp) return false;
+          if (search) {
+            var q = search.toLowerCase();
+            var hay = ((l.title || "") + " " + (l.contracts?.tenants?.name || "") + " " + (l.contracts?.properties?.name || "")).toLowerCase();
+            if (hay.indexOf(q) === -1) return false;
+          }
+          return true;
+        });
+
+        // Group by property
+        var groups: Record<string, { name: string; key: string; items: any[] }> = {};
+        filtered.forEach(function(l: any) {
+          var pid = l.property_id || l.contracts?.properties?.id || "";
+          var pname = l.contracts?.properties?.name || "ללא נכס";
+          var key = pid || pname;
+          if (!groups[key]) groups[key] = { name: pname, key: key, items: [] };
+          groups[key].items.push(l);
+        });
+        var groupList = Object.values(groups).sort(function(a, b) { return a.name.localeCompare(b.name, "he"); });
+
+        return (
+          <>
+            {/* Filter bar */}
+            <div className="mb-4 rounded-xl border border-slate-200 bg-white p-3 flex flex-wrap items-center gap-2">
+              <div className="relative flex-1 min-w-[200px]">
+                <input
+                  type="text"
+                  value={search}
+                  onChange={function(e){setSearch(e.target.value);}}
+                  placeholder="🔍 חיפוש לפי נושא / שוכר / נכס"
+                  className={ic}
+                />
+              </div>
+              <select value={filterYear} onChange={function(e){setFilterYear(e.target.value);}} className={ic + " w-32"}>
+                <option value="">📅 שנה: הכל</option>
+                {allYears.map(function(y){ return <option key={y} value={String(y)}>{y}</option>; })}
+              </select>
+              <select value={filterType} onChange={function(e){setFilterType(e.target.value);}} className={ic + " w-40"}>
+                <option value="">📋 סוג: הכל</option>
+                {LETTER_TYPES.map(function(t){ return <option key={t.v} value={t.v}>{t.icon} {t.l}</option>; })}
+              </select>
+              <select value={filterProp} onChange={function(e){setFilterProp(e.target.value);}} className={ic + " w-44"}>
+                <option value="">🏢 נכס: הכל</option>
+                {Object.keys(allProps).map(function(k){ return <option key={k} value={k}>{allProps[k]}</option>; })}
+              </select>
+              {(search||filterYear||filterType||filterProp) && (
+                <button onClick={function(){setSearch("");setFilterYear("");setFilterType("");setFilterProp("");}} className="text-xs text-slate-500 hover:text-slate-700 px-2 py-1 border border-slate-200 rounded">✕ נקה</button>
+              )}
+              <div className="text-xs text-slate-500 mr-auto">
+                {filtered.length} מתוך {letters.length}
+              </div>
+            </div>
+
+            {filtered.length === 0 ? (
+              <div className="rounded-xl border-2 border-dashed border-slate-200 bg-white p-8 text-center text-slate-400 text-sm">
+                לא נמצאו מכתבים התואמים את הסינון
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {groupList.map(function(g) {
+                  var collapsed = !!collapsedGroups[g.key];
+                  return (
+                    <div key={g.key} className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+                      <button
+                        onClick={function(){toggleGroup(g.key);}}
+                        className="w-full flex items-center justify-between px-4 py-3 bg-slate-50 hover:bg-slate-100 transition-colors text-right"
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className="text-lg">🏢</span>
+                          <span className="font-bold text-slate-800">{g.name}</span>
+                          <span className="text-xs text-slate-500">— {g.items.length} מכתבים</span>
+                        </div>
+                        <span className="text-slate-400 text-sm">{collapsed ? "▶" : "▼"}</span>
+                      </button>
+                      {!collapsed && (
+                        <table className="w-full text-right text-sm">
+                          <tbody>
+                            {g.items.map(function(l: any) {
+                              const ti = typeInfo(l.letter_type);
+                              return (
+                                <tr key={l.id} className="border-t border-slate-100 hover:bg-slate-50">
+                                  <td className="px-4 py-2.5 w-10 text-base">{ti.icon}</td>
+                                  <td className="px-2 py-2.5">
+                                    <div className="font-semibold text-slate-800">{l.title || "—"}</div>
+                                    <div className="text-xs text-slate-500">{l.contracts?.tenants?.name}</div>
+                                  </td>
+                                  <td className="px-2 py-2.5 text-xs text-slate-500 whitespace-nowrap w-24">{fmtDate(l.created_at)}</td>
+                                  <td className="px-4 py-2.5 w-44">
+                                    <div className="flex gap-1 justify-end">
+                                      <button onClick={function(){setPreview(l);}} className="text-xs border border-slate-200 rounded px-2 py-1 text-slate-600 hover:bg-slate-50" title="תצוגה">👁</button>
+                                      <button onClick={function(){handlePrint(l);}} className="text-xs border border-blue-200 rounded px-2 py-1 text-blue-600 hover:bg-blue-50" title="הדפסה">🖨</button>
+                                      <button onClick={function(){handleEmail(l);}} className="text-xs border border-green-200 rounded px-2 py-1 text-green-600 hover:bg-green-50" title="אימייל">📧</button>
+                                      <button onClick={function(){deleteLetter(l.id);}} className="text-xs border border-red-100 rounded px-2 py-1 text-red-400 hover:bg-red-50" title="מחק">🗑</button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </>
+        );
+      })()}
 
       {editingId && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={function(){setEditingId("");}}>
