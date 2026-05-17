@@ -1,11 +1,15 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit-log';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL",{month:"short",year:"numeric"}) : "—"; }
 function fmtMoney(n: number) { return n ? "₪"+n.toLocaleString("he-IL",{minimumFractionDigits:2,maximumFractionDigits:2}) : "—"; }
+
+// Bucket created via migration add_attachment_to_revenue_reports.
+// Public so the link in the row works directly without signing.
+const REVENUE_BUCKET = "revenue_attachments";
 
 export default function RevenuePage() {
   const [contracts,  setContracts]  = useState<any[]>([]);
@@ -18,6 +22,65 @@ export default function RevenuePage() {
   const [fContractId,  setFContractId]  = useState("");
   const [fGrossRevenue,setFGrossRevenue]=useState("");
   const [fNotes,       setFNotes]       =useState("");
+  // Attachment in the create modal
+  const [fFile,        setFFile]        = useState<File|null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  // Tracks per-row "attaching" state (the small 📎 button on each existing report)
+  const [rowAttaching, setRowAttaching] = useState<string>("");
+
+  // Uploads a file to the revenue_attachments bucket and returns the metadata
+  // that should be written onto the revenue_reports row. Throws on failure.
+  async function uploadAttachment(file: File): Promise<{ url: string; path: string; name: string; size: number; type: string; }> {
+    var safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+    var path = "revenue/" + Date.now() + "_" + safeName;
+    var upRes = await supabase.storage.from(REVENUE_BUCKET).upload(path, file, { upsert: false });
+    if (upRes.error) throw upRes.error;
+    var urlRes = supabase.storage.from(REVENUE_BUCKET).getPublicUrl(path);
+    return {
+      url: urlRes.data.publicUrl,
+      path: path,
+      name: file.name,
+      size: file.size,
+      type: file.type || "",
+    };
+  }
+
+  // Attaches a file to an existing row (the 📎 / 🔄 buttons in the table).
+  async function attachToRow(rowId: string, file: File) {
+    setRowAttaching(rowId);
+    try {
+      // If there's already an attachment on this row, delete the old one first
+      // so we don't accumulate orphans in storage.
+      var existing = reports.find(function(r) { return r.id === rowId; });
+      if (existing?.attachment_path) {
+        await supabase.storage.from(REVENUE_BUCKET).remove([existing.attachment_path]);
+      }
+      var meta = await uploadAttachment(file);
+      var { error } = await supabase.from("revenue_reports").update({
+        attachment_url: meta.url, attachment_path: meta.path,
+        attachment_name: meta.name, attachment_size: meta.size, attachment_type: meta.type,
+      }).eq("id", rowId);
+      if (error) throw error;
+      await logAudit({ entity_type: "revenue", entity_id: rowId, action: existing?.attachment_url ? "replace_attachment" : "add_attachment" });
+      await loadAll();
+    } catch (e: any) { alert("שגיאה בהעלאה: " + (e?.message || e)); }
+    finally { setRowAttaching(""); }
+  }
+
+  async function removeAttachment(row: any) {
+    if (!row.attachment_url) return;
+    if (!confirm("למחוק את הקובץ המצורף?")) return;
+    try {
+      if (row.attachment_path) {
+        await supabase.storage.from(REVENUE_BUCKET).remove([row.attachment_path]);
+      }
+      await supabase.from("revenue_reports").update({
+        attachment_url: null, attachment_path: null, attachment_name: null, attachment_size: null, attachment_type: null,
+      }).eq("id", row.id);
+      await logAudit({ entity_type: "revenue", entity_id: row.id, action: "remove_attachment" });
+      await loadAll();
+    } catch (e: any) { alert("שגיאה: " + (e?.message || e)); }
+  }
 
   useEffect(function() { loadAll(); }, [selMonth]);
 
@@ -50,15 +113,25 @@ export default function RevenuePage() {
     if (!calc) return;
     setSaving(true);
     try {
-      const c = contracts.find(function(x){return x.id===fContractId;});
+      // Upload first — if upload fails we'd rather fail the whole save
+      // than write a row that "claims" to have an attachment.
+      var attachmentMeta: any = null;
+      if (fFile) attachmentMeta = await uploadAttachment(fFile);
+
       const { data } = await supabase.from("revenue_reports").insert({
         contract_id:fContractId, report_month:selMonth+"-01",
         gross_revenue:Number(fGrossRevenue), revenue_pct:calc.pct,
         calculated_rent:calc.calcRent, min_rent:calc.minRent,
         final_rent:calc.finalRent, notes:fNotes||null,
+        attachment_url:  attachmentMeta?.url  ?? null,
+        attachment_path: attachmentMeta?.path ?? null,
+        attachment_name: attachmentMeta?.name ?? null,
+        attachment_size: attachmentMeta?.size ?? null,
+        attachment_type: attachmentMeta?.type ?? null,
       }).select().single();
       await logAudit({entity_type:"revenue",entity_id:data.id,action:"create"});
-      setEditingId(""); setFContractId(""); setFGrossRevenue(""); setFNotes("");
+      setEditingId(""); setFContractId(""); setFGrossRevenue(""); setFNotes(""); setFFile(null);
+      if (fileInputRef.current) fileInputRef.current.value = "";
       await loadAll();
     } catch(e:any) { alert("שגיאה: "+e?.message); }
     finally { setSaving(false); }
@@ -131,10 +204,13 @@ export default function RevenuePage() {
               <th className="px-4 py-3 font-semibold text-slate-700">שכ"ד מחושב</th>
               <th className="px-4 py-3 font-semibold text-slate-700">מינימום</th>
               <th className="px-4 py-3 font-semibold text-slate-700">סופי</th>
+              <th className="px-4 py-3 font-semibold text-slate-700">דיווח השוכר</th>
             </tr></thead>
             <tbody>
               {reports.map(function(r){
                 const isMin = (r.final_rent??0) <= (r.min_rent??0)+1;
+                const hasAttachment = !!r.attachment_url;
+                const isThisRowAttaching = rowAttaching === r.id;
                 return (
                   <tr key={r.id} className={"border-t border-slate-100 "+(isMin?"bg-orange-50":"hover:bg-slate-50")}>
                     <td className="px-4 py-3"><div className="font-semibold text-slate-800">{r.contracts?.tenants?.name}</div><div className="text-xs text-slate-400">{r.contracts?.properties?.name}</div></td>
@@ -143,12 +219,65 @@ export default function RevenuePage() {
                     <td className="px-4 py-3 text-slate-600">{fmtMoney(r.calculated_rent)}</td>
                     <td className="px-4 py-3 text-slate-500">{fmtMoney(r.min_rent)}{isMin&&<span className="text-orange-600 font-bold mr-1"> ←</span>}</td>
                     <td className="px-4 py-3 font-black text-blue-700 text-base">{fmtMoney(r.final_rent)}</td>
+                    <td className="px-4 py-3">
+                      {hasAttachment ? (
+                        <div className="flex items-center gap-1.5">
+                          <a
+                            href={r.attachment_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-xs text-blue-700 hover:text-blue-900 underline flex items-center gap-1 max-w-[180px] truncate"
+                            title={r.attachment_name || "הצג קובץ"}
+                          >
+                            📎 {r.attachment_name || "קובץ"}
+                          </a>
+                          <button
+                            onClick={function(){
+                              var inp = document.createElement("input");
+                              inp.type = "file";
+                              inp.accept = ".pdf,.png,.jpg,.jpeg,.webp,image/*,application/pdf";
+                              inp.onchange = function(e: any) {
+                                var f = e.target.files?.[0];
+                                if (f) attachToRow(r.id, f);
+                              };
+                              inp.click();
+                            }}
+                            disabled={isThisRowAttaching}
+                            className="text-xs border border-slate-200 rounded px-1.5 py-1 text-slate-500 hover:bg-slate-50"
+                            title="החלף קובץ"
+                          >🔄</button>
+                          <button
+                            onClick={function(){ removeAttachment(r); }}
+                            className="text-xs border border-red-100 rounded px-1.5 py-1 text-red-400 hover:bg-red-50"
+                            title="מחק קובץ"
+                          >🗑</button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={function(){
+                            var inp = document.createElement("input");
+                            inp.type = "file";
+                            inp.accept = ".pdf,.png,.jpg,.jpeg,.webp,image/*,application/pdf";
+                            inp.onchange = function(e: any) {
+                              var f = e.target.files?.[0];
+                              if (f) attachToRow(r.id, f);
+                            };
+                            inp.click();
+                          }}
+                          disabled={isThisRowAttaching}
+                          className="text-xs text-blue-600 hover:text-blue-800 border border-blue-200 rounded px-2 py-1 hover:bg-blue-50 disabled:opacity-50"
+                          title="צרף דיווח מהשוכר"
+                        >
+                          {isThisRowAttaching ? "מעלה..." : "📎 צרף"}
+                        </button>
+                      )}
+                    </td>
                   </tr>
                 );
               })}
             </tbody>
             <tfoot className="border-t-2 border-slate-200 bg-slate-50">
-              <tr><td colSpan={5} className="px-4 py-2.5 text-xs font-bold text-slate-600">סה"כ {reports.length} דיווחים</td><td className="px-4 py-2.5 font-black text-blue-700">{fmtMoney(totalFinal)}</td></tr>
+              <tr><td colSpan={5} className="px-4 py-2.5 text-xs font-bold text-slate-600">סה"כ {reports.length} דיווחים</td><td className="px-4 py-2.5 font-black text-blue-700">{fmtMoney(totalFinal)}</td><td></td></tr>
             </tfoot>
           </table>
         </div>
@@ -182,8 +311,25 @@ export default function RevenuePage() {
                 </div>
               )}
               <div><label className="mb-1 block text-xs font-semibold text-slate-700">הערות</label><input type="text" value={fNotes} onChange={function(e){setFNotes(e.target.value);}} className={ic}/></div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">📎 צרף דיווח מהשוכר (PDF / תמונה)</label>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".pdf,.png,.jpg,.jpeg,.webp,image/*,application/pdf"
+                  onChange={function(e){ setFFile(e.target.files?.[0] || null); }}
+                  className="w-full text-xs text-slate-600 file:mr-3 file:rounded-lg file:border-0 file:bg-blue-50 file:px-3 file:py-2 file:text-xs file:font-semibold file:text-blue-700 hover:file:bg-blue-100"
+                />
+                {fFile && (
+                  <div className="mt-2 text-xs text-slate-500 flex items-center gap-2">
+                    <span>{fFile.name}</span>
+                    <span className="text-slate-400">({(fFile.size/1024).toFixed(0)} KB)</span>
+                    <button type="button" onClick={function(){setFFile(null); if (fileInputRef.current) fileInputRef.current.value="";}} className="text-red-500 hover:text-red-700">× הסר</button>
+                  </div>
+                )}
+              </div>
               <div className="flex gap-3 pt-2">
-                <button onClick={function(){setEditingId("");}} className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm text-slate-600">ביטול</button>
+                <button onClick={function(){setEditingId(""); setFFile(null); if (fileInputRef.current) fileInputRef.current.value="";}} className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm text-slate-600">ביטול</button>
                 <button onClick={handleSave} disabled={saving||!preview} className="flex-1 rounded-xl bg-blue-700 py-2.5 text-sm font-bold text-white disabled:opacity-50">{saving?"שומר...":"שמור"}</button>
               </div>
             </div>
