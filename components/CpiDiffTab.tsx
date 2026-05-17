@@ -108,6 +108,8 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
   async function saveDiffCalculation() {
     if (savedMode && !confirm("המקדמות הנוכחיות נטענו מנתונים שמורים. שמירה תדרוס. האם להמשיך?")) return;
     setSaving(true);
+    var saveStart = Date.now();
+    setProgress({ current: 0, total: 0, label: "שומר חישובי הפרשי הצמדה...", startedAt: saveStart });
     try {
       // Delete existing for this prop+year then insert new
       await supabase.from("cpi_diff_calculations").delete().eq("property_id", propId).eq("year", year);
@@ -136,7 +138,7 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
       alert("✅ נשמרו " + rows.length + " חישובי הפרשי הצמדה");
       checkSavedDiff();
     } catch (e: any) { alert("שגיאה: " + (e?.message || e)); }
-    finally { setSaving(false); }
+    finally { setSaving(false); setProgress(null); }
   }
 
   async function compute() {
@@ -699,10 +701,14 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
 
   async function createCharges() {
     setCreatingCharges(true);
+    var chargeStart = Date.now();
+    var withDiff = results.filter(function(r) { return Math.abs(r.totalDifference) >= 1; });
+    setProgress({ current: 0, total: withDiff.length, label: "יוצר חיובי הפרשי הצמדה...", startedAt: chargeStart });
     try {
       var count = 0;
       for (var r of results) {
         if (Math.abs(r.totalDifference) < 1) continue;
+        setProgress({ current: count + 1, total: withDiff.length, label: "יוצר חיוב — " + r.tenantName, startedAt: chargeStart });
         await supabase.from("charges").insert({
           contract_id: r.contractId,
           charge_type: "other",
@@ -721,7 +727,7 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
       await logAudit({ entity_type: "billing", entity_id: propId, action: "create_cpi_diff_charges", notes: count + " חיובים" });
       alert("✅ נוצרו " + count + " חיובי הפרשי הצמדה");
     } catch (e: any) { alert("שגיאה: " + (e?.message || e)); }
-    finally { setCreatingCharges(false); }
+    finally { setCreatingCharges(false); setProgress(null); }
   }
 
   async function createLetters() {
@@ -754,7 +760,12 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
       }
 
       var count = 0;
+      var letterStart = Date.now();
+      setProgress({ current: 0, total: results.length, label: "יוצר מכתבי דרישה...", startedAt: letterStart });
+      var letterIdx = 0;
       for (var r of results) {
+        letterIdx++;
+        setProgress({ current: letterIdx, total: results.length, label: "יוצר מכתב — " + r.tenantName, startedAt: letterStart });
         var liveTotal = r.periods.reduce(function(s: number, p: any) { return s + liveDifference(p, r.contractId).total; }, 0);
         var advChecks = savedAdvancesByContract[r.contractId] || [];
         if (Math.abs(liveTotal) < 1 && advChecks.length === 0) continue;
@@ -847,7 +858,7 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
       await logAudit({ entity_type: "billing", entity_id: propId, action: "create_cpi_diff_letters", notes: count + " מכתבים" });
       alert("✅ נוצרו " + count + " מכתבים");
     } catch (e: any) { alert("שגיאה: " + (e?.message || e)); }
-    finally { setCreatingLetters(false); }
+    finally { setCreatingLetters(false); setProgress(null); }
   }
 
   var grandTotalDiff = results.reduce(function(s, r) { return s + r.totalDifference; }, 0);

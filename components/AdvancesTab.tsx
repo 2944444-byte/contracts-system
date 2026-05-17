@@ -808,6 +808,10 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
       if (!confirm("המקדמות הנוכחיות נטענו מנתונים שמורים. שמירה תדרוס את הנתונים הקיימים. האם להמשיך?\n\nמומלץ: לחץ 'חשב מחדש' לפני שמירה כדי לחשב CPI מהלמ\"ס.")) return;
     }
     setCreatingCharges(true);
+    var saveStart = Date.now();
+    // Total = sum of checks across all spaces (one DB upsert per check)
+    var totalChecks = results.reduce(function(s, r) { return s + r.checks.length; }, 0);
+    setProgress({ current: 0, total: totalChecks, label: "שומר מקדמות...", startedAt: saveStart });
     try {
       var count = 0;
       for (var r of results) {
@@ -838,12 +842,18 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
             status: "pending",
           }, { onConflict: "contract_id,space_id,year,period" });
           count++;
+          setProgress({
+            current: count,
+            total: totalChecks,
+            label: "שומר מקדמות — " + r.tenantName + " · " + r.spaceName,
+            startedAt: saveStart,
+          });
         }
       }
       await logAudit({ entity_type: "billing", entity_id: propId, action: "create_advances", notes: count + " מקדמות" });
       alert("✅ נוצרו " + count + " מקדמות");
     } catch (e: any) { alert("שגיאה: " + (e?.message || e)); }
-    finally { setCreatingCharges(false); }
+    finally { setCreatingCharges(false); setProgress(null); }
   }
 
   async function createLetters() {
@@ -871,8 +881,17 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
       }
       var propName = propData?.name || "";
       var count = 0;
+      var letterStart = Date.now();
+      var contractIds = Object.keys(byContract);
+      setProgress({ current: 0, total: contractIds.length, label: "יוצר מכתבי דרישה...", startedAt: letterStart });
       for (var [cid, unitRows] of Object.entries(byContract)) {
         var firstRow = unitRows[0];
+        setProgress({
+          current: count + 1,
+          total: contractIds.length,
+          label: "יוצר מכתב — " + firstRow.tenantName,
+          startedAt: letterStart,
+        });
         var tenantName = firstRow.tenantName;
 
         // Consolidate checks by date
@@ -976,7 +995,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
       await logAudit({ entity_type: "billing", entity_id: propId, action: "create_advance_letters", notes: count + " מכתבים" });
       alert("✅ נוצרו " + count + " מכתבי דרישה");
     } catch (e: any) { alert("שגיאה: " + (e?.message || e)); }
-    finally { setCreatingLetters(false); }
+    finally { setCreatingLetters(false); setProgress(null); }
   }
 
   var totalAllChecks = results.reduce(function(s, r) { return s + r.checks.reduce(function(ss, p) { return ss + p.totalWithVat; }, 0); }, 0);
