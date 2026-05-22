@@ -41,10 +41,18 @@ export default function RevenuePage() {
   const [rowAttaching, setRowAttaching] = useState<string>("");
 
   // Area timeline for the selected contract — base + amendments collapsed into
-  // chronological [startDate..endDate, area, spaceName] segments. Drives the
-  // mixed-month splitting (e.g. March 2026 = 1-12 at 365m² + 13-31 at 110m²).
-  type AreaSegment = { startDate: Date; endDate: Date | null; area: number; spaceName: string; };
+  // chronological [startDate..endDate, area, spaceName, spaceId] segments. Drives
+  // the mixed-month splitting (e.g. March 2026 = 1-12 at 365m² + 13-31 at 110m²)
+  // AND the per-space mgmt rate lookup (billing_groups.rate_per_sqm_monthly).
+  type AreaSegment = { startDate: Date; endDate: Date | null; area: number; spaceName: string; spaceId: string; };
   const [areaSegments, setAreaSegments] = useState<AreaSegment[]>([]);
+  // space_id → mgmt rate per sqm per month, for the selected year (from billing_groups
+  // where group_type='management' + year = selYear). Empty if no group is set up.
+  const [mgmtRateBySpaceId, setMgmtRateBySpaceId] = useState<Record<string, number>>({});
+  // Per-month actuals from billing_reconciliations (when finalized).
+  // Key = "YYYY-MM". Value = the actual mgmt amount for that month.
+  // Empty until the reconciliation flow starts writing to this table.
+  const [mgmtActualByMonth, setMgmtActualByMonth] = useState<Record<string, number>>({});
 
   // Uploads a file to the revenue_attachments bucket and returns the metadata
   // that should be written onto the revenue_reports row. Throws on failure.
@@ -112,27 +120,34 @@ export default function RevenuePage() {
 
   useEffect(function() { loadAll(); }, [selYear]);
 
-  // Reload the area timeline when the user picks a different tenant.
-  useEffect(function() { loadAreaSegments(selContractId); }, [selContractId]);
+  // Reload the area timeline + mgmt rates when the user picks a different tenant
+  // or year.
+  useEffect(function() { loadAreaSegments(selContractId); }, [selContractId, selYear]);
 
-  // Build the chronological area timeline from the base contract + amendments.
-  // Each amendment closes the prior segment on (amendmentDate - 1 day) and opens
-  // a new one starting on amendmentDate with the amendment's area/space.
+  // Build the chronological area timeline from the base contract + amendments,
+  // then pull the per-space mgmt rate from billing_groups for the selected year
+  // and the per-month actuals from billing_reconciliations (when present).
   async function loadAreaSegments(contractId: string) {
-    if (!contractId) { setAreaSegments([]); return; }
+    if (!contractId) {
+      setAreaSegments([]); setMgmtRateBySpaceId({}); setMgmtActualByMonth({});
+      return;
+    }
     const [baseRes, amendsRes] = await Promise.all([
       supabase.from("contracts")
-        .select("id, start_date, charged_area, contract_spaces(spaces(space_name,area))")
+        .select("id, property_id, start_date, charged_area, contract_spaces(space_id, spaces(space_name,area))")
         .eq("id", contractId).single(),
       supabase.from("contracts")
-        .select("id, amendment_date, start_date, charged_area, contract_spaces(spaces(space_name,area))")
+        .select("id, amendment_date, start_date, charged_area, contract_spaces(space_id, spaces(space_name,area))")
         .eq("parent_contract_id", contractId)
         .eq("is_amendment", true)
         .order("amendment_date", { ascending: true }),
     ]);
     var base: any = baseRes.data;
     var amends: any[] = amendsRes.data || [];
-    if (!base) { setAreaSegments([]); return; }
+    if (!base) {
+      setAreaSegments([]); setMgmtRateBySpaceId({}); setMgmtActualByMonth({});
+      return;
+    }
 
     function spaceNameOf(row: any): string {
       var cs = row?.contract_spaces;
@@ -140,23 +155,68 @@ export default function RevenuePage() {
       var names = cs.map(function(x: any) { return x?.spaces?.space_name; }).filter(Boolean);
       return names.join(", ");
     }
+    function firstSpaceId(row: any): string {
+      var cs = row?.contract_spaces;
+      return (cs && cs.length > 0 && cs[0]?.space_id) || "";
+    }
 
     var segments: AreaSegment[] = [];
     var currentArea = Number(base.charged_area) || 0;
     var currentName = spaceNameOf(base);
+    var currentSpaceId = firstSpaceId(base);
     var currentStart = base.start_date ? new Date(base.start_date) : new Date(selYear, 0, 1);
 
     amends.forEach(function(am: any) {
       var amDate = new Date(am.amendment_date || am.start_date);
       var prevEnd = new Date(amDate);
       prevEnd.setDate(prevEnd.getDate() - 1);
-      segments.push({ startDate: currentStart, endDate: prevEnd, area: currentArea, spaceName: currentName });
+      segments.push({ startDate: currentStart, endDate: prevEnd, area: currentArea, spaceName: currentName, spaceId: currentSpaceId });
       currentArea = Number(am.charged_area) || currentArea;
       currentName = spaceNameOf(am) || currentName;
+      currentSpaceId = firstSpaceId(am) || currentSpaceId;
       currentStart = amDate;
     });
-    segments.push({ startDate: currentStart, endDate: null, area: currentArea, spaceName: currentName });
+    segments.push({ startDate: currentStart, endDate: null, area: currentArea, spaceName: currentName, spaceId: currentSpaceId });
     setAreaSegments(segments);
+
+    // ─── Mgmt advance: pull billing_groups for property+year, group_type=management ───
+    // Same pattern as components/AdvancesTab.tsx. rate_per_sqm_monthly is the
+    // forecast/advance rate; the per-space mapping comes from billing_group_spaces.
+    var propertyId = base.property_id;
+    if (propertyId) {
+      var { data: mgmtGroups } = await supabase.from("billing_groups")
+        .select("id, rate_per_sqm_monthly, annual_amount, billing_group_spaces(space_id)")
+        .eq("property_id", propertyId)
+        .eq("group_type", "management")
+        .eq("year", selYear);
+      var rateBySpace: Record<string, number> = {};
+      (mgmtGroups || []).forEach(function(g: any) {
+        var rate = Number(g.rate_per_sqm_monthly) || 0;
+        (g.billing_group_spaces || []).forEach(function(bgs: any) {
+          if (bgs.space_id) rateBySpace[bgs.space_id] = rate;
+        });
+      });
+      setMgmtRateBySpaceId(rateBySpace);
+    } else {
+      setMgmtRateBySpaceId({});
+    }
+
+    // ─── Mgmt actual: pull billing_reconciliations for the contract+year ───
+    // billing_type='management', period text holds "YYYY-MM" (convention; the
+    // table is empty in production today). actual_share, when present, takes
+    // priority over the advance rate.
+    var contractIds = [contractId].concat(amends.map(function(a: any) { return a.id; }));
+    var { data: recons } = await supabase.from("billing_reconciliations")
+      .select("contract_id, year, period, billing_type, actual_share, advance_amount")
+      .in("contract_id", contractIds)
+      .eq("year", selYear)
+      .eq("billing_type", "management");
+    var actuals: Record<string, number> = {};
+    (recons || []).forEach(function(r: any) {
+      var actual = Number(r.actual_share);
+      if (actual > 0 && r.period) actuals[r.period] = actual;
+    });
+    setMgmtActualByMonth(actuals);
   }
 
   async function loadAll() {
@@ -269,17 +329,18 @@ export default function RevenuePage() {
   });
 
   // Resolves the area segment(s) that overlap a given month. Each returned
-  // "part" is a contiguous day range within the month at a single area —
-  // (startDay, endDay, area, spaceName). For a non-mixed month this is one
-  // part covering all days; for March 2026 it's two parts (1-12, 13-31).
-  type MonthPart = { startDay: number; endDay: number; area: number; spaceName: string; };
+  // "part" is a contiguous day range within the month at a single space —
+  // (startDay, endDay, area, spaceName, spaceId, mgmtRate). For a non-mixed
+  // month this is one part covering all days; for March 2026 it's two parts
+  // (1-12, 13-31) so we can charge the right mgmt rate per unit.
+  type MonthPart = { startDay: number; endDay: number; area: number; spaceName: string; spaceId: string; mgmtRate: number; };
   function partsForMonth(m: number): MonthPart[] {
     var monthStart = new Date(selYear, m - 1, 1);
     var monthEnd = new Date(selYear, m, 0); // last day
     var daysInMonth = monthEnd.getDate();
     if (areaSegments.length === 0) {
       // Segments not loaded yet — fall back to contract-level area.
-      return [{ startDay: 1, endDay: daysInMonth, area: fallbackArea, spaceName: "" }];
+      return [{ startDay: 1, endDay: daysInMonth, area: fallbackArea, spaceName: "", spaceId: "", mgmtRate: 0 }];
     }
     var overlapping = areaSegments.filter(function(s) {
       if (s.startDate > monthEnd) return false;
@@ -290,7 +351,11 @@ export default function RevenuePage() {
     return overlapping.map(function(s) {
       var effStart = s.startDate > monthStart ? s.startDate : monthStart;
       var effEnd = (s.endDate === null || s.endDate > monthEnd) ? monthEnd : s.endDate;
-      return { startDay: effStart.getDate(), endDay: effEnd.getDate(), area: s.area, spaceName: s.spaceName };
+      return {
+        startDay: effStart.getDate(), endDay: effEnd.getDate(),
+        area: s.area, spaceName: s.spaceName, spaceId: s.spaceId,
+        mgmtRate: mgmtRateBySpaceId[s.spaceId] || 0,
+      };
     }).sort(function(a, b) { return a.startDay - b.startDay; });
   }
 
@@ -298,6 +363,7 @@ export default function RevenuePage() {
   // Mixed months produce 2+ sub-rows; "actions" controls (attach/delete/+) appear
   // only on the first sub-row (`isFirstSubOfMonth`) because they refer to the
   // single underlying report row.
+  type MgmtSource = "actual" | "manual" | "billing_group" | "contract_per_sqm" | "none";
   type MonthSubRow = {
     m: number;
     subIdx: number;
@@ -311,6 +377,7 @@ export default function RevenuePage() {
     report?: any;
     gross: number;
     mgmtDeduct: number;
+    mgmtSource: MgmtSource;
     net: number;
     calcRent: number;
     finalRent: number;
@@ -322,11 +389,12 @@ export default function RevenuePage() {
   var sumFinal = 0;
   var sumSqmMonths = 0; // running denominator for cumulative avg rent/sqm
 
-  // Whether to show the mgmt column at all — true when contract flag is set,
-  // OR any report has a manual mgmt_in_gross value.
-  var hasAnyMgmt = mgmtIncluded || tenantReports.some(function(r) {
-    return r.mgmt_in_gross != null && Number(r.mgmt_in_gross) > 0;
-  });
+  // Whether to show the mgmt column at all — true when the contract flag is set,
+  // OR any report has a manual mgmt_in_gross, OR billing_groups defined a rate
+  // for one of the contract's spaces.
+  var hasAnyMgmt = mgmtIncluded
+    || tenantReports.some(function(r) { return r.mgmt_in_gross != null && Number(r.mgmt_in_gross) > 0; })
+    || Object.keys(mgmtRateBySpaceId).length > 0;
 
   for (var mIdx = 1; mIdx <= 12; mIdx++) {
     var parts = partsForMonth(mIdx);
@@ -338,35 +406,64 @@ export default function RevenuePage() {
 
     // Compute the WHOLE-MONTH amounts first, then distribute proportionally.
     var monthGross = rep ? Number(rep.gross_revenue) || 0 : 0;
-    // Manual override beats auto-derivation:
+    var monthFinal = rep ? Number(rep.final_rent) || 0 : 0;
+
+    // Resolve mgmt for THIS month from the priority chain:
+    //   1. actual reconciliation for this month
+    //   2. manual override entered on the report
+    //   3. per-space advance rate from billing_groups (× area × days fraction)
+    //   4. contract-level mgmt_fee_per_sqm
+    //   5. zero
     var monthMgmt = 0;
-    if (rep) {
-      var manualM = rep.mgmt_in_gross != null ? Number(rep.mgmt_in_gross) : null;
-      if (manualM != null && manualM > 0) {
-        monthMgmt = manualM;
-      } else if (mgmtIncluded && contractFeePerSqm > 0) {
-        // Weighted by sqm-days when area changed mid-month
-        var totalWeighted = 0;
-        parts.forEach(function(p) {
-          var partDays = p.endDay - p.startDay + 1;
-          totalWeighted += contractFeePerSqm * p.area * (partDays / daysInMonth);
-        });
-        monthMgmt = totalWeighted;
+    var monthMgmtSource: MgmtSource = "none";
+    var monthKeyStr = selYear + "-" + String(mIdx).padStart(2, "0");
+    if (mgmtActualByMonth[monthKeyStr] != null && Number(mgmtActualByMonth[monthKeyStr]) > 0) {
+      monthMgmt = Number(mgmtActualByMonth[monthKeyStr]);
+      monthMgmtSource = "actual";
+    } else if (rep && rep.mgmt_in_gross != null && Number(rep.mgmt_in_gross) > 0) {
+      monthMgmt = Number(rep.mgmt_in_gross);
+      monthMgmtSource = "manual";
+    } else {
+      // Auto from billing_groups (preferred) or contract_per_sqm (fallback) —
+      // weighted across sub-parts when area changes mid-month.
+      var bgTotal = 0;
+      var cpsTotal = 0;
+      var anyBgRate = false;
+      parts.forEach(function(p) {
+        var partDays = p.endDay - p.startDay + 1;
+        var f = partDays / daysInMonth;
+        if (p.mgmtRate > 0) {
+          bgTotal += p.mgmtRate * p.area * f;
+          anyBgRate = true;
+        }
+        if (contractFeePerSqm > 0) {
+          cpsTotal += contractFeePerSqm * p.area * f;
+        }
+      });
+      if (anyBgRate) {
+        monthMgmt = bgTotal;
+        monthMgmtSource = "billing_group";
+      } else if (contractFeePerSqm > 0 && mgmtIncluded) {
+        monthMgmt = cpsTotal;
+        monthMgmtSource = "contract_per_sqm";
       }
     }
-    var monthFinal = rep ? Number(rep.final_rent) || 0 : 0;
 
     parts.forEach(function(p, idx) {
       var partDays = p.endDay - p.startDay + 1;
       var fraction = partDays / daysInMonth;
       var subGross = monthGross * fraction;
-      var subMgmt  = monthMgmt * fraction;
+      // For billing_group rate, mgmt scales by this segment's own area+days;
+      // for the other sources it's a flat monthly amount split proportionally.
+      var subMgmt: number;
+      if (monthMgmtSource === "billing_group") {
+        subMgmt = p.mgmtRate * p.area * fraction;
+      } else {
+        subMgmt = monthMgmt * fraction;
+      }
       var subNet   = Math.max(subGross - subMgmt, 0);
       var subCalc  = subNet * (Number(pctLabel) / 100);
       var subFinal = monthFinal * fraction;
-      // rent/sqm "normalized to a full month at this area":
-      //   sub_rent / (area × fraction)  =  month_rent / area
-      // Equivalent to "what would the tenant pay per sqm if this area were active all month".
       var rps = (p.area > 0 && subFinal > 0)
         ? subFinal / (p.area * fraction)
         : 0;
@@ -385,8 +482,8 @@ export default function RevenuePage() {
         label, spaceName: p.spaceName,
         daysInPart: partDays, daysInMonth, fraction,
         area: p.area, report: rep,
-        gross: subGross, mgmtDeduct: subMgmt, net: subNet,
-        calcRent: subCalc, finalRent: subFinal,
+        gross: subGross, mgmtDeduct: subMgmt, mgmtSource: monthMgmtSource,
+        net: subNet, calcRent: subCalc, finalRent: subFinal,
         rentPerSqm: rps, cumAvgRentPerSqm: cumRps,
       });
     });
@@ -541,7 +638,24 @@ export default function RevenuePage() {
                       </td>
                       <td className="px-3 py-2.5 text-slate-500 text-xs">{row.area}</td>
                       <td className="px-3 py-2.5 font-mono">{fmtMoney(row.gross)}</td>
-                      {hasAnyMgmt && <td className="px-3 py-2.5 font-mono text-amber-700">{row.mgmtDeduct > 0 ? "−" + fmtMoney(row.mgmtDeduct) : "—"}</td>}
+                      {hasAnyMgmt && (
+                        <td className="px-3 py-2.5 font-mono text-amber-700 whitespace-nowrap">
+                          {row.mgmtDeduct > 0 ? (
+                            <span title={
+                              row.mgmtSource === "actual" ? "מספר אמת (התחשבנות סופית)" :
+                              row.mgmtSource === "manual" ? "הוזן ידנית בדיווח" :
+                              row.mgmtSource === "billing_group" ? "מקדמת ניהול לפי קבוצת חיוב (rate × שטח)" :
+                              row.mgmtSource === "contract_per_sqm" ? "מהגדרת mgmt_fee_per_sqm בחוזה" :
+                              ""
+                            }>
+                              −{fmtMoney(row.mgmtDeduct)}
+                              {row.mgmtSource === "actual" && <span className="text-[9px] font-bold text-green-700 mr-1">✓ אמת</span>}
+                              {row.mgmtSource === "manual" && <span className="text-[9px] font-bold text-blue-700 mr-1">ידני</span>}
+                              {row.mgmtSource === "billing_group" && <span className="text-[9px] font-bold text-amber-600 mr-1">מקדמה</span>}
+                            </span>
+                          ) : "—"}
+                        </td>
+                      )}
                       {hasAnyMgmt && <td className="px-3 py-2.5 font-mono">{fmtMoney(row.net)}</td>}
                       <td className="px-3 py-2.5 font-mono">{fmtMoney(row.calcRent)}</td>
                       <td className="px-3 py-2.5 font-mono font-black text-blue-700">{fmtMoney(row.finalRent)}</td>
