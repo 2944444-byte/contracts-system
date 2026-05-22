@@ -11,8 +11,8 @@ import SavedAdvancesTab from '@/components/SavedAdvancesTab';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 
-function fmtMoney(n: number) { return "\u20AA" + (n ?? 0).toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
-function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "\u2014"; }
+function fmtMoney(n: number) { return "₪" + (n ?? 0).toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
 
 type Tab = "management" | "insurance" | "waste" | "advances" | "saved_advances" | "cpi_diff";
 
@@ -55,8 +55,8 @@ export default function BillingPage() {
   return (
     <div dir="rtl">
       <div className="mb-6">
-        <h1 className="text-3xl font-bold text-slate-800">{"\u05D7\u05D9\u05D5\u05D1\u05D9\u05DD \u05EA\u05E4\u05E2\u05D5\u05DC\u05D9\u05D9\u05DD"}</h1>
-        <p className="text-sm text-slate-500 mt-1">{"\u05D3\u05DE\u05D9 \u05E0\u05D9\u05D4\u05D5\u05DC, \u05D1\u05D9\u05D8\u05D5\u05D7 \u05DE\u05D1\u05E0\u05D4 \u05D5\u05E4\u05D9\u05E0\u05D5\u05D9 \u05D0\u05E9\u05E4\u05D4"}</p>
+        <h1 className="text-3xl font-bold text-slate-800">{"חיובים תפעוליים"}</h1>
+        <p className="text-sm text-slate-500 mt-1">{"דמי ניהול, ביטוח מבנה ופינוי אשפה"}</p>
       </div>
 
       <div className="mb-4">
@@ -77,7 +77,7 @@ export default function BillingPage() {
       </div>
 
       {loading ? (
-        <div className="text-center py-12 text-slate-400">{"\u05D8\u05D5\u05E2\u05DF..."}</div>
+        <div className="text-center py-12 text-slate-400">{"טוען..."}</div>
       ) : (
         <>
           {activeTab === "management" && <ManagementTab properties={internalProps} allProperties={properties} />}
@@ -153,11 +153,11 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
       .select("id, space_name, space_type, area")
       .eq("property_id", propId);
     const prop = allProperties.find(function (p) { return p.id === propId; });
-    if (prop?.property_type === "\u05DE\u05E2\u05D5\u05E8\u05D1") {
+    if (prop?.property_type === "מעורב") {
       setIsMixed(true);
       const byType: Record<string, number> = {};
       for (const s of spaces ?? []) {
-        const t = s.space_type || "\u05D0\u05D7\u05E8";
+        const t = s.space_type || "אחר";
         byType[t] = (byType[t] || 0) + (s.area || 0);
       }
       setMixedRows(Object.entries(byType).map(function ([useType, totalSqm]) {
@@ -186,7 +186,7 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
   }
 
   async function saveBudget() {
-    if (!propId) { alert("\u05D9\u05E9 \u05DC\u05D1\u05D7\u05D5\u05E8 \u05E0\u05DB\u05E1"); return; }
+    if (!propId) { alert("יש לבחור נכס"); return; }
     setSaving(true);
     try {
       let annualAmount = 0;
@@ -207,9 +207,9 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
         management_budget: annualAmount,
       }, { onConflict: "property_id,year" });
       await logAudit({ entity_type: "property_budget", entity_id: propId, action: "upsert", notes: year + " - " + fmtMoney(annualAmount) });
-      setMsg("\u2705 \u05EA\u05E7\u05E6\u05D9\u05D1 \u05E0\u05E9\u05DE\u05E8 \u05D1\u05D4\u05E6\u05DC\u05D7\u05D4");
+      setMsg("✅ תקציב נשמר בהצלחה");
       setTimeout(function () { setMsg(""); }, 3000);
-    } catch (e: any) { alert("\u05E9\u05D2\u05D9\u05D0\u05D4: " + e?.message); }
+    } catch (e: any) { alert("שגיאה: " + e?.message); }
     finally { setSaving(false); }
   }
 
@@ -319,7 +319,7 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
       let skippedRevenue = 0;
       for (const r of mgmtResults) {
         if (Math.abs(r.difference) < 0.01) continue;
-        // Revenue-% tenants: skip \u2014 their mgmt is part of the % rent on the
+        // Revenue-% tenants: skip — their mgmt is part of the % rent on the
         // revenue page, not a separate charge.
         if (r.isRevenueBased) { skippedRevenue++; continue; }
         const base = Math.abs(r.difference);
@@ -334,15 +334,15 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
           billing_period_end: year + "-12-31",
           due_date: new Date().toISOString().slice(0, 10),
           status: "pending",
-          notes: "\u05D4\u05EA\u05D7\u05E9\u05D1\u05E0\u05D5\u05EA \u05D3\u05DE\u05D9 \u05E0\u05D9\u05D4\u05D5\u05DC " + year,
+          notes: "התחשבנות דמי ניהול " + year,
         });
         count++;
       }
-      await logAudit({ entity_type: "billing", entity_id: propId, action: "create_mgmt_charges", notes: count + " \u05D7\u05D9\u05D5\u05D1\u05D9\u05DD" + (skippedRevenue ? " (\u05D3\u05D5\u05DC\u05D2 " + skippedRevenue + " % \u05E4\u05D9\u05D3\u05D9\u05D5\u05DF)" : "") });
-      var msg = "\u2705 \u05E0\u05D5\u05E6\u05E8\u05D5 " + count + " \u05D7\u05D9\u05D5\u05D1\u05D9\u05DD";
-      if (skippedRevenue > 0) msg += "\n\u05D3\u05D5\u05DC\u05D2\u05D5 " + skippedRevenue + " \u05E9\u05D5\u05DB\u05E8\u05D9 % \u05E4\u05D9\u05D3\u05D9\u05D5\u05DF (\u05D3\u05DE\u05D9 \u05D4\u05E0\u05D9\u05D4\u05D5\u05DC \u05DB\u05DC\u05D5\u05DC\u05D9\u05DD \u05D1\u05E9\u05DB\"\u05D3 \u05D4\u05DE\u05D7\u05D6\u05D5\u05E8)";
+      await logAudit({ entity_type: "billing", entity_id: propId, action: "create_mgmt_charges", notes: count + " חיובים" + (skippedRevenue ? " (דולג " + skippedRevenue + " % פידיון)" : "") });
+      var msg = "✅ נוצרו " + count + " חיובים";
+      if (skippedRevenue > 0) msg += "\nדולגו " + skippedRevenue + " שוכרי % פידיון (דמי הניהול כלולים בשכ\"ד המחזור)";
       alert(msg);
-    } catch (e: any) { alert("\u05E9\u05D2\u05D9\u05D0\u05D4: " + e?.message); }
+    } catch (e: any) { alert("שגיאה: " + e?.message); }
     finally { setCreatingCharges(false); }
   }
 
@@ -356,12 +356,12 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
         if (Math.abs(r.difference) < 0.01) continue;
         if (r.isRevenueBased) { skippedRevenue++; continue; }
         const subject = r.difference > 0
-          ? "\u05D4\u05E9\u05DC\u05DE\u05EA \u05D4\u05E4\u05E8\u05E9 \u05D3\u05DE\u05D9 \u05E0\u05D9\u05D4\u05D5\u05DC " + year
-          : "\u05D4\u05D7\u05D6\u05E8 \u05D3\u05DE\u05D9 \u05E0\u05D9\u05D4\u05D5\u05DC " + year;
-        const body = "\u05E9\u05D5\u05DB\u05E8/\u05EA \u05E0\u05DB\u05D1\u05D3/\u05D4,\n\n\u05DC\u05D0\u05D7\u05E8 \u05D1\u05D9\u05E6\u05D5\u05E2 \u05D4\u05EA\u05D7\u05E9\u05D1\u05E0\u05D5\u05EA \u05D3\u05DE\u05D9 \u05E0\u05D9\u05D4\u05D5\u05DC \u05DC\u05E9\u05E0\u05EA " + year + ":\n" +
-          "\u05DE\u05E7\u05D3\u05DE\u05D4: " + fmtMoney(r.advance) + "\n" +
-          "\u05D7\u05DC\u05E7 \u05D1\u05E4\u05D5\u05E2\u05DC: " + fmtMoney(r.actualShare) + "\n" +
-          "\u05D4\u05E4\u05E8\u05E9: " + fmtMoney(r.difference) + "\n\n\u05D1\u05D1\u05E8\u05DB\u05D4,\n\u05D4\u05E0\u05D4\u05DC\u05EA \u05D4\u05E0\u05DB\u05E1";
+          ? "השלמת הפרש דמי ניהול " + year
+          : "החזר דמי ניהול " + year;
+        const body = "שוכר/ת נכבד/ה,\n\nלאחר ביצוע התחשבנות דמי ניהול לשנת " + year + ":\n" +
+          "מקדמה: " + fmtMoney(r.advance) + "\n" +
+          "חלק בפועל: " + fmtMoney(r.actualShare) + "\n" +
+          "הפרש: " + fmtMoney(r.difference) + "\n\nבברכה,\nהנהלת הנכס";
         await supabase.from("letters").insert({
           contract_id: r.contractId,
           letter_type: "demand",
@@ -371,11 +371,11 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
         });
         count++;
       }
-      await logAudit({ entity_type: "billing", entity_id: propId, action: "create_mgmt_letters", notes: count + " \u05DE\u05DB\u05EA\u05D1\u05D9\u05DD" + (skippedRevenue ? " (\u05D3\u05D5\u05DC\u05D2 " + skippedRevenue + " % \u05E4\u05D9\u05D3\u05D9\u05D5\u05DF)" : "") });
-      var msg2 = "\u2705 \u05E0\u05D5\u05E6\u05E8\u05D5 " + count + " \u05DE\u05DB\u05EA\u05D1\u05D9\u05DD";
-      if (skippedRevenue > 0) msg2 += "\n\u05D3\u05D5\u05DC\u05D2\u05D5 " + skippedRevenue + " \u05E9\u05D5\u05DB\u05E8\u05D9 % \u05E4\u05D9\u05D3\u05D9\u05D5\u05DF";
+      await logAudit({ entity_type: "billing", entity_id: propId, action: "create_mgmt_letters", notes: count + " מכתבים" + (skippedRevenue ? " (דולג " + skippedRevenue + " % פידיון)" : "") });
+      var msg2 = "✅ נוצרו " + count + " מכתבים";
+      if (skippedRevenue > 0) msg2 += "\nדולגו " + skippedRevenue + " שוכרי % פידיון";
       alert(msg2);
-    } catch (e: any) { alert("\u05E9\u05D2\u05D9\u05D0\u05D4: " + e?.message); }
+    } catch (e: any) { alert("שגיאה: " + e?.message); }
     finally { setCreatingLetters(false); }
   }
 
@@ -383,28 +383,28 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
     <div className="space-y-6">
       {/* Section A: Budget */}
       <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-        <h2 className="text-lg font-bold text-slate-800 mb-4">{"\u05DE\u05E7\u05D3\u05DE\u05D4 \u2014 \u05D4\u05D6\u05E0\u05EA \u05EA\u05E7\u05E6\u05D9\u05D1"}</h2>
+        <h2 className="text-lg font-bold text-slate-800 mb-4">{"מקדמה — הזנת תקציב"}</h2>
         <div className="grid grid-cols-2 gap-4 mb-4">
           <div>
-            <label className="mb-1 block text-xs font-semibold text-slate-700">{"\u05E0\u05DB\u05E1"}</label>
+            <label className="mb-1 block text-xs font-semibold text-slate-700">{"נכס"}</label>
             <select value={propId} onChange={function (e) { setPropId(e.target.value); }} className={ic}>
-              <option value="">{"\u2014 \u05D1\u05D7\u05E8 \u05E0\u05DB\u05E1 \u2014"}</option>
+              <option value="">{"— בחר נכס —"}</option>
               {properties.map(function (p) {
                 return <option key={p.id} value={p.id}>{p.name}</option>;
               })}
             </select>
           </div>
           <div>
-            <label className="mb-1 block text-xs font-semibold text-slate-700">{"\u05E9\u05E0\u05D4"}</label>
+            <label className="mb-1 block text-xs font-semibold text-slate-700">{"שנה"}</label>
             <input type="number" value={year} onChange={function (e) { setYear(Number(e.target.value)); }} className={ic} />
           </div>
         </div>
 
         {propId && totalArea > 0 && (
           <div className="rounded-lg bg-slate-50 border border-slate-200 px-4 py-2 mb-4 text-sm text-slate-600">
-            {"\u05E9\u05D8\u05D7 \u05DB\u05D5\u05DC\u05DC \u05E0\u05DB\u05E1: "}<span className="font-bold">{totalArea.toLocaleString("he-IL")} {'\u05DE"\u05E8'}</span>
-            {selProp?.property_type === "\u05DE\u05E2\u05D5\u05E8\u05D1" && (
-              <span className="mr-3 text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full font-semibold">{"\u05E0\u05DB\u05E1 \u05DE\u05E2\u05D5\u05E8\u05D1"}</span>
+            {"שטח כולל נכס: "}<span className="font-bold">{totalArea.toLocaleString("he-IL")} {'מ"ר'}</span>
+            {selProp?.property_type === "מעורב" && (
+              <span className="mr-3 text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full font-semibold">{"נכס מעורב"}</span>
             )}
           </div>
         )}
@@ -449,8 +449,8 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
           <>
             <div className="flex gap-3 mb-4">
               {[
-                { v: "fixed" as const, l: "\u05E1\u05DB\u05D5\u05DD \u05E9\u05E0\u05EA\u05D9 \u05E7\u05D1\u05D5\u05E2" },
-                { v: "persqm" as const, l: '\u05DC\u05DE"\u05E8 \u05DC\u05D7\u05D5\u05D3\u05E9' },
+                { v: "fixed" as const, l: "סכום שנתי קבוע" },
+                { v: "persqm" as const, l: 'למ"ר לחודש' },
               ].map(function (m) {
                 return (
                   <button key={m.v} onClick={function () { setInputMode(m.v); }}
@@ -465,26 +465,26 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
             {inputMode === "fixed" ? (
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-700">{"\u05E1\u05DB\u05D5\u05DD \u05E9\u05E0\u05EA\u05D9 (\u20AA)"}</label>
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">{"סכום שנתי (₪)"}</label>
                   <input type="number" value={fixedTotal} onChange={function (e) { setFixedTotal(e.target.value); }} className={ic} placeholder="0" />
                 </div>
                 <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-700">{'\u05EA\u05E2\u05E8\u05D9\u05E3 \u05DC\u05DE"\u05E8 \u05DC\u05D7\u05D5\u05D3\u05E9 (\u05DE\u05D7\u05D5\u05E9\u05D1)'}</label>
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">{'תעריף למ"ר לחודש (מחושב)'}</label>
                   <div className="rounded-lg bg-slate-100 border border-slate-200 px-3 py-2 text-sm text-slate-700 font-mono">
-                    {computedRate > 0 ? fmtMoney(computedRate) : "\u2014"}
+                    {computedRate > 0 ? fmtMoney(computedRate) : "—"}
                   </div>
                 </div>
               </div>
             ) : (
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-700">{'\u05EA\u05E2\u05E8\u05D9\u05E3 \u05DC\u05DE"\u05E8 \u05DC\u05D7\u05D5\u05D3\u05E9 (\u20AA)'}</label>
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">{'תעריף למ"ר לחודש (₪)'}</label>
                   <input type="number" value={perSqmRate} onChange={function (e) { setPerSqmRate(e.target.value); }} className={ic} placeholder="0" />
                 </div>
                 <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-700">{"\u05E1\u05DB\u05D5\u05DD \u05E9\u05E0\u05EA\u05D9 (\u05DE\u05D7\u05D5\u05E9\u05D1)"}</label>
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">{"סכום שנתי (מחושב)"}</label>
                   <div className="rounded-lg bg-slate-100 border border-slate-200 px-3 py-2 text-sm text-slate-700 font-mono">
-                    {computedTotal > 0 ? fmtMoney(computedTotal) : "\u2014"}
+                    {computedTotal > 0 ? fmtMoney(computedTotal) : "—"}
                   </div>
                 </div>
               </div>
@@ -494,15 +494,15 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
 
         {propId && isMixed && mixedRows.length > 0 && (
           <div className="space-y-3">
-            <h3 className="text-sm font-bold text-purple-700">{"\u05EA\u05E2\u05E8\u05D9\u05E3 \u05DC\u05E4\u05D9 \u05E1\u05D5\u05D2 \u05E9\u05D9\u05DE\u05D5\u05E9"}</h3>
+            <h3 className="text-sm font-bold text-purple-700">{"תעריף לפי סוג שימוש"}</h3>
             <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
               <table className="w-full text-right text-sm">
                 <thead className="bg-slate-50 border-b">
                   <tr>
-                    <th className="px-4 py-2.5 font-semibold text-slate-700">{"\u05E1\u05D5\u05D2 \u05E9\u05D9\u05DE\u05D5\u05E9"}</th>
-                    <th className="px-4 py-2.5 font-semibold text-slate-700">{'\u05E9\u05D8\u05D7 (\u05DE"\u05E8)'}</th>
-                    <th className="px-4 py-2.5 font-semibold text-slate-700">{'\u05EA\u05E2\u05E8\u05D9\u05E3 \u05DC\u05DE"\u05E8/\u05D7\u05D5\u05D3\u05E9'}</th>
-                    <th className="px-4 py-2.5 font-semibold text-slate-700">{"\u05E1\u05DB\u05D5\u05DD \u05E9\u05E0\u05EA\u05D9"}</th>
+                    <th className="px-4 py-2.5 font-semibold text-slate-700">{"סוג שימוש"}</th>
+                    <th className="px-4 py-2.5 font-semibold text-slate-700">{'שטח (מ"ר)'}</th>
+                    <th className="px-4 py-2.5 font-semibold text-slate-700">{'תעריף למ"ר/חודש'}</th>
+                    <th className="px-4 py-2.5 font-semibold text-slate-700">{"סכום שנתי"}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -522,7 +522,7 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
                 </tbody>
                 <tfoot className="bg-slate-50 border-t-2 border-slate-200">
                   <tr>
-                    <td className="px-4 py-2.5 font-bold text-slate-700">{'\u05E1\u05D4"\u05DB'}</td>
+                    <td className="px-4 py-2.5 font-bold text-slate-700">{'סה"כ'}</td>
                     <td className="px-4 py-2.5 font-bold">{mixedRows.reduce(function (s, r) { return s + r.totalSqm; }, 0).toLocaleString("he-IL")}</td>
                     <td className="px-4 py-2.5" />
                     <td className="px-4 py-2.5 font-black text-blue-700">{fmtMoney(mixedRows.reduce(function (s, r) { return s + r.annual; }, 0))}</td>
@@ -537,7 +537,7 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
           <div className="flex items-center gap-3 mt-4">
             <button onClick={saveBudget} disabled={saving}
               className="rounded-lg bg-blue-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-blue-800 disabled:opacity-50">
-              {saving ? "\u05E9\u05D5\u05DE\u05E8..." : "\u05E9\u05DE\u05D5\u05E8 \u05EA\u05E7\u05E6\u05D9\u05D1"}
+              {saving ? "שומר..." : "שמור תקציב"}
             </button>
             {msg && <span className="text-sm text-green-700 bg-green-50 px-3 py-1 rounded-lg">{msg}</span>}
           </div>
@@ -629,12 +629,12 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
               <table className="w-full text-right text-sm">
                 <thead className="bg-slate-50 border-b">
                   <tr>
-                    <th className="px-4 py-3 font-semibold text-slate-700">\u05E9\u05D5\u05DB\u05E8</th>
-                    <th className="px-4 py-3 font-semibold text-slate-700">\u05D9\u05D7\u05D9\u05D3\u05D5\u05EA</th>
-                    <th className="px-4 py-3 font-semibold text-slate-700">\u05E9\u05D8\u05D7 (\u05DE&quot;\u05E8)</th>
-                    <th className="px-4 py-3 font-semibold text-slate-700">\u05DE\u05E7\u05D3\u05DE\u05D4</th>
-                    <th className="px-4 py-3 font-semibold text-slate-700">\u05D7\u05DC\u05E7 \u05D1\u05E4\u05D5\u05E2\u05DC</th>
-                    <th className="px-4 py-3 font-semibold text-slate-700">\u05D4\u05E4\u05E8\u05E9</th>
+                    <th className="px-4 py-3 font-semibold text-slate-700">שוכר</th>
+                    <th className="px-4 py-3 font-semibold text-slate-700">יחידות</th>
+                    <th className="px-4 py-3 font-semibold text-slate-700">שטח (מ&quot;ר)</th>
+                    <th className="px-4 py-3 font-semibold text-slate-700">מקדמה</th>
+                    <th className="px-4 py-3 font-semibold text-slate-700">חלק בפועל</th>
+                    <th className="px-4 py-3 font-semibold text-slate-700">הפרש</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -646,8 +646,8 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
                         <td className="px-4 py-3 font-semibold text-slate-800">
                           {r.tenantName}
                           {r.isRevenueBased && (
-                            <div className="text-[10px] mt-0.5 font-normal text-purple-700 rounded bg-purple-100 inline-block px-1.5 py-0.5" title="\u05E9\u05D5\u05DB\u05E8 \u05D6\u05D4 \u05DE\u05E9\u05DC\u05DD \u05D3\u05DE\u05D9 \u05E0\u05D9\u05D4\u05D5\u05DC \u05DB\u05D7\u05DC\u05E7 \u05DE-% \u05D4\u05DE\u05D7\u05D6\u05D5\u05E8. \u05D4\u05D4\u05E4\u05E8\u05E9 \u05DE\u05D5\u05E6\u05D2 \u05DC\u05DE\u05D9\u05D3\u05E2 \u05D1\u05DC\u05D1\u05D3 \u2014 \u05D0\u05D9\u05DF \u05D7\u05D9\u05D5\u05D1/\u05DE\u05DB\u05EA\u05D1 \u05E0\u05E4\u05E8\u05D3; \u05D9\u05E9 \u05DC\u05E2\u05D3\u05DB\u05DF \u05D0\u05EA \u05E9\u05DB&quot;\u05D3 \u05D1\u05DE\u05E1\u05DA \u05E9\u05DB&quot;\u05D3 \u05E4\u05D9\u05D3\u05D9\u05D5\u05DF.">
-                              \uD83D\uDCCA % \u05E4\u05D9\u05D3\u05D9\u05D5\u05DF \u2014 \u05DC\u05D0 \u05DC\u05D7\u05D9\u05D5\u05D1
+                            <div className="text-[10px] mt-0.5 font-normal text-purple-700 rounded bg-purple-100 inline-block px-1.5 py-0.5" title="שוכר זה משלם דמי ניהול כחלק מ-% המחזור. ההפרש מוצג למידע בלבד — אין חיוב/מכתב נפרד; יש לעדכן את שכ&quot;ד במסך שכ&quot;ד פידיון.">
+                              📊 % פידיון — לא לחיוב
                             </div>
                           )}
                         </td>
@@ -664,7 +664,7 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
                 </tbody>
                 <tfoot className="bg-slate-50 border-t-2 border-slate-200">
                   <tr>
-                    <td className="px-4 py-2.5 font-bold text-slate-700" colSpan={2}>\u05E1\u05D4&quot;\u05DB</td>
+                    <td className="px-4 py-2.5 font-bold text-slate-700" colSpan={2}>סה&quot;כ</td>
                     <td className="px-4 py-2.5 font-bold">{mgmtResults.reduce(function (s, r) { return s + r.chargedArea; }, 0).toLocaleString("he-IL")}</td>
                     <td className="px-4 py-2.5 font-bold">{fmtMoney(mgmtResults.reduce(function (s, r) { return s + r.advance; }, 0))}</td>
                     <td className="px-4 py-2.5 font-bold">{fmtMoney(mgmtResults.reduce(function (s, r) { return s + r.actualShare; }, 0))}</td>
@@ -676,27 +676,27 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
 
             {/* Explainer + counts */}
             <div className="mt-4 rounded-lg bg-slate-50 border border-slate-200 p-3 text-xs text-slate-600 leading-relaxed">
-              <div className="font-bold text-slate-700 mb-1">\uD83D\uDCA1 \u05DE\u05D4 \u05D4\u05DB\u05E4\u05EA\u05D5\u05E8\u05D9\u05DD \u05D9\u05D5\u05E6\u05E8\u05D9\u05DD?</div>
+              <div className="font-bold text-slate-700 mb-1">💡 מה הכפתורים יוצרים?</div>
               <div className="space-y-0.5">
-                <div><span className="font-semibold">\u05E6\u05D5\u05E8 \u05D7\u05D9\u05D5\u05D1\u05D9\u05DD</span> \u2014 \u05DE\u05D5\u05E1\u05D9\u05E3 \u05E9\u05D5\u05E8\u05EA \u05D7\u05D9\u05D5\u05D1 \u05DC\u05D8\u05D1\u05DC\u05EA <code>charges</code> \u05DC\u05DB\u05DC \u05E9\u05D5\u05DB\u05E8 \u05E2\u05DD \u05D4\u05E4\u05E8\u05E9 &gt; 0\u20AA (\u05D7\u05D9\u05D5\u05D1/\u05D6\u05D9\u05DB\u05D5\u05D9 \u05DC\u05E4\u05D9 \u05D4\u05E1\u05D9\u05DE\u05DF). \u05D6\u05D4 \u05DE\u05E9\u05DC\u05D1 \u05D0\u05EA \u05D4\u05D4\u05E4\u05E8\u05E9 \u05DC\u05DB\u05E8\u05D8\u05E1\u05EA \u05D4\u05DB\u05E1\u05E4\u05D9\u05EA \u05E9\u05DC \u05D4\u05E9\u05D5\u05DB\u05E8.</div>
-                <div><span className="font-semibold">\u05E6\u05D5\u05E8 \u05DE\u05DB\u05EA\u05D1\u05D9\u05DD</span> \u2014 \u05D9\u05D5\u05E6\u05E8 \u05D8\u05D9\u05D5\u05D8\u05D5\u05EA \u05DE\u05DB\u05EA\u05D1\u05D9 \u05D3\u05E8\u05D9\u05E9\u05D4/\u05D4\u05D7\u05D6\u05E8 \u05D1\u05DE\u05E1\u05DA \u05D4\u05DE\u05DB\u05EA\u05D1\u05D9\u05DD. \u05D0\u05D9\u05E0\u05D5 \u05E9\u05D5\u05DC\u05D7 \u05DB\u05DC\u05D5\u05DD \u2014 \u05E8\u05E7 \u05D9\u05D5\u05E6\u05E8 \u05D8\u05D9\u05D5\u05D8\u05D4.</div>
+                <div><span className="font-semibold">צור חיובים</span> — מוסיף שורת חיוב לטבלת <code>charges</code> לכל שוכר עם הפרש &gt; 0₪ (חיוב/זיכוי לפי הסימן). זה משלב את ההפרש לכרטסת הכספית של השוכר.</div>
+                <div><span className="font-semibold">צור מכתבים</span> — יוצר טיוטות מכתבי דרישה/החזר במסך המכתבים. אינו שולח כלום — רק יוצר טיוטה.</div>
                 <div className="pt-1 border-t border-slate-200 mt-1">
-                  <span className="text-blue-700 font-semibold">{billableCount}</span> \u05E9\u05D5\u05DB\u05E8\u05D9\u05DD \u05D6\u05DB\u05D0\u05D9\u05DD \u05DC\u05D7\u05D9\u05D5\u05D1.
-                  {revenueSkippedCount > 0 && <span className="text-purple-700"> + <span className="font-semibold">{revenueSkippedCount}</span> \u05E9\u05D5\u05DB\u05E8\u05D9 % \u05E4\u05D9\u05D3\u05D9\u05D5\u05DF \u05D9\u05D3\u05D5\u05DC\u05D2\u05D5 \u05D0\u05D5\u05D8\u05D5\u05DE\u05D8\u05D9\u05EA (\u05DC\u05D4\u05D6\u05D9\u05DF \u05D1\u05DE\u05E1\u05DA \u05E9\u05DB&quot;\u05D3 \u05E4\u05D9\u05D3\u05D9\u05D5\u05DF).</span>}
+                  <span className="text-blue-700 font-semibold">{billableCount}</span> שוכרים זכאים לחיוב.
+                  {revenueSkippedCount > 0 && <span className="text-purple-700"> + <span className="font-semibold">{revenueSkippedCount}</span> שוכרי % פידיון ידולגו אוטומטית (להזין במסך שכ&quot;ד פידיון).</span>}
                 </div>
               </div>
             </div>
 
             <div className="flex gap-3 mt-4">
               <button onClick={createCharges} disabled={creatingCharges || billableCount === 0}
-                title={billableCount === 0 ? "\u05D0\u05D9\u05DF \u05D4\u05E4\u05E8\u05E9\u05D9\u05DD \u05DC\u05D7\u05D9\u05D5\u05D1" : "\u05DE\u05D5\u05E1\u05D9\u05E3 " + billableCount + " \u05E9\u05D5\u05E8\u05D5\u05EA \u05D7\u05D9\u05D5\u05D1 \u05DC\u05D8\u05D1\u05DC\u05EA charges"}
+                title={billableCount === 0 ? "אין הפרשים לחיוב" : "מוסיף " + billableCount + " שורות חיוב לטבלת charges"}
                 className="rounded-lg bg-blue-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-blue-800 disabled:opacity-50">
-                {creatingCharges ? "\u05D9\u05D5\u05E6\u05E8..." : "\u05E6\u05D5\u05E8 " + billableCount + " \u05D7\u05D9\u05D5\u05D1\u05D9\u05DD"}
+                {creatingCharges ? "יוצר..." : "צור " + billableCount + " חיובים"}
               </button>
               <button onClick={createLetters} disabled={creatingLetters || billableCount === 0}
-                title={billableCount === 0 ? "\u05D0\u05D9\u05DF \u05D4\u05E4\u05E8\u05E9\u05D9\u05DD \u05DC\u05DE\u05DB\u05EA\u05D1" : "\u05D9\u05D5\u05E6\u05E8 " + billableCount + " \u05D8\u05D9\u05D5\u05D8\u05D5\u05EA \u05DE\u05DB\u05EA\u05D1\u05D9 \u05D3\u05E8\u05D9\u05E9\u05D4/\u05D4\u05D7\u05D6\u05E8"}
+                title={billableCount === 0 ? "אין הפרשים למכתב" : "יוצר " + billableCount + " טיוטות מכתבי דרישה/החזר"}
                 className="rounded-lg border border-blue-200 bg-blue-50 px-5 py-2.5 text-sm font-bold text-blue-700 hover:bg-blue-100 disabled:opacity-50">
-                {creatingLetters ? "\u05D9\u05D5\u05E6\u05E8..." : "\u05E6\u05D5\u05E8 " + billableCount + " \u05DE\u05DB\u05EA\u05D1\u05D9\u05DD"}
+                {creatingLetters ? "יוצר..." : "צור " + billableCount + " מכתבים"}
               </button>
             </div>
           </div>
@@ -741,7 +741,7 @@ function InsuranceTab({ properties }: { properties: any[] }) {
   }
 
   async function compute() {
-    if (!propId || !policy) { alert("\u05D9\u05E9 \u05DC\u05D1\u05D7\u05D5\u05E8 \u05E0\u05DB\u05E1 \u05E2\u05DD \u05D1\u05D9\u05D8\u05D5\u05D7 \u05E4\u05E2\u05D9\u05DC"); return; }
+    if (!propId || !policy) { alert("יש לבחור נכס עם ביטוח פעיל"); return; }
     setComputing(true);
     try {
       const premium = policy.annual_premium ?? 0;
@@ -757,14 +757,14 @@ function InsuranceTab({ properties }: { properties: any[] }) {
         const charge = totalArea > 0 ? premium * (area / totalArea) : 0;
         return {
           contractId: c.id,
-          tenantName: c.tenants?.name ?? "\u2014",
+          tenantName: c.tenants?.name ?? "—",
           area,
           pct,
           charge,
         };
       });
       setResults(res);
-    } catch (e: any) { alert("\u05E9\u05D2\u05D9\u05D0\u05D4: " + e?.message); }
+    } catch (e: any) { alert("שגיאה: " + e?.message); }
     finally { setComputing(false); }
   }
 
@@ -786,13 +786,13 @@ function InsuranceTab({ properties }: { properties: any[] }) {
           billing_period_end: year + "-12-31",
           due_date: new Date().toISOString().slice(0, 10),
           status: "pending",
-          notes: "\u05D7\u05D9\u05D5\u05D1 \u05D1\u05D9\u05D8\u05D5\u05D7 \u05DE\u05D1\u05E0\u05D4 " + year,
+          notes: "חיוב ביטוח מבנה " + year,
         });
         count++;
       }
-      await logAudit({ entity_type: "billing", entity_id: propId, action: "create_ins_charges", notes: count + " \u05D7\u05D9\u05D5\u05D1\u05D9\u05DD" });
-      alert("\u2705 \u05E0\u05D5\u05E6\u05E8\u05D5 " + count + " \u05D7\u05D9\u05D5\u05D1\u05D9\u05DD");
-    } catch (e: any) { alert("\u05E9\u05D2\u05D9\u05D0\u05D4: " + e?.message); }
+      await logAudit({ entity_type: "billing", entity_id: propId, action: "create_ins_charges", notes: count + " חיובים" });
+      alert("✅ נוצרו " + count + " חיובים");
+    } catch (e: any) { alert("שגיאה: " + e?.message); }
     finally { setCreatingCharges(false); }
   }
 
@@ -806,62 +806,62 @@ function InsuranceTab({ properties }: { properties: any[] }) {
         await supabase.from("letters").insert({
           contract_id: r.contractId,
           letter_type: "notice",
-          subject: "\u05D7\u05D9\u05D5\u05D1 \u05D1\u05D9\u05D8\u05D5\u05D7 \u05DE\u05D1\u05E0\u05D4 " + year,
-          body: "\u05E9\u05D5\u05DB\u05E8/\u05EA \u05E0\u05DB\u05D1\u05D3/\u05D4,\n\n\u05DC\u05D4\u05DC\u05DF \u05D7\u05D9\u05D5\u05D1 \u05D1\u05D9\u05D8\u05D5\u05D7 \u05DE\u05D1\u05E0\u05D4 \u05DC\u05E9\u05E0\u05EA " + year + ":\n" +
-            '\u05E9\u05D8\u05D7: ' + r.area.toLocaleString("he-IL") + ' \u05DE"\u05E8\n' +
-            "\u05D0\u05D7\u05D5\u05D6 \u05DE\u05E9\u05D8\u05D7: " + r.pct.toFixed(1) + "%\n" +
-            "\u05D7\u05D9\u05D5\u05D1: " + fmtMoney(r.charge) + "\n\n\u05D1\u05D1\u05E8\u05DB\u05D4,\n\u05D4\u05E0\u05D4\u05DC\u05EA \u05D4\u05E0\u05DB\u05E1",
+          subject: "חיוב ביטוח מבנה " + year,
+          body: "שוכר/ת נכבד/ה,\n\nלהלן חיוב ביטוח מבנה לשנת " + year + ":\n" +
+            'שטח: ' + r.area.toLocaleString("he-IL") + ' מ"ר\n' +
+            "אחוז משטח: " + r.pct.toFixed(1) + "%\n" +
+            "חיוב: " + fmtMoney(r.charge) + "\n\nבברכה,\nהנהלת הנכס",
           status: "draft",
         });
         count++;
       }
-      await logAudit({ entity_type: "billing", entity_id: propId, action: "create_ins_letters", notes: count + " \u05DE\u05DB\u05EA\u05D1\u05D9\u05DD" });
-      alert("\u2705 \u05E0\u05D5\u05E6\u05E8\u05D5 " + count + " \u05DE\u05DB\u05EA\u05D1\u05D9\u05DD");
-    } catch (e: any) { alert("\u05E9\u05D2\u05D9\u05D0\u05D4: " + e?.message); }
+      await logAudit({ entity_type: "billing", entity_id: propId, action: "create_ins_letters", notes: count + " מכתבים" });
+      alert("✅ נוצרו " + count + " מכתבים");
+    } catch (e: any) { alert("שגיאה: " + e?.message); }
     finally { setCreatingLetters(false); }
   }
 
   return (
     <div className="space-y-6">
       <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-        <h2 className="text-lg font-bold text-slate-800 mb-4">{"\u05D1\u05D9\u05D8\u05D5\u05D7 \u05DE\u05D1\u05E0\u05D4"}</h2>
+        <h2 className="text-lg font-bold text-slate-800 mb-4">{"ביטוח מבנה"}</h2>
         <div className="grid grid-cols-2 gap-4 mb-4">
           <div>
-            <label className="mb-1 block text-xs font-semibold text-slate-700">{"\u05E0\u05DB\u05E1"}</label>
+            <label className="mb-1 block text-xs font-semibold text-slate-700">{"נכס"}</label>
             <select value={propId} onChange={function (e) { setPropId(e.target.value); }} className={ic}>
-              <option value="">{"\u2014 \u05D1\u05D7\u05E8 \u05E0\u05DB\u05E1 \u2014"}</option>
+              <option value="">{"— בחר נכס —"}</option>
               {properties.map(function (p) {
                 return <option key={p.id} value={p.id}>{p.name}</option>;
               })}
             </select>
           </div>
           <div>
-            <label className="mb-1 block text-xs font-semibold text-slate-700">{"\u05E9\u05E0\u05D4"}</label>
+            <label className="mb-1 block text-xs font-semibold text-slate-700">{"שנה"}</label>
             <input type="number" value={year} onChange={function (e) { setYear(Number(e.target.value)); }} className={ic} />
           </div>
         </div>
 
         {policy ? (
           <div className="rounded-lg bg-green-50 border border-green-200 p-4 mb-4">
-            <div className="text-sm font-bold text-green-800 mb-2">{"\u05E4\u05D5\u05DC\u05D9\u05E1\u05D4 \u05E4\u05E2\u05D9\u05DC\u05D4"}</div>
+            <div className="text-sm font-bold text-green-800 mb-2">{"פוליסה פעילה"}</div>
             <div className="grid grid-cols-2 gap-3 text-sm">
-              <div className="flex justify-between"><span className="text-green-700">{"\u05DE\u05D1\u05D8\u05D7"}</span><span className="font-semibold">{policy.insurer_name ?? "\u2014"}</span></div>
-              <div className="flex justify-between"><span className="text-green-700">{"\u05DE\u05E1\u05E4\u05E8 \u05E4\u05D5\u05DC\u05D9\u05E1\u05D4"}</span><span className="font-semibold font-mono">{policy.policy_number ?? "\u2014"}</span></div>
-              <div className="flex justify-between"><span className="text-green-700">{"\u05DB\u05D9\u05E1\u05D5\u05D9"}</span><span className="font-semibold">{fmtMoney(policy.coverage_amount ?? 0)}</span></div>
-              <div className="flex justify-between"><span className="text-green-700">{"\u05E4\u05E8\u05DE\u05D9\u05D4 \u05E9\u05E0\u05EA\u05D9\u05EA"}</span><span className="font-bold text-green-900">{fmtMoney(policy.annual_premium ?? 0)}</span></div>
-              <div className="flex justify-between"><span className="text-green-700">{"\u05EA\u05D5\u05E7\u05E3"}</span><span className="font-semibold">{fmtDate(policy.start_date)}</span></div>
-              <div className="flex justify-between"><span className="text-green-700">{"\u05E4\u05E7\u05D9\u05E2\u05D4"}</span><span className="font-semibold">{fmtDate(policy.end_date)}</span></div>
+              <div className="flex justify-between"><span className="text-green-700">{"מבטח"}</span><span className="font-semibold">{policy.insurer_name ?? "—"}</span></div>
+              <div className="flex justify-between"><span className="text-green-700">{"מספר פוליסה"}</span><span className="font-semibold font-mono">{policy.policy_number ?? "—"}</span></div>
+              <div className="flex justify-between"><span className="text-green-700">{"כיסוי"}</span><span className="font-semibold">{fmtMoney(policy.coverage_amount ?? 0)}</span></div>
+              <div className="flex justify-between"><span className="text-green-700">{"פרמיה שנתית"}</span><span className="font-bold text-green-900">{fmtMoney(policy.annual_premium ?? 0)}</span></div>
+              <div className="flex justify-between"><span className="text-green-700">{"תוקף"}</span><span className="font-semibold">{fmtDate(policy.start_date)}</span></div>
+              <div className="flex justify-between"><span className="text-green-700">{"פקיעה"}</span><span className="font-semibold">{fmtDate(policy.end_date)}</span></div>
             </div>
           </div>
         ) : propId ? (
           <div className="rounded-lg bg-yellow-50 border border-yellow-200 p-4 mb-4 text-sm text-yellow-800">
-            {"\u05DC\u05D0 \u05E0\u05DE\u05E6\u05D0 \u05D1\u05D9\u05D8\u05D5\u05D7 \u05DE\u05D1\u05E0\u05D4 \u05E4\u05E2\u05D9\u05DC \u05DC\u05E0\u05DB\u05E1 \u05D6\u05D4"}
+            {"לא נמצא ביטוח מבנה פעיל לנכס זה"}
           </div>
         ) : null}
 
         <button onClick={compute} disabled={computing || !propId || !policy}
           className="rounded-lg bg-purple-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-purple-800 disabled:opacity-50">
-          {computing ? "\u05DE\u05D7\u05E9\u05D1..." : "\u05D7\u05E9\u05D1"}
+          {computing ? "מחשב..." : "חשב"}
         </button>
 
         {results.length > 0 && (
@@ -870,10 +870,10 @@ function InsuranceTab({ properties }: { properties: any[] }) {
               <table className="w-full text-right text-sm">
                 <thead className="bg-slate-50 border-b">
                   <tr>
-                    <th className="px-4 py-3 font-semibold text-slate-700">{"\u05E9\u05D5\u05DB\u05E8"}</th>
-                    <th className="px-4 py-3 font-semibold text-slate-700">{'\u05E9\u05D8\u05D7 (\u05DE"\u05E8)'}</th>
-                    <th className="px-4 py-3 font-semibold text-slate-700">{"% \u05E9\u05D8\u05D7"}</th>
-                    <th className="px-4 py-3 font-semibold text-slate-700">{"\u05D7\u05D9\u05D5\u05D1"}</th>
+                    <th className="px-4 py-3 font-semibold text-slate-700">{"שוכר"}</th>
+                    <th className="px-4 py-3 font-semibold text-slate-700">{'שטח (מ"ר)'}</th>
+                    <th className="px-4 py-3 font-semibold text-slate-700">{"% שטח"}</th>
+                    <th className="px-4 py-3 font-semibold text-slate-700">{"חיוב"}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -890,7 +890,7 @@ function InsuranceTab({ properties }: { properties: any[] }) {
                 </tbody>
                 <tfoot className="bg-slate-50 border-t-2 border-slate-200">
                   <tr>
-                    <td className="px-4 py-2.5 font-bold text-slate-700">{'\u05E1\u05D4"\u05DB'}</td>
+                    <td className="px-4 py-2.5 font-bold text-slate-700">{'סה"כ'}</td>
                     <td className="px-4 py-2.5 font-bold">{results.reduce(function (s, r) { return s + r.area; }, 0).toLocaleString("he-IL")}</td>
                     <td className="px-4 py-2.5 font-bold">{results.reduce(function (s, r) { return s + r.pct; }, 0).toFixed(1)}%</td>
                     <td className="px-4 py-2.5 font-black text-blue-700">{fmtMoney(results.reduce(function (s, r) { return s + r.charge; }, 0))}</td>
@@ -901,11 +901,11 @@ function InsuranceTab({ properties }: { properties: any[] }) {
             <div className="flex gap-3 mt-4">
               <button onClick={createCharges} disabled={creatingCharges}
                 className="rounded-lg bg-blue-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-blue-800 disabled:opacity-50">
-                {creatingCharges ? "\u05D9\u05D5\u05E6\u05E8..." : "\u05E6\u05D5\u05E8 \u05D7\u05D9\u05D5\u05D1\u05D9\u05DD"}
+                {creatingCharges ? "יוצר..." : "צור חיובים"}
               </button>
               <button onClick={createLetters} disabled={creatingLetters}
                 className="rounded-lg border border-blue-200 bg-blue-50 px-5 py-2.5 text-sm font-bold text-blue-700 hover:bg-blue-100 disabled:opacity-50">
-                {creatingLetters ? "\u05D9\u05D5\u05E6\u05E8..." : "\u05E6\u05D5\u05E8 \u05DE\u05DB\u05EA\u05D1\u05D9\u05DD"}
+                {creatingLetters ? "יוצר..." : "צור מכתבים"}
               </button>
             </div>
           </div>
@@ -1080,13 +1080,13 @@ function WasteTab({ properties }: { properties: any[] }) {
           billing_period_end: dates.end,
           due_date: new Date().toISOString().slice(0, 10),
           status: "pending",
-          notes: "\u05D7\u05D9\u05D5\u05D1 \u05E4\u05D9\u05E0\u05D5\u05D9 \u05D0\u05E9\u05E4\u05D4 " + (period === "annual" ? year : period + " " + year),
+          notes: "חיוב פינוי אשפה " + (period === "annual" ? year : period + " " + year),
         });
         count++;
       }
-      await logAudit({ entity_type: "billing", entity_id: propId, action: "create_waste_charges", notes: count + " \u05D7\u05D9\u05D5\u05D1\u05D9\u05DD" });
-      alert("\u2705 \u05E0\u05D5\u05E6\u05E8\u05D5 " + count + " \u05D7\u05D9\u05D5\u05D1\u05D9\u05DD");
-    } catch (e: any) { alert("\u05E9\u05D2\u05D9\u05D0\u05D4: " + e?.message); }
+      await logAudit({ entity_type: "billing", entity_id: propId, action: "create_waste_charges", notes: count + " חיובים" });
+      alert("✅ נוצרו " + count + " חיובים");
+    } catch (e: any) { alert("שגיאה: " + e?.message); }
     finally { setCreatingCharges(false); }
   }
 
@@ -1094,31 +1094,31 @@ function WasteTab({ properties }: { properties: any[] }) {
     if (results.length === 0) return;
     setCreatingLetters(true);
     try {
-      const periodLabel = period === "annual" ? "\u05E9\u05E0\u05EA " + year : period + " " + year;
+      const periodLabel = period === "annual" ? "שנת " + year : period + " " + year;
       let count = 0;
       for (const r of results) {
         if (r.charge < 0.01) continue;
         await supabase.from("letters").insert({
           contract_id: r.contractId,
           letter_type: "notice",
-          subject: "\u05D7\u05D9\u05D5\u05D1 \u05E4\u05D9\u05E0\u05D5\u05D9 \u05D0\u05E9\u05E4\u05D4 \u2014 " + periodLabel,
-          body: "\u05E9\u05D5\u05DB\u05E8/\u05EA \u05E0\u05DB\u05D1\u05D3/\u05D4,\n\n\u05DC\u05D4\u05DC\u05DF \u05D7\u05D9\u05D5\u05D1 \u05E4\u05D9\u05E0\u05D5\u05D9 \u05D0\u05E9\u05E4\u05D4 \u05DC\u05EA\u05E7\u05D5\u05E4\u05D4 " + periodLabel + ":\n" +
-            "\u05D9\u05D7\u05D9\u05D3\u05D5\u05EA: " + r.spaces + "\n" +
-            '\u05E9\u05D8\u05D7: ' + r.wasteArea.toLocaleString("he-IL") + ' \u05DE"\u05E8\n' +
-            "\u05D0\u05D7\u05D5\u05D6: " + r.pct.toFixed(1) + "%\n" +
-            "\u05D7\u05D9\u05D5\u05D1: " + fmtMoney(r.charge) + "\n\n\u05D1\u05D1\u05E8\u05DB\u05D4,\n\u05D4\u05E0\u05D4\u05DC\u05EA \u05D4\u05E0\u05DB\u05E1",
+          subject: "חיוב פינוי אשפה — " + periodLabel,
+          body: "שוכר/ת נכבד/ה,\n\nלהלן חיוב פינוי אשפה לתקופה " + periodLabel + ":\n" +
+            "יחידות: " + r.spaces + "\n" +
+            'שטח: ' + r.wasteArea.toLocaleString("he-IL") + ' מ"ר\n' +
+            "אחוז: " + r.pct.toFixed(1) + "%\n" +
+            "חיוב: " + fmtMoney(r.charge) + "\n\nבברכה,\nהנהלת הנכס",
           status: "draft",
         });
         count++;
       }
-      await logAudit({ entity_type: "billing", entity_id: propId, action: "create_waste_letters", notes: count + " \u05DE\u05DB\u05EA\u05D1\u05D9\u05DD" });
-      alert("\u2705 \u05E0\u05D5\u05E6\u05E8\u05D5 " + count + " \u05DE\u05DB\u05EA\u05D1\u05D9\u05DD");
-    } catch (e: any) { alert("\u05E9\u05D2\u05D9\u05D0\u05D4: " + e?.message); }
+      await logAudit({ entity_type: "billing", entity_id: propId, action: "create_waste_letters", notes: count + " מכתבים" });
+      alert("✅ נוצרו " + count + " מכתבים");
+    } catch (e: any) { alert("שגיאה: " + e?.message); }
     finally { setCreatingLetters(false); }
   }
 
   const PERIODS: { v: typeof period; l: string }[] = [
-    { v: "annual", l: "\u05E9\u05E0\u05EA\u05D9" },
+    { v: "annual", l: "שנתי" },
     { v: "Q1", l: "Q1" },
     { v: "Q2", l: "Q2" },
     { v: "Q3", l: "Q3" },
@@ -1128,23 +1128,23 @@ function WasteTab({ properties }: { properties: any[] }) {
   return (
     <div className="space-y-6">
       <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-        <h2 className="text-lg font-bold text-slate-800 mb-4">{"\u05E4\u05D9\u05E0\u05D5\u05D9 \u05D0\u05E9\u05E4\u05D4"}</h2>
+        <h2 className="text-lg font-bold text-slate-800 mb-4">{"פינוי אשפה"}</h2>
         <div className="grid grid-cols-3 gap-4 mb-4">
           <div>
-            <label className="mb-1 block text-xs font-semibold text-slate-700">{"\u05E0\u05DB\u05E1"}</label>
+            <label className="mb-1 block text-xs font-semibold text-slate-700">{"נכס"}</label>
             <select value={propId} onChange={function (e) { setPropId(e.target.value); }} className={ic}>
-              <option value="">{"\u2014 \u05D1\u05D7\u05E8 \u05E0\u05DB\u05E1 \u2014"}</option>
+              <option value="">{"— בחר נכס —"}</option>
               {properties.map(function (p) {
                 return <option key={p.id} value={p.id}>{p.name}</option>;
               })}
             </select>
           </div>
           <div>
-            <label className="mb-1 block text-xs font-semibold text-slate-700">{"\u05E9\u05E0\u05D4"}</label>
+            <label className="mb-1 block text-xs font-semibold text-slate-700">{"שנה"}</label>
             <input type="number" value={year} onChange={function (e) { setYear(Number(e.target.value)); }} className={ic} />
           </div>
           <div>
-            <label className="mb-1 block text-xs font-semibold text-slate-700">{"\u05EA\u05E7\u05D5\u05E4\u05D4"}</label>
+            <label className="mb-1 block text-xs font-semibold text-slate-700">{"תקופה"}</label>
             <div className="flex gap-1">
               {PERIODS.map(function (p) {
                 return (
@@ -1177,22 +1177,22 @@ function WasteTab({ properties }: { properties: any[] }) {
         {propId && spaces.length > 0 && !hasGroups && (
           <div className="grid grid-cols-2 gap-4 mb-4">
             <div className="rounded-lg bg-green-50 border border-green-200 p-3">
-              <div className="text-xs font-bold text-green-800 mb-1">{"\u05DE\u05E9\u05EA\u05EA\u05E4\u05D5\u05EA \u05D1\u05E9\u05D9\u05E8\u05D5\u05EA"} ({participatingSpaces.length})</div>
+              <div className="text-xs font-bold text-green-800 mb-1">{"משתתפות בשירות"} ({participatingSpaces.length})</div>
               <div className="text-xs text-green-700 space-y-0.5">
                 {participatingSpaces.map(function (s) {
-                  return <div key={s.id}>{s.space_name} \u2014 {s.area ?? 0} {'\u05DE"\u05E8'}</div>;
+                  return <div key={s.id}>{s.space_name} — {s.area ?? 0} {'מ"ר'}</div>;
                 })}
               </div>
               <div className="text-xs font-bold text-green-900 mt-1 pt-1 border-t border-green-200">
-                {'\u05E1\u05D4"\u05DB: '}{totalWasteArea.toLocaleString("he-IL")} {'\u05DE"\u05E8'}
+                {'סה"כ: '}{totalWasteArea.toLocaleString("he-IL")} {'מ"ר'}
               </div>
             </div>
             {nonParticipating.length > 0 && (
               <div className="rounded-lg bg-slate-50 border border-slate-200 p-3">
-                <div className="text-xs font-bold text-slate-600 mb-1">{"\u05DC\u05D0 \u05DE\u05E9\u05EA\u05EA\u05E4\u05D5\u05EA"} ({nonParticipating.length})</div>
+                <div className="text-xs font-bold text-slate-600 mb-1">{"לא משתתפות"} ({nonParticipating.length})</div>
                 <div className="text-xs text-slate-500 space-y-0.5">
                   {nonParticipating.map(function (s) {
-                    return <div key={s.id}>{s.space_name} \u2014 {s.area ?? 0} {'\u05DE"\u05E8'}</div>;
+                    return <div key={s.id}>{s.space_name} — {s.area ?? 0} {'מ"ר'}</div>;
                   })}
                 </div>
               </div>
@@ -1211,11 +1211,11 @@ function WasteTab({ properties }: { properties: any[] }) {
               <table className="w-full text-right text-sm">
                 <thead className="bg-slate-50 border-b">
                   <tr>
-                    <th className="px-4 py-3 font-semibold text-slate-700">{"\u05E9\u05D5\u05DB\u05E8"}</th>
-                    <th className="px-4 py-3 font-semibold text-slate-700">{"\u05D9\u05D7\u05D9\u05D3\u05D5\u05EA \u05DE\u05E9\u05EA\u05EA\u05E4\u05D5\u05EA"}</th>
-                    <th className="px-4 py-3 font-semibold text-slate-700">{'\u05E9\u05D8\u05D7 (\u05DE"\u05E8)'}</th>
+                    <th className="px-4 py-3 font-semibold text-slate-700">{"שוכר"}</th>
+                    <th className="px-4 py-3 font-semibold text-slate-700">{"יחידות משתתפות"}</th>
+                    <th className="px-4 py-3 font-semibold text-slate-700">{'שטח (מ"ר)'}</th>
                     <th className="px-4 py-3 font-semibold text-slate-700">%</th>
-                    <th className="px-4 py-3 font-semibold text-slate-700">{"\u05D7\u05D9\u05D5\u05D1"}</th>
+                    <th className="px-4 py-3 font-semibold text-slate-700">{"חיוב"}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1233,7 +1233,7 @@ function WasteTab({ properties }: { properties: any[] }) {
                 </tbody>
                 <tfoot className="bg-slate-50 border-t-2 border-slate-200">
                   <tr>
-                    <td className="px-4 py-2.5 font-bold text-slate-700">{'\u05E1\u05D4"\u05DB'}</td>
+                    <td className="px-4 py-2.5 font-bold text-slate-700">{'סה"כ'}</td>
                     <td className="px-4 py-2.5" />
                     <td className="px-4 py-2.5 font-bold">{results.reduce(function (s, r) { return s + r.wasteArea; }, 0).toLocaleString("he-IL")}</td>
                     <td className="px-4 py-2.5 font-bold">{results.reduce(function (s, r) { return s + r.pct; }, 0).toFixed(1)}%</td>
@@ -1245,11 +1245,11 @@ function WasteTab({ properties }: { properties: any[] }) {
             <div className="flex gap-3 mt-4">
               <button onClick={createCharges} disabled={creatingCharges}
                 className="rounded-lg bg-blue-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-blue-800 disabled:opacity-50">
-                {creatingCharges ? "\u05D9\u05D5\u05E6\u05E8..." : "\u05E6\u05D5\u05E8 \u05D7\u05D9\u05D5\u05D1\u05D9\u05DD"}
+                {creatingCharges ? "יוצר..." : "צור חיובים"}
               </button>
               <button onClick={createLetters} disabled={creatingLetters}
                 className="rounded-lg border border-blue-200 bg-blue-50 px-5 py-2.5 text-sm font-bold text-blue-700 hover:bg-blue-100 disabled:opacity-50">
-                {creatingLetters ? "\u05D9\u05D5\u05E6\u05E8..." : "\u05E6\u05D5\u05E8 \u05DE\u05DB\u05EA\u05D1\u05D9\u05DD"}
+                {creatingLetters ? "יוצר..." : "צור מכתבים"}
               </button>
             </div>
           </div>
