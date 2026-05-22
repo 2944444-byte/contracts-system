@@ -733,6 +733,9 @@ function InsuranceTab({ properties }: { properties: any[] }) {
   const [computing, setComputing] = useState(false);
   const [creatingCharges, setCreatingCharges] = useState(false);
   const [creatingLetters, setCreatingLetters] = useState(false);
+  // Detected data issues to surface in the UI (e.g. a space assigned to two
+  // active contracts simultaneously). Cleared on each compute().
+  const [warnings, setWarnings] = useState<string[]>([]);
 
   const selProp = properties.find(function (p) { return p.id === propId; });
   const totalArea = selProp?.total_area ?? 0;
@@ -801,6 +804,56 @@ function InsuranceTab({ properties }: { properties: any[] }) {
       var joinNames = function(cs: any[]): string {
         return (cs || []).map(function(x: any) { return x?.spaces?.space_name; }).filter(Boolean).join(", ");
       };
+
+      // 2.5) Data-sanity check: detect spaces assigned to multiple ACTIVE
+      // base contracts. That's the classic cause of "total share > 100%" —
+      // the same square meters are being billed twice. We surface this so
+      // the user can fix the source data instead of silently over-billing.
+      var spaceToContracts: Record<string, { name: string; tenant: string; contractId: string; }[]> = {};
+      baseList.forEach(function(c: any) {
+        (c.contract_spaces || []).forEach(function(cs: any) {
+          if (!cs.space_id) return;
+          if (!spaceToContracts[cs.space_id]) spaceToContracts[cs.space_id] = [];
+          spaceToContracts[cs.space_id].push({
+            name: cs.spaces?.space_name || cs.space_id,
+            tenant: (c.tenants as any)?.name || "—",
+            contractId: c.id,
+          });
+        });
+      });
+      // Also include amendments' spaces — they share the parent's claim but
+      // for the segment after amendment_date only. If two unrelated contracts
+      // both claim the same space, it's a real conflict.
+      Object.keys(amendsByParent).forEach(function(pid) {
+        amendsByParent[pid].forEach(function(am: any) {
+          (am.contract_spaces || []).forEach(function(cs: any) {
+            if (!cs.space_id) return;
+            if (!spaceToContracts[cs.space_id]) spaceToContracts[cs.space_id] = [];
+            // dedupe inside the same contract family
+            var already = spaceToContracts[cs.space_id].some(function(x) { return x.contractId === pid; });
+            if (!already) {
+              spaceToContracts[cs.space_id].push({
+                name: cs.spaces?.space_name || cs.space_id,
+                tenant: "(תוספת ל-" + ((baseList.find(function(b: any) { return b.id === pid; })?.tenants as any)?.name || pid) + ")",
+                contractId: pid,
+              });
+            }
+          });
+        });
+      });
+      var newWarnings: string[] = [];
+      Object.keys(spaceToContracts).forEach(function(sid) {
+        var refs = spaceToContracts[sid];
+        // Filter to unique contracts (different contract families)
+        var uniqContracts: Record<string, boolean> = {};
+        refs.forEach(function(r) { uniqContracts[r.contractId] = true; });
+        if (Object.keys(uniqContracts).length > 1) {
+          var spaceName = refs[0].name;
+          var tenants = refs.map(function(r) { return r.tenant; }).join(" | ");
+          newWarnings.push("⚠ יחידה \"" + spaceName + "\" משויכת למספר חוזים פעילים: " + tenants);
+        }
+      });
+      setWarnings(newWarnings);
 
       // 3) Build per-contract area timeline → sum sqm-days inside policy window
       const res: InsResult[] = baseList.map(function(c: any) {
@@ -981,17 +1034,40 @@ function InsuranceTab({ properties }: { properties: any[] }) {
           var totPct = results.reduce(function (s, r) { return s + r.pct; }, 0);
           var totCharge = results.reduce(function (s, r) { return s + r.charge; }, 0);
           var partialCount = results.filter(function (r) { return r.isPartialPeriod; }).length;
-          var coverage = Math.min(100, totPct);
           var ownerSelf = Math.max(0, 100 - totPct);
           var ownerCharge = Math.max(0, (policy?.annual_premium ?? 0) - totCharge);
+          var overBilled = totPct > 100.5; // small tolerance for floating-point noise
+          var overshoot = totPct - 100;
           return (
           <div className="mt-5">
+            {/* Data-sanity warnings (overlapping space claims) */}
+            {warnings.length > 0 && (
+              <div className="mb-3 rounded-lg border-2 border-orange-300 bg-orange-50 p-3 text-sm">
+                <div className="font-bold text-orange-800 mb-1.5">🚨 בעיות בנתוני החוזים — כפילות בשיוך יחידות</div>
+                <div className="space-y-1 text-xs text-orange-800">
+                  {warnings.map(function (w, i) { return <div key={i}>{w}</div>; })}
+                </div>
+                <div className="mt-2 text-[11px] text-orange-700">
+                  כל עוד הכפילות לא תתוקן בנתוני החוזים, החיוב המחושב עלול להיות שגוי. תקן באמצעות עריכת החוזים הרלוונטיים.
+                </div>
+              </div>
+            )}
+
+            {/* Total-over-100 validation banner */}
+            {overBilled && (
+              <div className="mb-3 rounded-lg border-2 border-red-400 bg-red-50 p-3 text-sm">
+                <div className="font-bold text-red-800 mb-1">❌ סך % עולה על 100% ({totPct.toFixed(2)}%, חריגה של {overshoot.toFixed(2)}%)</div>
+                <div className="text-xs text-red-700">
+                  משמעות הדבר ששטחים נחשבים מספר פעמים. אין ליצור חיובים עד תיקון הבעיה.
+                </div>
+              </div>
+            )}
+
             <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
               <table className="w-full text-right text-sm">
                 <thead className="bg-slate-50 border-b">
                   <tr>
-                    <th className="px-4 py-3 font-semibold text-slate-700">שוכר</th>
-                    <th className="px-4 py-3 font-semibold text-slate-700">יחידות</th>
+                    <th className="px-4 py-3 font-semibold text-slate-700">שוכר / יחידות</th>
                     <th className="px-4 py-3 font-semibold text-slate-700">תקופה</th>
                     <th className="px-4 py-3 font-semibold text-slate-700">שטח (מ&quot;ר)</th>
                     <th className="px-4 py-3 font-semibold text-slate-700">% חלק</th>
@@ -1006,16 +1082,16 @@ function InsuranceTab({ properties }: { properties: any[] }) {
                       : r.daysInPolicy + "/" + r.policyDays + " ימים";
                     return (
                       <tr key={r.contractId} className={"border-t border-slate-100 " + (r.isPartialPeriod ? "bg-amber-50/40" : "hover:bg-slate-50")}>
-                        <td className="px-4 py-3 font-semibold text-slate-800">
-                          {r.tenantName}
+                        <td className="px-4 py-3">
+                          <div className="font-semibold text-slate-800">{r.tenantName}</div>
+                          <div className="text-xs text-slate-500 mt-0.5">{r.spaceNames || "—"}</div>
                           {r.isPartialPeriod && (
-                            <div className="text-[10px] mt-0.5 font-normal text-amber-700 rounded bg-amber-100 inline-block px-1.5 py-0.5"
+                            <div className="text-[10px] mt-1 font-normal text-amber-700 rounded bg-amber-100 inline-block px-1.5 py-0.5"
                                  title={"החזקה רק " + r.daysInPolicy + " מתוך " + r.policyDays + " ימי הפוליסה — מחויב יחסית"}>
                               ⏱ תקופה חלקית
                             </div>
                           )}
                         </td>
-                        <td className="px-4 py-3 text-xs text-slate-600">{r.spaceNames}</td>
                         <td className="px-4 py-3 text-xs text-slate-500">{periodCell}</td>
                         <td className="px-4 py-3 text-slate-600">{areaCell}</td>
                         <td className="px-4 py-3 text-slate-600">{r.pct.toFixed(2)}%</td>
@@ -1026,13 +1102,16 @@ function InsuranceTab({ properties }: { properties: any[] }) {
                 </tbody>
                 <tfoot className="bg-slate-50 border-t-2 border-slate-200">
                   <tr>
-                    <td className="px-4 py-2.5 font-bold text-slate-700" colSpan={4}>סה&quot;כ — שוכרים</td>
-                    <td className="px-4 py-2.5 font-bold">{totPct.toFixed(2)}%</td>
+                    <td className="px-4 py-2.5 font-bold text-slate-700" colSpan={3}>סה&quot;כ — שוכרים</td>
+                    <td className={"px-4 py-2.5 font-bold " + (overBilled ? "text-red-700" : "")}>
+                      {totPct.toFixed(2)}%
+                      {overBilled && <span className="text-[10px] mr-1">⚠ חורג</span>}
+                    </td>
                     <td className="px-4 py-2.5 font-black text-blue-700">{fmtMoney(totCharge)}</td>
                   </tr>
-                  {ownerSelf > 0.5 && (
+                  {!overBilled && ownerSelf > 0.5 && (
                     <tr className="border-t border-slate-200">
-                      <td className="px-4 py-2.5 font-semibold text-amber-700" colSpan={4}>חלק בעלים (שטח פנוי / לא מבוטח על-ידי שוכרים)</td>
+                      <td className="px-4 py-2.5 font-semibold text-amber-700" colSpan={3}>חלק בעלים (שטח פנוי / לא מבוטח על-ידי שוכרים)</td>
                       <td className="px-4 py-2.5 font-semibold text-amber-700">{ownerSelf.toFixed(2)}%</td>
                       <td className="px-4 py-2.5 font-bold text-amber-700">{fmtMoney(ownerCharge)}</td>
                     </tr>
@@ -1048,18 +1127,18 @@ function InsuranceTab({ properties }: { properties: any[] }) {
                 <div>החיוב הוא יחס של <span className="font-semibold">מ&quot;ר × ימים</span> בתוך תקופת הפוליסה — שינוי יחידה באמצע השנה (כמו קבוצת גולף) מחויב יחסית לפי הימים בכל יחידה.</div>
                 <div>שוכרים שהיו בנכס רק חלק מהשנה (תקופה חלקית) מחויבים רק עבור הימים שלהם — מסומנים ⏱.</div>
                 {partialCount > 0 && <div className="text-amber-700">📌 {partialCount} שוכרים בתקופה חלקית. אם הוצא חיוב מלא קודם — מומלץ להוסיף חיוב משלים בסוף השנה לתקופת ההחזקה שלהם.</div>}
-                {ownerSelf > 0.5 && <div className="text-amber-700">📌 {ownerSelf.toFixed(1)}% מהנכס לא מבוטח על-ידי שוכרים פעילים — נטל בעלי הנכס.</div>}
+                {!overBilled && ownerSelf > 0.5 && <div className="text-amber-700">📌 {ownerSelf.toFixed(1)}% מהנכס לא מבוטח על-ידי שוכרים פעילים — נטל בעלי הנכס.</div>}
               </div>
             </div>
 
             <div className="flex gap-3 mt-4">
-              <button onClick={createCharges} disabled={creatingCharges || results.length === 0}
-                title="מוסיף שורת חיוב ביטוח לטבלת charges לכל שוכר"
+              <button onClick={createCharges} disabled={creatingCharges || results.length === 0 || overBilled}
+                title={overBilled ? "לא ניתן ליצור חיובים כאשר סך החלקים עולה על 100% — תקן את הכפילות בנתוני החוזים" : "מוסיף שורת חיוב ביטוח לטבלת charges לכל שוכר"}
                 className="rounded-lg bg-blue-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-blue-800 disabled:opacity-50">
                 {creatingCharges ? "יוצר..." : "צור חיובים"}
               </button>
-              <button onClick={createLetters} disabled={creatingLetters || results.length === 0}
-                title="יוצר טיוטות מכתבי חיוב ביטוח לשוכרים"
+              <button onClick={createLetters} disabled={creatingLetters || results.length === 0 || overBilled}
+                title={overBilled ? "לא ניתן ליצור מכתבים כאשר סך החלקים עולה על 100%" : "יוצר טיוטות מכתבי חיוב ביטוח לשוכרים"}
                 className="rounded-lg border border-blue-200 bg-blue-50 px-5 py-2.5 text-sm font-bold text-blue-700 hover:bg-blue-100 disabled:opacity-50">
                 {creatingLetters ? "יוצר..." : "צור מכתבים"}
               </button>
