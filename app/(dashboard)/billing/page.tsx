@@ -16,7 +16,7 @@ function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL")
 
 type Tab = "management" | "insurance" | "waste" | "advances" | "saved_advances" | "cpi_diff";
 
-interface MgmtResult { contractId: string; tenantName: string; chargedArea: number; advance: number; actualShare: number; difference: number; }
+interface MgmtResult { contractId: string; tenantName: string; spaceNames: string; chargedArea: number; advance: number; actualShare: number; difference: number; isRevenueBased: boolean; }
 interface InsResult { contractId: string; tenantName: string; area: number; pct: number; charge: number; }
 interface WasteResult { contractId: string; tenantName: string; spaces: string; wasteArea: number; pct: number; charge: number; }
 interface UseTypeRow { useType: string; totalSqm: number; rate: number; annual: number; }
@@ -219,11 +219,17 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
     if (!hasGroups && !actualCost) { alert("יש להזין עלות בפועל"); return; }
     setComputing(true);
     try {
-      // Load active contracts with their spaces
+      // Load active BASE contracts only. Amendments share a tenant name with
+      // the base, so including them would duplicate tenants in the table
+      // (e.g. Joubaril Aesthetics appearing three times). The base contract's
+      // contract_spaces still describes the current set of units used.
+      // Also pulls revenue_pct / rent_type so revenue-% tenants can be flagged
+      // (their mgmt is paid as part of the % rent — no separate charge).
       const { data: contracts } = await supabase
         .from("contracts")
-        .select("id, charged_area, rent_per_sqm, tenants(name), contract_spaces(space_id, spaces(id, area))")
+        .select("id, charged_area, rent_per_sqm, rent_type, revenue_pct, mgmt_included_in_revenue, is_amendment, tenants(name), contract_spaces(space_id, spaces(id, space_name, area))")
         .eq("property_id", propId)
+        .eq("is_amendment", false)
         .in("status", ["active", "expiring", "extended"]);
 
       // Load property budget (default rate fallback)
@@ -265,17 +271,17 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
         let advance = 0;
         let actualShare = 0;
         let contractArea = 0;
+        const spaceNamesList: string[] = [];
 
         for (const cs of (c.contract_spaces ?? [])) {
           const spArea = Number(cs.spaces?.area) || 0;
           contractArea += spArea;
+          if (cs.spaces?.space_name) spaceNamesList.push(cs.spaces.space_name);
           const info = spaceGroupMap.get(cs.space_id);
           if (info) {
-            // This space is in a group — use group rate for advance, group actual for share
             advance += info.rate * spArea * 12;
             actualShare += info.groupTotalArea > 0 ? info.groupActualCost * (spArea / info.groupTotalArea) : 0;
           } else {
-            // Default/unassigned: use property default rate + default actual
             advance += defaultRate * spArea * 12;
             actualShare += defaultSpaceArea > 0 ? defaultActual * (spArea / defaultSpaceArea) : 0;
           }
@@ -283,13 +289,21 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
 
         if (contractArea === 0) contractArea = c.charged_area ?? 0;
 
+        // Revenue-pct tenants pay management as part of their % rent — they
+        // see the reconciliation diff but shouldn't be billed/lettered for it
+        // through the mgmt-reconciliation flow. The rent itself gets updated
+        // on the revenue page.
+        const isRevenueBased = c.rent_type === "revenue_pct" || c.rent_type === "revenue_based" || Number(c.revenue_pct) > 0;
+
         return {
           contractId: c.id,
           tenantName: c.tenants?.name ?? "—",
+          spaceNames: spaceNamesList.join(", ") || "—",
           chargedArea: contractArea,
           advance,
           actualShare,
           difference: actualShare - advance,
+          isRevenueBased,
         };
       });
       setMgmtResults(results);
@@ -302,8 +316,12 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
     setCreatingCharges(true);
     try {
       let count = 0;
+      let skippedRevenue = 0;
       for (const r of mgmtResults) {
         if (Math.abs(r.difference) < 0.01) continue;
+        // Revenue-% tenants: skip \u2014 their mgmt is part of the % rent on the
+        // revenue page, not a separate charge.
+        if (r.isRevenueBased) { skippedRevenue++; continue; }
         const base = Math.abs(r.difference);
         await supabase.from("charges").insert({
           contract_id: r.contractId,
@@ -320,8 +338,10 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
         });
         count++;
       }
-      await logAudit({ entity_type: "billing", entity_id: propId, action: "create_mgmt_charges", notes: count + " \u05D7\u05D9\u05D5\u05D1\u05D9\u05DD" });
-      alert("\u2705 \u05E0\u05D5\u05E6\u05E8\u05D5 " + count + " \u05D7\u05D9\u05D5\u05D1\u05D9\u05DD");
+      await logAudit({ entity_type: "billing", entity_id: propId, action: "create_mgmt_charges", notes: count + " \u05D7\u05D9\u05D5\u05D1\u05D9\u05DD" + (skippedRevenue ? " (\u05D3\u05D5\u05DC\u05D2 " + skippedRevenue + " % \u05E4\u05D9\u05D3\u05D9\u05D5\u05DF)" : "") });
+      var msg = "\u2705 \u05E0\u05D5\u05E6\u05E8\u05D5 " + count + " \u05D7\u05D9\u05D5\u05D1\u05D9\u05DD";
+      if (skippedRevenue > 0) msg += "\n\u05D3\u05D5\u05DC\u05D2\u05D5 " + skippedRevenue + " \u05E9\u05D5\u05DB\u05E8\u05D9 % \u05E4\u05D9\u05D3\u05D9\u05D5\u05DF (\u05D3\u05DE\u05D9 \u05D4\u05E0\u05D9\u05D4\u05D5\u05DC \u05DB\u05DC\u05D5\u05DC\u05D9\u05DD \u05D1\u05E9\u05DB\"\u05D3 \u05D4\u05DE\u05D7\u05D6\u05D5\u05E8)";
+      alert(msg);
     } catch (e: any) { alert("\u05E9\u05D2\u05D9\u05D0\u05D4: " + e?.message); }
     finally { setCreatingCharges(false); }
   }
@@ -331,8 +351,10 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
     setCreatingLetters(true);
     try {
       let count = 0;
+      let skippedRevenue = 0;
       for (const r of mgmtResults) {
         if (Math.abs(r.difference) < 0.01) continue;
+        if (r.isRevenueBased) { skippedRevenue++; continue; }
         const subject = r.difference > 0
           ? "\u05D4\u05E9\u05DC\u05DE\u05EA \u05D4\u05E4\u05E8\u05E9 \u05D3\u05DE\u05D9 \u05E0\u05D9\u05D4\u05D5\u05DC " + year
           : "\u05D4\u05D7\u05D6\u05E8 \u05D3\u05DE\u05D9 \u05E0\u05D9\u05D4\u05D5\u05DC " + year;
@@ -349,8 +371,10 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
         });
         count++;
       }
-      await logAudit({ entity_type: "billing", entity_id: propId, action: "create_mgmt_letters", notes: count + " \u05DE\u05DB\u05EA\u05D1\u05D9\u05DD" });
-      alert("\u2705 \u05E0\u05D5\u05E6\u05E8\u05D5 " + count + " \u05DE\u05DB\u05EA\u05D1\u05D9\u05DD");
+      await logAudit({ entity_type: "billing", entity_id: propId, action: "create_mgmt_letters", notes: count + " \u05DE\u05DB\u05EA\u05D1\u05D9\u05DD" + (skippedRevenue ? " (\u05D3\u05D5\u05DC\u05D2 " + skippedRevenue + " % \u05E4\u05D9\u05D3\u05D9\u05D5\u05DF)" : "") });
+      var msg2 = "\u2705 \u05E0\u05D5\u05E6\u05E8\u05D5 " + count + " \u05DE\u05DB\u05EA\u05D1\u05D9\u05DD";
+      if (skippedRevenue > 0) msg2 += "\n\u05D3\u05D5\u05DC\u05D2\u05D5 " + skippedRevenue + " \u05E9\u05D5\u05DB\u05E8\u05D9 % \u05E4\u05D9\u05D3\u05D9\u05D5\u05DF";
+      alert(msg2);
     } catch (e: any) { alert("\u05E9\u05D2\u05D9\u05D0\u05D4: " + e?.message); }
     finally { setCreatingLetters(false); }
   }
@@ -595,36 +619,52 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
           {computing ? "מחשב..." : "חשב"}
         </button>
 
-        {mgmtResults.length > 0 && (
+        {mgmtResults.length > 0 && (() => {
+          // Counts for footer/buttons
+          var billableCount = mgmtResults.filter(function(r){ return !r.isRevenueBased && Math.abs(r.difference) >= 0.01; }).length;
+          var revenueSkippedCount = mgmtResults.filter(function(r){ return r.isRevenueBased && Math.abs(r.difference) >= 0.01; }).length;
+          return (
           <div className="mt-5">
             <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
               <table className="w-full text-right text-sm">
                 <thead className="bg-slate-50 border-b">
                   <tr>
-                    <th className="px-4 py-3 font-semibold text-slate-700">{"\u05E9\u05D5\u05DB\u05E8"}</th>
-                    <th className="px-4 py-3 font-semibold text-slate-700">{'\u05E9\u05D8\u05D7 (\u05DE"\u05E8)'}</th>
-                    <th className="px-4 py-3 font-semibold text-slate-700">{"\u05DE\u05E7\u05D3\u05DE\u05D4"}</th>
-                    <th className="px-4 py-3 font-semibold text-slate-700">{"\u05D7\u05DC\u05E7 \u05D1\u05E4\u05D5\u05E2\u05DC"}</th>
-                    <th className="px-4 py-3 font-semibold text-slate-700">{"\u05D4\u05E4\u05E8\u05E9"}</th>
+                    <th className="px-4 py-3 font-semibold text-slate-700">\u05E9\u05D5\u05DB\u05E8</th>
+                    <th className="px-4 py-3 font-semibold text-slate-700">\u05D9\u05D7\u05D9\u05D3\u05D5\u05EA</th>
+                    <th className="px-4 py-3 font-semibold text-slate-700">\u05E9\u05D8\u05D7 (\u05DE&quot;\u05E8)</th>
+                    <th className="px-4 py-3 font-semibold text-slate-700">\u05DE\u05E7\u05D3\u05DE\u05D4</th>
+                    <th className="px-4 py-3 font-semibold text-slate-700">\u05D7\u05DC\u05E7 \u05D1\u05E4\u05D5\u05E2\u05DC</th>
+                    <th className="px-4 py-3 font-semibold text-slate-700">\u05D4\u05E4\u05E8\u05E9</th>
                   </tr>
                 </thead>
                 <tbody>
                   {mgmtResults.map(function (r) {
                     const color = r.difference > 0.01 ? "text-red-700 bg-red-50" : r.difference < -0.01 ? "text-green-700 bg-green-50" : "text-slate-600";
+                    const isZeroBoth = r.advance < 0.01 && r.actualShare < 0.01;
                     return (
-                      <tr key={r.contractId} className="border-t border-slate-100 hover:bg-slate-50">
-                        <td className="px-4 py-3 font-semibold text-slate-800">{r.tenantName}</td>
+                      <tr key={r.contractId} className={"border-t border-slate-100 " + (r.isRevenueBased ? "bg-purple-50/40" : "hover:bg-slate-50") + (isZeroBoth ? " opacity-60" : "")}>
+                        <td className="px-4 py-3 font-semibold text-slate-800">
+                          {r.tenantName}
+                          {r.isRevenueBased && (
+                            <div className="text-[10px] mt-0.5 font-normal text-purple-700 rounded bg-purple-100 inline-block px-1.5 py-0.5" title="\u05E9\u05D5\u05DB\u05E8 \u05D6\u05D4 \u05DE\u05E9\u05DC\u05DD \u05D3\u05DE\u05D9 \u05E0\u05D9\u05D4\u05D5\u05DC \u05DB\u05D7\u05DC\u05E7 \u05DE-% \u05D4\u05DE\u05D7\u05D6\u05D5\u05E8. \u05D4\u05D4\u05E4\u05E8\u05E9 \u05DE\u05D5\u05E6\u05D2 \u05DC\u05DE\u05D9\u05D3\u05E2 \u05D1\u05DC\u05D1\u05D3 \u2014 \u05D0\u05D9\u05DF \u05D7\u05D9\u05D5\u05D1/\u05DE\u05DB\u05EA\u05D1 \u05E0\u05E4\u05E8\u05D3; \u05D9\u05E9 \u05DC\u05E2\u05D3\u05DB\u05DF \u05D0\u05EA \u05E9\u05DB&quot;\u05D3 \u05D1\u05DE\u05E1\u05DA \u05E9\u05DB&quot;\u05D3 \u05E4\u05D9\u05D3\u05D9\u05D5\u05DF.">
+                              \uD83D\uDCCA % \u05E4\u05D9\u05D3\u05D9\u05D5\u05DF \u2014 \u05DC\u05D0 \u05DC\u05D7\u05D9\u05D5\u05D1
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-xs text-slate-600">{r.spaceNames}</td>
                         <td className="px-4 py-3 text-slate-600">{r.chargedArea.toLocaleString("he-IL")}</td>
                         <td className="px-4 py-3">{fmtMoney(r.advance)}</td>
                         <td className="px-4 py-3">{fmtMoney(r.actualShare)}</td>
-                        <td className={"px-4 py-3 font-bold rounded " + color}>{fmtMoney(r.difference)}</td>
+                        <td className={"px-4 py-3 font-bold rounded " + (r.isRevenueBased ? "text-slate-500" : color)}>
+                          {fmtMoney(r.difference)}
+                        </td>
                       </tr>
                     );
                   })}
                 </tbody>
                 <tfoot className="bg-slate-50 border-t-2 border-slate-200">
                   <tr>
-                    <td className="px-4 py-2.5 font-bold text-slate-700">{'\u05E1\u05D4"\u05DB'}</td>
+                    <td className="px-4 py-2.5 font-bold text-slate-700" colSpan={2}>\u05E1\u05D4&quot;\u05DB</td>
                     <td className="px-4 py-2.5 font-bold">{mgmtResults.reduce(function (s, r) { return s + r.chargedArea; }, 0).toLocaleString("he-IL")}</td>
                     <td className="px-4 py-2.5 font-bold">{fmtMoney(mgmtResults.reduce(function (s, r) { return s + r.advance; }, 0))}</td>
                     <td className="px-4 py-2.5 font-bold">{fmtMoney(mgmtResults.reduce(function (s, r) { return s + r.actualShare; }, 0))}</td>
@@ -633,18 +673,35 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
                 </tfoot>
               </table>
             </div>
+
+            {/* Explainer + counts */}
+            <div className="mt-4 rounded-lg bg-slate-50 border border-slate-200 p-3 text-xs text-slate-600 leading-relaxed">
+              <div className="font-bold text-slate-700 mb-1">\uD83D\uDCA1 \u05DE\u05D4 \u05D4\u05DB\u05E4\u05EA\u05D5\u05E8\u05D9\u05DD \u05D9\u05D5\u05E6\u05E8\u05D9\u05DD?</div>
+              <div className="space-y-0.5">
+                <div><span className="font-semibold">\u05E6\u05D5\u05E8 \u05D7\u05D9\u05D5\u05D1\u05D9\u05DD</span> \u2014 \u05DE\u05D5\u05E1\u05D9\u05E3 \u05E9\u05D5\u05E8\u05EA \u05D7\u05D9\u05D5\u05D1 \u05DC\u05D8\u05D1\u05DC\u05EA <code>charges</code> \u05DC\u05DB\u05DC \u05E9\u05D5\u05DB\u05E8 \u05E2\u05DD \u05D4\u05E4\u05E8\u05E9 &gt; 0\u20AA (\u05D7\u05D9\u05D5\u05D1/\u05D6\u05D9\u05DB\u05D5\u05D9 \u05DC\u05E4\u05D9 \u05D4\u05E1\u05D9\u05DE\u05DF). \u05D6\u05D4 \u05DE\u05E9\u05DC\u05D1 \u05D0\u05EA \u05D4\u05D4\u05E4\u05E8\u05E9 \u05DC\u05DB\u05E8\u05D8\u05E1\u05EA \u05D4\u05DB\u05E1\u05E4\u05D9\u05EA \u05E9\u05DC \u05D4\u05E9\u05D5\u05DB\u05E8.</div>
+                <div><span className="font-semibold">\u05E6\u05D5\u05E8 \u05DE\u05DB\u05EA\u05D1\u05D9\u05DD</span> \u2014 \u05D9\u05D5\u05E6\u05E8 \u05D8\u05D9\u05D5\u05D8\u05D5\u05EA \u05DE\u05DB\u05EA\u05D1\u05D9 \u05D3\u05E8\u05D9\u05E9\u05D4/\u05D4\u05D7\u05D6\u05E8 \u05D1\u05DE\u05E1\u05DA \u05D4\u05DE\u05DB\u05EA\u05D1\u05D9\u05DD. \u05D0\u05D9\u05E0\u05D5 \u05E9\u05D5\u05DC\u05D7 \u05DB\u05DC\u05D5\u05DD \u2014 \u05E8\u05E7 \u05D9\u05D5\u05E6\u05E8 \u05D8\u05D9\u05D5\u05D8\u05D4.</div>
+                <div className="pt-1 border-t border-slate-200 mt-1">
+                  <span className="text-blue-700 font-semibold">{billableCount}</span> \u05E9\u05D5\u05DB\u05E8\u05D9\u05DD \u05D6\u05DB\u05D0\u05D9\u05DD \u05DC\u05D7\u05D9\u05D5\u05D1.
+                  {revenueSkippedCount > 0 && <span className="text-purple-700"> + <span className="font-semibold">{revenueSkippedCount}</span> \u05E9\u05D5\u05DB\u05E8\u05D9 % \u05E4\u05D9\u05D3\u05D9\u05D5\u05DF \u05D9\u05D3\u05D5\u05DC\u05D2\u05D5 \u05D0\u05D5\u05D8\u05D5\u05DE\u05D8\u05D9\u05EA (\u05DC\u05D4\u05D6\u05D9\u05DF \u05D1\u05DE\u05E1\u05DA \u05E9\u05DB&quot;\u05D3 \u05E4\u05D9\u05D3\u05D9\u05D5\u05DF).</span>}
+                </div>
+              </div>
+            </div>
+
             <div className="flex gap-3 mt-4">
-              <button onClick={createCharges} disabled={creatingCharges}
+              <button onClick={createCharges} disabled={creatingCharges || billableCount === 0}
+                title={billableCount === 0 ? "\u05D0\u05D9\u05DF \u05D4\u05E4\u05E8\u05E9\u05D9\u05DD \u05DC\u05D7\u05D9\u05D5\u05D1" : "\u05DE\u05D5\u05E1\u05D9\u05E3 " + billableCount + " \u05E9\u05D5\u05E8\u05D5\u05EA \u05D7\u05D9\u05D5\u05D1 \u05DC\u05D8\u05D1\u05DC\u05EA charges"}
                 className="rounded-lg bg-blue-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-blue-800 disabled:opacity-50">
-                {creatingCharges ? "\u05D9\u05D5\u05E6\u05E8..." : "\u05E6\u05D5\u05E8 \u05D7\u05D9\u05D5\u05D1\u05D9\u05DD"}
+                {creatingCharges ? "\u05D9\u05D5\u05E6\u05E8..." : "\u05E6\u05D5\u05E8 " + billableCount + " \u05D7\u05D9\u05D5\u05D1\u05D9\u05DD"}
               </button>
-              <button onClick={createLetters} disabled={creatingLetters}
+              <button onClick={createLetters} disabled={creatingLetters || billableCount === 0}
+                title={billableCount === 0 ? "\u05D0\u05D9\u05DF \u05D4\u05E4\u05E8\u05E9\u05D9\u05DD \u05DC\u05DE\u05DB\u05EA\u05D1" : "\u05D9\u05D5\u05E6\u05E8 " + billableCount + " \u05D8\u05D9\u05D5\u05D8\u05D5\u05EA \u05DE\u05DB\u05EA\u05D1\u05D9 \u05D3\u05E8\u05D9\u05E9\u05D4/\u05D4\u05D7\u05D6\u05E8"}
                 className="rounded-lg border border-blue-200 bg-blue-50 px-5 py-2.5 text-sm font-bold text-blue-700 hover:bg-blue-100 disabled:opacity-50">
-                {creatingLetters ? "\u05D9\u05D5\u05E6\u05E8..." : "\u05E6\u05D5\u05E8 \u05DE\u05DB\u05EA\u05D1\u05D9\u05DD"}
+                {creatingLetters ? "\u05D9\u05D5\u05E6\u05E8..." : "\u05E6\u05D5\u05E8 " + billableCount + " \u05DE\u05DB\u05EA\u05D1\u05D9\u05DD"}
               </button>
             </div>
           </div>
-        )}
+          );
+        })()}
       </div>
     </div>
   );
