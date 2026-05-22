@@ -237,11 +237,18 @@ export default function RevenuePage() {
   }
 
   // Pure calc: given a contract + raw gross revenue (+ optional manual mgmt),
-  // returns the full breakdown. Two sources for the mgmt deduction, in order:
-  //   1. Manual override entered on the report (handles contracts like Golf
-  //      where mgmt_included_in_revenue=true but the per-sqm rate is null)
-  //   2. Contract: mgmt_fee_per_sqm × charged_area
-  // If neither is available, mgmt is 0 even when the flag is set.
+  // returns the full breakdown. The financial model (per the contract terms
+  // for revenue-pct tenants where mgmt is included in the revenue):
+  //
+  //   1. Tenant reports their gross revenue (includes the rent + mgmt portion)
+  //   2. Property is owed: consideration = pct% × gross  (= "תמורה בגין פדיון")
+  //   3. From that consideration, mgmt fee is taken out:
+  //        rent_from_revenue = consideration − mgmt   (= "שכ"ד מפדיון")
+  //   4. For reporting purposes, the "net revenue" (revenue that's pure rent
+  //      basis, i.e. before mgmt) = gross − mgmt/pct  — this is the figure
+  //      that would yield rent_from_revenue if you applied pct% to it.
+  //
+  // Mgmt sources (priority): manual override → contract per-sqm × area → 0.
   function calcRent(contractId: string, grossRevenue: number, manualMgmt?: number) {
     const c = contracts.find(function(x){return x.id===contractId;});
     if (!c) return null;
@@ -254,12 +261,22 @@ export default function RevenuePage() {
     } else {
       mgmtMonthly = 0;
     }
-    const netGross  = Math.max(grossRevenue - mgmtMonthly, 0);
-    const calcRent_ = netGross * (pct/100);
-    const minRent   = (c.min_rent_per_sqm??0)*(c.charged_area??0)+(c.investment_addition??0);
-    const finalRent = Math.max(calcRent_, minRent);
-    const vat       = c.vat_type==="taxable" ? finalRent*0.18 : 0;
-    return { pct, mgmtMonthly, netGross, calcRent: calcRent_, minRent, finalRent, vat, total: finalRent+vat, area: Number(c.charged_area) || 0 };
+    const consideration = grossRevenue * (pct/100);                       // תמורה בגין פדיון
+    const netGross      = pct > 0 ? Math.max(grossRevenue - mgmtMonthly / (pct/100), 0)
+                                  : grossRevenue;                          // מחזור נטו (information)
+    const rentFromRev   = consideration - mgmtMonthly;                    // שכ"ד מפדיון (before min)
+    const minRent       = (c.min_rent_per_sqm??0)*(c.charged_area??0)+(c.investment_addition??0);
+    const finalRent     = Math.max(rentFromRev, minRent);
+    const vat           = c.vat_type==="taxable" ? finalRent*0.18 : 0;
+    return {
+      pct, mgmtMonthly, netGross,
+      consideration,                  // 12% × gross
+      calcRent: consideration,        // alias used elsewhere
+      rentFromRev,                    // consideration − mgmt (before min)
+      minRent, finalRent, vat,
+      total: finalRent + vat,
+      area: Number(c.charged_area) || 0,
+    };
   }
 
   const previewCalc = fContractId && fGrossRevenue
@@ -461,10 +478,18 @@ export default function RevenuePage() {
       } else {
         subMgmt = monthMgmt * fraction;
       }
-      var subNet   = Math.max(subGross - subMgmt, 0);
-      var subCalc  = subNet * (Number(pctLabel) / 100);
-      var subFinal = monthFinal * fraction;
-      var rps = (p.area > 0 && subFinal > 0)
+      // Per the user's contract model (mgmt is paid OUT OF the 12% consideration):
+      //   תמורה (subCalc)  = pct × gross
+      //   שכ"ד מפדיון      = תמורה − mgmt
+      //   נטו מחזור (info) = gross − mgmt / pct
+      // Re-derive on the fly so older saved final_rent values (which used the
+      // pre-fix formula) don't show stale numbers in the table.
+      var pctFrac = Number(pctLabel) / 100;
+      var subCalc  = subGross * pctFrac;                          // תמורה
+      var subNet   = pctFrac > 0 ? Math.max(subGross - subMgmt / pctFrac, 0)
+                                 : subGross;                       // מחזור נטו
+      var subFinal = subCalc - subMgmt;                           // שכ"ד מפדיון
+      var rps = (p.area > 0 && Math.abs(subFinal) > 0)
         ? subFinal / (p.area * fraction)
         : 0;
 
@@ -607,8 +632,8 @@ export default function RevenuePage() {
                   <th className="px-3 py-3 font-semibold text-slate-700">מחזור ברוטו</th>
                   {hasAnyMgmt && <th className="px-3 py-3 font-semibold text-amber-700">דמי ניהול</th>}
                   {hasAnyMgmt && <th className="px-3 py-3 font-semibold text-slate-700">נטו מחזור</th>}
-                  <th className="px-3 py-3 font-semibold text-slate-700">שכ"ד {pctLabel}%</th>
-                  <th className="px-3 py-3 font-semibold text-slate-700">סופי</th>
+                  <th className="px-3 py-3 font-semibold text-slate-700" title="תמורה לפני ניכוי דמי ניהול">תמורה {pctLabel}%</th>
+                  <th className="px-3 py-3 font-semibold text-slate-700" title="שכ&quot;ד אחרי ניכוי דמי ניהול מהתמורה">שכ&quot;ד מפדיון</th>
                   <th className="px-3 py-3 font-semibold text-green-700">שכ"ד/מ"ר</th>
                   <th className="px-3 py-3 font-semibold text-slate-500">ממוצע מצטבר/מ"ר</th>
                   <th className="px-3 py-3 font-semibold text-slate-700">דיווח השוכר</th>
@@ -816,23 +841,33 @@ export default function RevenuePage() {
               {previewCalc && (
                 <div className="rounded-xl bg-blue-50 border border-blue-200 p-4 text-sm space-y-1.5">
                   <div className="font-bold text-blue-700 mb-2">חישוב אוטומטי</div>
-                  <div className="flex justify-between text-xs"><span className="text-slate-500">הכנסה ברוטו</span><span className="font-medium">{fmtMoney(Number(fGrossRevenue))}</span></div>
+                  <div className="flex justify-between text-xs"><span className="text-slate-500">מחזור ברוטו (כולל דמי ניהול)</span><span className="font-medium">{fmtMoney(Number(fGrossRevenue))}</span></div>
                   {previewCalc.mgmtMonthly > 0 && (
-                    <>
-                      <div className="flex justify-between text-xs text-amber-700"><span>− דמי ניהול בתוך המחזור</span><span className="font-medium">−{fmtMoney(previewCalc.mgmtMonthly)}</span></div>
-                      <div className="flex justify-between text-xs font-semibold border-t border-blue-200 pt-1"><span className="text-slate-700">נטו מחזור</span><span>{fmtMoney(previewCalc.netGross)}</span></div>
-                    </>
+                    <div className="flex justify-between text-xs text-slate-500"><span>מחזור נטו (ללא דמי ניהול) — מידע</span><span className="font-medium">{fmtMoney(previewCalc.netGross)}</span></div>
                   )}
-                  <div className="flex justify-between text-xs"><span className="text-slate-500">{`שכ"ד ${previewCalc.pct}%`}</span><span className="font-medium">{fmtMoney(previewCalc.calcRent)}</span></div>
-                  <div className="flex justify-between text-xs"><span className="text-slate-500">מינימום</span><span className="font-medium">{fmtMoney(previewCalc.minRent)}</span></div>
-                  <div className="flex justify-between text-xs"><span className="text-slate-500">מע"מ</span><span className="font-medium">{fmtMoney(previewCalc.vat)}</span></div>
-                  <div className="flex justify-between font-black text-blue-800 text-base pt-2 border-t border-blue-200">
-                    <span>שכ"ד סופי</span><span>{fmtMoney(previewCalc.finalRent)}</span>
+                  <div className="flex justify-between text-xs border-t border-blue-200 pt-1.5">
+                    <span className="text-slate-700 font-semibold">תמורה בגין פדיון {previewCalc.pct}%</span>
+                    <span className="font-semibold">{fmtMoney(previewCalc.consideration)}</span>
                   </div>
-                  {previewCalc.area > 0 && previewCalc.finalRent > 0 && (
-                    <div className="flex justify-between text-xs text-green-700 pt-1"><span>שכ"ד למ"ר</span><span className="font-medium">{fmtNum(previewCalc.finalRent / previewCalc.area)}</span></div>
+                  {previewCalc.mgmtMonthly > 0 && (
+                    <div className="flex justify-between text-xs text-amber-700">
+                      <span>− דמי ניהול בתוך המחזור</span>
+                      <span className="font-medium">−{fmtMoney(previewCalc.mgmtMonthly)}</span>
+                    </div>
                   )}
-                  {previewCalc.calcRent < previewCalc.minRent && previewCalc.minRent > 0 && (
+                  {previewCalc.minRent > 0 && (
+                    <div className="flex justify-between text-xs"><span className="text-slate-500">מינימום</span><span className="font-medium">{fmtMoney(previewCalc.minRent)}</span></div>
+                  )}
+                  <div className="flex justify-between font-black text-blue-800 text-base pt-2 border-t border-blue-200">
+                    <span>שכ&quot;ד מפדיון</span><span>{fmtMoney(previewCalc.finalRent)}</span>
+                  </div>
+                  {previewCalc.vat > 0 && (
+                    <div className="flex justify-between text-xs text-slate-500"><span>מע&quot;מ</span><span className="font-medium">{fmtMoney(previewCalc.vat)}</span></div>
+                  )}
+                  {previewCalc.area > 0 && Math.abs(previewCalc.finalRent) > 0 && (
+                    <div className="flex justify-between text-xs text-green-700 pt-1"><span>שכ&quot;ד למ&quot;ר</span><span className="font-medium">{fmtNum(previewCalc.finalRent / previewCalc.area)}</span></div>
+                  )}
+                  {previewCalc.rentFromRev < previewCalc.minRent && previewCalc.minRent > 0 && (
                     <div className="text-xs text-orange-600 font-semibold">⚠️ פידיון נמוך ממינימום — יחויב מינימום</div>
                   )}
                 </div>
