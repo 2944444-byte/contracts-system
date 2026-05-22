@@ -33,11 +33,18 @@ export default function RevenuePage() {
   const [fContractId,  setFContractId]  = useState("");
   const [fMonth,       setFMonth]       = useState<string>(""); // YYYY-MM
   const [fGrossRevenue,setFGrossRevenue]=useState("");
+  const [fMgmtInGross, setFMgmtInGross] = useState<string>(""); // manual override
   const [fNotes,       setFNotes]       =useState("");
   const [fFile,        setFFile]        = useState<File|null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   // Tracks per-row "attaching" state (the small 📎 button on each existing report)
   const [rowAttaching, setRowAttaching] = useState<string>("");
+
+  // Area timeline for the selected contract — base + amendments collapsed into
+  // chronological [startDate..endDate, area, spaceName] segments. Drives the
+  // mixed-month splitting (e.g. March 2026 = 1-12 at 365m² + 13-31 at 110m²).
+  type AreaSegment = { startDate: Date; endDate: Date | null; area: number; spaceName: string; };
+  const [areaSegments, setAreaSegments] = useState<AreaSegment[]>([]);
 
   // Uploads a file to the revenue_attachments bucket and returns the metadata
   // that should be written onto the revenue_reports row. Throws on failure.
@@ -105,6 +112,53 @@ export default function RevenuePage() {
 
   useEffect(function() { loadAll(); }, [selYear]);
 
+  // Reload the area timeline when the user picks a different tenant.
+  useEffect(function() { loadAreaSegments(selContractId); }, [selContractId]);
+
+  // Build the chronological area timeline from the base contract + amendments.
+  // Each amendment closes the prior segment on (amendmentDate - 1 day) and opens
+  // a new one starting on amendmentDate with the amendment's area/space.
+  async function loadAreaSegments(contractId: string) {
+    if (!contractId) { setAreaSegments([]); return; }
+    const [baseRes, amendsRes] = await Promise.all([
+      supabase.from("contracts")
+        .select("id, start_date, charged_area, contract_spaces(spaces(space_name,area))")
+        .eq("id", contractId).single(),
+      supabase.from("contracts")
+        .select("id, amendment_date, start_date, charged_area, contract_spaces(spaces(space_name,area))")
+        .eq("parent_contract_id", contractId)
+        .eq("is_amendment", true)
+        .order("amendment_date", { ascending: true }),
+    ]);
+    var base: any = baseRes.data;
+    var amends: any[] = amendsRes.data || [];
+    if (!base) { setAreaSegments([]); return; }
+
+    function spaceNameOf(row: any): string {
+      var cs = row?.contract_spaces;
+      if (!cs || cs.length === 0) return "";
+      var names = cs.map(function(x: any) { return x?.spaces?.space_name; }).filter(Boolean);
+      return names.join(", ");
+    }
+
+    var segments: AreaSegment[] = [];
+    var currentArea = Number(base.charged_area) || 0;
+    var currentName = spaceNameOf(base);
+    var currentStart = base.start_date ? new Date(base.start_date) : new Date(selYear, 0, 1);
+
+    amends.forEach(function(am: any) {
+      var amDate = new Date(am.amendment_date || am.start_date);
+      var prevEnd = new Date(amDate);
+      prevEnd.setDate(prevEnd.getDate() - 1);
+      segments.push({ startDate: currentStart, endDate: prevEnd, area: currentArea, spaceName: currentName });
+      currentArea = Number(am.charged_area) || currentArea;
+      currentName = spaceNameOf(am) || currentName;
+      currentStart = amDate;
+    });
+    segments.push({ startDate: currentStart, endDate: null, area: currentArea, spaceName: currentName });
+    setAreaSegments(segments);
+  }
+
   async function loadAll() {
     // Load all year's reports for ALL contracts so switching the tenant filter is instant.
     // The 12-month table reads from this in-memory set, filtered by selContractId.
@@ -122,30 +176,40 @@ export default function RevenuePage() {
     setLoading(false);
   }
 
-  // Pure calc: given a contract + raw gross revenue, returns the full breakdown.
-  // When mgmt_included_in_revenue=true AND mgmt_fee_per_sqm>0, subtract the monthly
-  // mgmt amount from gross so the % rent is computed off the *net* turnover —
-  // matching how the property actually charges the tenant.
-  function calcRent(contractId: string, grossRevenue: number) {
+  // Pure calc: given a contract + raw gross revenue (+ optional manual mgmt),
+  // returns the full breakdown. Two sources for the mgmt deduction, in order:
+  //   1. Manual override entered on the report (handles contracts like Golf
+  //      where mgmt_included_in_revenue=true but the per-sqm rate is null)
+  //   2. Contract: mgmt_fee_per_sqm × charged_area
+  // If neither is available, mgmt is 0 even when the flag is set.
+  function calcRent(contractId: string, grossRevenue: number, manualMgmt?: number) {
     const c = contracts.find(function(x){return x.id===contractId;});
     if (!c) return null;
-    const pct       = c.revenue_pct ?? 0;
-    const mgmtMonthly = (c.mgmt_included_in_revenue && c.mgmt_fee_per_sqm && c.charged_area)
-      ? Number(c.mgmt_fee_per_sqm) * Number(c.charged_area)
-      : 0;
-    const netGross  = grossRevenue - mgmtMonthly;
-    const calcRent_ = Math.max(netGross, 0) * (pct/100);
+    const pct = c.revenue_pct ?? 0;
+    var mgmtMonthly: number;
+    if (manualMgmt != null && manualMgmt > 0) {
+      mgmtMonthly = manualMgmt;
+    } else if (c.mgmt_included_in_revenue && c.mgmt_fee_per_sqm && c.charged_area) {
+      mgmtMonthly = Number(c.mgmt_fee_per_sqm) * Number(c.charged_area);
+    } else {
+      mgmtMonthly = 0;
+    }
+    const netGross  = Math.max(grossRevenue - mgmtMonthly, 0);
+    const calcRent_ = netGross * (pct/100);
     const minRent   = (c.min_rent_per_sqm??0)*(c.charged_area??0)+(c.investment_addition??0);
     const finalRent = Math.max(calcRent_, minRent);
     const vat       = c.vat_type==="taxable" ? finalRent*0.18 : 0;
     return { pct, mgmtMonthly, netGross, calcRent: calcRent_, minRent, finalRent, vat, total: finalRent+vat, area: Number(c.charged_area) || 0 };
   }
 
-  const previewCalc = fContractId && fGrossRevenue ? calcRent(fContractId, Number(fGrossRevenue)) : null;
+  const previewCalc = fContractId && fGrossRevenue
+    ? calcRent(fContractId, Number(fGrossRevenue), fMgmtInGross ? Number(fMgmtInGross) : undefined)
+    : null;
 
   async function handleSave() {
     if (!fContractId||!fGrossRevenue||!fMonth) { alert("חובה: חוזה + חודש + הכנסה ברוטו"); return; }
-    const calc = calcRent(fContractId, Number(fGrossRevenue));
+    var manualMgmt = fMgmtInGross ? Number(fMgmtInGross) : undefined;
+    const calc = calcRent(fContractId, Number(fGrossRevenue), manualMgmt);
     if (!calc) return;
     setSaving(true);
     try {
@@ -159,6 +223,7 @@ export default function RevenuePage() {
         gross_revenue: Number(fGrossRevenue), revenue_pct: calc.pct,
         calculated_rent: calc.calcRent, min_rent: calc.minRent,
         final_rent: calc.finalRent, notes: fNotes || null,
+        mgmt_in_gross: manualMgmt ?? null,
         attachment_url:  attachmentMeta?.url  ?? null,
         attachment_path: attachmentMeta?.path ?? null,
         attachment_name: attachmentMeta?.name ?? null,
@@ -177,24 +242,24 @@ export default function RevenuePage() {
     setFContractId(contractId);
     setFMonth(monthYM);
     setFGrossRevenue("");
+    setFMgmtInGross("");
     setFNotes("");
     setFFile(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
   function closeModal() {
-    setEditingId(""); setFContractId(""); setFMonth(""); setFGrossRevenue(""); setFNotes(""); setFFile(null);
+    setEditingId(""); setFContractId(""); setFMonth(""); setFGrossRevenue(""); setFMgmtInGross(""); setFNotes(""); setFFile(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
   // ─── Build the 12-month table for the selected tenant ───
   const selContract = contracts.find(function(c){return c.id===selContractId;});
   const tenantReports = reports.filter(function(r){return r.contract_id===selContractId;});
-  const area = Number(selContract?.charged_area) || 0;
+  const fallbackArea = Number(selContract?.charged_area) || 0;
   const pctLabel = selContract?.revenue_pct ?? 0;
   const mgmtIncluded = !!selContract?.mgmt_included_in_revenue;
-  const mgmtMonthly = (mgmtIncluded && selContract?.mgmt_fee_per_sqm && area)
-    ? Number(selContract.mgmt_fee_per_sqm) * area : 0;
+  const contractFeePerSqm = Number(selContract?.mgmt_fee_per_sqm) || 0;
 
   // Map month → report
   const reportByMonth: Record<number, any> = {};
@@ -203,10 +268,46 @@ export default function RevenuePage() {
     reportByMonth[m] = r;
   });
 
-  // 12 month rows with running averages
-  type MonthRow = {
+  // Resolves the area segment(s) that overlap a given month. Each returned
+  // "part" is a contiguous day range within the month at a single area —
+  // (startDay, endDay, area, spaceName). For a non-mixed month this is one
+  // part covering all days; for March 2026 it's two parts (1-12, 13-31).
+  type MonthPart = { startDay: number; endDay: number; area: number; spaceName: string; };
+  function partsForMonth(m: number): MonthPart[] {
+    var monthStart = new Date(selYear, m - 1, 1);
+    var monthEnd = new Date(selYear, m, 0); // last day
+    var daysInMonth = monthEnd.getDate();
+    if (areaSegments.length === 0) {
+      // Segments not loaded yet — fall back to contract-level area.
+      return [{ startDay: 1, endDay: daysInMonth, area: fallbackArea, spaceName: "" }];
+    }
+    var overlapping = areaSegments.filter(function(s) {
+      if (s.startDate > monthEnd) return false;
+      if (s.endDate !== null && s.endDate < monthStart) return false;
+      return true;
+    });
+    if (overlapping.length === 0) return [];
+    return overlapping.map(function(s) {
+      var effStart = s.startDate > monthStart ? s.startDate : monthStart;
+      var effEnd = (s.endDate === null || s.endDate > monthEnd) ? monthEnd : s.endDate;
+      return { startDay: effStart.getDate(), endDay: effEnd.getDate(), area: s.area, spaceName: s.spaceName };
+    }).sort(function(a, b) { return a.startDay - b.startDay; });
+  }
+
+  // Each visual table row is potentially one of multiple sub-rows of a month.
+  // Mixed months produce 2+ sub-rows; "actions" controls (attach/delete/+) appear
+  // only on the first sub-row (`isFirstSubOfMonth`) because they refer to the
+  // single underlying report row.
+  type MonthSubRow = {
     m: number;
+    subIdx: number;
+    isFirstSubOfMonth: boolean;
     label: string;
+    spaceName: string;
+    daysInPart: number;
+    daysInMonth: number;
+    fraction: number;
+    area: number;
     report?: any;
     gross: number;
     mgmtDeduct: number;
@@ -216,34 +317,79 @@ export default function RevenuePage() {
     rentPerSqm: number;
     cumAvgRentPerSqm: number;
   };
-  var rows: MonthRow[] = [];
-  var sumFinalSoFar = 0;
-  var reportsSoFar = 0;
-  for (var m = 1; m <= 12; m++) {
-    var rep = reportByMonth[m];
+
+  var rows: MonthSubRow[] = [];
+  var sumFinal = 0;
+  var sumSqmMonths = 0; // running denominator for cumulative avg rent/sqm
+
+  // Whether to show the mgmt column at all — true when contract flag is set,
+  // OR any report has a manual mgmt_in_gross value.
+  var hasAnyMgmt = mgmtIncluded || tenantReports.some(function(r) {
+    return r.mgmt_in_gross != null && Number(r.mgmt_in_gross) > 0;
+  });
+
+  for (var mIdx = 1; mIdx <= 12; mIdx++) {
+    var parts = partsForMonth(mIdx);
+    if (parts.length === 0) continue; // shouldn't happen
+    var monthEnd = new Date(selYear, mIdx, 0);
+    var daysInMonth = monthEnd.getDate();
+    var isMixed = parts.length > 1;
+    var rep = reportByMonth[mIdx];
+
+    // Compute the WHOLE-MONTH amounts first, then distribute proportionally.
+    var monthGross = rep ? Number(rep.gross_revenue) || 0 : 0;
+    // Manual override beats auto-derivation:
+    var monthMgmt = 0;
     if (rep) {
-      var gross = Number(rep.gross_revenue) || 0;
-      // Re-derive the deduction from the contract so it matches current settings
-      // even for rows saved before this feature shipped (which stored full gross).
-      var monthMgmt = mgmtMonthly; // contract-derived, constant per year
-      var net = Math.max(gross - monthMgmt, 0);
-      var finalR = Number(rep.final_rent) || 0;
-      var rps = area > 0 ? finalR / area : 0;
-      sumFinalSoFar += finalR;
-      reportsSoFar++;
-      var avgRps = (reportsSoFar > 0 && area > 0) ? (sumFinalSoFar / reportsSoFar) / area : 0;
-      rows.push({
-        m, label: HEB_MONTHS[m] + " " + String(selYear).slice(-2),
-        report: rep, gross, mgmtDeduct: monthMgmt, net, calcRent: Number(rep.calculated_rent)||0,
-        finalRent: finalR, rentPerSqm: rps, cumAvgRentPerSqm: avgRps,
-      });
-    } else {
-      rows.push({
-        m, label: HEB_MONTHS[m] + " " + String(selYear).slice(-2),
-        gross: 0, mgmtDeduct: 0, net: 0, calcRent: 0, finalRent: 0, rentPerSqm: 0,
-        cumAvgRentPerSqm: (reportsSoFar > 0 && area > 0) ? (sumFinalSoFar / reportsSoFar) / area : 0,
-      });
+      var manualM = rep.mgmt_in_gross != null ? Number(rep.mgmt_in_gross) : null;
+      if (manualM != null && manualM > 0) {
+        monthMgmt = manualM;
+      } else if (mgmtIncluded && contractFeePerSqm > 0) {
+        // Weighted by sqm-days when area changed mid-month
+        var totalWeighted = 0;
+        parts.forEach(function(p) {
+          var partDays = p.endDay - p.startDay + 1;
+          totalWeighted += contractFeePerSqm * p.area * (partDays / daysInMonth);
+        });
+        monthMgmt = totalWeighted;
+      }
     }
+    var monthFinal = rep ? Number(rep.final_rent) || 0 : 0;
+
+    parts.forEach(function(p, idx) {
+      var partDays = p.endDay - p.startDay + 1;
+      var fraction = partDays / daysInMonth;
+      var subGross = monthGross * fraction;
+      var subMgmt  = monthMgmt * fraction;
+      var subNet   = Math.max(subGross - subMgmt, 0);
+      var subCalc  = subNet * (Number(pctLabel) / 100);
+      var subFinal = monthFinal * fraction;
+      // rent/sqm "normalized to a full month at this area":
+      //   sub_rent / (area × fraction)  =  month_rent / area
+      // Equivalent to "what would the tenant pay per sqm if this area were active all month".
+      var rps = (p.area > 0 && subFinal > 0)
+        ? subFinal / (p.area * fraction)
+        : 0;
+
+      if (rep) {
+        sumFinal += subFinal;
+        sumSqmMonths += p.area * fraction;
+      }
+      var cumRps = sumSqmMonths > 0 ? sumFinal / sumSqmMonths : 0;
+
+      var labelBase = HEB_MONTHS[mIdx] + " " + String(selYear).slice(-2);
+      var label = isMixed ? labelBase + " (" + p.startDay + "-" + p.endDay + ")" : labelBase;
+
+      rows.push({
+        m: mIdx, subIdx: idx, isFirstSubOfMonth: idx === 0,
+        label, spaceName: p.spaceName,
+        daysInPart: partDays, daysInMonth, fraction,
+        area: p.area, report: rep,
+        gross: subGross, mgmtDeduct: subMgmt, net: subNet,
+        calcRent: subCalc, finalRent: subFinal,
+        rentPerSqm: rps, cumAvgRentPerSqm: cumRps,
+      });
+    });
   }
 
   // Year totals
@@ -251,7 +397,7 @@ export default function RevenuePage() {
   var totMgmt  = rows.reduce(function(s,r){return s+r.mgmtDeduct;},0);
   var totNet   = rows.reduce(function(s,r){return s+r.net;},0);
   var totFinal = rows.reduce(function(s,r){return s+r.finalRent;},0);
-  var avgRpsYear = (reportsSoFar > 0 && area > 0) ? (totFinal / reportsSoFar) / area : 0;
+  var avgRpsYear = sumSqmMonths > 0 ? sumFinal / sumSqmMonths : 0;
 
   // Year options — current year ± 5
   var yearOptions: number[] = [];
@@ -288,7 +434,21 @@ export default function RevenuePage() {
       {/* Contract context bar */}
       {selContract && (
         <div className="rounded-xl border border-blue-100 bg-blue-50 p-3 mb-5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-700">
-          <span><span className="text-slate-500">שטח:</span> <span className="font-semibold">{area} מ"ר</span></span>
+          {areaSegments.length <= 1 ? (
+            <span><span className="text-slate-500">שטח:</span> <span className="font-semibold">{fallbackArea} מ"ר</span></span>
+          ) : (
+            <span><span className="text-slate-500">שטח (היסטוריה):</span>
+              {areaSegments.map(function(s, i) {
+                var fromStr = s.startDate.toLocaleDateString("he-IL");
+                var toStr   = s.endDate ? s.endDate.toLocaleDateString("he-IL") : "—";
+                return (
+                  <span key={i} className="mr-2 font-semibold">
+                    {s.area} מ"ר ({fromStr}{s.endDate ? "→"+toStr : "→ ..."})
+                  </span>
+                );
+              })}
+            </span>
+          )}
           <span><span className="text-slate-500">% פידיון:</span> <span className="font-semibold">{pctLabel}%</span></span>
           {selContract.min_rent_per_sqm && (
             <span><span className="text-slate-500">מינ' למ"ר:</span> <span className="font-semibold">{fmtMoney(Number(selContract.min_rent_per_sqm))}</span></span>
@@ -296,11 +456,11 @@ export default function RevenuePage() {
           {mgmtIncluded && (
             <span className="rounded-md bg-amber-100 text-amber-900 px-2 py-0.5 font-semibold">
               ⚙️ ניהול כלול במחזור — מנוטרל אוטומטית
-              {mgmtMonthly > 0 && <span className="text-amber-700"> ({fmtMoney(mgmtMonthly)}/חודש)</span>}
+              {contractFeePerSqm > 0 && <span className="text-amber-700"> ({fmtMoney(contractFeePerSqm)}/מ"ר/חודש)</span>}
             </span>
           )}
-          {!selContract.mgmt_fee_per_sqm && mgmtIncluded && (
-            <span className="text-amber-700 text-[10px]">⚠ אין הגדרת mgmt_fee_per_sqm — בדוק את החוזה</span>
+          {!contractFeePerSqm && mgmtIncluded && (
+            <span className="text-amber-700 text-[11px]">⚠ אין הגדרת mgmt_fee_per_sqm — הזן את דמי הניהול ידנית בכל דיווח</span>
           )}
         </div>
       )}
@@ -319,12 +479,12 @@ export default function RevenuePage() {
       ) : (
         <>
           {/* KPI strip */}
-          <div className="grid grid-cols-4 gap-3 mb-5">
+          <div className={"grid gap-3 mb-5 " + (hasAnyMgmt ? "grid-cols-4" : "grid-cols-3")}>
             <div className="rounded-xl border border-slate-200 bg-white shadow-sm p-4 text-center">
               <div className="text-2xl font-black text-slate-700">{fmtMoney(totGross)}</div>
               <div className="text-xs text-slate-400 mt-1">מחזור ברוטו {selYear}</div>
             </div>
-            {mgmtMonthly > 0 && (
+            {hasAnyMgmt && (
               <div className="rounded-xl border border-amber-200 bg-amber-50 shadow-sm p-4 text-center">
                 <div className="text-2xl font-black text-amber-700">{fmtMoney(totMgmt)}</div>
                 <div className="text-xs text-amber-700 mt-1">דמי ניהול בתוך המחזור</div>
@@ -346,9 +506,10 @@ export default function RevenuePage() {
               <thead className="bg-slate-50 border-b">
                 <tr>
                   <th className="px-3 py-3 font-semibold text-slate-700">חודש</th>
+                  <th className="px-3 py-3 font-semibold text-slate-500">שטח (מ"ר)</th>
                   <th className="px-3 py-3 font-semibold text-slate-700">מחזור ברוטו</th>
-                  {mgmtMonthly > 0 && <th className="px-3 py-3 font-semibold text-amber-700">דמי ניהול</th>}
-                  {mgmtMonthly > 0 && <th className="px-3 py-3 font-semibold text-slate-700">נטו מחזור</th>}
+                  {hasAnyMgmt && <th className="px-3 py-3 font-semibold text-amber-700">דמי ניהול</th>}
+                  {hasAnyMgmt && <th className="px-3 py-3 font-semibold text-slate-700">נטו מחזור</th>}
                   <th className="px-3 py-3 font-semibold text-slate-700">שכ"ד {pctLabel}%</th>
                   <th className="px-3 py-3 font-semibold text-slate-700">סופי</th>
                   <th className="px-3 py-3 font-semibold text-green-700">שכ"ד/מ"ר</th>
@@ -358,22 +519,37 @@ export default function RevenuePage() {
                 </tr>
               </thead>
               <tbody>
-                {rows.map(function(row) {
+                {rows.map(function(row, rowIdx) {
                   var isThisRowAttaching = row.report && rowAttaching === row.report.id;
                   var hasReport = !!row.report;
                   var hasAttachment = !!row.report?.attachment_url;
+                  // The attach / "+ הוסף" / 🗑 controls refer to the underlying
+                  // monthly report row, so render them only on the first sub-row.
+                  var showActions = row.isFirstSubOfMonth;
+                  var nextSameMonth = rowIdx + 1 < rows.length && rows[rowIdx + 1].m === row.m;
                   return (
-                    <tr key={row.m} className={"border-t border-slate-100 " + (hasReport ? "hover:bg-slate-50" : "bg-slate-50/40 text-slate-400")}>
-                      <td className="px-3 py-2.5 font-semibold whitespace-nowrap">{row.label}</td>
+                    <tr key={row.m + "-" + row.subIdx} className={
+                      "border-t border-slate-100 " +
+                      (hasReport ? "hover:bg-slate-50" : "bg-slate-50/40 text-slate-400") +
+                      (!row.isFirstSubOfMonth ? " bg-amber-50/30" : "")
+                    }>
+                      <td className="px-3 py-2.5 font-semibold whitespace-nowrap">
+                        {row.label}
+                        {row.spaceName && row.isFirstSubOfMonth === false && (
+                          <div className="text-[10px] text-slate-500 font-normal">{row.spaceName}</div>
+                        )}
+                      </td>
+                      <td className="px-3 py-2.5 text-slate-500 text-xs">{row.area}</td>
                       <td className="px-3 py-2.5 font-mono">{fmtMoney(row.gross)}</td>
-                      {mgmtMonthly > 0 && <td className="px-3 py-2.5 font-mono text-amber-700">{row.mgmtDeduct > 0 ? "−" + fmtMoney(row.mgmtDeduct) : "—"}</td>}
-                      {mgmtMonthly > 0 && <td className="px-3 py-2.5 font-mono">{fmtMoney(row.net)}</td>}
+                      {hasAnyMgmt && <td className="px-3 py-2.5 font-mono text-amber-700">{row.mgmtDeduct > 0 ? "−" + fmtMoney(row.mgmtDeduct) : "—"}</td>}
+                      {hasAnyMgmt && <td className="px-3 py-2.5 font-mono">{fmtMoney(row.net)}</td>}
                       <td className="px-3 py-2.5 font-mono">{fmtMoney(row.calcRent)}</td>
                       <td className="px-3 py-2.5 font-mono font-black text-blue-700">{fmtMoney(row.finalRent)}</td>
                       <td className="px-3 py-2.5 font-mono text-green-700">{row.rentPerSqm > 0 ? fmtNum(row.rentPerSqm) : "—"}</td>
                       <td className="px-3 py-2.5 font-mono text-slate-500 text-xs">{row.cumAvgRentPerSqm > 0 ? fmtNum(row.cumAvgRentPerSqm) : "—"}</td>
                       <td className="px-3 py-2.5">
-                        {hasAttachment ? (
+                        {!showActions ? <span className="text-slate-300 text-xs">↑</span> :
+                         hasAttachment ? (
                           <div className="flex items-center gap-1">
                             <a
                               href={row.report.attachment_url}
@@ -420,7 +596,8 @@ export default function RevenuePage() {
                         )}
                       </td>
                       <td className="px-3 py-2.5 whitespace-nowrap">
-                        {hasReport ? (
+                        {!showActions ? <span className="text-slate-300 text-xs">↑</span> :
+                         hasReport ? (
                           <button
                             onClick={function(){ deleteRow(row.report); }}
                             className="text-xs text-red-400 hover:text-red-600"
@@ -440,9 +617,10 @@ export default function RevenuePage() {
               <tfoot className="border-t-2 border-slate-200 bg-slate-50 font-bold">
                 <tr>
                   <td className="px-3 py-3 text-slate-700">סה"כ {selYear}</td>
+                  <td className="px-3 py-3"></td>
                   <td className="px-3 py-3 font-mono text-slate-800">{fmtMoney(totGross)}</td>
-                  {mgmtMonthly > 0 && <td className="px-3 py-3 font-mono text-amber-700">{fmtMoney(totMgmt)}</td>}
-                  {mgmtMonthly > 0 && <td className="px-3 py-3 font-mono text-slate-800">{fmtMoney(totNet)}</td>}
+                  {hasAnyMgmt && <td className="px-3 py-3 font-mono text-amber-700">{fmtMoney(totMgmt)}</td>}
+                  {hasAnyMgmt && <td className="px-3 py-3 font-mono text-slate-800">{fmtMoney(totNet)}</td>}
                   <td className="px-3 py-3"></td>
                   <td className="px-3 py-3 font-mono font-black text-blue-700">{fmtMoney(totFinal)}</td>
                   <td className="px-3 py-3 font-mono text-green-700">{avgRpsYear > 0 ? fmtNum(avgRpsYear) : "—"}</td>
@@ -497,6 +675,30 @@ export default function RevenuePage() {
                 <label className="mb-1 block text-xs font-semibold text-slate-700">הכנסה ברוטו (₪) *</label>
                 <input type="number" value={fGrossRevenue} onChange={function(e){setFGrossRevenue(e.target.value);}} className={ic} placeholder="לדוגמה: 500000"/>
               </div>
+              {/* Manual mgmt-in-gross — shown only when the contract flag is set.
+                  Overrides the auto-derivation (mgmt_fee_per_sqm × area). */}
+              {(() => {
+                var c = contracts.find(function(x){return x.id===fContractId;});
+                if (!c?.mgmt_included_in_revenue) return null;
+                var autoMgmt = (c.mgmt_fee_per_sqm && c.charged_area)
+                  ? Number(c.mgmt_fee_per_sqm) * Number(c.charged_area) : 0;
+                return (
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-amber-700">
+                      דמי ניהול בתוך המחזור (₪)
+                      {autoMgmt > 0 && <span className="text-slate-400 mr-2 font-normal">— ברירת מחדל מהחוזה: {fmtMoney(autoMgmt)}</span>}
+                      {!autoMgmt && <span className="text-amber-600 mr-2 font-normal">— אין הגדרה בחוזה, הזן ידנית</span>}
+                    </label>
+                    <input
+                      type="number"
+                      value={fMgmtInGross}
+                      onChange={function(e){setFMgmtInGross(e.target.value);}}
+                      className={ic}
+                      placeholder={autoMgmt > 0 ? "השאר ריק לשימוש בברירת מחדל" : "לדוגמה: 1500"}
+                    />
+                  </div>
+                );
+              })()}
               {previewCalc && (
                 <div className="rounded-xl bg-blue-50 border border-blue-200 p-4 text-sm space-y-1.5">
                   <div className="font-bold text-blue-700 mb-2">חישוב אוטומטי</div>
