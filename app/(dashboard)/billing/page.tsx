@@ -17,7 +17,21 @@ function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL")
 type Tab = "management" | "insurance" | "waste" | "advances" | "saved_advances" | "cpi_diff";
 
 interface MgmtResult { contractId: string; tenantName: string; spaceNames: string; chargedArea: number; advance: number; actualShare: number; difference: number; isRevenueBased: boolean; }
-interface InsResult { contractId: string; tenantName: string; area: number; pct: number; charge: number; }
+interface InsResult {
+  contractId: string;
+  tenantName: string;
+  spaceNames: string;
+  area: number;                // representative area (last segment)
+  areaRange?: string;          // e.g. "365 → 110" when changed during the policy
+  sqmDays: number;             // sqm × days inside the policy period
+  daysInPolicy: number;        // total days the tenant covered any part of the property
+  policyDays: number;          // total policy length in days (constant per row, for the ratio display)
+  contractStart: string;
+  contractEnd: string;
+  pct: number;
+  charge: number;
+  isPartialPeriod: boolean;
+}
 interface WasteResult { contractId: string; tenantName: string; spaces: string; wasteArea: number; pct: number; charge: number; }
 interface UseTypeRow { useType: string; totalSqm: number; rate: number; annual: number; }
 
@@ -745,24 +759,117 @@ function InsuranceTab({ properties }: { properties: any[] }) {
     setComputing(true);
     try {
       const premium = policy.annual_premium ?? 0;
-      const { data: contracts } = await supabase
+      // Policy period — bound all tenancy intersections by this window
+      const policyStart = new Date(policy.start_date);
+      const policyEnd = new Date(policy.end_date);
+      const policyDays = Math.max(1, Math.floor((policyEnd.getTime() - policyStart.getTime()) / 86400000) + 1);
+
+      // 1) Base contracts (no amendments — those are merged into the timeline below)
+      const { data: baseContracts } = await supabase
         .from("contracts")
-        .select("id, charged_area, tenants(name)")
+        .select("id, charged_area, start_date, end_date, status, tenants(name), contract_spaces(space_id, spaces(space_name, area))")
         .eq("property_id", propId)
+        .eq("is_amendment", false)
         .in("status", ["active", "expiring", "extended"]);
 
-      const res: InsResult[] = (contracts ?? []).map(function (c: any) {
-        const area = c.charged_area ?? 0;
-        const pct = totalArea > 0 ? (area / totalArea) * 100 : 0;
-        const charge = totalArea > 0 ? premium * (area / totalArea) : 0;
+      const baseList = baseContracts || [];
+      const baseIds = baseList.map(function(c: any) { return c.id; });
+
+      // 2) Amendments per base — needed to track unit/area swaps mid-policy
+      const amendsByParent: Record<string, any[]> = {};
+      if (baseIds.length > 0) {
+        const { data: amends } = await supabase
+          .from("contracts")
+          .select("id, parent_contract_id, amendment_date, start_date, charged_area, contract_spaces(spaces(space_name, area))")
+          .in("parent_contract_id", baseIds)
+          .eq("is_amendment", true)
+          .order("amendment_date", { ascending: true });
+        (amends || []).forEach(function(am: any) {
+          const pid = am.parent_contract_id;
+          if (!amendsByParent[pid]) amendsByParent[pid] = [];
+          amendsByParent[pid].push(am);
+        });
+      }
+
+      // Helper: days of overlap between two date ranges (inclusive)
+      var daysOverlap = function(a1: Date, a2: Date, b1: Date, b2: Date): number {
+        const s = a1 > b1 ? a1 : b1;
+        const e = a2 < b2 ? a2 : b2;
+        if (e < s) return 0;
+        return Math.floor((e.getTime() - s.getTime()) / 86400000) + 1;
+      };
+      var joinNames = function(cs: any[]): string {
+        return (cs || []).map(function(x: any) { return x?.spaces?.space_name; }).filter(Boolean).join(", ");
+      };
+
+      // 3) Build per-contract area timeline → sum sqm-days inside policy window
+      const res: InsResult[] = baseList.map(function(c: any) {
+        const contractStart = c.start_date ? new Date(c.start_date) : policyStart;
+        const contractEnd   = c.end_date   ? new Date(c.end_date)   : policyEnd;
+
+        type Seg = { start: Date; end: Date; area: number; spaceName: string };
+        const segments: Seg[] = [];
+
+        let curArea  = Number(c.charged_area) || 0;
+        let curName  = joinNames(c.contract_spaces);
+        let curStart = contractStart;
+
+        const amends = amendsByParent[c.id] || [];
+        amends.forEach(function(am: any) {
+          const amDate = new Date(am.amendment_date || am.start_date);
+          const prevEnd = new Date(amDate.getTime() - 86400000);
+          segments.push({ start: curStart, end: prevEnd, area: curArea, spaceName: curName });
+          curArea = Number(am.charged_area) || curArea;
+          curName = joinNames(am.contract_spaces) || curName;
+          curStart = amDate;
+        });
+        segments.push({ start: curStart, end: contractEnd, area: curArea, spaceName: curName });
+
+        // Sum sqm-days inside the policy window — naturally pro-rates by unit
+        // swaps, mid-year tenancy start, and mid-year tenancy end.
+        let sqmDays = 0;
+        let daysCovered = 0;
+        const areasSeenSet: Record<number, boolean> = {};
+        const namesSeen: string[] = [];
+        segments.forEach(function(seg) {
+          const days = daysOverlap(seg.start, seg.end, policyStart, policyEnd);
+          if (days > 0) {
+            sqmDays += seg.area * days;
+            daysCovered += days;
+            areasSeenSet[seg.area] = true;
+            if (seg.spaceName && namesSeen.indexOf(seg.spaceName) === -1) namesSeen.push(seg.spaceName);
+          }
+        });
+        const areasSeen = Object.keys(areasSeenSet).map(Number).sort(function(a, b) { return b - a; });
+        const areaRange = areasSeen.length > 1 ? areasSeen.join(" → ") : undefined;
+        const isPartialPeriod = daysCovered < policyDays;
+
         return {
           contractId: c.id,
-          tenantName: c.tenants?.name ?? "—",
-          area,
-          pct,
-          charge,
+          tenantName: (c.tenants as any)?.name ?? "—",
+          spaceNames: namesSeen.join(", ") || "—",
+          area: curArea, areaRange,
+          sqmDays, daysInPolicy: daysCovered, policyDays,
+          contractStart: contractStart.toISOString().slice(0, 10),
+          contractEnd: contractEnd.toISOString().slice(0, 10),
+          pct: 0, charge: 0, isPartialPeriod,
         };
       });
+
+      // 4) Convert sqm-days to % and charge.
+      // Denominator: property's total possible sqm-days (totalArea × policyDays).
+      // Using the property total (not the sum of tenant sqm-days) means a tenant's
+      // share is anchored to a stable physical denominator — vacant periods are
+      // not silently redistributed onto everyone else. The remainder is the
+      // owner's self-insurance share.
+      const propertySqmDays = (totalArea || 0) * policyDays;
+      res.forEach(function(r) {
+        if (propertySqmDays > 0) {
+          r.pct = (r.sqmDays / propertySqmDays) * 100;
+          r.charge = (r.sqmDays / propertySqmDays) * premium;
+        }
+      });
+
       setResults(res);
     } catch (e: any) { alert("שגיאה: " + e?.message); }
     finally { setComputing(false); }
@@ -803,13 +910,19 @@ function InsuranceTab({ properties }: { properties: any[] }) {
       let count = 0;
       for (const r of results) {
         if (r.charge < 0.01) continue;
+        var periodLine = r.isPartialPeriod
+          ? "תקופת חיוב: " + r.daysInPolicy + " מתוך " + r.policyDays + " ימים\n"
+          : "";
+        var areaLine = r.areaRange
+          ? "שטח (השתנה במהלך השנה): " + r.areaRange + " מ\"ר\n"
+          : "שטח: " + r.area.toLocaleString("he-IL") + " מ\"ר\n";
         await supabase.from("letters").insert({
           contract_id: r.contractId,
           letter_type: "notice",
           subject: "חיוב ביטוח מבנה " + year,
           body: "שוכר/ת נכבד/ה,\n\nלהלן חיוב ביטוח מבנה לשנת " + year + ":\n" +
-            'שטח: ' + r.area.toLocaleString("he-IL") + ' מ"ר\n' +
-            "אחוז משטח: " + r.pct.toFixed(1) + "%\n" +
+            areaLine + periodLine +
+            "חלק יחסי: " + r.pct.toFixed(2) + "%\n" +
             "חיוב: " + fmtMoney(r.charge) + "\n\nבברכה,\nהנהלת הנכס",
           status: "draft",
         });
@@ -864,25 +977,48 @@ function InsuranceTab({ properties }: { properties: any[] }) {
           {computing ? "מחשב..." : "חשב"}
         </button>
 
-        {results.length > 0 && (
+        {results.length > 0 && (() => {
+          var totPct = results.reduce(function (s, r) { return s + r.pct; }, 0);
+          var totCharge = results.reduce(function (s, r) { return s + r.charge; }, 0);
+          var partialCount = results.filter(function (r) { return r.isPartialPeriod; }).length;
+          var coverage = Math.min(100, totPct);
+          var ownerSelf = Math.max(0, 100 - totPct);
+          var ownerCharge = Math.max(0, (policy?.annual_premium ?? 0) - totCharge);
+          return (
           <div className="mt-5">
             <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
               <table className="w-full text-right text-sm">
                 <thead className="bg-slate-50 border-b">
                   <tr>
-                    <th className="px-4 py-3 font-semibold text-slate-700">{"שוכר"}</th>
-                    <th className="px-4 py-3 font-semibold text-slate-700">{'שטח (מ"ר)'}</th>
-                    <th className="px-4 py-3 font-semibold text-slate-700">{"% שטח"}</th>
-                    <th className="px-4 py-3 font-semibold text-slate-700">{"חיוב"}</th>
+                    <th className="px-4 py-3 font-semibold text-slate-700">שוכר</th>
+                    <th className="px-4 py-3 font-semibold text-slate-700">יחידות</th>
+                    <th className="px-4 py-3 font-semibold text-slate-700">תקופה</th>
+                    <th className="px-4 py-3 font-semibold text-slate-700">שטח (מ&quot;ר)</th>
+                    <th className="px-4 py-3 font-semibold text-slate-700">% חלק</th>
+                    <th className="px-4 py-3 font-semibold text-slate-700">חיוב</th>
                   </tr>
                 </thead>
                 <tbody>
                   {results.map(function (r) {
+                    var areaCell = r.areaRange || r.area.toLocaleString("he-IL");
+                    var periodCell = r.daysInPolicy === r.policyDays
+                      ? "כל התקופה"
+                      : r.daysInPolicy + "/" + r.policyDays + " ימים";
                     return (
-                      <tr key={r.contractId} className="border-t border-slate-100 hover:bg-slate-50">
-                        <td className="px-4 py-3 font-semibold text-slate-800">{r.tenantName}</td>
-                        <td className="px-4 py-3 text-slate-600">{r.area.toLocaleString("he-IL")}</td>
-                        <td className="px-4 py-3 text-slate-600">{r.pct.toFixed(1)}%</td>
+                      <tr key={r.contractId} className={"border-t border-slate-100 " + (r.isPartialPeriod ? "bg-amber-50/40" : "hover:bg-slate-50")}>
+                        <td className="px-4 py-3 font-semibold text-slate-800">
+                          {r.tenantName}
+                          {r.isPartialPeriod && (
+                            <div className="text-[10px] mt-0.5 font-normal text-amber-700 rounded bg-amber-100 inline-block px-1.5 py-0.5"
+                                 title={"החזקה רק " + r.daysInPolicy + " מתוך " + r.policyDays + " ימי הפוליסה — מחויב יחסית"}>
+                              ⏱ תקופה חלקית
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-xs text-slate-600">{r.spaceNames}</td>
+                        <td className="px-4 py-3 text-xs text-slate-500">{periodCell}</td>
+                        <td className="px-4 py-3 text-slate-600">{areaCell}</td>
+                        <td className="px-4 py-3 text-slate-600">{r.pct.toFixed(2)}%</td>
                         <td className="px-4 py-3 font-bold text-blue-700">{fmtMoney(r.charge)}</td>
                       </tr>
                     );
@@ -890,26 +1026,47 @@ function InsuranceTab({ properties }: { properties: any[] }) {
                 </tbody>
                 <tfoot className="bg-slate-50 border-t-2 border-slate-200">
                   <tr>
-                    <td className="px-4 py-2.5 font-bold text-slate-700">{'סה"כ'}</td>
-                    <td className="px-4 py-2.5 font-bold">{results.reduce(function (s, r) { return s + r.area; }, 0).toLocaleString("he-IL")}</td>
-                    <td className="px-4 py-2.5 font-bold">{results.reduce(function (s, r) { return s + r.pct; }, 0).toFixed(1)}%</td>
-                    <td className="px-4 py-2.5 font-black text-blue-700">{fmtMoney(results.reduce(function (s, r) { return s + r.charge; }, 0))}</td>
+                    <td className="px-4 py-2.5 font-bold text-slate-700" colSpan={4}>סה&quot;כ — שוכרים</td>
+                    <td className="px-4 py-2.5 font-bold">{totPct.toFixed(2)}%</td>
+                    <td className="px-4 py-2.5 font-black text-blue-700">{fmtMoney(totCharge)}</td>
                   </tr>
+                  {ownerSelf > 0.5 && (
+                    <tr className="border-t border-slate-200">
+                      <td className="px-4 py-2.5 font-semibold text-amber-700" colSpan={4}>חלק בעלים (שטח פנוי / לא מבוטח על-ידי שוכרים)</td>
+                      <td className="px-4 py-2.5 font-semibold text-amber-700">{ownerSelf.toFixed(2)}%</td>
+                      <td className="px-4 py-2.5 font-bold text-amber-700">{fmtMoney(ownerCharge)}</td>
+                    </tr>
+                  )}
                 </tfoot>
               </table>
             </div>
+
+            {/* Explainer */}
+            <div className="mt-4 rounded-lg bg-slate-50 border border-slate-200 p-3 text-xs text-slate-600 leading-relaxed">
+              <div className="font-bold text-slate-700 mb-1">💡 כיצד מחושב חלק כל שוכר</div>
+              <div className="space-y-0.5">
+                <div>החיוב הוא יחס של <span className="font-semibold">מ&quot;ר × ימים</span> בתוך תקופת הפוליסה — שינוי יחידה באמצע השנה (כמו קבוצת גולף) מחויב יחסית לפי הימים בכל יחידה.</div>
+                <div>שוכרים שהיו בנכס רק חלק מהשנה (תקופה חלקית) מחויבים רק עבור הימים שלהם — מסומנים ⏱.</div>
+                {partialCount > 0 && <div className="text-amber-700">📌 {partialCount} שוכרים בתקופה חלקית. אם הוצא חיוב מלא קודם — מומלץ להוסיף חיוב משלים בסוף השנה לתקופת ההחזקה שלהם.</div>}
+                {ownerSelf > 0.5 && <div className="text-amber-700">📌 {ownerSelf.toFixed(1)}% מהנכס לא מבוטח על-ידי שוכרים פעילים — נטל בעלי הנכס.</div>}
+              </div>
+            </div>
+
             <div className="flex gap-3 mt-4">
-              <button onClick={createCharges} disabled={creatingCharges}
+              <button onClick={createCharges} disabled={creatingCharges || results.length === 0}
+                title="מוסיף שורת חיוב ביטוח לטבלת charges לכל שוכר"
                 className="rounded-lg bg-blue-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-blue-800 disabled:opacity-50">
                 {creatingCharges ? "יוצר..." : "צור חיובים"}
               </button>
-              <button onClick={createLetters} disabled={creatingLetters}
+              <button onClick={createLetters} disabled={creatingLetters || results.length === 0}
+                title="יוצר טיוטות מכתבי חיוב ביטוח לשוכרים"
                 className="rounded-lg border border-blue-200 bg-blue-50 px-5 py-2.5 text-sm font-bold text-blue-700 hover:bg-blue-100 disabled:opacity-50">
                 {creatingLetters ? "יוצר..." : "צור מכתבים"}
               </button>
             </div>
           </div>
-        )}
+          );
+        })()}
       </div>
     </div>
   );
