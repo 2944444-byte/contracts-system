@@ -753,6 +753,8 @@ function InsuranceTab({ properties }: { properties: any[] }) {
     daysVacant: number;     // policyDays − daysHeld (clamped to ≥ 0)
     vacantSqmDays: number;  // area × daysVacant
     isFullyVacant: boolean; // never held during the entire policy
+    // The actual vacant date intervals within the policy, formatted for display
+    vacantRanges: Array<{ start: string; end: string; days: number }>;
     // Reason explanation
     lastContractId?: string;       // contract that held the space last (if any)
     lastTenantName?: string;
@@ -837,52 +839,62 @@ function InsuranceTab({ properties }: { properties: any[] }) {
         return (cs || []).map(function(x: any) { return x?.spaces?.space_name; }).filter(Boolean).join(", ");
       };
 
-      // 2.5) Data-sanity check: detect spaces assigned to multiple ACTIVE
-      // base contracts. That's the classic cause of "total share > 100%" —
-      // the same square meters are being billed twice. We surface this so
-      // the user can fix the source data instead of silently over-billing.
-      var spaceToContracts: Record<string, { name: string; tenant: string; contractId: string; }[]> = {};
+      // 2.5) Data-sanity check: detect spaces claimed by multiple contracts
+      // AT THE SAME TIME (not just sequentially). A clean handoff (Yehonatan
+      // until 12.3, Golf from 13.3) is fine; overlapping claims double-bill
+      // the same square meters.
+      //
+      // Build per-space per-contract holding ranges, then check pairs for
+      // actual time overlap.
+      type ClaimRange = { start: Date; end: Date; tenant: string; contractId: string; spaceName: string; };
+      var claimsBySpace: Record<string, ClaimRange[]> = {};
+      var addClaim = function(sid: string, name: string, start: Date, end: Date, contractId: string, tenant: string) {
+        if (!claimsBySpace[sid]) claimsBySpace[sid] = [];
+        claimsBySpace[sid].push({ start, end, contractId, tenant, spaceName: name });
+      };
       baseList.forEach(function(c: any) {
+        var contractStart = c.start_date ? new Date(c.start_date) : policyStart;
+        var contractEndDate = c.end_date ? new Date(c.end_date) : policyEnd;
+        var amends = amendsByParent[c.id] || [];
+
+        // Base snapshot range: contractStart → (first amendment - 1) or contractEnd
+        var baseEnd = amends.length > 0
+          ? new Date(new Date(amends[0].amendment_date || amends[0].start_date).getTime() - 86400000)
+          : contractEndDate;
         (c.contract_spaces || []).forEach(function(cs: any) {
           if (!cs.space_id) return;
-          if (!spaceToContracts[cs.space_id]) spaceToContracts[cs.space_id] = [];
-          spaceToContracts[cs.space_id].push({
-            name: cs.spaces?.space_name || cs.space_id,
-            tenant: (c.tenants as any)?.name || "—",
-            contractId: c.id,
-          });
+          addClaim(cs.space_id, cs.spaces?.space_name || cs.space_id, contractStart, baseEnd, c.id, (c.tenants as any)?.name || "—");
         });
-      });
-      // Also include amendments' spaces — they share the parent's claim but
-      // for the segment after amendment_date only. If two unrelated contracts
-      // both claim the same space, it's a real conflict.
-      Object.keys(amendsByParent).forEach(function(pid) {
-        amendsByParent[pid].forEach(function(am: any) {
+        // Each amendment is its own range
+        amends.forEach(function(am: any, i: number) {
+          var amStart = new Date(am.amendment_date || am.start_date);
+          var nextAm = amends[i + 1];
+          var amEnd = nextAm
+            ? new Date(new Date(nextAm.amendment_date || nextAm.start_date).getTime() - 86400000)
+            : contractEndDate;
           (am.contract_spaces || []).forEach(function(cs: any) {
             if (!cs.space_id) return;
-            if (!spaceToContracts[cs.space_id]) spaceToContracts[cs.space_id] = [];
-            // dedupe inside the same contract family
-            var already = spaceToContracts[cs.space_id].some(function(x) { return x.contractId === pid; });
-            if (!already) {
-              spaceToContracts[cs.space_id].push({
-                name: cs.spaces?.space_name || cs.space_id,
-                tenant: "(תוספת ל-" + ((baseList.find(function(b: any) { return b.id === pid; })?.tenants as any)?.name || pid) + ")",
-                contractId: pid,
-              });
-            }
+            addClaim(cs.space_id, cs.spaces?.space_name || cs.space_id, amStart, amEnd, c.id, (c.tenants as any)?.name || "—");
           });
         });
       });
+
       var newWarnings: string[] = [];
-      Object.keys(spaceToContracts).forEach(function(sid) {
-        var refs = spaceToContracts[sid];
-        // Filter to unique contracts (different contract families)
-        var uniqContracts: Record<string, boolean> = {};
-        refs.forEach(function(r) { uniqContracts[r.contractId] = true; });
-        if (Object.keys(uniqContracts).length > 1) {
-          var spaceName = refs[0].name;
-          var tenants = refs.map(function(r) { return r.tenant; }).join(" | ");
-          newWarnings.push("⚠ יחידה \"" + spaceName + "\" משויכת למספר חוזים פעילים: " + tenants);
+      Object.keys(claimsBySpace).forEach(function(sid) {
+        var rngs = claimsBySpace[sid];
+        // Only inter-contract claims matter (different contract families).
+        // Same-contract overlaps are normal during the snapshot model.
+        for (var i = 0; i < rngs.length; i++) {
+          for (var j = i + 1; j < rngs.length; j++) {
+            var a = rngs[i], b = rngs[j];
+            if (a.contractId === b.contractId) continue;
+            // Overlap iff a.start <= b.end AND b.start <= a.end
+            if (a.start.getTime() <= b.end.getTime() && b.start.getTime() <= a.end.getTime()) {
+              var fmt = function(d: Date) { return d.toLocaleDateString("he-IL"); };
+              newWarnings.push("⚠ יחידה \"" + a.spaceName + "\" משויכת בו-זמנית ל-" + a.tenant + " (" + fmt(a.start) + "–" + fmt(a.end) + ") ול-" + b.tenant + " (" + fmt(b.start) + "–" + fmt(b.end) + ")");
+              break; // one warning per space is enough
+            }
+          }
         }
       });
       setWarnings(newWarnings);
@@ -1048,6 +1060,37 @@ function InsuranceTab({ properties }: { properties: any[] }) {
           else if (hasHead) reason = "head";
         }
 
+        // Compute actual VACANT intervals = policy period minus merged held ranges.
+        // This is what we display to the user so they see the exact dates.
+        var vacantRanges: Array<{ start: string; end: string; days: number }> = [];
+        var fmtDay = function(d: Date) { return d.toLocaleDateString("he-IL"); };
+        var daysBetween = function(a: Date, b: Date) {
+          return Math.floor((b.getTime() - a.getTime()) / 86400000) + 1;
+        };
+        if (merged.length === 0) {
+          // never held → entire policy is vacant
+          vacantRanges.push({ start: fmtDay(policyStart), end: fmtDay(policyEnd), days: policyDays });
+        } else {
+          // Head gap: before the first held range
+          if (merged[0][0].getTime() > policyStart.getTime()) {
+            var headEnd = new Date(merged[0][0].getTime() - 86400000);
+            vacantRanges.push({ start: fmtDay(policyStart), end: fmtDay(headEnd), days: daysBetween(policyStart, headEnd) });
+          }
+          // Gaps between merged ranges
+          for (var mi = 0; mi < merged.length - 1; mi++) {
+            var gapStart = new Date(merged[mi][1].getTime() + 86400000);
+            var gapEnd = new Date(merged[mi + 1][0].getTime() - 86400000);
+            if (gapEnd >= gapStart) {
+              vacantRanges.push({ start: fmtDay(gapStart), end: fmtDay(gapEnd), days: daysBetween(gapStart, gapEnd) });
+            }
+          }
+          // Tail gap: after the last held range
+          if (merged[merged.length - 1][1].getTime() < policyEnd.getTime()) {
+            var tailStart = new Date(merged[merged.length - 1][1].getTime() + 86400000);
+            vacantRanges.push({ start: fmtDay(tailStart), end: fmtDay(policyEnd), days: daysBetween(tailStart, policyEnd) });
+          }
+        }
+
         return {
           id: s.id,
           name: s.space_name || "—",
@@ -1056,6 +1099,7 @@ function InsuranceTab({ properties }: { properties: any[] }) {
           daysVacant,
           vacantSqmDays: area * daysVacant,
           isFullyVacant: daysHeld === 0,
+          vacantRanges,
           lastContractId: lastRange?.cid,
           lastTenantName: lastTenantName,
           lastEndDate: lastRange ? lastRange.end.toISOString().slice(0, 10) : undefined,
@@ -1329,8 +1373,8 @@ function InsuranceTab({ properties }: { properties: any[] }) {
                       <th className="px-3 py-2 font-semibold text-amber-900">יחידה</th>
                       <th className="px-3 py-2 font-semibold text-amber-900">סיבת ריקות</th>
                       <th className="px-3 py-2 font-semibold text-amber-900">שטח (מ&quot;ר)</th>
-                      <th className="px-3 py-2 font-semibold text-amber-900">תפוסה</th>
-                      <th className="px-3 py-2 font-semibold text-amber-900">ריקות</th>
+                      <th className="px-3 py-2 font-semibold text-amber-900 min-w-[200px]">תאריכי ריקות</th>
+                      <th className="px-3 py-2 font-semibold text-amber-900">סה&quot;כ ימים</th>
                       <th className="px-3 py-2 font-semibold text-amber-900">חלק יחסי</th>
                       <th className="px-3 py-2 font-semibold text-amber-900 min-w-[260px]">מי משלם?</th>
                     </tr>
@@ -1363,7 +1407,15 @@ function InsuranceTab({ properties }: { properties: any[] }) {
                             )}
                           </td>
                           <td className="px-3 py-2 text-slate-600">{v.area.toLocaleString("he-IL")}</td>
-                          <td className="px-3 py-2 text-slate-500">{v.daysHeld}</td>
+                          <td className="px-3 py-2 text-xs text-slate-700">
+                            {v.vacantRanges.map(function(r, idx) {
+                              return (
+                                <div key={idx} className="whitespace-nowrap">
+                                  {r.start} → {r.end} <span className="text-slate-400">({r.days} ימים)</span>
+                                </div>
+                              );
+                            })}
+                          </td>
                           <td className="px-3 py-2 text-slate-700 font-semibold">{v.daysVacant}</td>
                           <td className="px-3 py-2 font-bold text-amber-700">{pctOfProperty.toFixed(2)}%</td>
                           <td className="px-3 py-2">
