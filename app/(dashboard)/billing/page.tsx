@@ -802,7 +802,7 @@ function InsuranceTab({ properties }: { properties: any[] }) {
       if (baseIds.length > 0) {
         const { data: amends } = await supabase
           .from("contracts")
-          .select("id, parent_contract_id, amendment_date, start_date, charged_area, contract_spaces(spaces(space_name, area))")
+          .select("id, parent_contract_id, amendment_date, start_date, charged_area, contract_spaces(space_id, spaces(space_name, area))")
           .in("parent_contract_id", baseIds)
           .eq("is_amendment", true)
           .order("amendment_date", { ascending: true });
