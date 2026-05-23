@@ -737,6 +737,25 @@ function InsuranceTab({ properties }: { properties: any[] }) {
   // active contracts simultaneously). Cleared on each compute().
   const [warnings, setWarnings] = useState<string[]>([]);
 
+  // Per-space vacancy info (computed alongside results). The user can choose
+  // to "redistribute" the vacant portion of specific units onto active
+  // tenants instead of charging the owner — by checking excludedSpaces[id].
+  type SpaceVacancy = {
+    id: string;
+    name: string;
+    area: number;
+    daysHeld: number;       // union of all contract holdings within policy
+    daysVacant: number;     // policyDays − daysHeld (clamped to ≥ 0)
+    vacantSqmDays: number;  // area × daysVacant
+    isFullyVacant: boolean; // never held during the entire policy
+  };
+  const [spaceVacancies, setSpaceVacancies] = useState<SpaceVacancy[]>([]);
+  const [excludedSpaces, setExcludedSpaces] = useState<Record<string, boolean>>({});
+  // The denominator from the last compute() — needed to render the derived
+  // (post-redistribution) tenant shares without re-querying the DB.
+  const [computedTotalSqmDays, setComputedTotalSqmDays] = useState<number>(0);
+  const [computedPolicyDays, setComputedPolicyDays] = useState<number>(0);
+
   const selProp = properties.find(function (p) { return p.id === propId; });
   const totalArea = selProp?.total_area ?? 0;
 
@@ -924,8 +943,107 @@ function InsuranceTab({ properties }: { properties: any[] }) {
       });
 
       setResults(res);
+      setComputedTotalSqmDays(propertySqmDays);
+      setComputedPolicyDays(policyDays);
+
+      // 5) Per-space vacancy: for every space on the property, union all
+      // periods it was held by any contract snapshot, then policyDays −
+      // heldDays = vacancy. Lets the user see exactly which units make up
+      // the owner's share, and toggle them to redistribute to tenants.
+      var { data: propSpaces } = await supabase
+        .from("spaces")
+        .select("id, space_name, area")
+        .eq("property_id", propId);
+
+      type Snapshot = { startDate: Date; endDate: Date; spaceIds: Record<string, boolean>; };
+      var snapshotsByContract: Record<string, Snapshot[]> = {};
+      baseList.forEach(function(c: any) {
+        var snaps: Snapshot[] = [];
+        var amends = amendsByParent[c.id] || [];
+        var contractEndDate = c.end_date ? new Date(c.end_date) : policyEnd;
+
+        var baseEnd = amends.length > 0
+          ? new Date(new Date(amends[0].amendment_date || amends[0].start_date).getTime() - 86400000)
+          : contractEndDate;
+        var baseSpaceIds: Record<string, boolean> = {};
+        (c.contract_spaces || []).forEach(function(cs: any) { if (cs.space_id) baseSpaceIds[cs.space_id] = true; });
+        snaps.push({ startDate: c.start_date ? new Date(c.start_date) : policyStart, endDate: baseEnd, spaceIds: baseSpaceIds });
+
+        amends.forEach(function(am: any, i: number) {
+          var amStart = new Date(am.amendment_date || am.start_date);
+          var nextAm = amends[i + 1];
+          var amEnd = nextAm
+            ? new Date(new Date(nextAm.amendment_date || nextAm.start_date).getTime() - 86400000)
+            : contractEndDate;
+          var amSpaceIds: Record<string, boolean> = {};
+          (am.contract_spaces || []).forEach(function(cs: any) { if (cs.space_id) amSpaceIds[cs.space_id] = true; });
+          snaps.push({ startDate: amStart, endDate: amEnd, spaceIds: amSpaceIds });
+        });
+        snapshotsByContract[c.id] = snaps;
+      });
+
+      var vacancies: SpaceVacancy[] = (propSpaces || []).map(function(s: any) {
+        var ranges: Array<[Date, Date]> = [];
+        Object.keys(snapshotsByContract).forEach(function(cid) {
+          snapshotsByContract[cid].forEach(function(snap) {
+            if (!snap.spaceIds[s.id]) return;
+            var start = snap.startDate > policyStart ? snap.startDate : policyStart;
+            var end = snap.endDate < policyEnd ? snap.endDate : policyEnd;
+            if (end < start) return;
+            ranges.push([start, end]);
+          });
+        });
+        // Merge overlapping ranges (so dual claims don't inflate held days
+        // beyond policyDays — the over-claim is caught separately as a warning).
+        ranges.sort(function(a, b) { return a[0].getTime() - b[0].getTime(); });
+        var merged: Array<[Date, Date]> = [];
+        ranges.forEach(function(r) {
+          if (merged.length === 0) { merged.push([r[0], r[1]]); return; }
+          var last = merged[merged.length - 1];
+          if (r[0].getTime() <= last[1].getTime() + 86400000) {
+            if (r[1].getTime() > last[1].getTime()) last[1] = r[1];
+          } else {
+            merged.push([r[0], r[1]]);
+          }
+        });
+        var daysHeld = merged.reduce(function(sum, r) {
+          return sum + Math.floor((r[1].getTime() - r[0].getTime()) / 86400000) + 1;
+        }, 0);
+        var daysVacant = Math.max(0, policyDays - daysHeld);
+        var area = Number(s.area) || 0;
+        return {
+          id: s.id,
+          name: s.space_name || "—",
+          area,
+          daysHeld,
+          daysVacant,
+          vacantSqmDays: area * daysVacant,
+          isFullyVacant: daysHeld === 0,
+        };
+      }).filter(function(v) { return v.daysVacant > 0; }) // only show units with vacancy
+        .sort(function(a, b) { return b.vacantSqmDays - a.vacantSqmDays; });
+
+      setSpaceVacancies(vacancies);
+      // Reset exclusion state per compute() so stale ids don't leak
+      setExcludedSpaces({});
     } catch (e: any) { alert("שגיאה: " + e?.message); }
     finally { setComputing(false); }
+  }
+
+  // Recomputes per-tenant charge with the current redistribution exclusions
+  // applied, so create-charges/letters always use exactly what the user sees
+  // in the table.
+  function buildEffectiveResults(): InsResult[] {
+    var excludedSqmDays = spaceVacancies.reduce(function(sum, v) {
+      return sum + (excludedSpaces[v.id] ? v.vacantSqmDays : 0);
+    }, 0);
+    var effectiveDenominator = Math.max(1, computedTotalSqmDays - excludedSqmDays);
+    var premium = policy?.annual_premium ?? 0;
+    return results.map(function(r) {
+      var pct = (r.sqmDays / effectiveDenominator) * 100;
+      var charge = (r.sqmDays / effectiveDenominator) * premium;
+      return Object.assign({}, r, { pct, charge });
+    });
   }
 
   async function createCharges() {
@@ -933,7 +1051,8 @@ function InsuranceTab({ properties }: { properties: any[] }) {
     setCreatingCharges(true);
     try {
       let count = 0;
-      for (const r of results) {
+      var effective = buildEffectiveResults();
+      for (const r of effective) {
         if (r.charge < 0.01) continue;
         await supabase.from("charges").insert({
           contract_id: r.contractId,
@@ -961,7 +1080,8 @@ function InsuranceTab({ properties }: { properties: any[] }) {
     setCreatingLetters(true);
     try {
       let count = 0;
-      for (const r of results) {
+      var effective = buildEffectiveResults();
+      for (const r of effective) {
         if (r.charge < 0.01) continue;
         var periodLine = r.isPartialPeriod
           ? "תקופת חיוב: " + r.daysInPolicy + " מתוך " + r.policyDays + " ימים\n"
@@ -1031,13 +1151,29 @@ function InsuranceTab({ properties }: { properties: any[] }) {
         </button>
 
         {results.length > 0 && (() => {
-          var totPct = results.reduce(function (s, r) { return s + r.pct; }, 0);
-          var totCharge = results.reduce(function (s, r) { return s + r.charge; }, 0);
-          var partialCount = results.filter(function (r) { return r.isPartialPeriod; }).length;
+          // Redistribution: when the user marks vacant units to "redistribute
+          // to tenants", their vacant sqm-days are removed from the denominator,
+          // raising each tenant's share proportionally.
+          var excludedSqmDays = spaceVacancies.reduce(function(sum, v) {
+            return sum + (excludedSpaces[v.id] ? v.vacantSqmDays : 0);
+          }, 0);
+          var effectiveDenominator = Math.max(1, computedTotalSqmDays - excludedSqmDays);
+          var premium = policy?.annual_premium ?? 0;
+          // Derived per-row display values
+          var displayResults = results.map(function(r) {
+            var pct = (r.sqmDays / effectiveDenominator) * 100;
+            var charge = (r.sqmDays / effectiveDenominator) * premium;
+            return Object.assign({}, r, { pct, charge });
+          });
+          var totPct = displayResults.reduce(function (s, r) { return s + r.pct; }, 0);
+          var totCharge = displayResults.reduce(function (s, r) { return s + r.charge; }, 0);
+          var partialCount = displayResults.filter(function (r) { return r.isPartialPeriod; }).length;
           var ownerSelf = Math.max(0, 100 - totPct);
-          var ownerCharge = Math.max(0, (policy?.annual_premium ?? 0) - totCharge);
-          var overBilled = totPct > 100.5; // small tolerance for floating-point noise
+          var ownerCharge = Math.max(0, premium - totCharge);
+          var overBilled = totPct > 100.5;
           var overshoot = totPct - 100;
+          var anyExcluded = Object.values(excludedSpaces).some(Boolean);
+          var allVacantExcluded = spaceVacancies.length > 0 && spaceVacancies.every(function(v) { return !!excludedSpaces[v.id]; });
           return (
           <div className="mt-5">
             {/* Data-sanity warnings (overlapping space claims) */}
@@ -1075,7 +1211,7 @@ function InsuranceTab({ properties }: { properties: any[] }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {results.map(function (r) {
+                  {displayResults.map(function (r) {
                     var areaCell = r.areaRange || r.area.toLocaleString("he-IL");
                     var periodCell = r.daysInPolicy === r.policyDays
                       ? "כל התקופה"
@@ -1120,6 +1256,97 @@ function InsuranceTab({ properties }: { properties: any[] }) {
               </table>
             </div>
 
+            {/* Vacant-units breakdown + per-unit redistribution toggle */}
+            {spaceVacancies.length > 0 && (
+              <div className="mt-4 rounded-xl border-2 border-amber-200 bg-amber-50/50 overflow-hidden">
+                <div className="bg-amber-100/60 px-4 py-2.5 flex items-center justify-between">
+                  <div>
+                    <div className="font-bold text-amber-900 text-sm">🏚 יחידות ריקות / חלקיות שמרכיבות את חלק הבעלים</div>
+                    <div className="text-[11px] text-amber-700 mt-0.5">
+                      סימון יחידה יוציא אותה מהמכנה — הסכום שלה יחולק בין השוכרים הפעילים. ביטול הסימון = הבעלים נושא בעלות.
+                    </div>
+                  </div>
+                  <button
+                    onClick={function() {
+                      var next: Record<string, boolean> = {};
+                      if (!allVacantExcluded) spaceVacancies.forEach(function(v) { next[v.id] = true; });
+                      setExcludedSpaces(next);
+                    }}
+                    className="rounded-md border border-amber-400 bg-white px-3 py-1.5 text-xs font-semibold text-amber-800 hover:bg-amber-100"
+                  >
+                    {allVacantExcluded ? "בטל סימון הכל" : "סמן הכל להעברה לשוכרים"}
+                  </button>
+                </div>
+                <table className="w-full text-right text-sm">
+                  <thead className="bg-amber-50 border-b border-amber-200">
+                    <tr>
+                      <th className="px-4 py-2 font-semibold text-amber-900 w-12">בחר</th>
+                      <th className="px-4 py-2 font-semibold text-amber-900">יחידה</th>
+                      <th className="px-4 py-2 font-semibold text-amber-900">שטח (מ&quot;ר)</th>
+                      <th className="px-4 py-2 font-semibold text-amber-900">ימי תפוסה</th>
+                      <th className="px-4 py-2 font-semibold text-amber-900">ימי ריקות</th>
+                      <th className="px-4 py-2 font-semibold text-amber-900">מ&quot;ר × ימי ריקות</th>
+                      <th className="px-4 py-2 font-semibold text-amber-900">חלק יחסי בעלים</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {spaceVacancies.map(function(v) {
+                      var pctOfProperty = computedTotalSqmDays > 0
+                        ? (v.vacantSqmDays / computedTotalSqmDays) * 100
+                        : 0;
+                      var isExcluded = !!excludedSpaces[v.id];
+                      return (
+                        <tr key={v.id} className={"border-t border-amber-100 " + (isExcluded ? "bg-blue-50" : "hover:bg-amber-50/30")}>
+                          <td className="px-4 py-2">
+                            <input
+                              type="checkbox"
+                              checked={isExcluded}
+                              onChange={function(e) {
+                                setExcludedSpaces(function(prev) {
+                                  return Object.assign({}, prev, { [v.id]: e.target.checked });
+                                });
+                              }}
+                              className="w-4 h-4 cursor-pointer accent-blue-600"
+                              title="העבר לשוכרים"
+                            />
+                          </td>
+                          <td className="px-4 py-2 font-semibold text-slate-800">
+                            {v.name}
+                            {v.isFullyVacant && <span className="text-[10px] text-red-600 mr-1.5 font-normal">(ריק כל השנה)</span>}
+                            {isExcluded && <span className="text-[10px] text-blue-700 mr-1.5 font-semibold">→ מועבר לשוכרים</span>}
+                          </td>
+                          <td className="px-4 py-2 text-slate-600">{v.area.toLocaleString("he-IL")}</td>
+                          <td className="px-4 py-2 text-slate-500">{v.daysHeld}</td>
+                          <td className="px-4 py-2 text-slate-700 font-semibold">{v.daysVacant}</td>
+                          <td className="px-4 py-2 text-slate-600 font-mono">{v.vacantSqmDays.toLocaleString("he-IL")}</td>
+                          <td className="px-4 py-2 font-bold text-amber-700">{pctOfProperty.toFixed(2)}%</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                  <tfoot className="bg-amber-50 border-t-2 border-amber-200">
+                    <tr>
+                      <td className="px-4 py-2"></td>
+                      <td className="px-4 py-2 font-bold text-amber-900" colSpan={4}>
+                        סה&quot;כ ריקות:
+                        {anyExcluded && (
+                          <span className="text-blue-700 font-semibold mr-2 text-xs">
+                            (מסומנים להעברה: {Object.values(excludedSpaces).filter(Boolean).length})
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-2 font-bold font-mono">
+                        {spaceVacancies.reduce(function(s, v) { return s + v.vacantSqmDays; }, 0).toLocaleString("he-IL")}
+                      </td>
+                      <td className="px-4 py-2 font-black text-amber-700">
+                        {(spaceVacancies.reduce(function(s, v) { return s + v.vacantSqmDays; }, 0) / Math.max(1, computedTotalSqmDays) * 100).toFixed(2)}%
+                      </td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            )}
+
             {/* Explainer */}
             <div className="mt-4 rounded-lg bg-slate-50 border border-slate-200 p-3 text-xs text-slate-600 leading-relaxed">
               <div className="font-bold text-slate-700 mb-1">💡 כיצד מחושב חלק כל שוכר</div>
@@ -1127,6 +1354,7 @@ function InsuranceTab({ properties }: { properties: any[] }) {
                 <div>החיוב הוא יחס של <span className="font-semibold">מ&quot;ר × ימים</span> בתוך תקופת הפוליסה — שינוי יחידה באמצע השנה (כמו קבוצת גולף) מחויב יחסית לפי הימים בכל יחידה.</div>
                 <div>שוכרים שהיו בנכס רק חלק מהשנה (תקופה חלקית) מחויבים רק עבור הימים שלהם — מסומנים ⏱.</div>
                 {partialCount > 0 && <div className="text-amber-700">📌 {partialCount} שוכרים בתקופה חלקית. אם הוצא חיוב מלא קודם — מומלץ להוסיף חיוב משלים בסוף השנה לתקופת ההחזקה שלהם.</div>}
+                {anyExcluded && <div className="text-blue-700">🔄 הועברו לשוכרים: {Object.values(excludedSpaces).filter(Boolean).length} יחידות. החיוב לכל שוכר עלה יחסית — סה&quot;כ שוכרים עכשיו {totPct.toFixed(2)}%.</div>}
                 {!overBilled && ownerSelf > 0.5 && <div className="text-amber-700">📌 {ownerSelf.toFixed(1)}% מהנכס לא מבוטח על-ידי שוכרים פעילים — נטל בעלי הנכס.</div>}
               </div>
             </div>
