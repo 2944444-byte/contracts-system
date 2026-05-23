@@ -27,6 +27,9 @@ export default function CompaniesPage() {
   const [fBankName, setFBankName] = useState("");
   const [fBankBranch, setFBankBranch] = useState("");
   const [fBankAccount, setFBankAccount] = useState("");
+  // Auto-created charges (insurance, mgmt diff, CPI diff, etc.) get
+  // due_date = today + this many days. Default 30.
+  const [fGraceDays, setFGraceDays] = useState<string>("30");
 
   useEffect(function() { loadAll(); }, []);
 
@@ -39,14 +42,16 @@ export default function CompaniesPage() {
     if (!selected && (c??[]).length>0) setSelected((c??[])[0].id);
   }
 
-  function openNew() { setIsNew(true); setEditingId("new"); setFName(""); setFId(""); setFAddress(""); setFCity(""); setFPhone(""); setFEmail(""); setFContact(""); setFNotes(""); setFLogoUrl(""); setFBankName(""); setFBankBranch(""); setFBankAccount(""); }
-  function openEdit(c: any) { setIsNew(false); setEditingId(c.id); setFName(c.company_name??""); setFId(c.company_id??""); setFAddress(c.address??""); setFCity(c.city??""); setFPhone(c.phone??""); setFEmail(c.email??""); setFContact(c.contact_name??""); setFNotes(c.notes??""); setFLogoUrl(c.logo_url??""); setFBankName(c.bank_name??""); setFBankBranch(c.bank_branch??""); setFBankAccount(c.bank_account??""); }
+  function openNew() { setIsNew(true); setEditingId("new"); setFName(""); setFId(""); setFAddress(""); setFCity(""); setFPhone(""); setFEmail(""); setFContact(""); setFNotes(""); setFLogoUrl(""); setFBankName(""); setFBankBranch(""); setFBankAccount(""); setFGraceDays("30"); }
+  function openEdit(c: any) { setIsNew(false); setEditingId(c.id); setFName(c.company_name??""); setFId(c.company_id??""); setFAddress(c.address??""); setFCity(c.city??""); setFPhone(c.phone??""); setFEmail(c.email??""); setFContact(c.contact_name??""); setFNotes(c.notes??""); setFLogoUrl(c.logo_url??""); setFBankName(c.bank_name??""); setFBankBranch(c.bank_branch??""); setFBankAccount(c.bank_account??""); setFGraceDays(String(c.payment_grace_days ?? 30)); }
 
   async function handleSave() {
     if (!fName.trim()) { alert("חובה: שם חברה"); return; }
     setSaving(true);
     try {
-      const payload={company_name:fName.trim(),company_id:fId||null,address:fAddress||null,city:fCity||null,phone:fPhone||null,email:fEmail||null,contact_name:fContact||null,notes:fNotes||null,logo_url:fLogoUrl||null,bank_name:fBankName||null,bank_branch:fBankBranch||null,bank_account:fBankAccount||null};
+      var graceNum = Number(fGraceDays);
+      if (!graceNum || graceNum <= 0) graceNum = 30;
+      const payload={company_name:fName.trim(),company_id:fId||null,address:fAddress||null,city:fCity||null,phone:fPhone||null,email:fEmail||null,contact_name:fContact||null,notes:fNotes||null,logo_url:fLogoUrl||null,bank_name:fBankName||null,bank_branch:fBankBranch||null,bank_account:fBankAccount||null,payment_grace_days:graceNum};
       if (isNew) { const { data, error: ie } = await supabase.from("companies").insert(payload).select().single(); if (ie) throw new Error(ie.message); await logAudit({entity_type:"company",entity_id:data!.id,action:"create"}); setSelected(data!.id); }
       else { await supabase.from("companies").update(payload).eq("id",editingId); await logAudit({entity_type:"company",entity_id:editingId,action:"update"}); }
       setEditingId(""); await loadAll();
@@ -162,6 +167,18 @@ export default function CompaniesPage() {
                     <div><label className="mb-1 block text-xs text-slate-600">שם בנק</label><input value={fBankName} onChange={function(e){setFBankName(e.target.value);}} className={ic} placeholder="בנק הפועלים"/></div>
                     <div><label className="mb-1 block text-xs text-slate-600">סניף</label><input value={fBankBranch} onChange={function(e){setFBankBranch(e.target.value);}} className={ic} placeholder="159"/></div>
                     <div><label className="mb-1 block text-xs text-slate-600">מס׳ חשבון</label><input value={fBankAccount} onChange={function(e){setFBankAccount(e.target.value);}} className={ic} placeholder="15156"/></div>
+                  </div>
+                </div>
+                <div className="col-span-2 border-t border-slate-200 pt-3 mt-1">
+                  <div className="text-xs font-bold text-slate-600 mb-2">⚙️ הגדרות תשלום</div>
+                  <div className="grid grid-cols-2 gap-3 items-end">
+                    <div>
+                      <label className="mb-1 block text-xs text-slate-600">ימי חסד לתשלום (ברירת מחדל)</label>
+                      <input type="number" min="1" max="365" value={fGraceDays} onChange={function(e){setFGraceDays(e.target.value);}} className={ic} placeholder="30"/>
+                    </div>
+                    <div className="text-[11px] text-slate-500 pb-2">
+                      כל חיוב שנוצר אוטומטית (ביטוח, הפרשי הצמדה, התחשבנות ניהול) יקבל תאריך תשלום של היום + מספר זה. רק לאחר התאריך הזה הוא יסומן "באיחור".
+                    </div>
                   </div>
                 </div>
                 <div className="col-span-2">

@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit-log';
 
@@ -26,24 +26,30 @@ function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL")
 function fmtMoney(n: number) { return "₪" + (n ?? 0).toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function typeInfo(v: string) { return CHARGE_TYPES.find(function(t) { return t.v === v; }) ?? CHARGE_TYPES[CHARGE_TYPES.length - 1]; }
 
-// Unified row shape — a charge or a virtual "unpaid advance" row.
+// Unified row shape. Three sources:
+//   "charge"      — single row from the `charges` table
+//   "rent_check"  — virtual row aggregating advance_payments by (contract+check_date).
+//                   One check from the tenant typically covers all units for a period;
+//                   marking it paid updates every underlying advance_payments row.
 type Row = {
   id: string;
-  source: "charge" | "advance";
+  source: "charge" | "rent_check";
   contractId: string;
   tenantName: string;
   propertyName: string;
   chargeType: string;          // for charges; "rent" for advances
-  description: string;          // human-readable (notes for charges, period for advances)
+  description: string;
   baseAmount: number;
   vatAmount: number;
   totalAmount: number;
   vatType: string;
-  dueDate: string | null;       // ISO date
+  dueDate: string | null;
   status: "pending" | "approved" | "paid";
   createdAt: string;
-  spaceName?: string;           // for advances
-  period?: string;              // for advances
+  // rent_check details
+  underlyingAdvanceIds?: string[];   // ids in advance_payments to mark paid together
+  unitsBreakdown?: Array<{ name: string; amount: number; period: string }>;
+  period?: string;
 };
 
 export default function PaymentsPage() {
@@ -62,6 +68,11 @@ export default function PaymentsPage() {
   const [includeAdvances, setIncludeAdvances] = useState<boolean>(true);
   // Collapsed month sections
   const [collapsedMonths, setCollapsedMonths] = useState<Record<string, boolean>>({});
+  // Selection for bulk operations (e.g., one tenant pays one check that covers
+  // their rent + CPI diff + insurance — select all three and mark paid together)
+  const [selected, setSelected] = useState<Record<string, boolean>>({});
+  // Expanded rent_check rows showing unit breakdown
+  const [expandedChecks, setExpandedChecks] = useState<Record<string, boolean>>({});
 
   // New-charge form state
   const [fContractId,  setFContractId]  = useState("");
@@ -135,26 +146,59 @@ export default function PaymentsPage() {
       });
     });
 
+    // Group advance_payments by (contract_id, check_date) — one check from the
+    // tenant typically covers all the units they hold in that period. We render
+    // a single row per check and let the user mark the whole check paid in one
+    // click (which updates every underlying advance_payments row).
+    var checksMap: Record<string, {
+      contractId: string;
+      tenantName: string;
+      checkDate: string;
+      period: string;
+      rows: any[];
+    }> = {};
     adv.forEach(function(a: any) {
-      var c = contractMap[a.contract_id];
-      var property = (c?.properties as any)?.name || "";
-      allRows.push({
-        id: "adv-" + a.id,
-        source: "advance",
+      var key = a.contract_id + "|" + (a.check_date || "no-date");
+      if (!checksMap[key]) checksMap[key] = {
         contractId: a.contract_id,
-        tenantName: a.tenant_name || (c?.tenants as any)?.name || "—",
+        tenantName: a.tenant_name || (contractMap[a.contract_id]?.tenants as any)?.name || "—",
+        checkDate: a.check_date,
+        period: a.period || "",
+        rows: [],
+      };
+      checksMap[key].rows.push(a);
+    });
+    Object.keys(checksMap).forEach(function(key) {
+      var ck = checksMap[key];
+      var c = contractMap[ck.contractId];
+      var property = (c?.properties as any)?.name || "";
+      var totalBefore = ck.rows.reduce(function(s, r) { return s + (Number(r.total_before_vat) || 0); }, 0);
+      var totalVat    = ck.rows.reduce(function(s, r) { return s + (Number(r.vat_amount) || 0); }, 0);
+      var totalWith   = ck.rows.reduce(function(s, r) { return s + (Number(r.total_with_vat) || 0); }, 0);
+      var unitNames = Array.from(new Set(ck.rows.map(function(r) { return r.space_name; }).filter(Boolean)));
+      var unitsLabel = unitNames.length > 0
+        ? (unitNames.length <= 2 ? unitNames.join(", ") : unitNames.slice(0, 2).join(", ") + " +" + (unitNames.length - 2))
+        : "—";
+      allRows.push({
+        id: "check-" + key,
+        source: "rent_check",
+        contractId: ck.contractId,
+        tenantName: ck.tenantName,
         propertyName: property,
         chargeType: "rent",
-        description: "מקדמת שכ\"ד — " + (a.period || "—") + (a.space_name ? " (" + a.space_name + ")" : ""),
-        baseAmount: Number(a.total_before_vat) || 0,
-        vatAmount: Number(a.vat_amount) || 0,
-        totalAmount: Number(a.total_with_vat) || 0,
+        description: "שיק שכ\"ד — " + (ck.period || "—") + " · " + unitsLabel,
+        baseAmount: totalBefore,
+        vatAmount: totalVat,
+        totalAmount: totalWith,
         vatType: "taxable",
-        dueDate: a.check_date,
+        dueDate: ck.checkDate,
         status: "pending",
-        createdAt: a.check_date,
-        spaceName: a.space_name,
-        period: a.period,
+        createdAt: ck.checkDate,
+        underlyingAdvanceIds: ck.rows.map(function(r) { return r.id; }),
+        unitsBreakdown: ck.rows.map(function(r) {
+          return { name: r.space_name || "—", amount: Number(r.total_with_vat) || 0, period: r.period || "" };
+        }),
+        period: ck.period,
       });
     });
 
@@ -215,15 +259,72 @@ export default function PaymentsPage() {
     await logAudit({ entity_type: "charge", entity_id: id, action: "paid" });
     await loadAll();
   }
-  async function markAdvPaid(advId: string) {
-    var realId = advId.replace(/^adv-/, "");
-    await supabase.from("advance_payments").update({ actual_paid: 0.01, actual_paid_date: new Date().toISOString().slice(0, 10) }).eq("id", realId);
+  // Marks a whole rent check paid — updates every underlying advance_payments
+  // row at once, with the same actual_paid_date. The actual_paid value is the
+  // sum so the row's "paid in full" check uses real data.
+  async function markRentCheckPaid(row: Row) {
+    if (!row.underlyingAdvanceIds || row.underlyingAdvanceIds.length === 0) return;
+    var today = new Date().toISOString().slice(0, 10);
+    // Update each row with its own total_with_vat as actual_paid (keeps
+    // per-unit ledger accurate; the alternative would be putting the full
+    // check total on one row which breaks per-unit reconciliation).
+    if (!row.unitsBreakdown) return;
+    for (var i = 0; i < row.underlyingAdvanceIds.length; i++) {
+      var rid = row.underlyingAdvanceIds[i];
+      var amount = row.unitsBreakdown[i]?.amount || 0;
+      await supabase.from("advance_payments").update({
+        actual_paid: amount, actual_paid_date: today,
+      }).eq("id", rid);
+    }
     await loadAll();
   }
   async function deleteCharge(id: string) {
     if (!confirm("למחוק?")) return;
     await supabase.from("charges").delete().eq("id", id);
     await loadAll();
+  }
+
+  // Bulk mark: when a single tenant payment covers multiple debts (rent
+  // check + CPI diff + insurance), the user selects them all and clicks
+  // "סמן את הנבחרים כשולמו". One round-trip per row.
+  async function bulkMarkSelectedPaid() {
+    var keys = Object.keys(selected).filter(function(k) { return selected[k]; });
+    if (keys.length === 0) { alert("בחר חיובים תחילה"); return; }
+    if (!confirm("לסמן " + keys.length + " חיובים כשולמו?")) return;
+    for (var k of keys) {
+      var row = rows.find(function(r) { return r.id === k; });
+      if (!row) continue;
+      if (row.source === "charge") {
+        await supabase.from("charges").update({ status: "paid", paid_at: new Date().toISOString() }).eq("id", row.id);
+      } else if (row.source === "rent_check") {
+        await markRentCheckPaid(row);
+      }
+    }
+    setSelected({});
+    await loadAll();
+  }
+
+  // Creates a draft letter pre-filled with the debt info so the user can
+  // send a demand letter without leaving the page.
+  async function sendLetter(row: Row) {
+    try {
+      var body = "שוכר/ת נכבד/ה,\n\n" +
+        "להלן חיוב שטרם שולם:\n" +
+        "תיאור: " + row.description + "\n" +
+        "סכום: " + fmtMoney(row.totalAmount) + "\n" +
+        (row.dueDate ? "תאריך לתשלום: " + fmtDate(row.dueDate) + "\n" : "") +
+        "\nאנא הסדירו את התשלום בהקדם.\n\nבברכה,\nהנהלת הנכס";
+      var { data, error } = await supabase.from("letters").insert({
+        contract_id: row.contractId,
+        letter_type: "demand",
+        title: "דרישת תשלום — " + row.description.slice(0, 60),
+        content_json: { body: body, year: filterYear, tenant: row.tenantName },
+        status: "draft",
+      }).select().single();
+      if (error) throw error;
+      await logAudit({ entity_type: "letter", entity_id: data.id, action: "create_from_debt" });
+      alert("✅ נוצרה טיוטת מכתב — היכנס למסך מכתבים לעריכה והדפסה");
+    } catch (e: any) { alert("שגיאה: " + (e?.message || e)); }
   }
 
   // Apply filters
@@ -350,6 +451,11 @@ export default function PaymentsPage() {
         <div className="text-xs text-slate-500 mr-auto">
           {filtered.length} / {rows.length}
         </div>
+        {Object.values(selected).filter(Boolean).length > 0 && (
+          <button onClick={bulkMarkSelectedPaid} className="rounded-lg border border-green-300 bg-green-50 px-4 py-2 text-sm font-bold text-green-700 hover:bg-green-100">
+            ✓ סמן {Object.values(selected).filter(Boolean).length} נבחרים כשולמו
+          </button>
+        )}
         {filtered.filter(function(r) { return r.source === "charge" && r.status === "pending"; }).length > 0 && (
           <button onClick={bulkApprove} className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100">
             ✓ אשר כל הממתינים
@@ -423,10 +529,23 @@ export default function PaymentsPage() {
                   <table className="w-full text-right text-sm">
                     <thead className="bg-slate-50/50 border-b">
                       <tr>
+                        <th className="px-2 py-2 font-semibold text-slate-700 w-8">
+                          <input
+                            type="checkbox"
+                            checked={monthRows.every(function(r) { return !!selected[r.id]; })}
+                            onChange={function(e) {
+                              setSelected(function(prev) {
+                                var next = Object.assign({}, prev);
+                                monthRows.forEach(function(r) { next[r.id] = e.target.checked; });
+                                return next;
+                              });
+                            }}
+                            className="w-4 h-4 cursor-pointer accent-blue-600"
+                            title="בחר/בטל את כל החודש"
+                          />
+                        </th>
                         <th className="px-4 py-2 font-semibold text-slate-700">שוכר/נכס</th>
                         <th className="px-4 py-2 font-semibold text-slate-700">תיאור</th>
-                        <th className="px-4 py-2 font-semibold text-slate-700">בסיס</th>
-                        <th className="px-4 py-2 font-semibold text-slate-700">מע&quot;מ</th>
                         <th className="px-4 py-2 font-semibold text-slate-700">סה&quot;כ</th>
                         <th className="px-4 py-2 font-semibold text-slate-700">לתשלום</th>
                         <th className="px-4 py-2 font-semibold text-slate-700">סטטוס</th>
@@ -437,54 +556,96 @@ export default function PaymentsPage() {
                       {monthRows.map(function(r) {
                         var overdue = isOverdueRow(r);
                         var t = typeInfo(r.chargeType);
+                        var isExpanded = !!expandedChecks[r.id];
+                        var unitCount = r.unitsBreakdown?.length || 0;
                         return (
-                          <tr key={r.id} className={"border-t border-slate-100 " + (overdue ? "bg-red-50/60" : "hover:bg-slate-50")}>
-                            <td className="px-4 py-2.5">
-                              <div className="font-semibold text-slate-800">{r.tenantName}</div>
-                              <div className="text-xs text-slate-400">{r.propertyName}</div>
-                            </td>
-                            <td className="px-4 py-2.5">
-                              <div className="flex items-center gap-1.5">
-                                <span className="text-base">{t.icon}</span>
-                                <span className="text-xs text-slate-700">{r.description}</span>
-                              </div>
-                              {r.source === "advance" && (
-                                <div className="text-[10px] text-blue-700 font-semibold mt-0.5">📅 מקדמת שכ&quot;ד</div>
-                              )}
-                            </td>
-                            <td className="px-4 py-2.5 text-slate-700 font-mono">{fmtMoney(r.baseAmount)}</td>
-                            <td className="px-4 py-2.5 text-slate-500 font-mono">{fmtMoney(r.vatAmount)}</td>
-                            <td className="px-4 py-2.5 font-bold text-slate-800 font-mono">{fmtMoney(r.totalAmount)}</td>
-                            <td className="px-4 py-2.5 text-xs text-slate-500 whitespace-nowrap">
-                              {fmtDate(r.dueDate || "")}
-                              {overdue && <div className="text-red-600 font-semibold">⚠ באיחור</div>}
-                            </td>
-                            <td className="px-4 py-2.5">
-                              <span className={"text-xs px-2 py-0.5 rounded-full font-semibold " + (
-                                r.status === "paid" ? "bg-green-100 text-green-700" :
-                                r.status === "approved" ? "bg-blue-100 text-blue-700" :
-                                "bg-slate-100 text-slate-600"
-                              )}>
-                                {r.status === "paid" ? "שולם" : r.status === "approved" ? "מאושר" : "ממתין"}
-                              </span>
-                            </td>
-                            <td className="px-4 py-2.5">
-                              <div className="flex gap-1">
-                                {r.source === "charge" && r.status === "pending" && (
-                                  <button onClick={function() { approve(r.id); }} className="text-xs bg-blue-600 text-white px-2 py-1 rounded font-semibold" title="אשר חיוב">✓</button>
+                          <React.Fragment key={r.id}>
+                            <tr className={"border-t border-slate-100 " + (overdue ? "bg-red-50/60" : selected[r.id] ? "bg-blue-50/40" : "hover:bg-slate-50")}>
+                              <td className="px-2 py-2.5">
+                                <input
+                                  type="checkbox"
+                                  checked={!!selected[r.id]}
+                                  onChange={function(e) {
+                                    setSelected(function(prev) { return Object.assign({}, prev, { [r.id]: e.target.checked }); });
+                                  }}
+                                  className="w-4 h-4 cursor-pointer accent-blue-600"
+                                />
+                              </td>
+                              <td className="px-4 py-2.5">
+                                <div className="font-semibold text-slate-800">{r.tenantName}</div>
+                                <div className="text-xs text-slate-400">{r.propertyName}</div>
+                              </td>
+                              <td className="px-4 py-2.5">
+                                <div className="flex items-center gap-1.5">
+                                  <span className="text-base">{t.icon}</span>
+                                  <span className="text-xs text-slate-700">{r.description}</span>
+                                </div>
+                                {r.source === "rent_check" && (
+                                  <div className="flex items-center gap-2 mt-0.5">
+                                    <span className="text-[10px] text-blue-700 font-semibold">📅 שיק שכ&quot;ד · {unitCount} {unitCount === 1 ? "יחידה" : "יחידות"}</span>
+                                    {unitCount > 1 && (
+                                      <button
+                                        onClick={function() { setExpandedChecks(function(p) { return Object.assign({}, p, { [r.id]: !p[r.id] }); }); }}
+                                        className="text-[10px] text-blue-600 hover:underline"
+                                      >
+                                        {isExpanded ? "▲ הסתר פירוט" : "▼ פירוט יחידות"}
+                                      </button>
+                                    )}
+                                  </div>
                                 )}
-                                {r.source === "charge" && r.status === "approved" && (
-                                  <button onClick={function() { markPaid(r.id); }} className="text-xs bg-green-600 text-white px-2 py-1 rounded font-semibold" title="סמן כשולם">₪</button>
-                                )}
-                                {r.source === "advance" && (
-                                  <button onClick={function() { markAdvPaid(r.id); }} className="text-xs bg-green-600 text-white px-2 py-1 rounded font-semibold" title="סמן מקדמה כשולמה">₪</button>
-                                )}
-                                {r.source === "charge" && (
-                                  <button onClick={function() { deleteCharge(r.id); }} className="text-xs border border-red-100 rounded px-2 py-1 text-red-400 hover:bg-red-50" title="מחק">🗑</button>
-                                )}
-                              </div>
-                            </td>
-                          </tr>
+                              </td>
+                              <td className="px-4 py-2.5 font-bold text-slate-800 font-mono whitespace-nowrap">
+                                {fmtMoney(r.totalAmount)}
+                                {r.vatAmount > 0 && <div className="text-[10px] text-slate-400 font-normal">בסיס {fmtMoney(r.baseAmount)} + מע&quot;מ {fmtMoney(r.vatAmount)}</div>}
+                              </td>
+                              <td className="px-4 py-2.5 text-xs text-slate-500 whitespace-nowrap">
+                                {fmtDate(r.dueDate || "")}
+                                {overdue && <div className="text-red-600 font-semibold">⚠ באיחור</div>}
+                              </td>
+                              <td className="px-4 py-2.5">
+                                <span className={"text-xs px-2 py-0.5 rounded-full font-semibold " + (
+                                  r.status === "paid" ? "bg-green-100 text-green-700" :
+                                  r.status === "approved" ? "bg-blue-100 text-blue-700" :
+                                  "bg-slate-100 text-slate-600"
+                                )}>
+                                  {r.status === "paid" ? "שולם" : r.status === "approved" ? "מאושר" : "ממתין"}
+                                </span>
+                              </td>
+                              <td className="px-4 py-2.5">
+                                <div className="flex gap-1">
+                                  {r.source === "charge" && r.status === "pending" && (
+                                    <button onClick={function() { approve(r.id); }} className="text-xs bg-blue-600 text-white px-2 py-1 rounded font-semibold" title="אשר חיוב">✓</button>
+                                  )}
+                                  {r.source === "charge" && r.status === "approved" && (
+                                    <button onClick={function() { markPaid(r.id); }} className="text-xs bg-green-600 text-white px-2 py-1 rounded font-semibold" title="סמן כשולם">₪</button>
+                                  )}
+                                  {r.source === "rent_check" && (
+                                    <button onClick={function() { markRentCheckPaid(r); }} className="text-xs bg-green-600 text-white px-2 py-1 rounded font-semibold" title={"סמן את כל " + unitCount + " היחידות כשולמו"}>₪</button>
+                                  )}
+                                  <button onClick={function() { sendLetter(r); }} className="text-xs border border-amber-200 bg-amber-50 rounded px-2 py-1 text-amber-700 hover:bg-amber-100" title="צור טיוטת מכתב דרישה">📧</button>
+                                  {r.source === "charge" && (
+                                    <button onClick={function() { deleteCharge(r.id); }} className="text-xs border border-red-100 rounded px-2 py-1 text-red-400 hover:bg-red-50" title="מחק">🗑</button>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                            {r.source === "rent_check" && isExpanded && r.unitsBreakdown && (
+                              <tr className="bg-blue-50/30">
+                                <td colSpan={7} className="px-12 py-2">
+                                  <div className="text-[11px] text-slate-600 space-y-0.5">
+                                    {r.unitsBreakdown.map(function(u, i) {
+                                      return (
+                                        <div key={i} className="flex justify-between border-b border-blue-100/60 py-0.5">
+                                          <span>📐 {u.name} · {u.period}</span>
+                                          <span className="font-mono font-semibold">{fmtMoney(u.amount)}</span>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </td>
+                              </tr>
+                            )}
+                          </React.Fragment>
                         );
                       })}
                     </tbody>

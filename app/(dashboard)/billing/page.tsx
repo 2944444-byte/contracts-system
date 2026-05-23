@@ -5,6 +5,7 @@ import { logAudit } from "@/lib/audit-log";
 import PropertyHierarchyFilter from '@/components/PropertyHierarchyFilter';
 import BillingGroupsManager from '@/components/BillingGroupsManager';
 import { fetchCpiAdjusted } from '@/lib/cpi-server';
+import { getGraceDaysForProperty, dueDateFromGrace } from '@/lib/grace-days';
 import AdvancesTab from '@/components/AdvancesTab';
 import CpiDiffTab from '@/components/CpiDiffTab';
 import SavedAdvancesTab from '@/components/SavedAdvancesTab';
@@ -331,14 +332,14 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
     try {
       let count = 0;
       let skippedRevenue = 0;
+      var graceDays = await getGraceDaysForProperty(propId);
+      var dueDateStr = dueDateFromGrace(graceDays);
       for (const r of mgmtResults) {
         if (Math.abs(r.difference) < 0.01) continue;
         // Revenue-% tenants: skip — their mgmt is part of the % rent on the
         // revenue page, not a separate charge.
         if (r.isRevenueBased) { skippedRevenue++; continue; }
         const base = Math.abs(r.difference);
-        // Tenant gets 30 days from issue date — אינדיקציה "באיחור" רק לאחר מכן.
-        var dueDate = new Date(); dueDate.setDate(dueDate.getDate() + 30);
         await supabase.from("charges").insert({
           contract_id: r.contractId,
           charge_type: "management",
@@ -348,7 +349,7 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
           vat_type: "exempt",
           billing_period_start: year + "-01-01",
           billing_period_end: year + "-12-31",
-          due_date: dueDate.toISOString().slice(0, 10),
+          due_date: dueDateStr,
           status: "pending",
           notes: "התחשבנות דמי ניהול " + year + (r.difference > 0 ? " — לחיוב" : " — לזיכוי"),
         });
@@ -1144,10 +1145,9 @@ function InsuranceTab({ properties }: { properties: any[] }) {
     try {
       let count = 0;
       var effective = buildEffectiveResults();
-      // Standard 30-day grace from issue date — only after that is the charge
-      // considered "באיחור" on the payments screen.
-      var dueDate = new Date(); dueDate.setDate(dueDate.getDate() + 30);
-      var dueDateStr = dueDate.toISOString().slice(0, 10);
+      // Grace days configured per-company; only "באיחור" once due_date passes.
+      var graceDays = await getGraceDaysForProperty(propId);
+      var dueDateStr = dueDateFromGrace(graceDays);
       for (const r of effective) {
         if (r.charge < 0.01) continue;
         await supabase.from("charges").insert({
@@ -1663,8 +1663,8 @@ function WasteTab({ properties }: { properties: any[] }) {
     try {
       const dates = getPeriodDates();
       let count = 0;
-      var dueDate = new Date(); dueDate.setDate(dueDate.getDate() + 30);
-      var dueDateStr = dueDate.toISOString().slice(0, 10);
+      var graceDays = await getGraceDaysForProperty(propId);
+      var dueDateStr = dueDateFromGrace(graceDays);
       for (const r of results) {
         if (r.charge < 0.01) continue;
         await supabase.from("charges").insert({

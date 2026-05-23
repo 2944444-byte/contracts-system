@@ -3,6 +3,7 @@ import React, { useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { logAudit } from "@/lib/audit-log";
 import { fetchCpiAdjusted, fetchHighestChainedCpi, fetchCpiAdjustedWithRetry, fetchHighestChainedCpiWithRetry } from "@/lib/cpi-server";
+import { getGraceDaysForProperty, dueDateFromGrace } from "@/lib/grace-days";
 import CalcProgress, { CalcProgressState } from "./CalcProgress";
 import { tierAppliesAtYear, buildSpaceRentSchedule, rentAtDate } from "@/lib/contract-utils";
 
@@ -706,9 +707,9 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
     setProgress({ current: 0, total: withDiff.length, label: "יוצר חיובי הפרשי הצמדה...", startedAt: chargeStart });
     try {
       var count = 0;
-      // 30-day grace from issue date — only after that is the charge "באיחור".
-      var dueDate = new Date(); dueDate.setDate(dueDate.getDate() + 30);
-      var dueDateStr = dueDate.toISOString().slice(0, 10);
+      // Grace days configured per-company; only "באיחור" once due_date passes.
+      var graceDays = await getGraceDaysForProperty(propId);
+      var dueDateStr = dueDateFromGrace(graceDays);
       for (var r of results) {
         if (Math.abs(r.totalDifference) < 1) continue;
         setProgress({ current: count + 1, total: withDiff.length, label: "יוצר חיוב — " + r.tenantName, startedAt: chargeStart });
