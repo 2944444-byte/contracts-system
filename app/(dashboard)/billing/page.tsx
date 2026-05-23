@@ -337,6 +337,8 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
         // revenue page, not a separate charge.
         if (r.isRevenueBased) { skippedRevenue++; continue; }
         const base = Math.abs(r.difference);
+        // Tenant gets 30 days from issue date — אינדיקציה "באיחור" רק לאחר מכן.
+        var dueDate = new Date(); dueDate.setDate(dueDate.getDate() + 30);
         await supabase.from("charges").insert({
           contract_id: r.contractId,
           charge_type: "management",
@@ -346,9 +348,9 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
           vat_type: "exempt",
           billing_period_start: year + "-01-01",
           billing_period_end: year + "-12-31",
-          due_date: new Date().toISOString().slice(0, 10),
+          due_date: dueDate.toISOString().slice(0, 10),
           status: "pending",
-          notes: "התחשבנות דמי ניהול " + year,
+          notes: "התחשבנות דמי ניהול " + year + (r.difference > 0 ? " — לחיוב" : " — לזיכוי"),
         });
         count++;
       }
@@ -1142,20 +1144,24 @@ function InsuranceTab({ properties }: { properties: any[] }) {
     try {
       let count = 0;
       var effective = buildEffectiveResults();
+      // Standard 30-day grace from issue date — only after that is the charge
+      // considered "באיחור" on the payments screen.
+      var dueDate = new Date(); dueDate.setDate(dueDate.getDate() + 30);
+      var dueDateStr = dueDate.toISOString().slice(0, 10);
       for (const r of effective) {
         if (r.charge < 0.01) continue;
         await supabase.from("charges").insert({
           contract_id: r.contractId,
-          charge_type: "other",
+          charge_type: "insurance",
           base_amount: r.charge,
           vat_amount: 0,
           total_amount: r.charge,
           vat_type: "exempt",
           billing_period_start: year + "-01-01",
           billing_period_end: year + "-12-31",
-          due_date: new Date().toISOString().slice(0, 10),
+          due_date: dueDateStr,
           status: "pending",
-          notes: "חיוב ביטוח מבנה " + year,
+          notes: "חיוב ביטוח מבנה " + year + (r.isPartialPeriod ? " (תקופה חלקית: " + r.daysInPolicy + "/" + r.policyDays + " ימים)" : ""),
         });
         count++;
       }
@@ -1657,18 +1663,20 @@ function WasteTab({ properties }: { properties: any[] }) {
     try {
       const dates = getPeriodDates();
       let count = 0;
+      var dueDate = new Date(); dueDate.setDate(dueDate.getDate() + 30);
+      var dueDateStr = dueDate.toISOString().slice(0, 10);
       for (const r of results) {
         if (r.charge < 0.01) continue;
         await supabase.from("charges").insert({
           contract_id: r.contractId,
-          charge_type: "other",
+          charge_type: "waste",
           base_amount: r.charge,
           vat_amount: 0,
           total_amount: r.charge,
           vat_type: "exempt",
           billing_period_start: dates.start,
           billing_period_end: dates.end,
-          due_date: new Date().toISOString().slice(0, 10),
+          due_date: dueDateStr,
           status: "pending",
           notes: "חיוב פינוי אשפה " + (period === "annual" ? year : period + " " + year),
         });

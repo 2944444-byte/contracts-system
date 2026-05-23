@@ -706,21 +706,24 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
     setProgress({ current: 0, total: withDiff.length, label: "יוצר חיובי הפרשי הצמדה...", startedAt: chargeStart });
     try {
       var count = 0;
+      // 30-day grace from issue date — only after that is the charge "באיחור".
+      var dueDate = new Date(); dueDate.setDate(dueDate.getDate() + 30);
+      var dueDateStr = dueDate.toISOString().slice(0, 10);
       for (var r of results) {
         if (Math.abs(r.totalDifference) < 1) continue;
         setProgress({ current: count + 1, total: withDiff.length, label: "יוצר חיוב — " + r.tenantName, startedAt: chargeStart });
         await supabase.from("charges").insert({
           contract_id: r.contractId,
-          charge_type: "other",
+          charge_type: "cpi_diff",
           base_amount: r.totalDifference > 0 ? r.totalDifference : -Math.abs(r.totalDifference),
           vat_amount: 0,
           total_amount: r.totalDifference,
           vat_type: "exempt",
           billing_period_start: year + "-01-01",
           billing_period_end: year + "-12-31",
-          due_date: new Date().toISOString().slice(0, 10),
+          due_date: dueDateStr,
           status: "pending",
-          notes: "הפרשי הצמדה שכ\"ד שנת " + year,
+          notes: "הפרשי הצמדה שכ\"ד שנת " + year + (r.totalDifference > 0 ? " — לחיוב" : " — לזיכוי"),
         });
         count++;
       }
