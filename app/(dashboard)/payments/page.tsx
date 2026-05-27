@@ -337,8 +337,12 @@ export default function PaymentsPage() {
   }
 
   const filtered = rows.filter(function(r) {
+    // "לתשלום" (pending) includes BOTH pending and approved — anything that
+    // isn't paid yet. The intermediate "approved" state is internal and
+    // doesn't get its own bucket anymore (was confusing the user).
     if (filterStatus === "overdue") { if (!isOverdueRow(r)) return false; }
-    else if (filterStatus !== "all" && r.status !== filterStatus) return false;
+    else if (filterStatus === "pending") { if (r.status !== "pending" && r.status !== "approved") return false; }
+    else if (filterStatus === "paid") { if (r.status !== "paid") return false; }
     if (filterType && r.chargeType !== filterType) return false;
     if (filterSearch) {
       var q = filterSearch.toLowerCase();
@@ -383,10 +387,17 @@ export default function PaymentsPage() {
     setCollapsedMonths(function(prev) { return Object.assign({}, prev, { [key]: !prev[key] }); });
   }
 
-  async function bulkApprove() {
-    var toApprove = filtered.filter(function(r) { return r.source === "charge" && r.status === "pending"; });
-    for (var r of toApprove) {
-      await supabase.from("charges").update({ status: "approved", approved_at: new Date().toISOString() }).eq("id", r.id);
+  // Mark every visible unpaid row as paid in one click (charges + rent checks).
+  async function bulkMarkAllPaid() {
+    var toMark = filtered.filter(function(r) { return r.status !== "paid"; });
+    if (toMark.length === 0) { alert("אין חיובים לסמן"); return; }
+    if (!confirm("לסמן " + toMark.length + " חיובים כשולמו?")) return;
+    for (var r of toMark) {
+      if (r.source === "charge") {
+        await supabase.from("charges").update({ status: "paid", paid_at: new Date().toISOString() }).eq("id", r.id);
+      } else if (r.source === "rent_check") {
+        await markRentCheckPaid(r);
+      }
     }
     await loadAll();
   }
@@ -401,12 +412,15 @@ export default function PaymentsPage() {
         </p>
       </div>
 
-      {/* KPIs — clickable to filter by status */}
-      <div className="grid grid-cols-4 gap-3 mb-4">
+      {/* KPIs — clickable to filter by status. Simplified to 3 buckets:
+          לתשלום (everything not yet paid, including approved), באיחור (subset
+          past due_date), שולמו. The "approved" intermediate state was confusing
+          to the user — they expected ✓ to mean "paid". We now drive ✓ directly
+          to paid, and treat "approved" rows the same as "pending" in the KPIs. */}
+      <div className="grid grid-cols-3 gap-3 mb-4">
         {[
-          { f: "pending",  label: "ממתינים", amount: totalPending,  count: pendingCount, color: "text-slate-700", bg: "bg-white" },
-          { f: "overdue",  label: "באיחור",  amount: totalOverdue,  count: overdueCount, color: "text-red-700",   bg: "bg-red-50" },
-          { f: "approved", label: "מאושרים", amount: totalApproved, count: rows.filter(function(r){return r.status==="approved";}).length, color: "text-blue-700",  bg: "bg-blue-50" },
+          { f: "pending",  label: "לתשלום", amount: totalPending + totalApproved,  count: pendingCount + rows.filter(function(r){return r.status==="approved";}).length, color: "text-slate-700", bg: "bg-white" },
+          { f: "overdue",  label: "באיחור (מעל ימי החסד)",  amount: totalOverdue,  count: overdueCount, color: "text-red-700",   bg: "bg-red-50" },
           { f: "paid",     label: "שולמו",   amount: totalPaid,     count: rows.filter(function(r){return r.status==="paid";}).length, color: "text-green-700", bg: "bg-green-50" },
         ].map(function(k) {
           return (
@@ -456,9 +470,9 @@ export default function PaymentsPage() {
             ✓ סמן {Object.values(selected).filter(Boolean).length} נבחרים כשולמו
           </button>
         )}
-        {filtered.filter(function(r) { return r.source === "charge" && r.status === "pending"; }).length > 0 && (
-          <button onClick={bulkApprove} className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100">
-            ✓ אשר כל הממתינים
+        {filtered.filter(function(r) { return r.status !== "paid"; }).length > 0 && (
+          <button onClick={bulkMarkAllPaid} className="rounded-lg border border-green-300 bg-green-50 px-4 py-2 text-sm font-semibold text-green-700 hover:bg-green-100" title="סמן את כל המסוננים כשולמו">
+            ₪ סמן הכל כשולם
           </button>
         )}
         <button onClick={openNew} className="rounded-lg bg-blue-700 px-5 py-2 font-bold text-white hover:bg-blue-800">
@@ -604,23 +618,20 @@ export default function PaymentsPage() {
                               </td>
                               <td className="px-4 py-2.5">
                                 <span className={"text-xs px-2 py-0.5 rounded-full font-semibold " + (
-                                  r.status === "paid" ? "bg-green-100 text-green-700" :
-                                  r.status === "approved" ? "bg-blue-100 text-blue-700" :
-                                  "bg-slate-100 text-slate-600"
+                                  r.status === "paid" ? "bg-green-100 text-green-700" : "bg-slate-100 text-slate-600"
                                 )}>
-                                  {r.status === "paid" ? "שולם" : r.status === "approved" ? "מאושר" : "ממתין"}
+                                  {r.status === "paid" ? "שולם" : "לתשלום"}
                                 </span>
                               </td>
                               <td className="px-4 py-2.5">
                                 <div className="flex gap-1">
-                                  {r.source === "charge" && r.status === "pending" && (
-                                    <button onClick={function() { approve(r.id); }} className="text-xs bg-blue-600 text-white px-2 py-1 rounded font-semibold" title="אשר חיוב">✓</button>
+                                  {/* Single ₪ button does the right thing for every row type.
+                                      No more "approve first then pay" — caused user confusion. */}
+                                  {r.status !== "paid" && r.source === "charge" && (
+                                    <button onClick={function() { markPaid(r.id); }} className="text-xs bg-green-600 text-white px-2 py-1 rounded font-semibold" title="סמן כשולם">₪ שולם</button>
                                   )}
-                                  {r.source === "charge" && r.status === "approved" && (
-                                    <button onClick={function() { markPaid(r.id); }} className="text-xs bg-green-600 text-white px-2 py-1 rounded font-semibold" title="סמן כשולם">₪</button>
-                                  )}
-                                  {r.source === "rent_check" && (
-                                    <button onClick={function() { markRentCheckPaid(r); }} className="text-xs bg-green-600 text-white px-2 py-1 rounded font-semibold" title={"סמן את כל " + unitCount + " היחידות כשולמו"}>₪</button>
+                                  {r.status !== "paid" && r.source === "rent_check" && (
+                                    <button onClick={function() { markRentCheckPaid(r); }} className="text-xs bg-green-600 text-white px-2 py-1 rounded font-semibold" title={"סמן את כל " + unitCount + " היחידות כשולמו"}>₪ שולם</button>
                                   )}
                                   <button onClick={function() { sendLetter(r); }} className="text-xs border border-amber-200 bg-amber-50 rounded px-2 py-1 text-amber-700 hover:bg-amber-100" title="צור טיוטת מכתב דרישה">📧</button>
                                   {r.source === "charge" && (
