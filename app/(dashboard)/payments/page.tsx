@@ -61,10 +61,11 @@ export default function PaymentsPage() {
   const [saving,    setSaving]    = useState(false);
 
   // Filters
-  const [filterStatus, setFilterStatus] = useState<"all" | "pending" | "approved" | "paid" | "overdue">("pending");
-  const [filterYear,   setFilterYear]   = useState<number>(currentYear);
-  const [filterType,   setFilterType]   = useState<string>("");
-  const [filterSearch, setFilterSearch] = useState<string>("");
+  const [filterStatus,   setFilterStatus]   = useState<"all" | "pending" | "approved" | "paid" | "overdue">("pending");
+  const [filterYear,     setFilterYear]     = useState<number>(currentYear);
+  const [filterType,     setFilterType]     = useState<string>("");
+  const [filterProperty, setFilterProperty] = useState<string>("");
+  const [filterSearch,   setFilterSearch]   = useState<string>("");
   const [includeAdvances, setIncludeAdvances] = useState<boolean>(true);
   // Collapsed month sections
   const [collapsedMonths, setCollapsedMonths] = useState<Record<string, boolean>>({});
@@ -347,6 +348,7 @@ export default function PaymentsPage() {
     else if (filterStatus === "pending") { if (r.status !== "pending" && r.status !== "approved") return false; }
     else if (filterStatus === "paid") { if (r.status !== "paid") return false; }
     if (filterType && r.chargeType !== filterType) return false;
+    if (filterProperty && r.propertyName !== filterProperty) return false;
     if (filterSearch) {
       var q = filterSearch.toLowerCase();
       var hay = (r.tenantName + " " + r.propertyName + " " + r.description).toLowerCase();
@@ -441,46 +443,75 @@ export default function PaymentsPage() {
       </div>
 
       {/* Filter bar */}
-      <div className="mb-4 rounded-xl border border-slate-200 bg-white p-3 flex flex-wrap items-center gap-2">
-        <input
-          type="text"
-          value={filterSearch}
-          onChange={function(e) { setFilterSearch(e.target.value); }}
-          placeholder="🔍 חיפוש שוכר / נכס / תיאור"
-          className={ic + " flex-1 min-w-[200px]"}
-        />
-        <select value={filterYear} onChange={function(e) { setFilterYear(Number(e.target.value)); }} className={ic + " w-32"}>
-          {yearOptions.map(function(y) { return <option key={y} value={y}>📅 {y}</option>; })}
-        </select>
-        <select value={filterType} onChange={function(e) { setFilterType(e.target.value); }} className={ic + " w-44"}>
-          <option value="">📋 סוג: הכל</option>
-          {CHARGE_TYPES.map(function(t) { return <option key={t.v} value={t.v}>{t.icon} {t.l}</option>; })}
-        </select>
-        <label className="flex items-center gap-1.5 text-xs text-slate-600 px-2 py-1 cursor-pointer">
-          <input type="checkbox" checked={includeAdvances} onChange={function(e) { setIncludeAdvances(e.target.checked); }} className="w-3.5 h-3.5"/>
-          כלול מקדמות שכ&quot;ד
-        </label>
-        {(filterSearch || filterType || filterStatus !== "all") && (
-          <button onClick={function() { setFilterSearch(""); setFilterType(""); setFilterStatus("all"); }} className="text-xs text-slate-500 hover:text-slate-700 px-2 py-1 border border-slate-200 rounded">
-            ✕ נקה
+      <div className="mb-3 rounded-xl border border-slate-200 bg-white p-3 space-y-2">
+        {/* Top row: text search + year + property + advance toggle + clear + counter + actions */}
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            type="text"
+            value={filterSearch}
+            onChange={function(e) { setFilterSearch(e.target.value); }}
+            placeholder="🔍 חיפוש שוכר / נכס / תיאור"
+            className={ic + " flex-1 min-w-[200px]"}
+          />
+          <select value={filterYear} onChange={function(e) { setFilterYear(Number(e.target.value)); }} className={ic + " w-32"}>
+            {yearOptions.map(function(y) { return <option key={y} value={y}>📅 {y}</option>; })}
+          </select>
+          <select value={filterProperty} onChange={function(e) { setFilterProperty(e.target.value); }} className={ic + " w-44"}>
+            <option value="">🏢 נכס: הכל</option>
+            {Array.from(new Set(rows.map(function(r) { return r.propertyName; }).filter(Boolean))).sort().map(function(p) {
+              return <option key={p} value={p}>{p}</option>;
+            })}
+          </select>
+          <label className="flex items-center gap-1.5 text-xs text-slate-600 px-2 py-1 cursor-pointer">
+            <input type="checkbox" checked={includeAdvances} onChange={function(e) { setIncludeAdvances(e.target.checked); }} className="w-3.5 h-3.5"/>
+            כלול מקדמות שכ&quot;ד
+          </label>
+          {(filterSearch || filterType || filterProperty || filterStatus !== "all") && (
+            <button onClick={function() { setFilterSearch(""); setFilterType(""); setFilterProperty(""); setFilterStatus("all"); }} className="text-xs text-slate-500 hover:text-slate-700 px-2 py-1 border border-slate-200 rounded">
+              ✕ נקה
+            </button>
+          )}
+          <div className="text-xs text-slate-500 mr-auto">
+            {filtered.length} / {rows.length}
+          </div>
+          {Object.values(selected).filter(Boolean).length > 0 && (
+            <button onClick={bulkMarkSelectedPaid} className="rounded-lg border border-green-300 bg-green-50 px-4 py-2 text-sm font-bold text-green-700 hover:bg-green-100">
+              ✓ סמן {Object.values(selected).filter(Boolean).length} נבחרים כשולמו
+            </button>
+          )}
+          {filtered.filter(function(r) { return r.status !== "paid"; }).length > 0 && (
+            <button onClick={bulkMarkAllPaid} className="rounded-lg border border-green-300 bg-green-50 px-4 py-2 text-sm font-semibold text-green-700 hover:bg-green-100" title="סמן את כל המסוננים כשולמו">
+              ₪ סמן הכל כשולם
+            </button>
+          )}
+          <button onClick={openNew} className="rounded-lg bg-blue-700 px-5 py-2 font-bold text-white hover:bg-blue-800">
+            + חיוב חדש
           </button>
-        )}
-        <div className="text-xs text-slate-500 mr-auto">
-          {filtered.length} / {rows.length}
         </div>
-        {Object.values(selected).filter(Boolean).length > 0 && (
-          <button onClick={bulkMarkSelectedPaid} className="rounded-lg border border-green-300 bg-green-50 px-4 py-2 text-sm font-bold text-green-700 hover:bg-green-100">
-            ✓ סמן {Object.values(selected).filter(Boolean).length} נבחרים כשולמו
+        {/* Type chips — replaces the native select dropdown which was
+            overflowing the viewport in RTL Chrome. All options visible at
+            once, click to toggle on/off. */}
+        <div className="flex flex-wrap items-center gap-1.5 pt-1.5 border-t border-slate-100">
+          <span className="text-[11px] text-slate-500 ml-1">סוג חיוב:</span>
+          <button
+            onClick={function() { setFilterType(""); }}
+            className={"rounded-lg border px-2.5 py-1 text-xs font-semibold transition-colors " + (filterType === "" ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-200 text-slate-600 hover:bg-slate-50")}
+          >
+            הכל
           </button>
-        )}
-        {filtered.filter(function(r) { return r.status !== "paid"; }).length > 0 && (
-          <button onClick={bulkMarkAllPaid} className="rounded-lg border border-green-300 bg-green-50 px-4 py-2 text-sm font-semibold text-green-700 hover:bg-green-100" title="סמן את כל המסוננים כשולמו">
-            ₪ סמן הכל כשולם
-          </button>
-        )}
-        <button onClick={openNew} className="rounded-lg bg-blue-700 px-5 py-2 font-bold text-white hover:bg-blue-800">
-          + חיוב חדש
-        </button>
+          {CHARGE_TYPES.map(function(t) {
+            var isActive = filterType === t.v;
+            return (
+              <button
+                key={t.v}
+                onClick={function() { setFilterType(isActive ? "" : t.v); }}
+                className={"rounded-lg border px-2.5 py-1 text-xs font-semibold transition-colors " + (isActive ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-200 text-slate-600 hover:bg-slate-50")}
+              >
+                {t.icon} {t.l}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {/* Top debtors strip — quickly see who owes the most */}
