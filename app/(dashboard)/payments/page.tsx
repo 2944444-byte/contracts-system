@@ -94,14 +94,19 @@ function Dropdown(props: {
   );
 }
 
-// Unified row shape. Four sources:
-//   "charge"      — single row from the `charges` table
-//   "rent_check"  — virtual row aggregating advance_payments by (contract+check_date)
-//   "revenue"     — virtual row from revenue_reports (monthly rent for
-//                   revenue-pct tenants who don't have advance_payments)
+// Unified row shape. Five sources:
+//   "charge"                  — single row from the `charges` table
+//   "rent_check"              — virtual row aggregating advance_payments by check
+//   "revenue"                 — virtual row from revenue_reports
+//   "missing_revenue_report"  — virtual row for revenue tenants who haven't
+//                               submitted their monthly report yet; appears as
+//                               "ממתין לדיווח", becomes overdue past the
+//                               contract's revenue_report_day. Lets the user
+//                               chase missing reports the same way they chase
+//                               unpaid debts.
 type Row = {
   id: string;
-  source: "charge" | "rent_check" | "revenue";
+  source: "charge" | "rent_check" | "revenue" | "missing_revenue_report";
   contractId: string;
   tenantName: string;
   propertyName: string;
@@ -170,7 +175,7 @@ export default function PaymentsPage() {
         .or("due_date.gte." + yearStart + ",billing_period_start.gte." + yearStart)
         .or("due_date.lt." + yearEnd + ",billing_period_start.lt." + yearEnd)
         .order("due_date", { ascending: true }),
-      supabase.from("contracts").select("id,vat_type,rent_per_sqm,charged_area,investment_addition,tenants(name),properties(name)").in("status", ["active", "expiring", "extended"]),
+      supabase.from("contracts").select("id,vat_type,rent_type,revenue_pct,revenue_report_day,start_date,end_date,rent_per_sqm,charged_area,investment_addition,is_amendment,tenants(name),properties(name)").in("status", ["active", "expiring", "extended"]),
       // Rent advances for the year (both paid + unpaid — paid ones still need
       // to show on this screen so שולמו KPI is honest)
       includeAdvances ? supabase.from("advance_payments")
@@ -246,8 +251,73 @@ export default function PaymentsPage() {
       };
       checksMap[key].rows.push(a);
     });
-    // Revenue (פידיון) reports → virtual rows
+    // Build a lookup of reported months per contract so we can detect gaps.
+    var reportedMonths: Record<string, Record<string, boolean>> = {};
     var revenueRows = (revRes.data || []);
+    revenueRows.forEach(function(rev: any) {
+      var monthKey = rev.report_month ? rev.report_month.slice(0, 7) : ""; // YYYY-MM
+      if (!reportedMonths[rev.contract_id]) reportedMonths[rev.contract_id] = {};
+      reportedMonths[rev.contract_id][monthKey] = true;
+    });
+
+    // Missing revenue reports → virtual rows.
+    // For each active revenue-pct contract (base only), iterate every month
+    // from contract.start_date up to the current month (capped by contract
+    // end_date and the selected year). For any month that has no
+    // revenue_report yet, generate a "ממתין לדיווח" row so the user can
+    // chase the tenant for the report.
+    var todayDate = new Date();
+    var monthKeyForDate = function(d: Date) {
+      return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0");
+    };
+    (contractsRes.data || []).forEach(function(c: any) {
+      if (c.is_amendment) return;
+      var isRev = c.rent_type === "revenue_pct" || c.rent_type === "revenue_based" || Number(c.revenue_pct) > 0;
+      if (!isRev) return;
+      var reportDay = Number(c.revenue_report_day) || 10;
+      var startMonth = c.start_date ? new Date(c.start_date) : new Date(filterYear, 0, 1);
+      var endMonth = c.end_date ? new Date(c.end_date) : todayDate;
+      // Cap end to current month (a future month's report isn't "missing" yet)
+      var iterEnd = todayDate < endMonth ? todayDate : endMonth;
+      // Walk months
+      var cursor = new Date(startMonth.getFullYear(), startMonth.getMonth(), 1);
+      var stop = new Date(iterEnd.getFullYear(), iterEnd.getMonth(), 1);
+      while (cursor.getTime() <= stop.getTime()) {
+        var monthYear = cursor.getFullYear();
+        if (monthYear === filterYear) {
+          var mk = monthKeyForDate(cursor);
+          var hasReport = reportedMonths[c.id] && reportedMonths[c.id][mk];
+          if (!hasReport) {
+            var monthLabel = HEB_MONTHS[cursor.getMonth() + 1] + " " + monthYear;
+            // Report for month M is due by day=reportDay of month M+1
+            var nextMonth = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
+            var daysInNextMonth = new Date(nextMonth.getFullYear(), nextMonth.getMonth() + 1, 0).getDate();
+            var safeDay = Math.min(reportDay, daysInNextMonth);
+            var due = new Date(nextMonth.getFullYear(), nextMonth.getMonth(), safeDay);
+            allRows.push({
+              id: "missrep-" + c.id + "-" + mk,
+              source: "missing_revenue_report",
+              contractId: c.id,
+              tenantName: (c.tenants as any)?.name || "—",
+              propertyName: (c.properties as any)?.name || "",
+              chargeType: "rent",
+              description: "ממתין לדיווח מחזור — " + monthLabel + " (סופי לדיווח: " + safeDay + "/" + (nextMonth.getMonth()+1) + ")",
+              baseAmount: 0,
+              vatAmount: 0,
+              totalAmount: 0,
+              vatType: "",
+              dueDate: due.toISOString().slice(0, 10),
+              status: "pending",
+              createdAt: cursor.toISOString().slice(0, 10),
+              period: monthLabel,
+            });
+          }
+        }
+        cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
+      }
+    });
+
+    // Revenue (פידיון) reports → virtual rows
     revenueRows.forEach(function(rev: any) {
       var finalRent = Number(rev.final_rent) || 0;
       if (finalRent < 0.01) return;
@@ -434,25 +504,41 @@ export default function PaymentsPage() {
     await loadAll();
   }
 
-  // Creates a draft letter pre-filled with the debt info so the user can
-  // send a demand letter without leaving the page.
+  // Creates a draft letter pre-filled with the debt info. For
+  // missing-revenue-report rows the wording asks the tenant to send the
+  // monthly revenue report rather than demanding payment.
   async function sendLetter(row: Row) {
     try {
-      var body = "שוכר/ת נכבד/ה,\n\n" +
-        "להלן חיוב שטרם שולם:\n" +
-        "תיאור: " + row.description + "\n" +
-        "סכום: " + fmtMoney(row.totalAmount) + "\n" +
-        (row.dueDate ? "תאריך לתשלום: " + fmtDate(row.dueDate) + "\n" : "") +
-        "\nאנא הסדירו את התשלום בהקדם.\n\nבברכה,\nהנהלת הנכס";
+      var body: string;
+      var title: string;
+      var letterType: string;
+      if (row.source === "missing_revenue_report") {
+        body = "שוכר/ת נכבד/ה,\n\n" +
+          "בהתאם להסכם השכירות, נדרש דיווח מחזור חודשי לחישוב שכ\"ד.\n" +
+          "טרם נתקבל אצלנו דיווח עבור: " + (row.period || row.description) + "\n" +
+          (row.dueDate ? "מועד אחרון לדיווח: " + fmtDate(row.dueDate) + "\n" : "") +
+          "\nנודה לקבלת הדיווח בהקדם על מנת שנוכל להפיק את חיוב שכ\"ד הפידיון.\n\nבברכה,\nהנהלת הנכס";
+        title = "דרישת דיווח מחזור — " + (row.period || "");
+        letterType = "notice";
+      } else {
+        body = "שוכר/ת נכבד/ה,\n\n" +
+          "להלן חיוב שטרם שולם:\n" +
+          "תיאור: " + row.description + "\n" +
+          "סכום: " + fmtMoney(row.totalAmount) + "\n" +
+          (row.dueDate ? "תאריך לתשלום: " + fmtDate(row.dueDate) + "\n" : "") +
+          "\nאנא הסדירו את התשלום בהקדם.\n\nבברכה,\nהנהלת הנכס";
+        title = "דרישת תשלום — " + row.description.slice(0, 60);
+        letterType = "demand";
+      }
       var { data, error } = await supabase.from("letters").insert({
         contract_id: row.contractId,
-        letter_type: "demand",
-        title: "דרישת תשלום — " + row.description.slice(0, 60),
+        letter_type: letterType,
+        title: title,
         content_json: { body: body, year: filterYear, tenant: row.tenantName },
         status: "draft",
       }).select().single();
       if (error) throw error;
-      await logAudit({ entity_type: "letter", entity_id: data.id, action: "create_from_debt" });
+      await logAudit({ entity_type: "letter", entity_id: data.id, action: row.source === "missing_revenue_report" ? "request_revenue_report" : "create_from_debt" });
       alert("✅ נוצרה טיוטת מכתב — היכנס למסך מכתבים לעריכה והדפסה");
     } catch (e: any) { alert("שגיאה: " + (e?.message || e)); }
   }
@@ -780,6 +866,9 @@ export default function PaymentsPage() {
                                 {r.source === "revenue" && (
                                   <div className="text-[10px] text-purple-700 font-semibold mt-0.5">📊 שכ&quot;ד פידיון</div>
                                 )}
+                                {r.source === "missing_revenue_report" && (
+                                  <div className="text-[10px] text-orange-700 font-semibold mt-0.5">📝 ממתין לדיווח מהשוכר</div>
+                                )}
                               </td>
                               <td className="px-4 py-2.5 font-bold text-slate-800 font-mono whitespace-nowrap">
                                 {fmtMoney(r.totalAmount)}
@@ -791,9 +880,13 @@ export default function PaymentsPage() {
                               </td>
                               <td className="px-4 py-2.5">
                                 <span className={"text-xs px-2 py-0.5 rounded-full font-semibold " + (
-                                  r.status === "paid" ? "bg-green-100 text-green-700" : "bg-slate-100 text-slate-600"
+                                  r.status === "paid" ? "bg-green-100 text-green-700"
+                                    : r.source === "missing_revenue_report" ? "bg-orange-100 text-orange-700"
+                                    : "bg-slate-100 text-slate-600"
                                 )}>
-                                  {r.status === "paid" ? "שולם" : "לתשלום"}
+                                  {r.status === "paid" ? "שולם"
+                                    : r.source === "missing_revenue_report" ? "ממתין לדיווח"
+                                    : "לתשלום"}
                                 </span>
                               </td>
                               <td className="px-4 py-2.5">
