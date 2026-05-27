@@ -66,10 +66,34 @@ export default function GuaranteesPage() {
 
   async function loadAll() {
     const [{ data: g }, { data: c }] = await Promise.all([
-      supabase.from("guarantees").select("*, contracts(property_id, tenants(name), properties(name))").order("end_date"),
-      supabase.from("contracts").select("id, tenants(name), properties(name)").in("status", ["active", "expiring", "extended", "upcoming"]),
+      supabase.from("guarantees")
+        .select("*, contracts(id, property_id, start_date, end_date, status, tenants(name), properties(name), contract_spaces(spaces(space_name)))")
+        .order("end_date"),
+      supabase.from("contracts")
+        .select("id, start_date, end_date, status, tenants(name), properties(name), contract_spaces(spaces(space_name))")
+        .in("status", ["active", "expiring", "extended", "upcoming"])
+        .order("start_date", { ascending: false }),
     ]);
     setGuarantees(g ?? []); setContracts(c ?? []); setLoading(false);
+  }
+
+  // Build a unit-list string from contract_spaces relations.
+  function spacesLabel(contract: any): string {
+    var arr = contract?.contract_spaces || [];
+    var names = arr.map(function(cs: any) { return cs?.spaces?.space_name; }).filter(Boolean);
+    if (names.length === 0) return "—";
+    if (names.length <= 3) return names.join(" · ");
+    return names.slice(0, 3).join(" · ") + " +" + (names.length - 3);
+  }
+  // Short date range like "1/2024–12/2026" for contract identification.
+  function contractRange(c: any): string {
+    var s = c?.start_date ? new Date(c.start_date) : null;
+    var e = c?.end_date ? new Date(c.end_date) : null;
+    var fmt = function(d: Date) { return (d.getMonth() + 1) + "/" + d.getFullYear(); };
+    if (s && e) return fmt(s) + "–" + fmt(e);
+    if (s) return "מ-" + fmt(s);
+    if (e) return "עד " + fmt(e);
+    return "";
   }
 
   function openNew(prefillFromGuarantee?: any) {
@@ -286,7 +310,7 @@ export default function GuaranteesPage() {
               <tr>
                 <th className="px-4 py-3 font-semibold text-slate-700">סטטוס</th>
                 <th className="px-4 py-3 font-semibold text-slate-700">סוג</th>
-                <th className="px-4 py-3 font-semibold text-slate-700">שוכר/נכס</th>
+                <th className="px-4 py-3 font-semibold text-slate-700">שוכר / נכס / יחידות / הסכם</th>
                 <th className="px-4 py-3 font-semibold text-slate-700">נדרש</th>
                 <th className="px-4 py-3 font-semibold text-slate-700">בפועל</th>
                 <th className="px-4 py-3 font-semibold text-slate-700">פער</th>
@@ -324,7 +348,13 @@ export default function GuaranteesPage() {
                     </td>
                     <td className="px-4 py-3">
                       <div className="font-medium text-slate-800">{g.contracts?.tenants?.name}</div>
-                      <div className="text-xs text-slate-400">{g.contracts?.properties?.name}</div>
+                      <div className="text-xs text-slate-500">{g.contracts?.properties?.name}</div>
+                      <div className="text-xs text-indigo-700 font-semibold mt-0.5" title="היחידות הכלולות בהסכם זה">
+                        יח&apos;: {spacesLabel(g.contracts)}
+                      </div>
+                      <div className="text-[10px] text-slate-400 mt-0.5" title="תקופת ההסכם המקושר לערבות">
+                        הסכם: {contractRange(g.contracts)}
+                      </div>
                     </td>
                     <td className="px-4 py-3 text-slate-600">{fmtMoney(g.amount_required)}</td>
                     <td className="px-4 py-3 font-semibold text-slate-800">{fmtMoney(g.amount_actual)}</td>
@@ -409,8 +439,21 @@ export default function GuaranteesPage() {
                 <label className="mb-1 block text-xs font-semibold text-slate-700">חוזה *</label>
                 <select value={fContractId} onChange={function (e) { setFContractId(e.target.value); }} className={ic}>
                   <option value="">-- בחר --</option>
-                  {contracts.map(function (c) { return <option key={c.id} value={c.id}>{(c.tenants as any)?.name} — {(c.properties as any)?.name}</option>; })}
+                  {contracts.map(function (c) {
+                    var tenantName = (c.tenants as any)?.name || "—";
+                    var propName   = (c.properties as any)?.name || "—";
+                    var units      = spacesLabel(c);
+                    var range      = contractRange(c);
+                    return (
+                      <option key={c.id} value={c.id}>
+                        {tenantName} — {propName} | יח&apos;: {units}{range ? " | " + range : ""}
+                      </option>
+                    );
+                  })}
                 </select>
+                <p className="text-[10px] text-slate-400 mt-1">
+                  אם לאותו שוכר ונכס יש כמה הסכמים — בחר לפי היחידות והתאריכים.
+                </p>
               </div>
               <div>
                 <label className="mb-2 block text-xs font-semibold text-slate-700">סוג</label>
@@ -467,8 +510,11 @@ export default function GuaranteesPage() {
                 var g = guarantees.find(function(x) { return x.id === extendingId; });
                 if (!g) return null;
                 return (
-                  <div className="rounded-lg bg-slate-50 border border-slate-200 p-3 text-xs text-slate-700">
+                  <div className="rounded-lg bg-slate-50 border border-slate-200 p-3 text-xs text-slate-700 space-y-1">
                     <div><span className="text-slate-500">שוכר:</span> <span className="font-semibold">{g.contracts?.tenants?.name}</span></div>
+                    <div><span className="text-slate-500">נכס:</span> <span className="font-semibold">{g.contracts?.properties?.name}</span></div>
+                    <div><span className="text-slate-500">יחידות:</span> <span className="font-semibold text-indigo-700">{spacesLabel(g.contracts)}</span></div>
+                    <div><span className="text-slate-500">הסכם:</span> <span className="font-semibold">{contractRange(g.contracts)}</span></div>
                     <div><span className="text-slate-500">תוקף נוכחי:</span> <span className="font-semibold">{fmtDate(g.end_date)}</span></div>
                     {g.previous_end_date && <div><span className="text-slate-500">תוקף קודם (לפני הארכה):</span> <span className="font-semibold">{fmtDate(g.previous_end_date)}</span></div>}
                   </div>
