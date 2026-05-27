@@ -71,9 +71,11 @@ export default function CashflowPage() {
     const promises: any[] = [
       // Properties — for total_area (occupancy denominator)
       supabase.from("properties").select("id, name, total_area"),
-      // Contracts that are or might be active in the year
+      // Contracts that are or might be active in the year — pull contract_spaces
+      // so we can compute the REAL occupied area from the spaces table instead
+      // of the often-overstated charged_area field.
       supabase.from("contracts")
-        .select("id, status, is_amendment, rent_type, revenue_pct, start_date, end_date, charged_area, rent_per_sqm, vat_type, tenant_id, property_id, tenants(name), properties(name)")
+        .select("id, status, is_amendment, rent_type, revenue_pct, start_date, end_date, charged_area, rent_per_sqm, vat_type, tenant_id, property_id, tenants(name), properties(name), contract_spaces(spaces(area))")
         .eq("is_amendment", false),
       // Advance payments for the year
       supabase.from("advance_payments")
@@ -216,7 +218,15 @@ export default function CashflowPage() {
         if (cs && cs > monthEnd) return;
         if (ce && ce < monthStart) return;
         if (c.status !== "active" && c.status !== "expiring" && c.status !== "extended") return;
-        occupied += Number(c.charged_area) || 0;
+        // True occupied area = sum of the contract's actual spaces.area, not the
+        // contract.charged_area field (which is manually entered and often
+        // overstated — making occupancy look like 100% when it isn't).
+        var actualArea = ((c.contract_spaces as any[]) || []).reduce(function(s: number, cs2: any) {
+          var sp = cs2?.spaces;
+          var spArea = Array.isArray(sp) ? (sp[0]?.area || 0) : (sp?.area || 0);
+          return s + (Number(spArea) || 0);
+        }, 0);
+        occupied += actualArea > 0 ? actualArea : (Number(c.charged_area) || 0);
         active++;
         if (cs && cs.getFullYear() === yr && cs.getMonth() === mb.month - 1) {
           mb.contractsStarting.push({ name: (c.tenants as any)?.name || "—", date: c.start_date });
@@ -270,6 +280,18 @@ export default function CashflowPage() {
   var totalPaid      = totals.paidRent + totals.paidMgmt + totals.paidOther;
   var avgPct = totalPotential > 0 ? (totalPaid / totalPotential) * 100 : 0;
 
+  // YTD metric — only count months whose due dates have already passed.
+  // This separates "collection performance on bills that came due" from "bills
+  // that haven't been issued yet". The full-year % is misleading mid-year
+  // (future months count as un-collected, dragging the % down artificially).
+  var todayDate = new Date();
+  var lastDueMonth = (year === currentYear)
+    ? todayDate.getMonth() + 1                       // current month (inclusive)
+    : (year < currentYear ? 12 : 0);                  // past year → full; future → 0
+  var ytdPotential = monthly.slice(0, lastDueMonth).reduce(function(s, m) { return s + m.potRent + m.potMgmt + m.potOther; }, 0);
+  var ytdPaid      = monthly.slice(0, lastDueMonth).reduce(function(s, m) { return s + m.paidRent + m.paidMgmt + m.paidOther; }, 0);
+  var ytdPct = ytdPotential > 0 ? (ytdPaid / ytdPotential) * 100 : 0;
+
   // Occupancy avg + vacant potential
   var avgOccupancy = monthly.reduce(function(s, m) {
     var t = m.occupiedArea + m.vacantArea;
@@ -300,7 +322,7 @@ export default function CashflowPage() {
   // CSV export — richer with new columns
   function exportCSV() {
     var bom = "﻿";
-    var header = ["חודש", "חוזים פעילים", "תפוסה %", "שטח פנוי (מ\"ר)", "פוטנציאל שכ\"ד", "פוטנציאל ניהול", "פוטנציאל אחר", "סה\"כ פוטנציאל", "גבייה בפועל", "% גבייה"].join(",");
+    var header = ["חודש", "חוזים פעילים", "תפוסה %", "שטח פנוי (מ\"ר)", "פוטנציאל שכ\"ד", "פוטנציאל מקדמת דמי ניהול", "פוטנציאל אחר", "סה\"כ פוטנציאל", "גבייה בפועל", "% גבייה"].join(",");
     var rows = monthly.map(function(m) {
       var pot = m.potRent + m.potMgmt + m.potOther;
       var paid = m.paidRent + m.paidMgmt + m.paidOther;
@@ -332,7 +354,7 @@ export default function CashflowPage() {
         <div>
           <h1 className="text-3xl font-bold text-slate-800">תזרים שנתי</h1>
           <p className="text-sm text-slate-500 mt-1">
-            פוטנציאל: <strong>{fmtMoney(totalPotential)}</strong> | גבייה: <strong className="text-green-600">{fmtMoney(totalPaid)}</strong> | ממוצע גבייה: <strong className={avgPct >= 90 ? "text-green-600" : avgPct >= 70 ? "text-yellow-600" : "text-red-600"}>{fmtPct(avgPct)}</strong>
+            פוטנציאל שנתי: <strong>{fmtMoney(totalPotential)}</strong> | גבייה: <strong className="text-green-600">{fmtMoney(totalPaid)}</strong> | <span title="ביחס לחודשים שכבר חויבו (עד החודש הנוכחי)">גבייה לתאריך היום: <strong className={ytdPct >= 90 ? "text-green-600" : ytdPct >= 70 ? "text-yellow-600" : "text-red-600"}>{fmtPct(ytdPct)}</strong></span>
           </p>
         </div>
         <div className="flex gap-2 items-center">
@@ -393,8 +415,11 @@ export default function CashflowPage() {
           )}
         </div>
         <div className="rounded-xl border border-slate-200 bg-white p-4 text-center shadow-sm">
-          <div className={"text-xl font-black " + (avgPct >= 90 ? "text-green-700" : avgPct >= 70 ? "text-yellow-600" : "text-red-600")}>{fmtPct(avgPct)}</div>
-          <div className="text-xs text-slate-400 mt-0.5">ממוצע גבייה</div>
+          <div className={"text-xl font-black " + (ytdPct >= 90 ? "text-green-700" : ytdPct >= 70 ? "text-yellow-600" : "text-red-600")} title="גבייה / פוטנציאל עד החודש הנוכחי בלבד — חודשים עתידיים לא נספרים כי החיוב טרם הופק">{fmtPct(ytdPct)}</div>
+          <div className="text-xs text-slate-400 mt-0.5">% גבייה לתאריך היום</div>
+          <div className="text-[9px] text-slate-400 mt-0.5">
+            (שנתי בכללות: {fmtPct(avgPct)} — כולל חודשים שטרם הופק)
+          </div>
         </div>
         <div className="rounded-xl border border-blue-200 bg-blue-50 p-4 text-center shadow-sm">
           <div className="text-xl font-black text-blue-700">{fmtPct(avgOccupancy)}</div>
@@ -435,7 +460,7 @@ export default function CashflowPage() {
                     <div className="absolute bottom-full mb-1 hidden group-hover:block z-10 bg-slate-800 text-white text-xs rounded-lg p-2 whitespace-nowrap text-right shadow-lg">
                       <div className="font-bold mb-0.5">{MONTHS_HE[m.month]} {year}</div>
                       <div>🏢 שכ&quot;ד: {fmtMoney(m.potRent)}</div>
-                      <div>🔧 ניהול: {fmtMoney(m.potMgmt)}</div>
+                      <div>🔧 מקדמת דמי ניהול: {fmtMoney(m.potMgmt)}</div>
                       <div>📋 אחר: {fmtMoney(m.potOther)}</div>
                       <div className="border-t border-slate-600 mt-0.5 pt-0.5">סה&quot;כ פוטנציאל: {fmtMoney(totalPot)}</div>
                       <div className="text-green-300">💰 גבייה: {fmtMoney(paidTotal)} ({fmtPct(totalPot > 0 ? (paidTotal / totalPot) * 100 : 0)})</div>
@@ -466,7 +491,7 @@ export default function CashflowPage() {
             </div>
             <div className="flex gap-3 mt-3 text-xs text-slate-500 flex-wrap">
               <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-blue-500 inline-block" /> שכ&quot;ד</span>
-              <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-purple-500 inline-block" /> דמי ניהול</span>
+              <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-purple-500 inline-block" /> מקדמת דמי ניהול</span>
               <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-amber-500 inline-block" /> אחר (ביטוח/הפרשי/אשפה)</span>
               <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-green-500 inline-block" /> גבייה בפועל</span>
               {compareYoY && <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-slate-300/80 inline-block" /> {year - 1}</span>}
@@ -499,7 +524,7 @@ export default function CashflowPage() {
                   <th className="px-3 py-3 font-semibold text-slate-700">חוזים פעילים</th>
                   <th className="px-3 py-3 font-semibold text-blue-700">תפוסה</th>
                   <th className="px-3 py-3 font-semibold text-blue-600">שכ&quot;ד</th>
-                  <th className="px-3 py-3 font-semibold text-purple-600">ניהול</th>
+                  <th className="px-3 py-3 font-semibold text-purple-600">מקדמת דמי ניהול</th>
                   <th className="px-3 py-3 font-semibold text-amber-600">אחר</th>
                   <th className="px-3 py-3 font-semibold text-slate-700">סה&quot;כ פוטנציאל</th>
                   <th className="px-3 py-3 font-semibold text-green-700">גבייה</th>
