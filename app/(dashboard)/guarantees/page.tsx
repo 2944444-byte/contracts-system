@@ -5,121 +5,382 @@ import { logAudit } from '@/lib/audit-log';
 import PropertyHierarchyFilter from '@/components/PropertyHierarchyFilter';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
-const GUARANTEE_TYPES = [{v:"bank",l:"ערבות בנקאית",icon:"🏦"},{v:"check",l:"שיקים",icon:"📝"},{v:"cash",l:"מזומן",icon:"💵"},{v:"insurance",l:"ביטוח",icon:"🛡️"},{v:"personal",l:"ערבות אישית",icon:"👤"},{v:"other",l:"אחר",icon:"📋"}];
+const GUARANTEE_TYPES = [
+  { v: "bank",      l: "ערבות בנקאית", icon: "🏦" },
+  { v: "check",     l: "שיקים",         icon: "📝" },
+  { v: "cash",      l: "מזומן",         icon: "💵" },
+  { v: "insurance", l: "ביטוח",         icon: "🛡️" },
+  { v: "personal",  l: "ערבות אישית",   icon: "👤" },
+  { v: "other",     l: "אחר",           icon: "📋" },
+];
 
-function daysLeft(d: string) { return Math.ceil((new Date(d).getTime()-Date.now())/86400000); }
+function daysLeft(d: string) { return Math.ceil((new Date(d).getTime() - Date.now()) / 86400000); }
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
-function fmtMoney(n: number) { return n ? "₪"+n.toLocaleString("he-IL",{minimumFractionDigits:2,maximumFractionDigits:2}) : "—"; }
+function fmtMoney(n: number) { return n ? "₪" + n.toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"; }
+
+// Determines display health of a guarantee: expired (past end_date but still
+// "active"), gap (actual < required), expiring30/60, ok.
+type Health = "expired" | "gap" | "expiring30" | "expiring60" | "ok" | "inactive";
+function healthOf(g: any): Health {
+  if (g.status !== "active") return "inactive";
+  if (g.end_date && daysLeft(g.end_date) < 0) return "expired";
+  if ((g.amount_actual ?? 0) < (g.amount_required ?? 0) && (g.amount_required ?? 0) > 0) return "gap";
+  if (g.end_date && daysLeft(g.end_date) <= 30) return "expiring30";
+  if (g.end_date && daysLeft(g.end_date) <= 60) return "expiring60";
+  return "ok";
+}
+// Sort priority: lower number = more urgent → appears first.
+function healthOrder(h: Health): number {
+  return { expired: 0, gap: 1, expiring30: 2, expiring60: 3, ok: 4, inactive: 5 }[h];
+}
 
 export default function GuaranteesPage() {
-  const [guarantees,setGuarantees]=useState<any[]>([]);
-  const [contracts, setContracts] =useState<any[]>([]);
-  const [loading,   setLoading]   =useState(true);
-  const [editingId, setEditingId] =useState("");
-  const [isNew,     setIsNew]     =useState(false);
-  const [saving,    setSaving]    =useState(false);
-  const [filterSt,  setFilterSt]  =useState("active");
+  const [guarantees, setGuarantees] = useState<any[]>([]);
+  const [contracts,  setContracts]  = useState<any[]>([]);
+  const [loading,    setLoading]    = useState(true);
+  const [editingId,  setEditingId]  = useState("");
+  const [isNew,      setIsNew]      = useState(false);
+  const [saving,     setSaving]     = useState(false);
+  const [filterSt,   setFilterSt]   = useState<"active" | "expired" | "gap" | "expiring" | "returned" | "forfeited" | "all">("active");
   const [filterPropIds, setFilterPropIds] = useState<string[]>([]);
 
-  const [fContractId,setFContractId]=useState("");
-  const [fType,      setFType]      =useState("bank");
-  const [fRequired,  setFRequired]  =useState("");
-  const [fActual,    setFActual]    =useState("");
-  const [fBank,      setFBank]      =useState("");
-  const [fRef,       setFRef]       =useState("");
-  const [fStartDate, setFStartDate] =useState("");
-  const [fEndDate,   setFEndDate]   =useState("");
-  const [fStatus,    setFStatus]    =useState("active");
-  const [fNotes,     setFNotes]     =useState("");
+  // Form state — used for both create and edit
+  const [fContractId,  setFContractId]  = useState("");
+  const [fType,        setFType]        = useState("bank");
+  const [fRequired,    setFRequired]    = useState("");
+  const [fActual,      setFActual]      = useState("");
+  const [fBank,        setFBank]        = useState("");
+  const [fRef,         setFRef]         = useState("");
+  const [fStartDate,   setFStartDate]   = useState("");
+  const [fEndDate,     setFEndDate]     = useState("");
+  const [fStatus,      setFStatus]      = useState("active");
+  const [fNotes,       setFNotes]       = useState("");
+  const [fPrevGuaranteeId, setFPrevGuaranteeId] = useState<string | null>(null);
 
-  useEffect(function() { loadAll(); }, []);
+  // Extend dialog state
+  const [extendingId, setExtendingId] = useState("");
+  const [extNewEndDate, setExtNewEndDate] = useState("");
+  const [extNotes,    setExtNotes]    = useState("");
+
+  useEffect(function () { loadAll(); }, []);
 
   async function loadAll() {
     const [{ data: g }, { data: c }] = await Promise.all([
-      supabase.from("guarantees").select("*, contracts(property_id,tenants(name),properties(name))").order("end_date"),
-      supabase.from("contracts").select("id,tenants(name),properties(name)").in("status",["active","expiring","extended","upcoming"]),
+      supabase.from("guarantees").select("*, contracts(property_id, tenants(name), properties(name))").order("end_date"),
+      supabase.from("contracts").select("id, tenants(name), properties(name)").in("status", ["active", "expiring", "extended", "upcoming"]),
     ]);
-    setGuarantees(g??[]); setContracts(c??[]); setLoading(false);
+    setGuarantees(g ?? []); setContracts(c ?? []); setLoading(false);
   }
 
-  function openNew() { setIsNew(true); setEditingId("new"); setFContractId(""); setFType("bank"); setFRequired(""); setFActual(""); setFBank(""); setFRef(""); setFStartDate(""); setFEndDate(""); setFStatus("active"); setFNotes(""); }
-  function openEdit(g: any) { setIsNew(false); setEditingId(g.id); setFContractId(g.contract_id??""); setFType(g.guarantee_type??"bank"); setFRequired(g.amount_required?.toString()??""); setFActual(g.amount_actual?.toString()??""); setFBank(g.bank_name??""); setFRef(g.reference_number??""); setFStartDate(g.start_date?.split("T")[0]??""); setFEndDate(g.end_date?.split("T")[0]??""); setFStatus(g.status??"active"); setFNotes(g.notes??""); }
+  function openNew(prefillFromGuarantee?: any) {
+    setIsNew(true); setEditingId("new");
+    if (prefillFromGuarantee) {
+      // "Replace" flow — copy contract + type from old, blank everything else
+      setFContractId(prefillFromGuarantee.contract_id ?? "");
+      setFType(prefillFromGuarantee.guarantee_type ?? "bank");
+      setFRequired(prefillFromGuarantee.amount_required?.toString() ?? "");
+      setFActual("");
+      setFBank("");
+      setFRef("");
+      setFStartDate(new Date().toISOString().slice(0, 10));
+      setFEndDate("");
+      setFStatus("active");
+      setFNotes("מחליפה ערבות " + (prefillFromGuarantee.reference_number || prefillFromGuarantee.bank || "קודמת"));
+      setFPrevGuaranteeId(prefillFromGuarantee.id);
+    } else {
+      setFContractId(""); setFType("bank"); setFRequired(""); setFActual("");
+      setFBank(""); setFRef(""); setFStartDate(""); setFEndDate("");
+      setFStatus("active"); setFNotes(""); setFPrevGuaranteeId(null);
+    }
+  }
+
+  function openEdit(g: any) {
+    setIsNew(false); setEditingId(g.id);
+    setFContractId(g.contract_id ?? ""); setFType(g.guarantee_type ?? "bank");
+    setFRequired(g.amount_required?.toString() ?? ""); setFActual(g.amount_actual?.toString() ?? "");
+    setFBank(g.bank ?? ""); setFRef(g.reference_number ?? "");
+    setFStartDate(g.start_date?.split("T")[0] ?? ""); setFEndDate(g.end_date?.split("T")[0] ?? "");
+    setFStatus(g.status ?? "active"); setFNotes(g.notes ?? "");
+    setFPrevGuaranteeId(g.previous_guarantee_id ?? null);
+  }
 
   async function handleSave() {
     if (!fContractId) { alert("חובה: חוזה"); return; }
     setSaving(true);
     try {
-      const payload={contract_id:fContractId,guarantee_type:fType,amount_required:fRequired?Number(fRequired):null,amount_actual:fActual?Number(fActual):null,bank:fBank||null,reference_number:fRef||null,start_date:fStartDate||null,end_date:fEndDate||null,status:fStatus,notes:fNotes||null};
-      if (isNew) { const { data, error: _ie } = await supabase.from("guarantees").insert(payload).select().single();
-      if (_ie) throw new Error(_ie.message);
-      if (!data?.id) throw new Error("שגיאה בשמירה"); await logAudit({entity_type:"guarantee",entity_id:data.id,action:"create"}); }
-      else { await supabase.from("guarantees").update(payload).eq("id",editingId); await logAudit({entity_type:"guarantee",entity_id:editingId,action:"update"}); }
+      const payload: any = {
+        contract_id: fContractId,
+        guarantee_type: fType,
+        amount_required: fRequired ? Number(fRequired) : null,
+        amount_actual:   fActual   ? Number(fActual)   : null,
+        bank:             fBank || null,
+        reference_number: fRef || null,
+        start_date:       fStartDate || null,
+        end_date:         fEndDate || null,
+        status:           fStatus,
+        notes:            fNotes || null,
+      };
+      if (fPrevGuaranteeId) payload.previous_guarantee_id = fPrevGuaranteeId;
+
+      if (isNew) {
+        const { data, error: ie } = await supabase.from("guarantees").insert(payload).select().single();
+        if (ie) throw new Error(ie.message);
+        if (!data?.id) throw new Error("שגיאה בשמירה");
+        await logAudit({ entity_type: "guarantee", entity_id: data.id, action: "create" });
+        // If this is a replacement, close the previous one
+        if (fPrevGuaranteeId) {
+          await supabase.from("guarantees").update({
+            status: "returned",
+            return_date: new Date().toISOString().slice(0, 10),
+          }).eq("id", fPrevGuaranteeId);
+          await logAudit({ entity_type: "guarantee", entity_id: fPrevGuaranteeId, action: "replaced", notes: "החלפה ל-" + data.id });
+        }
+      } else {
+        await supabase.from("guarantees").update(payload).eq("id", editingId);
+        await logAudit({ entity_type: "guarantee", entity_id: editingId, action: "update" });
+      }
       setEditingId(""); await loadAll();
-    } catch(e:any) { alert("שגיאה: "+e?.message); }
+    } catch (e: any) { alert("שגיאה: " + e?.message); }
     finally { setSaving(false); }
   }
 
-  async function handleReturn(id: string) { if (!confirm("לסמן כהוחזרה?")) return; await supabase.from("guarantees").update({status:"returned",returned_at:new Date().toISOString()}).eq("id",id); await logAudit({entity_type:"guarantee",entity_id:id,action:"returned"}); await loadAll(); }
-  async function handleForfeit(id: string) { if (!confirm("לסמן כמומשה?")) return; await supabase.from("guarantees").update({status:"forfeited"}).eq("id",id); await logAudit({entity_type:"guarantee",entity_id:id,action:"forfeited"}); await loadAll(); }
+  // Extension: just shift the end_date. Stores the previous end_date so the
+  // history of extensions is auditable.
+  function openExtend(g: any) {
+    setExtendingId(g.id);
+    setExtNewEndDate(g.end_date || "");
+    setExtNotes("");
+  }
+  async function handleExtend() {
+    if (!extendingId || !extNewEndDate) { alert("חובה: תאריך חדש"); return; }
+    var g = guarantees.find(function(x) { return x.id === extendingId; });
+    var prevEnd = g?.end_date || null;
+    try {
+      await supabase.from("guarantees").update({
+        end_date: extNewEndDate,
+        previous_end_date: prevEnd,
+        extended_at: new Date().toISOString(),
+        notes: g?.notes
+          ? g.notes + "\n[הארכה " + new Date().toLocaleDateString("he-IL") + ": " + (prevEnd || "—") + " → " + extNewEndDate + (extNotes ? ", " + extNotes : "") + "]"
+          : "[הארכה: " + (prevEnd || "—") + " → " + extNewEndDate + (extNotes ? ", " + extNotes : "") + "]",
+      }).eq("id", extendingId);
+      await logAudit({ entity_type: "guarantee", entity_id: extendingId, action: "extend", notes: "ל-" + extNewEndDate });
+      setExtendingId(""); setExtNewEndDate(""); setExtNotes("");
+      await loadAll();
+    } catch (e: any) { alert("שגיאה: " + (e?.message || e)); }
+  }
 
-  const filtered = guarantees.filter(function(g){ return (filterSt==="all"||g.status===filterSt) && (filterPropIds.length===0||filterPropIds.includes(g.contracts?.property_id)); });
-  const active=guarantees.filter(function(g){return g.status==="active";});
-  const totalActive=active.reduce(function(s,g){return s+(g.amount_actual??0);},0);
-  const expiring=active.filter(function(g){return g.end_date&&daysLeft(g.end_date)<=60;});
-  const hasGap=active.filter(function(g){return (g.amount_actual??0)<(g.amount_required??0);});
-  const typeInfo = function(v: string){return GUARANTEE_TYPES.find(function(t){return t.v===v;})??GUARANTEE_TYPES[5];};
+  async function handleReturn(id: string) {
+    if (!confirm("לסמן כהוחזרה?")) return;
+    await supabase.from("guarantees").update({
+      status: "returned", return_date: new Date().toISOString().slice(0, 10),
+    }).eq("id", id);
+    await logAudit({ entity_type: "guarantee", entity_id: id, action: "returned" });
+    await loadAll();
+  }
+  async function handleForfeit(id: string) {
+    if (!confirm("לסמן כמומשה?")) return;
+    await supabase.from("guarantees").update({ status: "forfeited" }).eq("id", id);
+    await logAudit({ entity_type: "guarantee", entity_id: id, action: "forfeited" });
+    await loadAll();
+  }
+
+  // ─── Compute filtered + sorted list ────────────────────────────────
+  const filtered = guarantees.filter(function (g) {
+    var h = healthOf(g);
+    if (filterPropIds.length > 0 && !filterPropIds.includes(g.contracts?.property_id)) return false;
+    if (filterSt === "all") return true;
+    if (filterSt === "expired")   return h === "expired";
+    if (filterSt === "gap")       return h === "gap";
+    if (filterSt === "expiring")  return h === "expiring30" || h === "expiring60";
+    if (filterSt === "returned")  return g.status === "returned";
+    if (filterSt === "forfeited") return g.status === "forfeited";
+    // "active" — includes all health states that are still in-play
+    return g.status === "active";
+  });
+  // Sort: urgent first, then by end_date ascending
+  const sorted = filtered.slice().sort(function (a, b) {
+    var ha = healthOrder(healthOf(a));
+    var hb = healthOrder(healthOf(b));
+    if (ha !== hb) return ha - hb;
+    var ea = a.end_date ? new Date(a.end_date).getTime() : Infinity;
+    var eb = b.end_date ? new Date(b.end_date).getTime() : Infinity;
+    return ea - eb;
+  });
+
+  // ─── KPIs ──────────────────────────────────────────────────────────
+  const active        = guarantees.filter(function (g) { return g.status === "active"; });
+  const expired       = active.filter(function (g) { return healthOf(g) === "expired"; });
+  const expiring30    = active.filter(function (g) { return healthOf(g) === "expiring30"; });
+  const expiring60    = active.filter(function (g) { return healthOf(g) === "expiring60"; });
+  const hasGap        = active.filter(function (g) { return healthOf(g) === "gap"; });
+  const totalActive   = active.reduce(function (s, g) { return s + (g.amount_actual ?? 0); }, 0);
+  const totalRequired = active.reduce(function (s, g) { return s + (g.amount_required ?? 0); }, 0);
+  const typeInfo = function (v: string) { return GUARANTEE_TYPES.find(function (t) { return t.v === v; }) ?? GUARANTEE_TYPES[5]; };
 
   return (
     <div dir="rtl">
-      <div className="mb-6 flex items-center justify-between">
+      <div className="mb-6 flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-3xl font-bold text-slate-800">ערבויות</h1>
-          <p className="text-sm text-slate-500 mt-1">{active.length} פעילות | {fmtMoney(totalActive)}{expiring.length>0&&<span className="text-yellow-600 font-semibold"> | {expiring.length} פגות</span>}{hasGap.length>0&&<span className="text-red-600 font-semibold"> | {hasGap.length} פערים!</span>}</p>
+          <p className="text-sm text-slate-500 mt-1">
+            {active.length} פעילות | סה&quot;כ בפועל {fmtMoney(totalActive)} / נדרש {fmtMoney(totalRequired)}
+          </p>
         </div>
-        <button onClick={openNew} className="rounded-lg bg-blue-700 px-5 py-2.5 font-bold text-white hover:bg-blue-800">+ ערבות</button>
+        <button onClick={function() { openNew(); }} className="rounded-lg bg-blue-700 px-5 py-2.5 font-bold text-white hover:bg-blue-800" title="צור ערבות חדשה לשוכר">+ ערבות חדשה</button>
       </div>
 
-      <div className="grid grid-cols-4 gap-3 mb-5">
-        {[{label:"פעילות",value:active.length,sub:fmtMoney(totalActive),color:"text-slate-800",bg:"bg-white",f:"active"},{label:"פגות ב-60",value:expiring.length,sub:"יש לחדש",color:expiring.length>0?"text-yellow-700":"text-slate-400",bg:expiring.length>0?"bg-yellow-50":"bg-white",f:"active"},{label:"עם פער",value:hasGap.length,sub:"סכום נמוך",color:hasGap.length>0?"text-red-700":"text-slate-400",bg:hasGap.length>0?"bg-red-50":"bg-white",f:"active"},{label:"הכל",value:guarantees.length,sub:"",color:"text-slate-600",bg:"bg-white",f:"all"}].map(function(k){
-          return <button key={k.label} onClick={function(){setFilterSt(k.f);}} className={"rounded-xl border p-3 text-center transition-all "+k.bg+(filterSt===k.f?" border-blue-500 ring-2 ring-blue-300":" border-slate-200")}><div className={"text-2xl font-black "+k.color}>{k.value}</div><div className={"text-xs font-semibold "+k.color}>{k.label}</div>{k.sub&&<div className="text-xs text-slate-400">{k.sub}</div>}</button>;
+      {/* KPIs — clickable filters */}
+      <div className="grid grid-cols-5 gap-3 mb-5">
+        {[
+          { f: "all",       label: "הכל",        value: guarantees.length, sub: "כל הערבויות",            color: "text-slate-600",  bg: "bg-white" },
+          { f: "active",    label: "פעילות",     value: active.length,     sub: fmtMoney(totalActive),    color: "text-slate-800",  bg: "bg-white" },
+          { f: "expired",   label: "פג תוקף",    value: expired.length,    sub: "בתוקף 'פעיל' אך עברה תקפותם", color: expired.length > 0 ? "text-red-700" : "text-slate-400", bg: expired.length > 0 ? "bg-red-50" : "bg-white" },
+          { f: "expiring",  label: "פגות בקרוב", value: expiring30.length + expiring60.length, sub: "ב-60 הימים הקרובים", color: (expiring30.length + expiring60.length) > 0 ? "text-yellow-700" : "text-slate-400", bg: (expiring30.length + expiring60.length) > 0 ? "bg-yellow-50" : "bg-white" },
+          { f: "gap",       label: "עם פער",     value: hasGap.length,     sub: "בפועל < נדרש",            color: hasGap.length > 0 ? "text-orange-700" : "text-slate-400", bg: hasGap.length > 0 ? "bg-orange-50" : "bg-white" },
+        ].map(function (k) {
+          return (
+            <button key={k.label} onClick={function () { setFilterSt(k.f as any); }}
+              className={"rounded-xl border p-3 text-center transition-all " + k.bg + (filterSt === k.f ? " border-blue-500 ring-2 ring-blue-300" : " border-slate-200")}>
+              <div className={"text-2xl font-black " + k.color}>{k.value}</div>
+              <div className={"text-xs font-semibold " + k.color}>{k.label}</div>
+              {k.sub && <div className="text-[10px] text-slate-400 mt-0.5">{k.sub}</div>}
+            </button>
+          );
         })}
       </div>
 
       <div className="mb-4">
-        <PropertyHierarchyFilter onChange={function(f) { setFilterPropIds(f.propertyIds); }} />
+        <PropertyHierarchyFilter onChange={function (f) { setFilterPropIds(f.propertyIds); }} />
       </div>
 
-      <div className="flex gap-2 mb-4">
-        {[{v:"active",l:"פעילות"},{v:"returned",l:"הוחזרו"},{v:"forfeited",l:"מומשו"},{v:"all",l:"הכל"}].map(function(s){
-          return <button key={s.v} onClick={function(){setFilterSt(s.v);}} className={"rounded-xl border px-3 py-1.5 text-xs font-semibold "+(filterSt===s.v?"border-blue-500 bg-blue-50 text-blue-700":"border-slate-200 text-slate-600")}>{s.l}</button>;
+      <div className="flex gap-2 mb-4 flex-wrap">
+        {[
+          { v: "active",    l: "פעילות" },
+          { v: "expired",   l: "פג תוקף" },
+          { v: "expiring",  l: "פגות בקרוב" },
+          { v: "gap",       l: "עם פער" },
+          { v: "returned",  l: "הוחזרו" },
+          { v: "forfeited", l: "מומשו" },
+          { v: "all",       l: "הכל" },
+        ].map(function (s) {
+          return (
+            <button key={s.v} onClick={function () { setFilterSt(s.v as any); }}
+              className={"rounded-xl border px-3 py-1.5 text-xs font-semibold " + (filterSt === s.v ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-200 text-slate-600")}>
+              {s.l}
+            </button>
+          );
         })}
       </div>
 
-      {loading ? <div className="text-center py-12 text-slate-400">טוען...</div> : filtered.length===0 ? (
-        <div className="rounded-xl border-2 border-dashed border-slate-200 bg-white p-12 text-center text-slate-400"><div className="text-5xl mb-3">🏦</div><div>אין ערבויות</div></div>
+      {loading ? (
+        <div className="text-center py-12 text-slate-400">טוען...</div>
+      ) : sorted.length === 0 ? (
+        <div className="rounded-xl border-2 border-dashed border-slate-200 bg-white p-12 text-center text-slate-400">
+          <div className="text-5xl mb-3">🏦</div><div>אין ערבויות התואמות את הסינון</div>
+        </div>
       ) : (
         <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
           <table className="w-full text-right text-sm">
-            <thead className="bg-slate-50 border-b"><tr><th className="px-4 py-3 font-semibold text-slate-700">סוג</th><th className="px-4 py-3 font-semibold text-slate-700">שוכר/נכס</th><th className="px-4 py-3 font-semibold text-slate-700">נדרש</th><th className="px-4 py-3 font-semibold text-slate-700">בפועל</th><th className="px-4 py-3 font-semibold text-slate-700">פער</th><th className="px-4 py-3 font-semibold text-slate-700">תוקף</th><th className="px-4 py-3 font-semibold text-slate-700">פעולות</th></tr></thead>
+            <thead className="bg-slate-50 border-b">
+              <tr>
+                <th className="px-4 py-3 font-semibold text-slate-700">סטטוס</th>
+                <th className="px-4 py-3 font-semibold text-slate-700">סוג</th>
+                <th className="px-4 py-3 font-semibold text-slate-700">שוכר/נכס</th>
+                <th className="px-4 py-3 font-semibold text-slate-700">נדרש</th>
+                <th className="px-4 py-3 font-semibold text-slate-700">בפועל</th>
+                <th className="px-4 py-3 font-semibold text-slate-700">פער</th>
+                <th className="px-4 py-3 font-semibold text-slate-700">תוקף</th>
+                <th className="px-4 py-3 font-semibold text-slate-700">פעולות</th>
+              </tr>
+            </thead>
             <tbody>
-              {filtered.map(function(g) {
-                const ti=typeInfo(g.guarantee_type);
-                const diff=(g.amount_actual??0)-(g.amount_required??0);
-                const d=g.end_date?daysLeft(g.end_date):null;
-                const rowColor=g.status!=="active"?"opacity-60":diff<0?"bg-red-50":d!==null&&d<=30?"bg-orange-50":d!==null&&d<=60?"bg-yellow-50":"hover:bg-slate-50";
+              {sorted.map(function (g) {
+                const ti = typeInfo(g.guarantee_type);
+                const diff = (g.amount_actual ?? 0) - (g.amount_required ?? 0);
+                const d = g.end_date ? daysLeft(g.end_date) : null;
+                const h = healthOf(g);
+                const rowColor = h === "expired" ? "bg-red-50 border-r-4 border-red-500"
+                  : h === "gap" ? "bg-orange-50 border-r-4 border-orange-500"
+                  : h === "expiring30" ? "bg-yellow-50 border-r-4 border-yellow-400"
+                  : h === "expiring60" ? "bg-yellow-50/40"
+                  : h === "inactive" ? "opacity-60"
+                  : "hover:bg-slate-50";
                 return (
-                  <tr key={g.id} className={"border-t border-slate-100 "+rowColor}>
-                    <td className="px-4 py-3"><div className="flex items-center gap-2"><span className="text-xl">{ti.icon}</span><span className="font-semibold text-slate-800 text-xs">{ti.l}</span></div>{g.bank_name&&<div className="text-xs text-slate-400 mt-0.5">{g.bank_name}</div>}</td>
-                    <td className="px-4 py-3"><div className="font-medium text-slate-800">{g.contracts?.tenants?.name}</div><div className="text-xs text-slate-400">{g.contracts?.properties?.name}</div></td>
+                  <tr key={g.id} className={"border-t border-slate-100 " + rowColor}>
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      {h === "expired"   && <span className="text-[10px] bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full font-bold">⚠ פג תוקף</span>}
+                      {h === "gap"       && <span className="text-[10px] bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded-full font-bold">⚠ פער</span>}
+                      {h === "expiring30"&& <span className="text-[10px] bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded-full font-bold">⏰ ≤30 ימים</span>}
+                      {h === "expiring60"&& <span className="text-[10px] bg-yellow-50 text-yellow-700 px-1.5 py-0.5 rounded-full font-semibold">⏰ ≤60 ימים</span>}
+                      {h === "ok"        && <span className="text-[10px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full font-semibold">✓ תקין</span>}
+                      {g.status === "returned"  && <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded-full">הוחזרה</span>}
+                      {g.status === "forfeited" && <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded-full">מומשה</span>}
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-2"><span className="text-xl">{ti.icon}</span><span className="font-semibold text-slate-800 text-xs">{ti.l}</span></div>
+                      {g.bank && <div className="text-xs text-slate-400 mt-0.5">{g.bank}</div>}
+                      {g.reference_number && <div className="text-[10px] text-slate-400 font-mono">{g.reference_number}</div>}
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="font-medium text-slate-800">{g.contracts?.tenants?.name}</div>
+                      <div className="text-xs text-slate-400">{g.contracts?.properties?.name}</div>
+                    </td>
                     <td className="px-4 py-3 text-slate-600">{fmtMoney(g.amount_required)}</td>
                     <td className="px-4 py-3 font-semibold text-slate-800">{fmtMoney(g.amount_actual)}</td>
-                    <td className="px-4 py-3">{g.amount_required&&g.amount_actual&&<span className={diff<0?"text-red-600 font-bold":"text-green-600 font-semibold"}>{diff<0?"-₪"+Math.abs(Math.round(diff)).toLocaleString():"✓ תקין"}</span>}</td>
-                    <td className="px-4 py-3 text-xs text-slate-500">{fmtDate(g.end_date)}{d!==null&&d<=60&&g.status==="active"&&<div className={"text-xs font-bold "+(d<=30?"text-red-600":"text-yellow-600")}>{d} יום</div>}</td>
-                    <td className="px-4 py-3"><div className="flex gap-1">
-                      <button onClick={function(){openEdit(g);}} className="text-xs border border-slate-200 rounded px-2 py-1 text-slate-600 hover:bg-slate-50">✏️</button>
-                      {g.document_url&&<a href={g.document_url} target="_blank" rel="noopener noreferrer" className="text-xs border border-blue-200 rounded px-2 py-1 text-blue-600 hover:bg-blue-50">📄</a>}
-                      {g.status==="active"&&<><button onClick={function(){handleReturn(g.id);}} className="text-xs border border-green-200 rounded px-2 py-1 text-green-700 hover:bg-green-50">↩</button><button onClick={function(){handleForfeit(g.id);}} className="text-xs border border-red-200 rounded px-2 py-1 text-red-600 hover:bg-red-50">💸</button></>}
-                    </div></td>
+                    <td className="px-4 py-3">
+                      {g.amount_required && g.amount_actual && (
+                        <span className={diff < 0 ? "text-red-600 font-bold" : "text-green-600 font-semibold"}>
+                          {diff < 0 ? "-₪" + Math.abs(Math.round(diff)).toLocaleString() : "✓ תקין"}
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-xs text-slate-500 whitespace-nowrap">
+                      {fmtDate(g.end_date)}
+                      {d !== null && g.status === "active" && (
+                        d < 0 ? <div className="text-red-600 font-bold">פג לפני {Math.abs(d)} ימים</div>
+                        : d <= 60 ? <div className={"font-bold " + (d <= 30 ? "text-red-600" : "text-yellow-600")}>נותרו {d} ימים</div>
+                        : null
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex gap-1 flex-wrap">
+                        <button onClick={function () { openEdit(g); }} title="ערוך פרטי ערבות"
+                          className="text-xs border border-slate-200 rounded px-2 py-1 text-slate-600 hover:bg-slate-50">
+                          ✏️ ערוך
+                        </button>
+                        {g.status === "active" && (
+                          <button onClick={function () { openExtend(g); }} title="הארך תוקף — שנה רק את תאריך הסיום"
+                            className="text-xs border border-blue-200 bg-blue-50 rounded px-2 py-1 text-blue-700 hover:bg-blue-100">
+                            ⏰ הארכה
+                          </button>
+                        )}
+                        {g.status === "active" && (
+                          <button onClick={function () { openNew(g); }} title="החלף — סגור את הנוכחית ופתח ערבות חדשה לאותו שוכר"
+                            className="text-xs border border-indigo-200 bg-indigo-50 rounded px-2 py-1 text-indigo-700 hover:bg-indigo-100">
+                            🔄 החלפה
+                          </button>
+                        )}
+                        {g.document_url && (
+                          <a href={g.document_url} target="_blank" rel="noopener noreferrer" title="פתח מסמך ערבות"
+                            className="text-xs border border-blue-200 rounded px-2 py-1 text-blue-600 hover:bg-blue-50">
+                            📄
+                          </a>
+                        )}
+                        {g.status === "active" && (
+                          <>
+                            <button onClick={function () { handleReturn(g.id); }} title="סמן שהערבות הוחזרה לשוכר"
+                              className="text-xs border border-green-200 rounded px-2 py-1 text-green-700 hover:bg-green-50">
+                              ↩ הוחזרה
+                            </button>
+                            <button onClick={function () { handleForfeit(g.id); }} title="סמן שהערבות חולטה (מומשה)"
+                              className="text-xs border border-red-200 rounded px-2 py-1 text-red-600 hover:bg-red-50">
+                              💸 מימוש
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </td>
                   </tr>
                 );
               })}
@@ -128,25 +389,106 @@ export default function GuaranteesPage() {
         </div>
       )}
 
+      {/* Create / edit / replace modal */}
       {editingId && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={function(){setEditingId("");}}>
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={function(e){e.stopPropagation();}} dir="rtl">
-            <div className="sticky top-0 bg-white border-b px-6 py-4 flex items-center justify-between"><h2 className="font-bold text-slate-800 text-lg">{isNew?"ערבות חדשה":"עריכת ערבות"}</h2><button onClick={function(){setEditingId("");}} className="text-2xl text-slate-400">×</button></div>
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={function () { setEditingId(""); }}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={function (e) { e.stopPropagation(); }} dir="rtl">
+            <div className="sticky top-0 bg-white border-b px-6 py-4 flex items-center justify-between">
+              <h2 className="font-bold text-slate-800 text-lg">
+                {fPrevGuaranteeId ? "🔄 החלפת ערבות — ערבות חדשה" : isNew ? "ערבות חדשה" : "עריכת ערבות"}
+              </h2>
+              <button onClick={function () { setEditingId(""); }} className="text-2xl text-slate-400">×</button>
+            </div>
             <div className="p-6 space-y-4">
-              <div><label className="mb-1 block text-xs font-semibold text-slate-700">חוזה *</label><select value={fContractId} onChange={function(e){setFContractId(e.target.value);}} className={ic}><option value="">-- בחר --</option>{contracts.map(function(c){return <option key={c.id} value={c.id}>{c.tenants?.name} — {c.properties?.name}</option>;})}</select></div>
-              <div><label className="mb-2 block text-xs font-semibold text-slate-700">סוג</label><div className="grid grid-cols-3 gap-2">{GUARANTEE_TYPES.map(function(t){return <button key={t.v} type="button" onClick={function(){setFType(t.v);}} className={"rounded-lg border p-2 text-center "+(fType===t.v?"border-blue-500 bg-blue-50":"border-slate-200")}><div>{t.icon}</div><div className={"text-xs font-semibold "+(fType===t.v?"text-blue-700":"text-slate-600")}>{t.l}</div></button>;})}</div></div>
-              <div className="grid grid-cols-2 gap-3">
-                <div><label className="mb-1 block text-xs font-semibold text-slate-700">נדרש (₪)</label><input type="number" value={fRequired} onChange={function(e){setFRequired(e.target.value);}} className={ic}/></div>
-                <div><label className="mb-1 block text-xs font-semibold text-slate-700">בפועל (₪)</label><input type="number" value={fActual} onChange={function(e){setFActual(e.target.value);}} className={ic}/></div>
-                <div><label className="mb-1 block text-xs font-semibold text-slate-700">בנק/מוציא</label><input type="text" value={fBank} onChange={function(e){setFBank(e.target.value);}} className={ic}/></div>
-                <div><label className="mb-1 block text-xs font-semibold text-slate-700">אסמכתא</label><input type="text" value={fRef} onChange={function(e){setFRef(e.target.value);}} className={ic} dir="ltr"/></div>
-                <div><label className="mb-1 block text-xs font-semibold text-slate-700">תחילה</label><input type="date" value={fStartDate} onChange={function(e){setFStartDate(e.target.value);}} className={ic}/></div>
-                <div><label className="mb-1 block text-xs font-semibold text-slate-700">סיום</label><input type="date" value={fEndDate} onChange={function(e){setFEndDate(e.target.value);}} className={ic}/></div>
+              {fPrevGuaranteeId && (
+                <div className="rounded-lg bg-indigo-50 border border-indigo-200 p-3 text-xs text-indigo-800">
+                  בעת שמירה, הערבות הקודמת תיסומן אוטומטית כ"הוחזרה" וערבות זו תתפוס את מקומה.
+                </div>
+              )}
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">חוזה *</label>
+                <select value={fContractId} onChange={function (e) { setFContractId(e.target.value); }} className={ic}>
+                  <option value="">-- בחר --</option>
+                  {contracts.map(function (c) { return <option key={c.id} value={c.id}>{(c.tenants as any)?.name} — {(c.properties as any)?.name}</option>; })}
+                </select>
               </div>
-              <div><label className="mb-1 block text-xs font-semibold text-slate-700">סטטוס</label><select value={fStatus} onChange={function(e){setFStatus(e.target.value);}} className={ic}><option value="active">פעילה</option><option value="returned">הוחזרה</option><option value="forfeited">מומשה</option></select></div>
+              <div>
+                <label className="mb-2 block text-xs font-semibold text-slate-700">סוג</label>
+                <div className="grid grid-cols-3 gap-2">
+                  {GUARANTEE_TYPES.map(function (t) {
+                    return (
+                      <button key={t.v} type="button" onClick={function () { setFType(t.v); }}
+                        className={"rounded-lg border p-2 text-center " + (fType === t.v ? "border-blue-500 bg-blue-50" : "border-slate-200")}>
+                        <div>{t.icon}</div>
+                        <div className={"text-xs font-semibold " + (fType === t.v ? "text-blue-700" : "text-slate-600")}>{t.l}</div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><label className="mb-1 block text-xs font-semibold text-slate-700">נדרש (₪)</label><input type="number" value={fRequired} onChange={function (e) { setFRequired(e.target.value); }} className={ic}/></div>
+                <div><label className="mb-1 block text-xs font-semibold text-slate-700">בפועל (₪)</label><input type="number" value={fActual} onChange={function (e) { setFActual(e.target.value); }} className={ic}/></div>
+                <div><label className="mb-1 block text-xs font-semibold text-slate-700">בנק/מוציא</label><input type="text" value={fBank} onChange={function (e) { setFBank(e.target.value); }} className={ic}/></div>
+                <div><label className="mb-1 block text-xs font-semibold text-slate-700">אסמכתא</label><input type="text" value={fRef} onChange={function (e) { setFRef(e.target.value); }} className={ic} dir="ltr"/></div>
+                <div><label className="mb-1 block text-xs font-semibold text-slate-700">תחילה</label><input type="date" value={fStartDate} onChange={function (e) { setFStartDate(e.target.value); }} className={ic}/></div>
+                <div><label className="mb-1 block text-xs font-semibold text-slate-700">סיום</label><input type="date" value={fEndDate} onChange={function (e) { setFEndDate(e.target.value); }} className={ic}/></div>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">סטטוס</label>
+                <select value={fStatus} onChange={function (e) { setFStatus(e.target.value); }} className={ic}>
+                  <option value="active">פעילה</option>
+                  <option value="returned">הוחזרה</option>
+                  <option value="forfeited">מומשה</option>
+                </select>
+              </div>
+              <div><label className="mb-1 block text-xs font-semibold text-slate-700">הערות</label><textarea value={fNotes} onChange={function (e) { setFNotes(e.target.value); }} rows={2} className={ic}/></div>
               <div className="flex gap-3 pt-2">
-                <button onClick={function(){setEditingId("");}} className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm text-slate-600">ביטול</button>
-                <button onClick={handleSave} disabled={saving} className="flex-1 rounded-xl bg-blue-700 py-2.5 text-sm font-bold text-white disabled:opacity-50">{saving?"שומר...":"שמור"}</button>
+                <button onClick={function () { setEditingId(""); }} className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm text-slate-600">ביטול</button>
+                <button onClick={handleSave} disabled={saving} className="flex-1 rounded-xl bg-blue-700 py-2.5 text-sm font-bold text-white disabled:opacity-50">
+                  {saving ? "שומר..." : fPrevGuaranteeId ? "שמור והחלף" : "שמור"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Extend dialog — only changes end_date */}
+      {extendingId && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={function () { setExtendingId(""); }}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md" onClick={function (e) { e.stopPropagation(); }} dir="rtl">
+            <div className="border-b px-6 py-4 flex items-center justify-between">
+              <h2 className="font-bold text-slate-800 text-lg">⏰ הארכת תוקף הערבות</h2>
+              <button onClick={function () { setExtendingId(""); }} className="text-2xl text-slate-400">×</button>
+            </div>
+            <div className="p-6 space-y-3">
+              {(function () {
+                var g = guarantees.find(function(x) { return x.id === extendingId; });
+                if (!g) return null;
+                return (
+                  <div className="rounded-lg bg-slate-50 border border-slate-200 p-3 text-xs text-slate-700">
+                    <div><span className="text-slate-500">שוכר:</span> <span className="font-semibold">{g.contracts?.tenants?.name}</span></div>
+                    <div><span className="text-slate-500">תוקף נוכחי:</span> <span className="font-semibold">{fmtDate(g.end_date)}</span></div>
+                    {g.previous_end_date && <div><span className="text-slate-500">תוקף קודם (לפני הארכה):</span> <span className="font-semibold">{fmtDate(g.previous_end_date)}</span></div>}
+                  </div>
+                );
+              })()}
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">תאריך תוקף חדש *</label>
+                <input type="date" value={extNewEndDate} onChange={function (e) { setExtNewEndDate(e.target.value); }} className={ic}/>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">הערות (אופציונלי)</label>
+                <input type="text" value={extNotes} onChange={function (e) { setExtNotes(e.target.value); }} className={ic} placeholder="למשל: הסכמה טלפונית עם הבנק"/>
+              </div>
+              <div className="text-[11px] text-slate-500">
+                💡 ההארכה תישמר על הערבות הקיימת. התוקף הקודם יישמר לצורך מעקב.
+                אם הערבות הוחלפה (מסמך חדש מהבנק עם מספר אסמכתא חדש) — השתמש ב-"🔄 החלפה" במקום.
+              </div>
+              <div className="flex gap-3 pt-2">
+                <button onClick={function () { setExtendingId(""); }} className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm text-slate-600">ביטול</button>
+                <button onClick={handleExtend} className="flex-1 rounded-xl bg-blue-700 py-2.5 text-sm font-bold text-white">⏰ הארך</button>
               </div>
             </div>
           </div>
