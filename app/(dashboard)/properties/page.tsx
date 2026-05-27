@@ -282,11 +282,26 @@ export default function PropertiesPage() {
     return s + (base * ratio);
   },0);
   const selRevenue = selRevenueBase; // for backwards compat below
-  const selOccupied  = selSpaces.filter(function(s){return s.status==="occupied";}).length;
-  const selVacant    = selSpaces.filter(function(s){return s.status==="vacant";});
+  // Vacancy derived from contract_spaces — NOT from the cached spaces.status
+  // field. The status flag silently drifts when an amendment changes holdings
+  // (e.g. Golf's amendment took חנות 4 from "vacant" to occupied, but the
+  // flag wasn't updated). Computing from the relations means the truth always
+  // matches the source data, no syncing required.
+  //
+  // We include base contracts AND amendments in the held set, since an
+  // amendment that adds a space holds it from amendment_date onwards.
+  const allContractsForProp = contracts.filter(function(c) { return c.property_id === selected; });
+  const heldSpaceIds = new Set<string>();
+  allContractsForProp.forEach(function(c) {
+    (c.contract_spaces || []).forEach(function(cs: any) {
+      if (cs?.space_id) heldSpaceIds.add(cs.space_id);
+    });
+  });
+  const selOccupied  = selSpaces.filter(function(s){return heldSpaceIds.has(s.id);}).length;
+  const selVacant    = selSpaces.filter(function(s){return !heldSpaceIds.has(s.id);});
   // Occupancy by AREA (more meaningful than by count)
   const totalArea    = selSpaces.reduce(function(s,sp){return s + (Number(sp.area) || 0);}, 0);
-  const occupiedArea = selSpaces.filter(function(s){return s.status==="occupied";}).reduce(function(s,sp){return s + (Number(sp.area) || 0);}, 0);
+  const occupiedArea = selSpaces.filter(function(s){return heldSpaceIds.has(s.id);}).reduce(function(s,sp){return s + (Number(sp.area) || 0);}, 0);
   const selOccPct    = totalArea > 0 ? Math.round(occupiedArea/totalArea*100) : (selSpaces.length > 0 ? Math.round(selOccupied/selSpaces.length*100) : 0);
   // Contracts expiring within next 12 months
   const oneYearMs    = 365 * 24 * 60 * 60 * 1000;
