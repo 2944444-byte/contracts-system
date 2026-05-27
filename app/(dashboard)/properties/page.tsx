@@ -387,20 +387,33 @@ export default function PropertiesPage() {
                   </div>
                 )}
 
-                {/* KPI */}
+                {/* KPI. The revenue cards explicitly say "חודשי" + show the
+                    annual extrapolation underneath — the user previously
+                    couldn't tell whether the number was monthly or yearly. */}
                 <div className="grid grid-cols-5 gap-2">
                   {[
-                    {label: cpiLoading ? "מחשב הצמדה..." : "הכנסה צמודה", value:fmtMoney(selRevenueIndexed || selRevenueBase), color:"text-green-700", bg:"bg-green-50"},
-                    {label:"הכנסה לא צמודה", value:fmtMoney(selRevenueBase), color:"text-slate-700", bg:"bg-slate-50"},
+                    {
+                      label: cpiLoading ? "מחשב הצמדה..." : "שכ\"ד חודשי צמוד",
+                      value: fmtMoney(selRevenueIndexed || selRevenueBase),
+                      sub: "שנתי: " + fmtMoney((selRevenueIndexed || selRevenueBase) * 12),
+                      color: "text-green-700", bg: "bg-green-50",
+                    },
+                    {
+                      label: "שכ\"ד חודשי לא צמוד",
+                      value: fmtMoney(selRevenueBase),
+                      sub: "שנתי: " + fmtMoney(selRevenueBase * 12),
+                      color: "text-slate-700", bg: "bg-slate-50",
+                    },
                     {label:"תפוסה (לפי שטח)", value:selOccPct+"%",            color:"text-blue-700",  bg:"bg-blue-50"},
                     {label:selVacant.length > 0 ? selVacant.length + " פנויות" : "יחידות", value:selOccupied + "/" + selSpaces.length + " יח'",   color:"text-orange-700", bg:"bg-orange-50", link:"/units?propertyId="+selProp.id},
                     {label:"חוזים פעילים", value:String(selContracts.length),color:"text-purple-700",bg:"bg-purple-50", link:"/contracts"},
-                  ].map(function(k) {
+                  ].map(function(k: any) {
                     return (
-                      <div key={k.label} className={"rounded-xl p-3 text-center " + k.bg + ((k as any).link ? " cursor-pointer hover:ring-2 hover:ring-blue-300 transition-all" : "")}
-                        onClick={(k as any).link ? function(){router.push((k as any).link);} : undefined}>
+                      <div key={k.label} className={"rounded-xl p-3 text-center " + k.bg + (k.link ? " cursor-pointer hover:ring-2 hover:ring-blue-300 transition-all" : "")}
+                        onClick={k.link ? function(){router.push(k.link);} : undefined}>
                         <div className={"text-lg font-black " + k.color}>{k.value}</div>
-                        <div className="text-xs text-slate-400">{k.label}{(k as any).link ? " →" : ""}</div>
+                        <div className="text-xs text-slate-400">{k.label}{k.link ? " →" : ""}</div>
+                        {k.sub && <div className="text-[10px] text-slate-400 mt-0.5">{k.sub}</div>}
                       </div>
                     );
                   })}
