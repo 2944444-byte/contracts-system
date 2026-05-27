@@ -47,6 +47,7 @@ export default function CashflowPage() {
   const [compareYoY, setCompareYoY] = useState<boolean>(false);
 
   const [properties,   setProperties]   = useState<any[]>([]);
+  const [spaces,       setSpaces]       = useState<any[]>([]);
   const [contracts,    setContracts]    = useState<any[]>([]);
   const [advances,     setAdvances]     = useState<any[]>([]);
   const [charges,      setCharges]      = useState<any[]>([]);
@@ -69,13 +70,16 @@ export default function CashflowPage() {
     // Supabase query builders are thenable but not strict Promises — using
     // `any[]` here keeps Promise.all happy without forcing wrappers.
     const promises: any[] = [
-      // Properties — for total_area (occupancy denominator)
+      // Properties — name + total_area (kept for the contract-context bar)
       supabase.from("properties").select("id, name, total_area"),
-      // Contracts that are or might be active in the year — pull contract_spaces
-      // so we can compute the REAL occupied area from the spaces table instead
-      // of the often-overstated charged_area field.
+      // All spaces — the TRUE denominator for occupancy. properties.total_area
+      // is manually entered and frequently differs from the actual sum of
+      // spaces.area, so we use this instead.
+      supabase.from("spaces").select("id, property_id, area, space_name"),
+      // Contracts. contract_spaces brings the space_ids each contract holds —
+      // we sum the spaces.area for those ids to get the real occupied area.
       supabase.from("contracts")
-        .select("id, status, is_amendment, rent_type, revenue_pct, start_date, end_date, charged_area, rent_per_sqm, vat_type, tenant_id, property_id, tenants(name), properties(name), contract_spaces(spaces(area))")
+        .select("id, status, is_amendment, rent_type, revenue_pct, start_date, end_date, charged_area, rent_per_sqm, vat_type, tenant_id, property_id, tenants(name), properties(name), contract_spaces(space_id, spaces(area))")
         .eq("is_amendment", false),
       // Advance payments for the year
       supabase.from("advance_payments")
@@ -107,14 +111,15 @@ export default function CashflowPage() {
 
     const results = await Promise.all(promises);
     setProperties(results[0].data || []);
-    setContracts(results[1].data || []);
-    setAdvances(results[2].data || []);
-    setCharges(results[3].data || []);
-    setRevenues(results[4].data || []);
+    setSpaces(results[1].data || []);
+    setContracts(results[2].data || []);
+    setAdvances(results[3].data || []);
+    setCharges(results[4].data || []);
+    setRevenues(results[5].data || []);
     if (compareYoY) {
-      setAdvancesPrev(results[5]?.data || []);
-      setChargesPrev(results[6]?.data || []);
-      setRevenuesPrev(results[7]?.data || []);
+      setAdvancesPrev(results[6]?.data || []);
+      setChargesPrev(results[7]?.data || []);
+      setRevenuesPrev(results[8]?.data || []);
     } else {
       setAdvancesPrev([]); setChargesPrev([]); setRevenuesPrev([]);
     }
@@ -206,11 +211,20 @@ export default function CashflowPage() {
     });
 
     // 4) Occupancy + contract events
+    // Denominator: sum of spaces.area for the filtered property/properties —
+    // same formula /properties uses, matching the user's expectation.
     var matchingContracts = contracts.filter(contractMatchesFilter);
+    var totalArea = spaces
+      .filter(function(s) { return !propertyFilter || s.property_id === propertyFilter; })
+      .reduce(function(s, sp) { return s + (Number(sp.area) || 0); }, 0);
+    // Map space_id → area for quick lookup
+    var spaceAreaById: Record<string, number> = {};
+    spaces.forEach(function(sp) { spaceAreaById[sp.id] = Number(sp.area) || 0; });
+
     months.forEach(function(mb) {
       var monthStart = new Date(yr, mb.month - 1, 1);
       var monthEnd   = new Date(yr, mb.month, 0);
-      var occupied = 0;
+      var heldSpaceIds: Record<string, boolean> = {};
       var active = 0;
       matchingContracts.forEach(function(c) {
         var cs = c.start_date ? new Date(c.start_date) : null;
@@ -218,15 +232,11 @@ export default function CashflowPage() {
         if (cs && cs > monthEnd) return;
         if (ce && ce < monthStart) return;
         if (c.status !== "active" && c.status !== "expiring" && c.status !== "extended") return;
-        // True occupied area = sum of the contract's actual spaces.area, not the
-        // contract.charged_area field (which is manually entered and often
-        // overstated — making occupancy look like 100% when it isn't).
-        var actualArea = ((c.contract_spaces as any[]) || []).reduce(function(s: number, cs2: any) {
-          var sp = cs2?.spaces;
-          var spArea = Array.isArray(sp) ? (sp[0]?.area || 0) : (sp?.area || 0);
-          return s + (Number(spArea) || 0);
-        }, 0);
-        occupied += actualArea > 0 ? actualArea : (Number(c.charged_area) || 0);
+        // Collect the space_ids this contract holds. The actual area comes
+        // from the spaces table to avoid the data drift in contract.charged_area.
+        ((c.contract_spaces as any[]) || []).forEach(function(cs2: any) {
+          if (cs2?.space_id) heldSpaceIds[cs2.space_id] = true;
+        });
         active++;
         if (cs && cs.getFullYear() === yr && cs.getMonth() === mb.month - 1) {
           mb.contractsStarting.push({ name: (c.tenants as any)?.name || "—", date: c.start_date });
@@ -235,9 +245,7 @@ export default function CashflowPage() {
           mb.contractsEnding.push({ name: (c.tenants as any)?.name || "—", date: c.end_date });
         }
       });
-      var totalArea = (propertyFilter
-        ? Number(properties.find(function(p) { return p.id === propertyFilter; })?.total_area) || 0
-        : properties.reduce(function(s, p) { return s + (Number(p.total_area) || 0); }, 0));
+      var occupied = Object.keys(heldSpaceIds).reduce(function(s, sid) { return s + (spaceAreaById[sid] || 0); }, 0);
       mb.occupiedArea = occupied;
       mb.vacantArea = Math.max(0, totalArea - occupied);
       mb.activeContracts = active;
