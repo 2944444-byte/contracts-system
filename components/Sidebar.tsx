@@ -19,7 +19,6 @@ const NAV: NavItem[] = [
   {section:"כספים"},
   {href:"/billing",      label:"חיובי נכס",      icon:"🧾"},
   {href:"/payments",     label:"חיובים",         icon:"💳"},
-  {href:"/management",   label:"דמי ניהול",      icon:"🔧"},
   {href:"/indexation",   label:'הצמדה CBS',     icon:"📈"},
   {href:"/revenue",      label:'שכ"ד פידיון',   icon:"📊"},
   {href:"/cashflow",     label:"תזרים שנתי",     icon:"💹"},
