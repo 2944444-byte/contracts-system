@@ -94,18 +94,18 @@ function Dropdown(props: {
   );
 }
 
-// Unified row shape. Three sources:
+// Unified row shape. Four sources:
 //   "charge"      — single row from the `charges` table
-//   "rent_check"  — virtual row aggregating advance_payments by (contract+check_date).
-//                   One check from the tenant typically covers all units for a period;
-//                   marking it paid updates every underlying advance_payments row.
+//   "rent_check"  — virtual row aggregating advance_payments by (contract+check_date)
+//   "revenue"     — virtual row from revenue_reports (monthly rent for
+//                   revenue-pct tenants who don't have advance_payments)
 type Row = {
   id: string;
-  source: "charge" | "rent_check";
+  source: "charge" | "rent_check" | "revenue";
   contractId: string;
   tenantName: string;
   propertyName: string;
-  chargeType: string;          // for charges; "rent" for advances
+  chargeType: string;
   description: string;
   baseAmount: number;
   vatAmount: number;
@@ -114,10 +114,11 @@ type Row = {
   dueDate: string | null;
   status: "pending" | "approved" | "paid";
   createdAt: string;
-  // rent_check details
-  underlyingAdvanceIds?: string[];   // ids in advance_payments to mark paid together
+  underlyingAdvanceIds?: string[];
   unitsBreakdown?: Array<{ name: string; amount: number; period: string }>;
   period?: string;
+  // revenue row reference
+  revenueReportId?: string;
 };
 
 export default function PaymentsPage() {
@@ -128,8 +129,9 @@ export default function PaymentsPage() {
   const [editingId, setEditingId] = useState("");
   const [saving,    setSaving]    = useState(false);
 
-  // Filters
-  const [filterStatus,   setFilterStatus]   = useState<"all" | "pending" | "approved" | "paid" | "overdue">("pending");
+  // Filters. Default to "all" so the user sees full history (paid + unpaid)
+  // out of the box — they can still click any KPI card to drill in.
+  const [filterStatus,   setFilterStatus]   = useState<"all" | "pending" | "approved" | "paid" | "overdue">("all");
   const [filterYear,     setFilterYear]     = useState<number>(currentYear);
   const [filterType,     setFilterType]     = useState<string>("");
   const [filterProperty, setFilterProperty] = useState<string>("");
@@ -160,7 +162,7 @@ export default function PaymentsPage() {
     var yearStart = filterYear + "-01-01";
     var yearEnd   = (filterYear + 1) + "-01-01";
 
-    const [chargesRes, contractsRes, advRes] = await Promise.all([
+    const [chargesRes, contractsRes, advRes, revRes] = await Promise.all([
       // Load all charges with a due_date in the selected year. Falls back to
       // billing_period_start when due_date is null (older data).
       supabase.from("charges")
@@ -169,14 +171,22 @@ export default function PaymentsPage() {
         .or("due_date.lt." + yearEnd + ",billing_period_start.lt." + yearEnd)
         .order("due_date", { ascending: true }),
       supabase.from("contracts").select("id,vat_type,rent_per_sqm,charged_area,investment_addition,tenants(name),properties(name)").in("status", ["active", "expiring", "extended"]),
-      // Unpaid rent advances for the year — virtual rows so the user has
-      // a single screen showing what each tenant owes right now.
+      // Rent advances for the year (both paid + unpaid — paid ones still need
+      // to show on this screen so שולמו KPI is honest)
       includeAdvances ? supabase.from("advance_payments")
         .select("id, contract_id, period, space_name, tenant_name, check_date, total_with_vat, total_before_vat, vat_amount, actual_paid, waived")
         .gte("check_date", yearStart)
         .lt("check_date", yearEnd)
         .order("check_date", { ascending: true })
         : Promise.resolve({ data: [] }),
+      // Revenue (פידיון) reports for the year — these are the monthly rent
+      // amounts for revenue-pct tenants who don't have advance_payments.
+      // Without this, those tenants are invisible on the payments screen.
+      supabase.from("revenue_reports")
+        .select("id, contract_id, report_month, gross_revenue, final_rent, actual_paid, contracts(tenants(name), properties(name), vat_type)")
+        .gte("report_month", yearStart)
+        .lt("report_month", yearEnd)
+        .order("report_month", { ascending: true }),
     ]);
 
     var ch = chargesRes.data || [];
@@ -236,6 +246,42 @@ export default function PaymentsPage() {
       };
       checksMap[key].rows.push(a);
     });
+    // Revenue (פידיון) reports → virtual rows
+    var revenueRows = (revRes.data || []);
+    revenueRows.forEach(function(rev: any) {
+      var finalRent = Number(rev.final_rent) || 0;
+      if (finalRent < 0.01) return;
+      var contract = rev.contracts || contractMap[rev.contract_id];
+      var tenant = (contract?.tenants as any)?.name || "—";
+      var property = (contract?.properties as any)?.name || "";
+      var vatType = (contract?.vat_type) || "exempt";
+      var vat = vatType === "taxable" ? finalRent * 0.18 : 0;
+      var monthDate = new Date(rev.report_month);
+      var monthLabel = HEB_MONTHS[monthDate.getMonth() + 1] + " " + monthDate.getFullYear();
+      var paid = Number(rev.actual_paid) || 0;
+      allRows.push({
+        id: "rev-" + rev.id,
+        source: "revenue",
+        contractId: rev.contract_id,
+        tenantName: tenant,
+        propertyName: property,
+        chargeType: "rent",
+        description: "שכ\"ד פידיון — " + monthLabel + " (מחזור " + fmtMoney(Number(rev.gross_revenue) || 0) + ")",
+        baseAmount: finalRent,
+        vatAmount: vat,
+        totalAmount: finalRent + vat,
+        vatType: vatType,
+        // Due 30 days after the report month end
+        dueDate: (function() {
+          var d = new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 30);
+          return d.toISOString().slice(0, 10);
+        })(),
+        status: paid >= finalRent * 0.99 ? "paid" : "pending",
+        createdAt: rev.report_month,
+        revenueReportId: rev.id,
+      });
+    });
+
     Object.keys(checksMap).forEach(function(key) {
       var ck = checksMap[key];
       var c = contractMap[ck.contractId];
@@ -356,6 +402,16 @@ export default function PaymentsPage() {
     await loadAll();
   }
 
+  // Marks a revenue (פידיון) report's rent as collected.
+  async function markRevenuePaid(row: Row) {
+    if (!row.revenueReportId) return;
+    var today = new Date().toISOString().slice(0, 10);
+    await supabase.from("revenue_reports").update({
+      actual_paid: row.baseAmount, actual_paid_date: today,
+    }).eq("id", row.revenueReportId);
+    await loadAll();
+  }
+
   // Bulk mark: when a single tenant payment covers multiple debts (rent
   // check + CPI diff + insurance), the user selects them all and clicks
   // "סמן את הנבחרים כשולמו". One round-trip per row.
@@ -370,6 +426,8 @@ export default function PaymentsPage() {
         await supabase.from("charges").update({ status: "paid", paid_at: new Date().toISOString() }).eq("id", row.id);
       } else if (row.source === "rent_check") {
         await markRentCheckPaid(row);
+      } else if (row.source === "revenue") {
+        await markRevenuePaid(row);
       }
     }
     setSelected({});
@@ -460,7 +518,7 @@ export default function PaymentsPage() {
     setCollapsedMonths(function(prev) { return Object.assign({}, prev, { [key]: !prev[key] }); });
   }
 
-  // Mark every visible unpaid row as paid in one click (charges + rent checks).
+  // Mark every visible unpaid row as paid in one click — covers all 3 sources.
   async function bulkMarkAllPaid() {
     var toMark = filtered.filter(function(r) { return r.status !== "paid"; });
     if (toMark.length === 0) { alert("אין חיובים לסמן"); return; }
@@ -470,6 +528,8 @@ export default function PaymentsPage() {
         await supabase.from("charges").update({ status: "paid", paid_at: new Date().toISOString() }).eq("id", r.id);
       } else if (r.source === "rent_check") {
         await markRentCheckPaid(r);
+      } else if (r.source === "revenue") {
+        await markRevenuePaid(r);
       }
     }
     await loadAll();
@@ -717,6 +777,9 @@ export default function PaymentsPage() {
                                     )}
                                   </div>
                                 )}
+                                {r.source === "revenue" && (
+                                  <div className="text-[10px] text-purple-700 font-semibold mt-0.5">📊 שכ&quot;ד פידיון</div>
+                                )}
                               </td>
                               <td className="px-4 py-2.5 font-bold text-slate-800 font-mono whitespace-nowrap">
                                 {fmtMoney(r.totalAmount)}
@@ -742,6 +805,9 @@ export default function PaymentsPage() {
                                   )}
                                   {r.status !== "paid" && r.source === "rent_check" && (
                                     <button onClick={function() { markRentCheckPaid(r); }} className="text-xs bg-green-600 text-white px-2 py-1 rounded font-semibold" title={"סמן את כל " + unitCount + " היחידות כשולמו"}>₪ שולם</button>
+                                  )}
+                                  {r.status !== "paid" && r.source === "revenue" && (
+                                    <button onClick={function() { markRevenuePaid(r); }} className="text-xs bg-green-600 text-white px-2 py-1 rounded font-semibold" title="סמן שכ&quot;ד פידיון כשולם">₪ שולם</button>
                                   )}
                                   <button onClick={function() { sendLetter(r); }} className="text-xs border border-amber-200 bg-amber-50 rounded px-2 py-1 text-amber-700 hover:bg-amber-100" title="צור טיוטת מכתב דרישה">📧</button>
                                   {r.source === "charge" && (
