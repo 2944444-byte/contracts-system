@@ -63,8 +63,17 @@ function Dropdown(props: {
       </button>
       {open && (
         <div
-          className="absolute z-50 top-full mt-1 bg-white border border-slate-200 rounded-lg shadow-xl max-h-72 overflow-y-auto"
-          style={{ right: 0, minWidth: "100%", maxWidth: "min(360px, calc(100vw - 40px))" }}
+          className="absolute z-50 bg-white border border-slate-200 rounded-lg shadow-xl max-h-72 overflow-y-auto"
+          style={{
+            top: "calc(100% + 4px)",
+            right: 0,
+            // Width = widest item, clamped between min/max. Critically NOT
+            // "minWidth: 100%" — that was inheriting from a flex parent and
+            // blowing the panel up to most of the viewport.
+            width: "max-content",
+            minWidth: "140px",
+            maxWidth: "260px",
+          }}
         >
           {props.options.map(function(o) {
             var isSel = o.value === props.value;
@@ -73,7 +82,7 @@ function Dropdown(props: {
                 key={o.value || "__empty"}
                 type="button"
                 onClick={function() { props.onChange(o.value); setOpen(false); }}
-                className={"w-full text-right px-3 py-2 text-sm whitespace-nowrap " + (isSel ? "bg-blue-50 text-blue-700 font-semibold" : "text-slate-700 hover:bg-slate-50")}
+                className={"block w-full text-right px-3 py-2 text-sm whitespace-nowrap overflow-hidden text-ellipsis " + (isSel ? "bg-blue-50 text-blue-700 font-semibold" : "text-slate-700 hover:bg-slate-50")}
               >
                 {o.label}
               </button>
