@@ -111,11 +111,10 @@ export default function PaymentsPage() {
     ]);
 
     var ch = chargesRes.data || [];
-    var adv = (advRes.data || []).filter(function(a: any) {
-      // Only unpaid + not waived
-      var paid = Number(a.actual_paid) || 0;
-      return !a.waived && paid < 1;
-    });
+    // Keep BOTH paid and unpaid advances — paid ones still need to appear
+    // on this screen so the שולמו KPI reflects collected rent. Only waived
+    // advances are dropped entirely (they're explicitly cancelled).
+    var adv = (advRes.data || []).filter(function(a: any) { return !a.waived; });
 
     // Property lookup for advance rows (advance_payments doesn't join properties cleanly)
     var contractMap: Record<string, any> = {};
@@ -179,6 +178,10 @@ export default function PaymentsPage() {
       var unitsLabel = unitNames.length > 0
         ? (unitNames.length <= 2 ? unitNames.join(", ") : unitNames.slice(0, 2).join(", ") + " +" + (unitNames.length - 2))
         : "—";
+      // Check status: paid only when every underlying advance row was marked
+      // paid (actual_paid > 0). A partially-paid check stays "לתשלום" because
+      // we still owe collecting the rest.
+      var allPaid = ck.rows.every(function(r) { return (Number(r.actual_paid) || 0) > 0; });
       allRows.push({
         id: "check-" + key,
         source: "rent_check",
@@ -192,7 +195,7 @@ export default function PaymentsPage() {
         totalAmount: totalWith,
         vatType: "taxable",
         dueDate: ck.checkDate,
-        status: "pending",
+        status: allPaid ? "paid" : "pending",
         createdAt: ck.checkDate,
         underlyingAdvanceIds: ck.rows.map(function(r) { return r.id; }),
         unitsBreakdown: ck.rows.map(function(r) {
