@@ -1,8 +1,22 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit-log';
 import PropertyHierarchyFilter from '@/components/PropertyHierarchyFilter';
+
+// Minimum months of rent that a guarantee should cover. Below this, the
+// row is flagged "underinsured". Industry norm in Israel is ~3 months.
+const MIN_COVERAGE_MONTHS = 3;
+
+// Doc types stored inside guarantees.documents (jsonb array).
+const DOC_TYPES: Array<{v: string; l: string; icon: string}> = [
+  { v: "original",    l: "מקור",       icon: "📄" },
+  { v: "extension",   l: "הארכה",      icon: "⏰" },
+  { v: "replacement", l: "החלפה",      icon: "🔄" },
+  { v: "amendment",   l: "תיקון",      icon: "✏️" },
+  { v: "other",       l: "אחר",        icon: "📎" },
+];
+function docTypeInfo(v: string) { return DOC_TYPES.find(function(d) { return d.v === v; }) || DOC_TYPES[4]; }
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 const GUARANTEE_TYPES = [
@@ -41,7 +55,7 @@ export default function GuaranteesPage() {
   const [editingId,  setEditingId]  = useState("");
   const [isNew,      setIsNew]      = useState(false);
   const [saving,     setSaving]     = useState(false);
-  const [filterSt,   setFilterSt]   = useState<"active" | "expired" | "gap" | "expiring" | "returned" | "forfeited" | "all">("active");
+  const [filterSt,   setFilterSt]   = useState<"active" | "expired" | "gap" | "expiring" | "returned" | "forfeited" | "all" | "underinsured">("active");
   const [filterPropIds, setFilterPropIds] = useState<string[]>([]);
 
   // Form state — used for both create and edit
@@ -61,20 +75,59 @@ export default function GuaranteesPage() {
   const [extendingId, setExtendingId] = useState("");
   const [extNewEndDate, setExtNewEndDate] = useState("");
   const [extNotes,    setExtNotes]    = useState("");
+  const [extDocUrl,   setExtDocUrl]   = useState("");
+  const [extDocLabel, setExtDocLabel] = useState("");
+  const extFileRef = useRef<HTMLInputElement>(null);
+  const [extUploading, setExtUploading] = useState(false);
+
+  // Upload state for the new/edit modal main document.
+  const [fDocUrl,     setFDocUrl]     = useState("");
+  const newFileRef = useRef<HTMLInputElement>(null);
+  const [fUploading, setFUploading] = useState(false);
 
   useEffect(function () { loadAll(); }, []);
 
   async function loadAll() {
     const [{ data: g }, { data: c }] = await Promise.all([
       supabase.from("guarantees")
-        .select("*, contracts(id, property_id, start_date, end_date, status, tenants(name), properties(name), contract_spaces(spaces(space_name)))")
+        .select("*, contracts(id, property_id, start_date, end_date, status, tenants(name), properties(name), contract_spaces(charge_method, fixed_rent, price_per_sqm, revenue_pct, min_rent, spaces(space_name, area)))")
         .order("end_date"),
       supabase.from("contracts")
-        .select("id, start_date, end_date, status, tenants(name), properties(name), contract_spaces(spaces(space_name))")
+        .select("id, property_id, start_date, end_date, status, tenants(name), properties(name), contract_spaces(charge_method, fixed_rent, price_per_sqm, revenue_pct, min_rent, spaces(space_name, area)), guarantees(id, status, end_date)")
         .in("status", ["active", "expiring", "extended", "upcoming"])
         .order("start_date", { ascending: false }),
     ]);
     setGuarantees(g ?? []); setContracts(c ?? []); setLoading(false);
+  }
+
+  // Estimated monthly rent for a contract — sum of contract_spaces rent.
+  // Returns null when nothing can be inferred (e.g. fully revenue-based with
+  // no min_rent).
+  function monthlyRentOf(contract: any): number | null {
+    if (!contract?.contract_spaces?.length) return null;
+    var total = 0; var counted = 0;
+    contract.contract_spaces.forEach(function(cs: any) {
+      var area = cs?.spaces?.area ?? 0;
+      if (cs.charge_method === "fixed" || (cs.fixed_rent && cs.fixed_rent > 0)) {
+        total += Number(cs.fixed_rent || 0); counted++;
+      } else if (cs.charge_method === "per_sqm" || (cs.price_per_sqm && cs.price_per_sqm > 0)) {
+        total += Number(cs.price_per_sqm || 0) * Number(area); counted++;
+      } else if (cs.min_rent && cs.min_rent > 0) {
+        // revenue-based; min_rent is the floor
+        total += Number(cs.min_rent); counted++;
+      }
+    });
+    return counted > 0 ? total : null;
+  }
+
+  // Upload a file to the documents bucket; returns the public URL.
+  async function uploadDocFile(file: File, prefix: string): Promise<string> {
+    const safe = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+    const path = "guarantees/" + prefix + "_" + Date.now() + "_" + safe;
+    const { error: upErr } = await supabase.storage.from("documents").upload(path, file);
+    if (upErr) throw upErr;
+    const { data: urlData } = supabase.storage.from("documents").getPublicUrl(path);
+    return urlData.publicUrl;
   }
 
   // Build a unit-list string from contract_spaces relations.
@@ -96,8 +149,10 @@ export default function GuaranteesPage() {
     return "";
   }
 
-  function openNew(prefillFromGuarantee?: any) {
+  function openNew(prefillFromGuarantee?: any, prefillContractId?: string) {
     setIsNew(true); setEditingId("new");
+    setFDocUrl("");
+    if (newFileRef.current) newFileRef.current.value = "";
     if (prefillFromGuarantee) {
       // "Replace" flow — copy contract + type from old, blank everything else
       setFContractId(prefillFromGuarantee.contract_id ?? "");
@@ -112,7 +167,7 @@ export default function GuaranteesPage() {
       setFNotes("מחליפה ערבות " + (prefillFromGuarantee.reference_number || prefillFromGuarantee.bank || "קודמת"));
       setFPrevGuaranteeId(prefillFromGuarantee.id);
     } else {
-      setFContractId(""); setFType("bank"); setFRequired(""); setFActual("");
+      setFContractId(prefillContractId || ""); setFType("bank"); setFRequired(""); setFActual("");
       setFBank(""); setFRef(""); setFStartDate(""); setFEndDate("");
       setFStatus("active"); setFNotes(""); setFPrevGuaranteeId(null);
     }
@@ -126,12 +181,38 @@ export default function GuaranteesPage() {
     setFStartDate(g.start_date?.split("T")[0] ?? ""); setFEndDate(g.end_date?.split("T")[0] ?? "");
     setFStatus(g.status ?? "active"); setFNotes(g.notes ?? "");
     setFPrevGuaranteeId(g.previous_guarantee_id ?? null);
+    setFDocUrl(g.document_url ?? "");
+    if (newFileRef.current) newFileRef.current.value = "";
+  }
+
+  // File upload from the new/edit modal.
+  async function handleNewFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setFUploading(true);
+    try {
+      const url = await uploadDocFile(file, isNew ? "new" : (editingId || "edit"));
+      setFDocUrl(url);
+    } catch (err: any) { alert("שגיאה בהעלאה: " + (err?.message || err)); }
+    finally { setFUploading(false); }
   }
 
   async function handleSave() {
     if (!fContractId) { alert("חובה: חוזה"); return; }
     setSaving(true);
     try {
+      const existing = !isNew ? guarantees.find(function(x) { return x.id === editingId; }) : null;
+      const prevDocs: any[] = Array.isArray(existing?.documents) ? existing.documents : [];
+      const docs = prevDocs.slice();
+      // If a new doc URL was provided, append it to the history. We tag the
+      // first ever doc as "original", subsequent ones as "replacement" (in
+      // the dedicated replace flow we tag the new guarantee's doc as
+      // "original" because the OLD one keeps its own history).
+      if (fDocUrl && fDocUrl !== existing?.document_url) {
+        var typ = (isNew || prevDocs.length === 0) ? "original" : "replacement";
+        docs.push({ type: typ, url: fDocUrl, uploaded_at: new Date().toISOString() });
+      }
+
       const payload: any = {
         contract_id: fContractId,
         guarantee_type: fType,
@@ -143,6 +224,8 @@ export default function GuaranteesPage() {
         end_date:         fEndDate || null,
         status:           fStatus,
         notes:            fNotes || null,
+        document_url:     fDocUrl || null,
+        documents:        docs,
       };
       if (fPrevGuaranteeId) payload.previous_guarantee_id = fPrevGuaranteeId;
 
@@ -174,22 +257,49 @@ export default function GuaranteesPage() {
     setExtendingId(g.id);
     setExtNewEndDate(g.end_date || "");
     setExtNotes("");
+    setExtDocUrl("");
+    setExtDocLabel("");
+    if (extFileRef.current) extFileRef.current.value = "";
+  }
+  async function handleExtFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setExtUploading(true);
+    try {
+      const url = await uploadDocFile(file, "ext_" + extendingId);
+      setExtDocUrl(url);
+    } catch (err: any) { alert("שגיאה בהעלאה: " + (err?.message || err)); }
+    finally { setExtUploading(false); }
   }
   async function handleExtend() {
     if (!extendingId || !extNewEndDate) { alert("חובה: תאריך חדש"); return; }
     var g = guarantees.find(function(x) { return x.id === extendingId; });
     var prevEnd = g?.end_date || null;
+    var prevDocs: any[] = Array.isArray(g?.documents) ? g.documents : [];
+    var newDocs = prevDocs.slice();
+    if (extDocUrl) {
+      newDocs.push({
+        type: "extension",
+        url: extDocUrl,
+        label: extDocLabel || ("הארכה עד " + extNewEndDate),
+        uploaded_at: new Date().toISOString(),
+        prev_end_date: prevEnd,
+        new_end_date: extNewEndDate,
+      });
+    }
     try {
       await supabase.from("guarantees").update({
         end_date: extNewEndDate,
         previous_end_date: prevEnd,
         extended_at: new Date().toISOString(),
+        documents: newDocs,
         notes: g?.notes
-          ? g.notes + "\n[הארכה " + new Date().toLocaleDateString("he-IL") + ": " + (prevEnd || "—") + " → " + extNewEndDate + (extNotes ? ", " + extNotes : "") + "]"
-          : "[הארכה: " + (prevEnd || "—") + " → " + extNewEndDate + (extNotes ? ", " + extNotes : "") + "]",
+          ? g.notes + "\n[הארכה " + new Date().toLocaleDateString("he-IL") + ": " + (prevEnd || "—") + " → " + extNewEndDate + (extNotes ? ", " + extNotes : "") + (extDocUrl ? " (מסמך מצורף)" : "") + "]"
+          : "[הארכה: " + (prevEnd || "—") + " → " + extNewEndDate + (extNotes ? ", " + extNotes : "") + (extDocUrl ? " (מסמך מצורף)" : "") + "]",
       }).eq("id", extendingId);
-      await logAudit({ entity_type: "guarantee", entity_id: extendingId, action: "extend", notes: "ל-" + extNewEndDate });
+      await logAudit({ entity_type: "guarantee", entity_id: extendingId, action: "extend", notes: "ל-" + extNewEndDate + (extDocUrl ? " + מסמך" : "") });
       setExtendingId(""); setExtNewEndDate(""); setExtNotes("");
+      setExtDocUrl(""); setExtDocLabel("");
       await loadAll();
     } catch (e: any) { alert("שגיאה: " + (e?.message || e)); }
   }
@@ -219,6 +329,11 @@ export default function GuaranteesPage() {
     if (filterSt === "expiring")  return h === "expiring30" || h === "expiring60";
     if (filterSt === "returned")  return g.status === "returned";
     if (filterSt === "forfeited") return g.status === "forfeited";
+    if (filterSt === "underinsured") {
+      if (g.status !== "active") return false;
+      var m = coverageMonths(g);
+      return m !== null && m < MIN_COVERAGE_MONTHS;
+    }
     // "active" — includes all health states that are still in-play
     return g.status === "active";
   });
@@ -242,6 +357,29 @@ export default function GuaranteesPage() {
   const totalRequired = active.reduce(function (s, g) { return s + (g.amount_required ?? 0); }, 0);
   const typeInfo = function (v: string) { return GUARANTEE_TYPES.find(function (t) { return t.v === v; }) ?? GUARANTEE_TYPES[5]; };
 
+  // Contracts that should have at least one active guarantee but don't.
+  // Filtered by property selection so it follows the rest of the screen.
+  const missingGuarantees = contracts.filter(function(c: any) {
+    if (filterPropIds.length > 0 && !filterPropIds.includes(c.property_id)) return false;
+    var hasActive = (c.guarantees || []).some(function(gg: any) {
+      return gg.status === "active" && (!gg.end_date || daysLeft(gg.end_date) >= 0);
+    });
+    return !hasActive;
+  });
+
+  // Underinsured: amount_required < MIN_COVERAGE_MONTHS × monthly rent.
+  function coverageMonths(g: any): number | null {
+    var rent = monthlyRentOf(g.contracts);
+    if (!rent || rent <= 0) return null;
+    var amt = Number(g.amount_required || g.amount_actual || 0);
+    if (!amt) return 0;
+    return amt / rent;
+  }
+  const underinsured = active.filter(function(g) {
+    var m = coverageMonths(g);
+    return m !== null && m < MIN_COVERAGE_MONTHS;
+  });
+
   return (
     <div dir="rtl">
       <div className="mb-6 flex items-center justify-between flex-wrap gap-3">
@@ -255,13 +393,14 @@ export default function GuaranteesPage() {
       </div>
 
       {/* KPIs — clickable filters */}
-      <div className="grid grid-cols-5 gap-3 mb-5">
+      <div className="grid grid-cols-6 gap-3 mb-5">
         {[
           { f: "all",       label: "הכל",        value: guarantees.length, sub: "כל הערבויות",            color: "text-slate-600",  bg: "bg-white" },
           { f: "active",    label: "פעילות",     value: active.length,     sub: fmtMoney(totalActive),    color: "text-slate-800",  bg: "bg-white" },
           { f: "expired",   label: "פג תוקף",    value: expired.length,    sub: "בתוקף 'פעיל' אך עברה תקפותם", color: expired.length > 0 ? "text-red-700" : "text-slate-400", bg: expired.length > 0 ? "bg-red-50" : "bg-white" },
           { f: "expiring",  label: "פגות בקרוב", value: expiring30.length + expiring60.length, sub: "ב-60 הימים הקרובים", color: (expiring30.length + expiring60.length) > 0 ? "text-yellow-700" : "text-slate-400", bg: (expiring30.length + expiring60.length) > 0 ? "bg-yellow-50" : "bg-white" },
           { f: "gap",       label: "עם פער",     value: hasGap.length,     sub: "בפועל < נדרש",            color: hasGap.length > 0 ? "text-orange-700" : "text-slate-400", bg: hasGap.length > 0 ? "bg-orange-50" : "bg-white" },
+          { f: "underinsured", label: "מתחת ל-3 חוד׳", value: underinsured.length, sub: "כיסוי < " + MIN_COVERAGE_MONTHS + " חוד׳ שכ״ד", color: underinsured.length > 0 ? "text-amber-700" : "text-slate-400", bg: underinsured.length > 0 ? "bg-amber-50" : "bg-white" },
         ].map(function (k) {
           return (
             <button key={k.label} onClick={function () { setFilterSt(k.f as any); }}
@@ -278,12 +417,44 @@ export default function GuaranteesPage() {
         <PropertyHierarchyFilter onChange={function (f) { setFilterPropIds(f.propertyIds); }} />
       </div>
 
+      {/* Missing-guarantees alert: active contracts without an active guarantee */}
+      {missingGuarantees.length > 0 && (
+        <div className="rounded-xl border-2 border-rose-200 bg-rose-50 p-4 mb-4">
+          <div className="flex items-start justify-between gap-3 flex-wrap">
+            <div>
+              <div className="font-bold text-rose-800 text-sm">⚠ הסכמים פעילים ללא ערבות בתוקף — {missingGuarantees.length}</div>
+              <div className="text-xs text-rose-600 mt-0.5">חוזים פעילים שאין להם אף ערבות במצב "פעילה" שתאריך הסיום שלה לא עבר.</div>
+            </div>
+          </div>
+          <div className="mt-3 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+            {missingGuarantees.slice(0, 12).map(function(c: any) {
+              return (
+                <div key={c.id} className="rounded-lg bg-white border border-rose-200 p-2.5 text-xs">
+                  <div className="font-semibold text-slate-800">{(c.tenants as any)?.name}</div>
+                  <div className="text-slate-500">{(c.properties as any)?.name}</div>
+                  <div className="text-[10px] text-indigo-700 mt-0.5">יח&apos;: {spacesLabel(c)}</div>
+                  <div className="text-[10px] text-slate-400">{contractRange(c)}</div>
+                  <button onClick={function() { openNew(undefined, c.id); }} title="צור ערבות חדשה עבור הסכם זה"
+                    className="mt-1.5 text-[11px] rounded bg-rose-600 hover:bg-rose-700 text-white px-2 py-1 font-semibold">
+                    + צור ערבות לחוזה
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+          {missingGuarantees.length > 12 && (
+            <div className="text-[11px] text-rose-600 mt-2">ועוד {missingGuarantees.length - 12} הסכמים...</div>
+          )}
+        </div>
+      )}
+
       <div className="flex gap-2 mb-4 flex-wrap">
         {[
           { v: "active",    l: "פעילות" },
           { v: "expired",   l: "פג תוקף" },
           { v: "expiring",  l: "פגות בקרוב" },
           { v: "gap",       l: "עם פער" },
+          { v: "underinsured", l: "מתחת ל-3 חוד׳" },
           { v: "returned",  l: "הוחזרו" },
           { v: "forfeited", l: "מומשו" },
           { v: "all",       l: "הכל" },
@@ -364,6 +535,17 @@ export default function GuaranteesPage() {
                           {diff < 0 ? "-₪" + Math.abs(Math.round(diff)).toLocaleString() : "✓ תקין"}
                         </span>
                       )}
+                      {(function() {
+                        var m = coverageMonths(g);
+                        if (m === null) return null;
+                        var lo = m < MIN_COVERAGE_MONTHS;
+                        return (
+                          <div className={"text-[10px] mt-0.5 font-semibold " + (lo ? "text-amber-700" : "text-emerald-700")}
+                               title={"נדרש ÷ שכ\"ד חודשי משוער (≈₪" + Math.round(monthlyRentOf(g.contracts) || 0).toLocaleString() + ")"}>
+                            {lo ? "⚠ " : "✓ "}≈{m.toFixed(1)} חוד&apos; שכ&quot;ד
+                          </div>
+                        );
+                      })()}
                     </td>
                     <td className="px-4 py-3 text-xs text-slate-500 whitespace-nowrap">
                       {fmtDate(g.end_date)}
@@ -391,12 +573,25 @@ export default function GuaranteesPage() {
                             🔄 החלפה
                           </button>
                         )}
-                        {g.document_url && (
-                          <a href={g.document_url} target="_blank" rel="noopener noreferrer" title="פתח מסמך ערבות"
-                            className="text-xs border border-blue-200 rounded px-2 py-1 text-blue-600 hover:bg-blue-50">
-                            📄
-                          </a>
-                        )}
+                        {/* Documents list — original + every extension/replacement attachment */}
+                        {(function() {
+                          var docs: any[] = Array.isArray(g.documents) ? g.documents.slice() : [];
+                          // Back-compat: include document_url if not already represented in docs.
+                          if (g.document_url && !docs.some(function(d){ return d.url === g.document_url; })) {
+                            docs.unshift({ type: "original", url: g.document_url });
+                          }
+                          if (docs.length === 0) return null;
+                          return docs.map(function(d, i) {
+                            var info = docTypeInfo(d.type || "other");
+                            return (
+                              <a key={i} href={d.url} target="_blank" rel="noopener noreferrer"
+                                title={"פתח מסמך — " + info.l + (d.label ? ": " + d.label : "")}
+                                className="text-xs border border-blue-200 rounded px-2 py-1 text-blue-600 hover:bg-blue-50">
+                                {info.icon} {info.l}
+                              </a>
+                            );
+                          });
+                        })()}
                         {g.status === "active" && (
                           <>
                             <button onClick={function () { handleReturn(g.id); }} title="סמן שהערבות הוחזרה לשוכר"
@@ -485,6 +680,24 @@ export default function GuaranteesPage() {
                   <option value="forfeited">מומשה</option>
                 </select>
               </div>
+              {/* Document attachment — cloud upload or paste a URL */}
+              <div className="rounded-lg border border-slate-200 bg-slate-50/50 p-3 space-y-2">
+                <label className="block text-xs font-semibold text-slate-700">📄 מסמך ערבות (עליה לענן או קישור)</label>
+                <div className="flex gap-2 items-center flex-wrap">
+                  <input ref={newFileRef} type="file" onChange={handleNewFileChange}
+                    className="text-xs file:rounded file:border-0 file:bg-blue-600 file:text-white file:px-3 file:py-1.5 file:font-semibold file:cursor-pointer file:ml-2"/>
+                  {fUploading && <span className="text-xs text-blue-600">מעלה...</span>}
+                </div>
+                <input type="text" value={fDocUrl} onChange={function(e){ setFDocUrl(e.target.value); }}
+                  placeholder="או הדבק קישור (Drive / Dropbox / כל URL)"
+                  className={ic} dir="ltr"/>
+                {fDocUrl && (
+                  <div className="text-[11px] text-emerald-700 flex items-center gap-2">
+                    ✓ מסמך מצורף — <a href={fDocUrl} target="_blank" rel="noopener noreferrer" className="underline">פתח</a>
+                    <button type="button" onClick={function(){ setFDocUrl(""); }} className="text-rose-600 underline">הסר</button>
+                  </div>
+                )}
+              </div>
               <div><label className="mb-1 block text-xs font-semibold text-slate-700">הערות</label><textarea value={fNotes} onChange={function (e) { setFNotes(e.target.value); }} rows={2} className={ic}/></div>
               <div className="flex gap-3 pt-2">
                 <button onClick={function () { setEditingId(""); }} className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm text-slate-600">ביטול</button>
@@ -528,9 +741,30 @@ export default function GuaranteesPage() {
                 <label className="mb-1 block text-xs font-semibold text-slate-700">הערות (אופציונלי)</label>
                 <input type="text" value={extNotes} onChange={function (e) { setExtNotes(e.target.value); }} className={ic} placeholder="למשל: הסכמה טלפונית עם הבנק"/>
               </div>
+              {/* Extension document — cloud upload or URL */}
+              <div className="rounded-lg border border-blue-200 bg-blue-50/40 p-3 space-y-2">
+                <label className="block text-xs font-semibold text-slate-700">📎 מסמך הארכה (אופציונלי — עליה לענן או קישור)</label>
+                <div className="flex gap-2 items-center flex-wrap">
+                  <input ref={extFileRef} type="file" onChange={handleExtFileChange}
+                    className="text-xs file:rounded file:border-0 file:bg-blue-600 file:text-white file:px-3 file:py-1.5 file:font-semibold file:cursor-pointer file:ml-2"/>
+                  {extUploading && <span className="text-xs text-blue-600">מעלה...</span>}
+                </div>
+                <input type="text" value={extDocUrl} onChange={function(e){ setExtDocUrl(e.target.value); }}
+                  placeholder="או הדבק קישור (Drive / Dropbox / כל URL)"
+                  className={ic} dir="ltr"/>
+                <input type="text" value={extDocLabel} onChange={function(e){ setExtDocLabel(e.target.value); }}
+                  placeholder="תיאור (לדוגמה: אישור הארכה מבנק לאומי)"
+                  className={ic}/>
+                {extDocUrl && (
+                  <div className="text-[11px] text-emerald-700 flex items-center gap-2">
+                    ✓ מסמך הארכה מצורף — <a href={extDocUrl} target="_blank" rel="noopener noreferrer" className="underline">פתח</a>
+                    <button type="button" onClick={function(){ setExtDocUrl(""); }} className="text-rose-600 underline">הסר</button>
+                  </div>
+                )}
+              </div>
               <div className="text-[11px] text-slate-500">
                 💡 ההארכה תישמר על הערבות הקיימת. התוקף הקודם יישמר לצורך מעקב.
-                אם הערבות הוחלפה (מסמך חדש מהבנק עם מספר אסמכתא חדש) — השתמש ב-"🔄 החלפה" במקום.
+                אם הערבות הוחלפה (מסמך חדש מהבנק עם מספר אסמכתא חדש) — השתמש ב-&quot;🔄 החלפה&quot; במקום.
               </div>
               <div className="flex gap-3 pt-2">
                 <button onClick={function () { setExtendingId(""); }} className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm text-slate-600">ביטול</button>
