@@ -1,5 +1,5 @@
 "use client";
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit-log';
 
@@ -25,6 +25,65 @@ const HEB_MONTHS = ["", "ינואר", "פברואר", "מרץ", "אפריל", "�
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
 function fmtMoney(n: number) { return "₪" + (n ?? 0).toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function typeInfo(v: string) { return CHARGE_TYPES.find(function(t) { return t.v === v; }) ?? CHARGE_TYPES[CHARGE_TYPES.length - 1]; }
+
+// Custom dropdown — native <select> in RTL Chrome positions its panel
+// off the left edge of the viewport. This component renders the panel
+// inside the document flow (absolute below the trigger), so it can never
+// overflow the page. Anchored to the right edge of the trigger so it
+// reads naturally in RTL.
+function Dropdown(props: {
+  value: string;
+  options: Array<{ value: string; label: string }>;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  className?: string;
+  buttonClassName?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(function() {
+    function onClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    if (open) document.addEventListener("mousedown", onClick);
+    return function() { document.removeEventListener("mousedown", onClick); };
+  }, [open]);
+  var current = props.options.find(function(o) { return o.value === props.value; });
+  var btnClass = props.buttonClassName ||
+    "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm bg-white hover:bg-slate-50";
+  return (
+    <div ref={ref} className={"relative " + (props.className || "")}>
+      <button
+        type="button"
+        onClick={function() { setOpen(!open); }}
+        className={btnClass + " flex items-center justify-between gap-2"}
+      >
+        <span className="text-slate-400 text-xs">{open ? "▲" : "▼"}</span>
+        <span className="flex-1 text-right truncate">{current ? current.label : (props.placeholder || "")}</span>
+      </button>
+      {open && (
+        <div
+          className="absolute z-50 top-full mt-1 bg-white border border-slate-200 rounded-lg shadow-xl max-h-72 overflow-y-auto"
+          style={{ right: 0, minWidth: "100%", maxWidth: "min(360px, calc(100vw - 40px))" }}
+        >
+          {props.options.map(function(o) {
+            var isSel = o.value === props.value;
+            return (
+              <button
+                key={o.value || "__empty"}
+                type="button"
+                onClick={function() { props.onChange(o.value); setOpen(false); }}
+                className={"w-full text-right px-3 py-2 text-sm whitespace-nowrap " + (isSel ? "bg-blue-50 text-blue-700 font-semibold" : "text-slate-700 hover:bg-slate-50")}
+              >
+                {o.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
 
 // Unified row shape. Three sources:
 //   "charge"      — single row from the `charges` table
@@ -453,15 +512,23 @@ export default function PaymentsPage() {
             placeholder="🔍 חיפוש שוכר / נכס / תיאור"
             className={ic + " flex-1 min-w-[200px]"}
           />
-          <select value={filterYear} onChange={function(e) { setFilterYear(Number(e.target.value)); }} className={ic + " w-32"}>
-            {yearOptions.map(function(y) { return <option key={y} value={y}>📅 {y}</option>; })}
-          </select>
-          <select value={filterProperty} onChange={function(e) { setFilterProperty(e.target.value); }} className={ic + " w-44"}>
-            <option value="">🏢 נכס: הכל</option>
-            {Array.from(new Set(rows.map(function(r) { return r.propertyName; }).filter(Boolean))).sort().map(function(p) {
-              return <option key={p} value={p}>{p}</option>;
-            })}
-          </select>
+          <Dropdown
+            className="w-32"
+            value={String(filterYear)}
+            onChange={function(v) { setFilterYear(Number(v)); }}
+            options={yearOptions.map(function(y) { return { value: String(y), label: "📅 " + y }; })}
+          />
+          <Dropdown
+            className="w-48"
+            value={filterProperty}
+            placeholder="🏢 נכס: הכל"
+            onChange={function(v) { setFilterProperty(v); }}
+            options={[{ value: "", label: "🏢 נכס: הכל" }].concat(
+              Array.from(new Set(rows.map(function(r) { return r.propertyName; }).filter(Boolean))).sort().map(function(p) {
+                return { value: p as string, label: p as string };
+              })
+            )}
+          />
           <label className="flex items-center gap-1.5 text-xs text-slate-600 px-2 py-1 cursor-pointer">
             <input type="checkbox" checked={includeAdvances} onChange={function(e) { setIncludeAdvances(e.target.checked); }} className="w-3.5 h-3.5"/>
             כלול מקדמות שכ&quot;ד
