@@ -20,13 +20,17 @@ function docTypeInfo(v: string) { return DOC_TYPES.find(function(d) { return d.v
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 const GUARANTEE_TYPES = [
-  { v: "bank",      l: "ערבות בנקאית", icon: "🏦" },
-  { v: "check",     l: "שיקים",         icon: "📝" },
-  { v: "cash",      l: "מזומן",         icon: "💵" },
-  { v: "insurance", l: "ביטוח",         icon: "🛡️" },
-  { v: "personal",  l: "ערבות אישית",   icon: "👤" },
-  { v: "other",     l: "אחר",           icon: "📋" },
+  { v: "bank",            l: "ערבות בנקאית", icon: "🏦" },
+  { v: "cash",            l: "פיקדון",        icon: "💰" },
+  { v: "promissory_note", l: "שטר חוב",       icon: "📜" },
+  { v: "check",           l: "שיקים",         icon: "📝" },
+  { v: "insurance",       l: "ביטוח",         icon: "🛡️" },
+  { v: "personal",        l: "ערבות אישית",   icon: "👤" },
+  { v: "other",           l: "אחר",           icon: "📋" },
 ];
+// Types where amount_actual is commonly left blank — the instrument's face
+// value equals the requirement, so a missing amount_actual is NOT a gap.
+const OPEN_VALUE_TYPES = ["promissory_note", "personal", "check"];
 
 function daysLeft(d: string) { return Math.ceil((new Date(d).getTime() - Date.now()) / 86400000); }
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
@@ -38,7 +42,12 @@ type Health = "expired" | "gap" | "expiring30" | "expiring60" | "ok" | "inactive
 function healthOf(g: any): Health {
   if (g.status !== "active") return "inactive";
   if (g.end_date && daysLeft(g.end_date) < 0) return "expired";
-  if ((g.amount_actual ?? 0) < (g.amount_required ?? 0) && (g.amount_required ?? 0) > 0) return "gap";
+  // Gap only when an actual amount is on file AND it's below the requirement.
+  // A null/absent amount_actual (common for promissory notes / personal
+  // guarantees) is "not itemized", not a shortfall.
+  var req = Number(g.amount_required ?? 0);
+  var hasActual = g.amount_actual !== null && g.amount_actual !== undefined && Number(g.amount_actual) > 0;
+  if (req > 0 && hasActual && Number(g.amount_actual) < req) return "gap";
   if (g.end_date && daysLeft(g.end_date) <= 30) return "expiring30";
   if (g.end_date && daysLeft(g.end_date) <= 60) return "expiring60";
   return "ok";
@@ -355,7 +364,10 @@ export default function GuaranteesPage() {
   const hasGap        = active.filter(function (g) { return healthOf(g) === "gap"; });
   const totalActive   = active.reduce(function (s, g) { return s + (g.amount_actual ?? 0); }, 0);
   const totalRequired = active.reduce(function (s, g) { return s + (g.amount_required ?? 0); }, 0);
-  const typeInfo = function (v: string) { return GUARANTEE_TYPES.find(function (t) { return t.v === v; }) ?? GUARANTEE_TYPES[5]; };
+  const typeInfo = function (v: string) {
+    return GUARANTEE_TYPES.find(function (t) { return t.v === v; })
+      ?? (GUARANTEE_TYPES.find(function (t) { return t.v === "other"; }) as any);
+  };
 
   // Contract is treated as "no guarantee required" only when explicitly
   // flagged via contracts.no_guarantee_required (boolean). Default = true
