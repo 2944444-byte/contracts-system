@@ -21,6 +21,17 @@ const COVERAGE_TYPES = [
 ];
 function coverageInfo(v: string) { return COVERAGE_TYPES.find(function(t){return t.v===v;}) || { v:v, l:v, icon:"🛡️", desc:"" }; }
 
+// Default requirement template per the standard appendix: third-party
+// ₪10M, employers' liability ₪20M, contents + consequential required
+// (no specific minimum). The manager can edit per contract.
+const DEFAULT_REQUIREMENTS: Record<string, number> = {
+  contents: 0,
+  third_party: 10000000,
+  employers: 20000000,
+  consequential: 0,
+};
+function fmtLimit(n: number) { return n ? "₪" + Number(n).toLocaleString("he-IL") : "—"; }
+
 // Doc types stored in documents jsonb.
 function docTypeLabel(t: string) {
   if (t === "policy")      return "📄 פוליסה";
@@ -66,18 +77,23 @@ export default function InsurancesPage() {
   const [fNotes,      setFNotes]      = useState("");
   const [fDocUrl,     setFDocUrl]     = useState("");
   const [fCovTypes,   setFCovTypes]   = useState<string[]>([]);
+  const [fCovLimits,  setFCovLimits]  = useState<Record<string,string>>({});
   const fileRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading]     = useState(false);
+
+  // Requirements editor state (per-contract)
+  const [reqEditContract, setReqEditContract] = useState<any>(null);
+  const [reqMap, setReqMap] = useState<Record<string,string>>({});
 
   useEffect(function() { loadAll(); }, []);
 
   async function loadAll() {
     const [{ data: b }, { data: t }, { data: p }, { data: c }] = await Promise.all([
       supabase.from("insurances_building").select("*, properties(name)").order("end_date"),
-      supabase.from("insurances_tenant").select("*, contracts(id, property_id, no_tenant_insurance_required, tenants(name), properties(name), contract_spaces(spaces(space_name)))").order("end_date"),
+      supabase.from("insurances_tenant").select("*, contracts(id, property_id, no_tenant_insurance_required, insurance_requirements, tenants(name), properties(name), contract_spaces(spaces(space_name)))").order("end_date"),
       supabase.from("properties").select("id,name").order("name"),
       supabase.from("contracts")
-        .select("id, property_id, start_date, end_date, status, is_amendment, parent_contract_id, no_tenant_insurance_required, tenants(name), properties(name), contract_spaces(spaces(space_name))")
+        .select("id, property_id, start_date, end_date, status, is_amendment, parent_contract_id, no_tenant_insurance_required, insurance_requirements, tenants(name), properties(name), contract_spaces(spaces(space_name))")
         .in("status",["active","expiring","extended","upcoming"])
         .order("start_date", { ascending: false }),
     ]);
@@ -127,7 +143,7 @@ export default function InsurancesPage() {
     setIsNew(true); setEditingId("new");
     setFRefId(prefillRefId || ""); setFInsurer(""); setFPolicyNum(""); setFCoverage("");
     setFPremium(""); setFDeductible(""); setFStartDate(""); setFEndDate("");
-    setFStatus("active"); setFNotes(""); setFDocUrl(""); setFCovTypes([]);
+    setFStatus("active"); setFNotes(""); setFDocUrl(""); setFCovTypes([]); setFCovLimits({});
     if (fileRef.current) fileRef.current.value = "";
   }
 
@@ -140,8 +156,22 @@ export default function InsurancesPage() {
     setFStartDate(ins.start_date?.split("T")[0]??""); setFEndDate(ins.end_date?.split("T")[0]??"");
     setFStatus(ins.status??"active"); setFNotes(ins.notes??"");
     setFDocUrl(ins.document_url || ins.certificate_url || "");
-    setFCovTypes(Array.isArray(ins.coverage_types) ? ins.coverage_types : []);
+    var limits = (ins.coverage_limits && typeof ins.coverage_limits==="object") ? ins.coverage_limits : {};
+    var types = Array.isArray(ins.coverage_types) ? ins.coverage_types.slice() : [];
+    Object.keys(limits).forEach(function(k){ if (!types.includes(k)) types.push(k); });
+    var limStr: Record<string,string> = {};
+    Object.keys(limits).forEach(function(k){ limStr[k] = limits[k] ? String(limits[k]) : ""; });
+    setFCovTypes(types); setFCovLimits(limStr);
     if (fileRef.current) fileRef.current.value = "";
+  }
+
+  function toggleCovType(v: string) {
+    if (fCovTypes.includes(v)) {
+      setFCovTypes(fCovTypes.filter(function(x){return x!==v;}));
+      var nl = Object.assign({}, fCovLimits); delete nl[v]; setFCovLimits(nl);
+    } else {
+      setFCovTypes(fCovTypes.concat([v]));
+    }
   }
 
   async function handleSave() {
@@ -172,7 +202,12 @@ export default function InsurancesPage() {
         documents:       docs,
       };
       if (activeTab==="building") { payload.total_premium = fPremium ? Number(fPremium) : null; payload.deductible = fDeductible ? Number(fDeductible) : null; }
-      else { payload.coverage_types = fCovTypes; }
+      else {
+        payload.coverage_types = fCovTypes;
+        var limMap: Record<string,number> = {};
+        fCovTypes.forEach(function(t){ var v = Number(fCovLimits[t]||0); if (v>0) limMap[t] = v; });
+        payload.coverage_limits = limMap;
+      }
 
       if (isNew) {
         const { data, error: ie } = await supabase.from(table).insert(payload).select().single();
@@ -205,6 +240,93 @@ export default function InsurancesPage() {
   async function unmarkNoTenantInsurance(contractId: string) {
     await supabase.from("contracts").update({ no_tenant_insurance_required: false }).eq("id", contractId);
     await loadAll();
+  }
+
+  // ─── Requirements editor ──────────────────────────────────────────
+  function openReqEditor(contract: any) {
+    var req = (contract?.insurance_requirements && typeof contract.insurance_requirements==="object") ? contract.insurance_requirements : {};
+    var m: Record<string,string> = {};
+    Object.keys(req).forEach(function(k){ m[k] = (req[k] && Number(req[k])>0) ? String(req[k]) : ""; });
+    setReqMap(m);
+    setReqEditContract(contract);
+  }
+  function toggleReq(v: string) {
+    if (Object.prototype.hasOwnProperty.call(reqMap, v)) {
+      var nm = Object.assign({}, reqMap); delete nm[v]; setReqMap(nm);
+    } else {
+      setReqMap(Object.assign({}, reqMap, { [v]: "" }));
+    }
+  }
+  function loadDefaultReqs() {
+    var m: Record<string,string> = {};
+    Object.keys(DEFAULT_REQUIREMENTS).forEach(function(k){ var v = DEFAULT_REQUIREMENTS[k]; m[k] = v>0 ? String(v) : ""; });
+    setReqMap(m);
+  }
+  async function saveRequirements() {
+    if (!reqEditContract) return;
+    var out: Record<string,number> = {};
+    Object.keys(reqMap).forEach(function(k){ out[k] = Number(reqMap[k]||0); });
+    await supabase.from("contracts").update({ insurance_requirements: out }).eq("id", reqEditContract.id);
+    await logAudit({ entity_type:"contract", entity_id:reqEditContract.id, action:"set_insurance_requirements" });
+    setReqEditContract(null);
+    await loadAll();
+  }
+
+  // ─── Compliance engine ────────────────────────────────────────────
+  // Compares a contract's active tenant certificate(s) against its
+  // insurance_requirements (required coverage codes + minimum limits).
+  function activeCertsForContract(contractId: string): any[] {
+    return tenantIns.filter(function(t:any){
+      return t.contract_id===contractId && t.status==="active" && (!t.end_date || daysLeft(t.end_date)>=0);
+    });
+  }
+  // returns { state: 'no_req' | 'no_cert' | 'compliant' | 'deficient', issues: string[] }
+  function complianceFor(contract: any) {
+    var req = (contract?.insurance_requirements && typeof contract.insurance_requirements==="object") ? contract.insurance_requirements : {};
+    var reqTypes = Object.keys(req);
+    if (reqTypes.length === 0) return { state:"no_req", issues:[] as string[] };
+    var certs = activeCertsForContract(contract.id);
+    if (certs.length === 0) return { state:"no_cert", issues:["לא הומצא אישור ביטוח בתוקף"] };
+    // Merge covered limits across all active certs (take the max per type).
+    var covered: Record<string,number> = {};
+    certs.forEach(function(c:any){
+      var lims = (c.coverage_limits && typeof c.coverage_limits==="object") ? c.coverage_limits : {};
+      (Array.isArray(c.coverage_types)?c.coverage_types:[]).forEach(function(t:string){ if (!(t in covered)) covered[t]=0; });
+      Object.keys(lims).forEach(function(t:string){ covered[t] = Math.max(covered[t]||0, Number(lims[t]||0)); });
+    });
+    var issues: string[] = [];
+    reqTypes.forEach(function(t){
+      var info = coverageInfo(t);
+      var minLimit = Number(req[t]||0);
+      if (!(t in covered)) { issues.push("חסר כיסוי: " + info.l); return; }
+      if (minLimit>0 && (covered[t]||0) < minLimit) {
+        issues.push(info.l + ": גבול " + fmtLimit(covered[t]||0) + " < נדרש " + fmtLimit(minLimit));
+      }
+    });
+    return { state: issues.length ? "deficient" : "compliant", issues: issues };
+  }
+
+  // ─── Insurance demand letter ──────────────────────────────────────
+  async function sendInsuranceDemand(contract: any, issues: string[]) {
+    try {
+      var tName = (contract?.tenants as any)?.name || "";
+      var body = "שוכר/ת נכבד/ה " + tName + ",\n\n" +
+        "בהתאם להוראות נספח האחריות והביטוח שבהסכם השכירות, עליך להמציא לנו אישור קיום ביטוחים תקף עבור המושכר.\n\n" +
+        (issues && issues.length
+          ? "נמצאו הליקויים הבאים באישור הקיים / בכיסוי:\n" + issues.map(function(s){return "• " + s;}).join("\n") + "\n\n"
+          : "טרם הומצא לנו אישור ביטוח בתוקף.\n\n") +
+        "נודה להמצאת אישור ביטוח מתוקן/מעודכן בהקדם, הכולל את כל הכיסויים וגבולות האחריות הנדרשים בהסכם.\n\nבברכה,\nהנהלת הנכס";
+      var { data, error } = await supabase.from("letters").insert({
+        contract_id: contract.id,
+        letter_type: "demand",
+        title: "דרישת אישור ביטוח — " + tName,
+        content_json: { body: body, kind: "insurance_demand", issues: issues || [] },
+        status: "draft",
+      }).select().single();
+      if (error) throw error;
+      await logAudit({ entity_type:"letter", entity_id:data.id, action:"insurance_demand" });
+      alert("✅ נוצרה טיוטת מכתב דרישת אישור ביטוח — היכנס למסך מכתבים לעריכה והדפסה");
+    } catch (e:any) { alert("שגיאה: " + (e?.message || e)); }
   }
 
   // ─── Filtering + sorting ───────────────────────────────────────────
@@ -268,6 +390,13 @@ export default function InsurancesPage() {
   const contractsExemptTenantIns = baseActiveContracts.filter(function(c:any){
     return c.no_tenant_insurance_required && !contractHasActiveTenantIns(c.id);
   });
+
+  // Contracts that HAVE an active certificate but it doesn't meet the
+  // contract's insurance requirements (missing coverage code or limit too low).
+  const deficientContracts = baseActiveContracts
+    .filter(function(c:any){ return !c.no_tenant_insurance_required; })
+    .map(function(c:any){ return { c: c, comp: complianceFor(c) }; })
+    .filter(function(x:any){ return x.comp.state === "deficient"; });
 
   // Sum of active building premium (feeds tenant insurance billing on /billing).
   const totalBuildingPremium = (activeTab==="building" ? active : [])
@@ -346,6 +475,10 @@ export default function InsurancesPage() {
                   <div className="mt-1.5 flex gap-1 flex-wrap">
                     <button onClick={function(){openNew(c.id);}} title="הוסף אישור ביטוח עבור שוכר זה"
                       className="text-[11px] rounded bg-rose-600 hover:bg-rose-700 text-white px-2 py-1 font-semibold">+ הוסף אישור</button>
+                    <button onClick={function(){sendInsuranceDemand(c, []);}} title="צור טיוטת מכתב דרישת אישור ביטוח"
+                      className="text-[11px] rounded border border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100 px-2 py-1">✉ דרישה</button>
+                    <button onClick={function(){openReqEditor(c);}} title="הגדר אילו כיסויים וגבולות אחריות נדרשים בהסכם זה"
+                      className="text-[11px] rounded border border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 px-2 py-1">⚙ דרישות</button>
                     <button onClick={function(){markNoTenantInsurance(c.id,(c.tenants as any)?.name||"");}}
                       title="סמן שההסכם אינו דורש אישור ביטוח שוכר — יוצא מההתראה"
                       className="text-[11px] rounded border border-slate-300 text-slate-600 hover:bg-slate-50 px-2 py-1">לא נדרש</button>
@@ -355,6 +488,34 @@ export default function InsurancesPage() {
             })}
           </div>
           {contractsMissingTenantIns.length>15 && <div className="text-[11px] text-rose-600 mt-2">ועוד {contractsMissingTenantIns.length-15} שוכרים...</div>}
+        </div>
+      )}
+
+      {/* Deficient certificates: cert exists but doesn't meet requirements */}
+      {activeTab==="tenant" && deficientContracts.length>0 && (
+        <div className="rounded-xl border-2 border-amber-300 bg-amber-50 p-4 mb-4">
+          <div className="font-bold text-amber-800 text-sm">⚠ אישורים שאינם עומדים בדרישות ההסכם — {deficientContracts.length}</div>
+          <div className="text-xs text-amber-700 mt-0.5">קיים אישור ביטוח בתוקף, אך הוא חסר כיסוי נדרש או שגבול האחריות נמוך מהנדרש בנספח הביטוח.</div>
+          <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-2">
+            {deficientContracts.map(function(x:any){
+              var c = x.c;
+              return (
+                <div key={c.id} className="rounded-lg bg-white border border-amber-200 p-2.5 text-xs">
+                  <div className="font-semibold text-slate-800">{(c.tenants as any)?.name}</div>
+                  <div className="text-slate-500">{(c.properties as any)?.name} · יח&apos;: {spacesLabel(c)}</div>
+                  <ul className="mt-1 space-y-0.5">
+                    {x.comp.issues.map(function(iss:string,i:number){ return <li key={i} className="text-[11px] text-amber-700">• {iss}</li>; })}
+                  </ul>
+                  <div className="mt-1.5 flex gap-1 flex-wrap">
+                    <button onClick={function(){sendInsuranceDemand(c, x.comp.issues);}} title="צור טיוטת מכתב דרישה לתיקון האישור"
+                      className="text-[11px] rounded bg-amber-600 hover:bg-amber-700 text-white px-2 py-1 font-semibold">✉ דרוש תיקון</button>
+                    <button onClick={function(){openReqEditor(c);}} title="ערוך את דרישות הביטוח להסכם זה"
+                      className="text-[11px] rounded border border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 px-2 py-1">⚙ דרישות</button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 
@@ -443,10 +604,17 @@ export default function InsurancesPage() {
                         <div className="flex flex-wrap gap-1">
                           {(Array.isArray(ins.coverage_types)?ins.coverage_types:[]).map(function(ct:string){
                             var info = coverageInfo(ct);
-                            return <span key={ct} title={info.desc} className="text-[10px] bg-indigo-50 text-indigo-700 rounded px-1.5 py-0.5">{info.icon} {info.l}</span>;
+                            var lim = (ins.coverage_limits && ins.coverage_limits[ct]) ? " " + fmtLimit(Number(ins.coverage_limits[ct])) : "";
+                            return <span key={ct} title={info.desc+(lim?" — גבול"+lim:"")} className="text-[10px] bg-indigo-50 text-indigo-700 rounded px-1.5 py-0.5">{info.icon} {info.l}{lim}</span>;
                           })}
                           {(!ins.coverage_types || ins.coverage_types.length===0) && <span className="text-[10px] text-slate-300">—</span>}
                         </div>
+                        {(function(){
+                          var comp = complianceFor(ins.contracts);
+                          if (comp.state==="compliant") return <div className="text-[10px] text-emerald-700 font-semibold mt-1">✓ עומד בדרישות</div>;
+                          if (comp.state==="deficient") return <div className="text-[10px] text-amber-700 font-semibold mt-1" title={comp.issues.join("\n")}>⚠ {comp.issues.length} ליקויים מול הדרישות</div>;
+                          return null;
+                        })()}
                       </td>
                     )}
                     <td className="px-4 py-3">{fmtMoney(ins.coverage_amount)}</td>
@@ -468,6 +636,13 @@ export default function InsurancesPage() {
                     <td className="px-4 py-3">
                       <div className="flex gap-1 flex-wrap">
                         <button onClick={function(){openEdit(ins);}} title="ערוך פרטי ביטוח" className="text-xs border border-slate-200 rounded px-2 py-1 text-slate-600 hover:bg-slate-50">✏️ ערוך</button>
+                        {activeTab==="building" && (
+                          <a href="/billing" title={"עבור למסך חיובים ליצירת חיוב ביטוח לדיירים (פרו-רייט לפי מ\"ר-ימים)"}
+                            className="text-xs border border-emerald-200 bg-emerald-50 rounded px-2 py-1 text-emerald-700 hover:bg-emerald-100">💸 צור חיוב</a>
+                        )}
+                        {activeTab==="tenant" && (
+                          <button onClick={function(){openReqEditor(ins.contracts);}} title="הגדר דרישות ביטוח להסכם זה" className="text-xs border border-indigo-200 bg-indigo-50 rounded px-2 py-1 text-indigo-700 hover:bg-indigo-100">⚙ דרישות</button>
+                        )}
                         {docs.length>0
                           ? docs.map(function(dc:any,i:number){ return <a key={i} href={dc.url} target="_blank" rel="noopener noreferrer" title={"פתח "+docTypeLabel(dc.type)} className="text-xs border border-blue-200 rounded px-2 py-1 text-blue-600 hover:bg-blue-50">{docTypeLabel(dc.type)}</a>; })
                           : docUrl && <a href={docUrl} target="_blank" rel="noopener noreferrer" title={activeTab==="building"?"פתח פוליסה":"פתח אישור ביטוח"} className="text-xs border border-blue-200 rounded px-2 py-1 text-blue-600 hover:bg-blue-50">📄</a>}
@@ -506,19 +681,26 @@ export default function InsurancesPage() {
 
               {activeTab==="tenant" && (
                 <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-700">כיסויים כלולים באישור</label>
-                  <div className="grid grid-cols-2 gap-2">
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">כיסויים כלולים באישור + גבול אחריות לכל כיסוי</label>
+                  <div className="space-y-1.5">
                     {COVERAGE_TYPES.map(function(t){
                       var on = fCovTypes.includes(t.v);
                       return (
-                        <button key={t.v} type="button" title={t.desc}
-                          onClick={function(){ setFCovTypes(on?fCovTypes.filter(function(x){return x!==t.v;}):fCovTypes.concat([t.v])); }}
-                          className={"rounded-lg border p-2 text-right text-xs " + (on?"border-indigo-500 bg-indigo-50 text-indigo-700 font-semibold":"border-slate-200 text-slate-600")}>
-                          {t.icon} {t.l}
-                        </button>
+                        <div key={t.v} className="flex items-center gap-2">
+                          <button type="button" title={t.desc} onClick={function(){ toggleCovType(t.v); }}
+                            className={"flex-1 rounded-lg border p-2 text-right text-xs " + (on?"border-indigo-500 bg-indigo-50 text-indigo-700 font-semibold":"border-slate-200 text-slate-600")}>
+                            {t.icon} {t.l}
+                          </button>
+                          {on && (
+                            <input type="number" value={fCovLimits[t.v]||""} placeholder="גבול ₪"
+                              onChange={function(e){ setFCovLimits(Object.assign({}, fCovLimits, { [t.v]: e.target.value })); }}
+                              className="w-32 rounded-lg border border-slate-300 px-2 py-2 text-right text-xs" dir="ltr"/>
+                          )}
+                        </div>
                       );
                     })}
                   </div>
+                  <p className="text-[10px] text-slate-400 mt-1">הזן גבול אחריות לכל כיסוי כדי שהמערכת תוכל לבדוק אם הוא עומד בנדרש בהסכם.</p>
                 </div>
               )}
 
@@ -564,6 +746,51 @@ export default function InsurancesPage() {
               <div className="flex gap-3 pt-2">
                 <button onClick={function(){setEditingId("");}} className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm text-slate-600">ביטול</button>
                 <button onClick={handleSave} disabled={saving} className="flex-1 rounded-xl bg-blue-700 py-2.5 text-sm font-bold text-white disabled:opacity-50">{saving?"שומר...":"שמור"}</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Requirements editor modal */}
+      {reqEditContract && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={function(){setReqEditContract(null);}}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto" onClick={function(e){e.stopPropagation();}} dir="rtl">
+            <div className="sticky top-0 bg-white border-b px-6 py-4 flex items-center justify-between">
+              <h2 className="font-bold text-slate-800 text-lg">⚙ דרישות ביטוח להסכם</h2>
+              <button onClick={function(){setReqEditContract(null);}} className="text-2xl text-slate-400">×</button>
+            </div>
+            <div className="p-6 space-y-3">
+              <div className="rounded-lg bg-slate-50 border border-slate-200 p-3 text-xs">
+                <div className="font-semibold text-slate-800">{(reqEditContract.tenants as any)?.name}</div>
+                <div className="text-slate-500">{(reqEditContract.properties as any)?.name} · יח&apos;: {spacesLabel(reqEditContract)}</div>
+              </div>
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-semibold text-slate-700">סמן אילו כיסויים נדרשים + גבול אחריות מינימלי</label>
+                <button type="button" onClick={loadDefaultReqs} className="text-[11px] rounded border border-indigo-200 bg-indigo-50 text-indigo-700 px-2 py-1 hover:bg-indigo-100">טען ברירת מחדל מהנספח</button>
+              </div>
+              <div className="space-y-1.5">
+                {COVERAGE_TYPES.map(function(t){
+                  var on = Object.prototype.hasOwnProperty.call(reqMap, t.v);
+                  return (
+                    <div key={t.v} className="flex items-center gap-2">
+                      <button type="button" title={t.desc} onClick={function(){ toggleReq(t.v); }}
+                        className={"flex-1 rounded-lg border p-2 text-right text-xs " + (on?"border-indigo-500 bg-indigo-50 text-indigo-700 font-semibold":"border-slate-200 text-slate-600")}>
+                        {t.icon} {t.l}
+                      </button>
+                      {on && (
+                        <input type="number" value={reqMap[t.v]||""} placeholder="מינ׳ ₪"
+                          onChange={function(e){ setReqMap(Object.assign({}, reqMap, { [t.v]: e.target.value })); }}
+                          className="w-32 rounded-lg border border-slate-300 px-2 py-2 text-right text-xs" dir="ltr"/>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              <p className="text-[10px] text-slate-400">השאר שדה גבול ריק = כיסוי נדרש ללא סכום מינימלי. המערכת תבדוק כל אישור שיוזן מול ההגדרות האלו ותתריע על ליקויים.</p>
+              <div className="flex gap-3 pt-2">
+                <button onClick={function(){setReqEditContract(null);}} className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm text-slate-600">ביטול</button>
+                <button onClick={saveRequirements} className="flex-1 rounded-xl bg-blue-700 py-2.5 text-sm font-bold text-white">שמור דרישות</button>
               </div>
             </div>
           </div>
