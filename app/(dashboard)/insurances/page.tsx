@@ -84,6 +84,9 @@ export default function InsurancesPage() {
   // Requirements editor state (per-contract)
   const [reqEditContract, setReqEditContract] = useState<any>(null);
   const [reqMap, setReqMap] = useState<Record<string,string>>({});
+  const [reqDocUrl, setReqDocUrl] = useState("");
+  const [reqExtracting, setReqExtracting] = useState(false);
+  const [reqExtractMsg, setReqExtractMsg] = useState("");
 
   useEffect(function() { loadAll(); }, []);
 
@@ -243,12 +246,54 @@ export default function InsurancesPage() {
   }
 
   // ─── Requirements editor ──────────────────────────────────────────
-  function openReqEditor(contract: any) {
+  async function openReqEditor(contract: any) {
     var req = (contract?.insurance_requirements && typeof contract.insurance_requirements==="object") ? contract.insurance_requirements : {};
     var m: Record<string,string> = {};
     Object.keys(req).forEach(function(k){ m[k] = (req[k] && Number(req[k])>0) ? String(req[k]) : ""; });
     setReqMap(m);
+    setReqExtractMsg(""); setReqDocUrl("");
     setReqEditContract(contract);
+    // Try to prefill the document URL from the contract's stored documents.
+    try {
+      const { data: docs } = await supabase.from("documents")
+        .select("doc_type, file_url, external_url")
+        .eq("contract_id", contract.id)
+        .order("created_at", { ascending: false });
+      if (docs && docs.length) {
+        // Prefer an insurance doc, else a contract doc, else the first.
+        var pick = docs.find(function(d:any){ return d.doc_type==="insurance"; })
+          || docs.find(function(d:any){ return d.doc_type==="contract"; })
+          || docs[0];
+        var u = pick.external_url || pick.file_url || "";
+        if (u && !/^https?:\/\//.test(u)) {
+          // Looks like a storage path → build a public URL from the documents bucket.
+          u = supabase.storage.from("documents").getPublicUrl(u).data.publicUrl;
+        }
+        setReqDocUrl(u);
+      }
+    } catch (_e) { /* non-fatal */ }
+  }
+
+  async function readRequirementsFromDoc() {
+    if (!reqDocUrl) { setReqExtractMsg("הזן קישור למסמך ההסכם (PDF/DOCX) — בענן או משותף ציבורית."); return; }
+    setReqExtracting(true); setReqExtractMsg("קורא את המסמך ומנתח...");
+    try {
+      const res = await fetch("/api/extract-from-url", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fileUrl: reqDocUrl }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || "שגיאה בקריאת המסמך");
+      var ir = (data && data.insurance_requirements && typeof data.insurance_requirements==="object") ? data.insurance_requirements : {};
+      var keys = Object.keys(ir);
+      if (keys.length === 0) { setReqExtractMsg("⚠ לא זוהו דרישות ביטוח במסמך. ניתן להגדיר ידנית."); return; }
+      var m: Record<string,string> = {};
+      keys.forEach(function(k){ m[k] = (Number(ir[k])>0) ? String(Number(ir[k])) : ""; });
+      setReqMap(m);
+      setReqExtractMsg("✓ נקראו " + keys.length + " דרישות מהמסמך — בדוק ואשר לפני שמירה.");
+    } catch (e:any) {
+      setReqExtractMsg("שגיאה: " + (e?.message || e));
+    } finally { setReqExtracting(false); }
   }
   function toggleReq(v: string) {
     if (Object.prototype.hasOwnProperty.call(reqMap, v)) {
@@ -764,6 +809,20 @@ export default function InsurancesPage() {
               <div className="rounded-lg bg-slate-50 border border-slate-200 p-3 text-xs">
                 <div className="font-semibold text-slate-800">{(reqEditContract.tenants as any)?.name}</div>
                 <div className="text-slate-500">{(reqEditContract.properties as any)?.name} · יח&apos;: {spacesLabel(reqEditContract)}</div>
+              </div>
+              {/* Auto-read from the contract document in the cloud */}
+              <div className="rounded-lg border border-emerald-200 bg-emerald-50/60 p-3 space-y-2">
+                <label className="block text-xs font-semibold text-emerald-800">🤖 קריאה אוטומטית מהמסמך בענן</label>
+                <input type="text" value={reqDocUrl} onChange={function(e){setReqDocUrl(e.target.value);}}
+                  placeholder="קישור למסמך ההסכם (PDF/DOCX) — Supabase / Dropbox / Drive ציבורי" className={ic} dir="ltr"/>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button type="button" onClick={readRequirementsFromDoc} disabled={reqExtracting}
+                    className="text-[11px] rounded bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 font-semibold disabled:opacity-50">
+                    {reqExtracting ? "קורא..." : "קרא דרישות מהמסמך"}
+                  </button>
+                  {reqExtractMsg && <span className="text-[11px] text-slate-600">{reqExtractMsg}</span>}
+                </div>
+                <p className="text-[10px] text-emerald-700/70">המערכת מורידה את המסמך, קוראת אותו (כולל סריקה) ומחלצת את הכיסויים וגבולות האחריות הנדרשים בנספח הביטוח. בדוק ואשר לפני שמירה.</p>
               </div>
               <div className="flex items-center justify-between">
                 <label className="text-xs font-semibold text-slate-700">סמן אילו כיסויים נדרשים + גבול אחריות מינימלי</label>

@@ -1,0 +1,100 @@
+import { NextRequest, NextResponse } from "next/server";
+import Anthropic from "@anthropic-ai/sdk";
+import { EXTRACT_PROMPT } from "@/lib/extract-prompt";
+
+export const runtime = "nodejs";
+export const maxDuration = 60;
+
+// Normalize common cloud-share links into direct-download URLs so we can fetch
+// the raw bytes. Private/local files (not shared publicly) won't be reachable.
+function normalizeUrl(url: string): string {
+  let u = url.trim();
+  // Dropbox: ?dl=0 → ?dl=1, and www.dropbox.com → dl.dropboxusercontent.com
+  if (u.includes("dropbox.com")) {
+    u = u.replace("www.dropbox.com", "dl.dropboxusercontent.com");
+    if (u.includes("?dl=0")) u = u.replace("?dl=0", "?dl=1");
+    else if (u.includes("&dl=0")) u = u.replace("&dl=0", "&dl=1");
+    else if (!u.includes("dl=1")) u += (u.includes("?") ? "&" : "?") + "dl=1";
+  }
+  // Google Drive: /file/d/<id>/view → direct download
+  const gd = u.match(/drive\.google\.com\/file\/d\/([^/]+)/);
+  if (gd) u = "https://drive.google.com/uc?export=download&id=" + gd[1];
+  return u;
+}
+
+function parseJson(raw: string): any {
+  const clean = raw.replace(/```json|```/g, "").trim();
+  try { return JSON.parse(clean); }
+  catch {
+    const m = clean.match(/\{[\s\S]*\}/);
+    if (m) return JSON.parse(m[0]);
+    throw new Error("לא ניתן לפרס JSON: " + clean.substring(0, 200));
+  }
+}
+
+export async function POST(req: NextRequest) {
+  try {
+    const { fileUrl } = await req.json();
+    if (!fileUrl) return NextResponse.json({ error: "לא סופק קישור למסמך" }, { status: 400 });
+
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) return NextResponse.json({ error: "ANTHROPIC_API_KEY not configured" }, { status: 500 });
+
+    const url = normalizeUrl(fileUrl);
+    let res: Response;
+    try {
+      res = await fetch(url, { redirect: "follow" });
+    } catch (e: any) {
+      return NextResponse.json({ error: "לא ניתן להוריד את הקובץ מהקישור. ודא שהקישור ציבורי/משותף." }, { status: 400 });
+    }
+    if (!res.ok) {
+      return NextResponse.json({ error: "הורדת הקובץ נכשלה (" + res.status + "). ודא שהקישור ציבורי." }, { status: 400 });
+    }
+
+    const ctype = (res.headers.get("content-type") || "").toLowerCase();
+    const lower = url.toLowerCase();
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length > 28 * 1024 * 1024) {
+      return NextResponse.json({ error: "הקובץ גדול מדי (מעל 28MB)." }, { status: 400 });
+    }
+
+    const client = new Anthropic({ apiKey });
+    let content: any[];
+
+    const isPdf  = ctype.includes("pdf") || lower.includes(".pdf");
+    const isDocx = ctype.includes("word") || ctype.includes("officedocument") || lower.includes(".docx");
+
+    if (isPdf) {
+      // Claude reads PDFs natively (text + scanned pages).
+      content = [
+        { type: "text", text: EXTRACT_PROMPT + "\n\nלהלן מסמך החוזה (PDF):" },
+        { type: "document", source: { type: "base64", media_type: "application/pdf", data: buf.toString("base64") } },
+      ];
+    } else if (isDocx) {
+      // Extract text from DOCX with mammoth, then text mode.
+      let text = "";
+      try {
+        const mammoth = await import("mammoth");
+        const result = await mammoth.extractRawText({ buffer: buf });
+        text = result.value || "";
+      } catch (e: any) {
+        return NextResponse.json({ error: "כשל בקריאת קובץ ה-DOCX: " + (e?.message || e) }, { status: 400 });
+      }
+      if (!text.trim()) return NextResponse.json({ error: "לא נמצא טקסט בקובץ ה-DOCX." }, { status: 400 });
+      content = [{ type: "text", text: EXTRACT_PROMPT + "\n\nטקסט החוזה:\n" + text.substring(0, 60000) }];
+    } else {
+      return NextResponse.json({ error: "סוג קובץ לא נתמך (נדרש PDF או DOCX). זוהה: " + (ctype || "לא ידוע") }, { status: 400 });
+    }
+
+    const message = await client.messages.create({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 4096,
+      messages: [{ role: "user", content }],
+    });
+    const raw = message.content[0].type === "text" ? message.content[0].text : "";
+    const data = parseJson(raw);
+    return NextResponse.json(data);
+  } catch (e: any) {
+    return NextResponse.json({ error: e?.message ?? String(e) }, { status: 500 });
+  }
+}
