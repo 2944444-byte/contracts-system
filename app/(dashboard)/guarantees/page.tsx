@@ -93,7 +93,7 @@ export default function GuaranteesPage() {
         .select("*, contracts(id, property_id, start_date, end_date, status, tenants(name), properties(name), contract_spaces(charge_method, fixed_rent, price_per_sqm, revenue_pct, min_rent, spaces(space_name, area)))")
         .order("end_date"),
       supabase.from("contracts")
-        .select("id, property_id, start_date, end_date, status, is_amendment, parent_contract_id, guarantee_type, guarantee_amount, guarantee_months, tenants(name), properties(name), contract_spaces(charge_method, fixed_rent, price_per_sqm, revenue_pct, min_rent, spaces(space_name, area)), guarantees(id, status, end_date)")
+        .select("id, property_id, start_date, end_date, status, is_amendment, parent_contract_id, no_guarantee_required, guarantee_type, guarantee_amount, guarantee_months, tenants(name), properties(name), contract_spaces(charge_method, fixed_rent, price_per_sqm, revenue_pct, min_rent, spaces(space_name, area)), guarantees(id, status, end_date, guarantee_type)")
         .in("status", ["active", "expiring", "extended", "upcoming"])
         .order("start_date", { ascending: false }),
     ]);
@@ -357,19 +357,25 @@ export default function GuaranteesPage() {
   const totalRequired = active.reduce(function (s, g) { return s + (g.amount_required ?? 0); }, 0);
   const typeInfo = function (v: string) { return GUARANTEE_TYPES.find(function (t) { return t.v === v; }) ?? GUARANTEE_TYPES[5]; };
 
-  // Contract is treated as "no guarantee required" when its guarantee
-  // definition is explicitly empty or marked 'none'. The user told us this
-  // happens when the parties agreed there's no guarantee/other security —
-  // these should NOT be flagged as missing, just listed informatively.
+  // Contract is treated as "no guarantee required" only when explicitly
+  // flagged via contracts.no_guarantee_required (boolean). Default = true
+  // (every active contract is assumed to require some form of security).
+  // Users mark exceptions by clicking the "סמן כללא ערבות נדרשת" button
+  // on a missing-card.
   function contractRequiresGuarantee(c: any): boolean {
-    var typ = (c.guarantee_type || "").toString().trim().toLowerCase();
-    if (typ === "" || typ === "none" || typ === "no" || typ === "ללא") return false;
-    var amt    = Number(c.guarantee_amount || 0);
-    var months = Number(c.guarantee_months || 0);
-    // If both the amount and months are zero AND there's no type that
-    // signals "yes" — also treat as no requirement.
-    if (amt === 0 && months === 0 && typ === "") return false;
-    return true;
+    return !c?.no_guarantee_required;
+  }
+
+  async function markContractNoGuaranteeRequired(contractId: string, tenantName: string) {
+    if (!confirm("לסמן את ההסכם של " + tenantName + " כ\"ללא ערבות בהסכם\"? יוצא מהתראת ערבויות חסרות.")) return;
+    await supabase.from("contracts").update({ no_guarantee_required: true }).eq("id", contractId);
+    await logAudit({ entity_type: "contract", entity_id: contractId, action: "mark_no_guarantee_required" });
+    await loadAll();
+  }
+  async function unmarkContractNoGuaranteeRequired(contractId: string) {
+    await supabase.from("contracts").update({ no_guarantee_required: false }).eq("id", contractId);
+    await logAudit({ entity_type: "contract", entity_id: contractId, action: "unmark_no_guarantee_required" });
+    await loadAll();
   }
 
   // Build a map: parent-or-self id → array of guarantees on the whole
@@ -400,18 +406,43 @@ export default function GuaranteesPage() {
     return true;
   });
 
-  // Three buckets: contracts that need a guarantee but don't have an
-  // active one; contracts whose contract explicitly defines no guarantee
-  // (informational only); and the rest (covered).
-  const missingGuarantees   = baseContractsForReport.filter(function(c: any) {
-    if (!contractRequiresGuarantee(c)) return false;
-    var hasActive = familyGuarantees(c).some(function(gg: any) {
+  // Helper: does the contract (or its family) have any in-date active
+  // guarantee? Counts ALL types including 'cash' which is a deposit
+  // (פיקדון) — a deposit IS a form of security and should not surface
+  // as "missing".
+  function hasFamilyActiveGuarantee(c: any): boolean {
+    return familyGuarantees(c).some(function(gg: any) {
       return gg.status === "active" && (!gg.end_date || daysLeft(gg.end_date) >= 0);
     });
-    return !hasActive;
+  }
+  // Helper: family has at least one cash/deposit guarantee — used to
+  // separate "deposit-only" contracts informationally.
+  function hasFamilyDepositOnly(c: any): boolean {
+    var act = familyGuarantees(c).filter(function(gg: any) {
+      return gg.status === "active" && (!gg.end_date || daysLeft(gg.end_date) >= 0);
+    });
+    if (act.length === 0) return false;
+    return act.every(function(g: any) { return g.guarantee_type === "cash"; });
+  }
+
+  // Three buckets:
+  // - missingGuarantees: requires guarantee AND family has NO active guarantee
+  // - depositOnly: family's only active security is cash/deposit
+  // - noGuaranteeDefined: contract explicitly flagged "no guarantee required"
+  //   AND has no active guarantee (otherwise just shown normally in table)
+  const missingGuarantees = baseContractsForReport.filter(function(c: any) {
+    if (!contractRequiresGuarantee(c)) return false;
+    return !hasFamilyActiveGuarantee(c);
   });
-  const noGuaranteeDefined  = baseContractsForReport.filter(function(c: any) {
-    return !contractRequiresGuarantee(c);
+  const depositOnly = baseContractsForReport.filter(function(c: any) {
+    return hasFamilyDepositOnly(c);
+  });
+  const noGuaranteeDefined = baseContractsForReport.filter(function(c: any) {
+    if (contractRequiresGuarantee(c)) return false;
+    // If the contract is flagged as "no guarantee required" but ALSO has
+    // an active guarantee, just show it normally — flag was probably set
+    // by mistake or before the guarantee was registered.
+    return !hasFamilyActiveGuarantee(c);
   });
 
   // Underinsured: amount_required < expected months × monthly rent.
@@ -471,15 +502,11 @@ export default function GuaranteesPage() {
         <PropertyHierarchyFilter onChange={function (f) { setFilterPropIds(f.propertyIds); }} />
       </div>
 
-      {/* Missing-guarantees alert: active contracts without an active guarantee */}
+      {/* Missing-guarantees alert: active contracts without any active guarantee */}
       {missingGuarantees.length > 0 && (
         <div className="rounded-xl border-2 border-rose-200 bg-rose-50 p-4 mb-4">
-          <div className="flex items-start justify-between gap-3 flex-wrap">
-            <div>
-              <div className="font-bold text-rose-800 text-sm">⚠ הסכמים פעילים ללא ערבות בתוקף — {missingGuarantees.length}</div>
-              <div className="text-xs text-rose-600 mt-0.5">חוזים פעילים שאין להם אף ערבות במצב "פעילה" שתאריך הסיום שלה לא עבר.</div>
-            </div>
-          </div>
+          <div className="font-bold text-rose-800 text-sm">⚠ הסכמים פעילים ללא ערבות בתוקף — {missingGuarantees.length}</div>
+          <div className="text-xs text-rose-600 mt-0.5">חוזים פעילים שאין להם אף ערבות / פיקדון במצב &quot;פעילה&quot; שתאריך הסיום שלה לא עבר.</div>
           <div className="mt-3 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
             {missingGuarantees.slice(0, 12).map(function(c: any) {
               return (
@@ -488,10 +515,17 @@ export default function GuaranteesPage() {
                   <div className="text-slate-500">{(c.properties as any)?.name}</div>
                   <div className="text-[10px] text-indigo-700 mt-0.5">יח&apos;: {spacesLabel(c)}</div>
                   <div className="text-[10px] text-slate-400">{contractRange(c)}</div>
-                  <button onClick={function() { openNew(undefined, c.id); }} title="צור ערבות חדשה עבור הסכם זה"
-                    className="mt-1.5 text-[11px] rounded bg-rose-600 hover:bg-rose-700 text-white px-2 py-1 font-semibold">
-                    + צור ערבות לחוזה
-                  </button>
+                  <div className="mt-1.5 flex gap-1 flex-wrap">
+                    <button onClick={function() { openNew(undefined, c.id); }} title="צור ערבות חדשה עבור הסכם זה"
+                      className="text-[11px] rounded bg-rose-600 hover:bg-rose-700 text-white px-2 py-1 font-semibold">
+                      + צור ערבות
+                    </button>
+                    <button onClick={function() { markContractNoGuaranteeRequired(c.id, (c.tenants as any)?.name || ""); }}
+                      title="סמן שההסכם הזה אינו דורש ערבות (סוכם בין הצדדים) — יוצא מההתראה"
+                      className="text-[11px] rounded border border-slate-300 text-slate-600 hover:bg-slate-50 px-2 py-1">
+                      ללא ערבות בהסכם
+                    </button>
+                  </div>
                 </div>
               );
             })}
@@ -502,12 +536,37 @@ export default function GuaranteesPage() {
         </div>
       )}
 
-      {/* Contracts with no guarantee defined — informational only */}
+      {/* Deposit-only — informational, security exists as cash deposit */}
+      {depositOnly.length > 0 && (
+        <div className="rounded-xl border border-blue-200 bg-blue-50/50 p-4 mb-4">
+          <div className="font-bold text-blue-800 text-sm">💵 בטוחה כפיקדון בלבד — {depositOnly.length}</div>
+          <div className="text-xs text-blue-700/70 mt-0.5">
+            בהסכמים אלו הבטחון מופיע כפיקדון (מזומן) במקום ערבות בנקאית. הפיקדון נחשב בטחון תקף — אין צורך לדרוש ערבות נוספת.
+          </div>
+          <div className="mt-3 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+            {depositOnly.slice(0, 12).map(function(c: any) {
+              return (
+                <div key={c.id} className="rounded-lg bg-white border border-blue-200 p-2.5 text-xs">
+                  <div className="font-semibold text-slate-800">{(c.tenants as any)?.name}</div>
+                  <div className="text-slate-500">{(c.properties as any)?.name}</div>
+                  <div className="text-[10px] text-indigo-700 mt-0.5">יח&apos;: {spacesLabel(c)}</div>
+                  <div className="text-[10px] text-slate-400">{contractRange(c)}</div>
+                </div>
+              );
+            })}
+          </div>
+          {depositOnly.length > 12 && (
+            <div className="text-[11px] text-blue-600 mt-2">ועוד {depositOnly.length - 12} הסכמים...</div>
+          )}
+        </div>
+      )}
+
+      {/* Contracts with no guarantee defined — manually flagged, informational */}
       {noGuaranteeDefined.length > 0 && (
         <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 mb-4">
           <div className="font-bold text-slate-700 text-sm">ℹ️ אין הגדרה של ערבות בהסכם — {noGuaranteeDefined.length}</div>
           <div className="text-xs text-slate-500 mt-0.5">
-            בהסכמים האלו לא הוגדרה דרישת ערבות (סוכם בין הצדדים שאין ערבות / ביטחון אחר). אין צורך לדרוש ערבות עבורם.
+            הסכמים שסומנו ידנית כ&quot;ללא ערבות&quot; — סוכם בין הצדדים שאין ערבות / ביטחון אחר. אין צורך לדרוש ערבות עבורם.
           </div>
           <div className="mt-3 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
             {noGuaranteeDefined.slice(0, 12).map(function(c: any) {
@@ -517,6 +576,11 @@ export default function GuaranteesPage() {
                   <div className="text-slate-500">{(c.properties as any)?.name}</div>
                   <div className="text-[10px] text-indigo-700 mt-0.5">יח&apos;: {spacesLabel(c)}</div>
                   <div className="text-[10px] text-slate-400">{contractRange(c)}</div>
+                  <button onClick={function() { unmarkContractNoGuaranteeRequired(c.id); }}
+                    title="בטל סימון — ההסכם יחזור להתראה הרגילה"
+                    className="mt-1.5 text-[10px] rounded border border-slate-300 text-slate-500 hover:bg-slate-100 px-2 py-0.5">
+                    בטל סימון
+                  </button>
                 </div>
               );
             })}
