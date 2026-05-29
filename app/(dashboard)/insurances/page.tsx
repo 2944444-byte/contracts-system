@@ -80,6 +80,8 @@ export default function InsurancesPage() {
   const [fCovLimits,  setFCovLimits]  = useState<Record<string,string>>({});
   const fileRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading]     = useState(false);
+  const [docExtracting, setDocExtracting] = useState(false);
+  const [docExtractMsg, setDocExtractMsg] = useState("");
 
   // Requirements editor state (per-contract)
   const [reqEditContract, setReqEditContract] = useState<any>(null);
@@ -96,7 +98,7 @@ export default function InsurancesPage() {
       supabase.from("insurances_tenant").select("*, contracts(id, property_id, no_tenant_insurance_required, insurance_requirements, tenants(name), properties(name), contract_spaces(spaces(space_name)))").order("end_date"),
       supabase.from("properties").select("id,name").order("name"),
       supabase.from("contracts")
-        .select("id, property_id, start_date, end_date, status, is_amendment, parent_contract_id, no_tenant_insurance_required, insurance_requirements, tenants(name), properties(name), contract_spaces(spaces(space_name))")
+        .select("id, tenant_id, property_id, start_date, end_date, status, is_amendment, parent_contract_id, no_tenant_insurance_required, insurance_requirements, tenants(name), properties(name), contract_spaces(spaces(space_name))")
         .in("status",["active","expiring","extended","upcoming"])
         .order("start_date", { ascending: false }),
     ]);
@@ -142,11 +144,45 @@ export default function InsurancesPage() {
     finally { setUploading(false); }
   }
 
+  // Read coverage types + limits from the attached certificate/policy document.
+  async function readDocIntoForm() {
+    if (!fDocUrl) { setDocExtractMsg("הזן/העלה קישור למסמך תחילה."); return; }
+    setDocExtracting(true); setDocExtractMsg("קורא את המסמך ומנתח...");
+    try {
+      const res = await fetch("/api/extract-from-url", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fileUrl: fDocUrl }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || "שגיאה בקריאת המסמך");
+      var filled = 0;
+      // Insurer / policy number / dates if found and empty.
+      if (data.insurer && !fInsurer) { setFInsurer(data.insurer); filled++; }
+      if (activeTab==="tenant") {
+        var ir = (data.insurance_requirements && typeof data.insurance_requirements==="object") ? data.insurance_requirements : {};
+        var keys = Object.keys(ir);
+        if (keys.length > 0) {
+          var lim: Record<string,string> = {};
+          keys.forEach(function(k){ lim[k] = Number(ir[k])>0 ? String(Number(ir[k])) : ""; });
+          setFCovTypes(keys); setFCovLimits(lim); filled += keys.length;
+        }
+      } else {
+        // building: take third_party / coverage amount if present
+        var ir2 = (data.insurance_requirements && typeof data.insurance_requirements==="object") ? data.insurance_requirements : {};
+        if (ir2.third_party && !fCoverage) { setFCoverage(String(Number(ir2.third_party))); filled++; }
+      }
+      setDocExtractMsg(filled>0 ? ("✓ נקראו " + filled + " שדות מהמסמך — בדוק ואשר.") : "⚠ לא זוהו נתוני כיסוי במסמך. ניתן למלא ידנית.");
+    } catch (e:any) {
+      setDocExtractMsg("שגיאה: " + (e?.message || e));
+    } finally { setDocExtracting(false); }
+  }
+
   function openNew(prefillRefId?: string) {
     setIsNew(true); setEditingId("new");
     setFRefId(prefillRefId || ""); setFInsurer(""); setFPolicyNum(""); setFCoverage("");
     setFPremium(""); setFDeductible(""); setFStartDate(""); setFEndDate("");
     setFStatus("active"); setFNotes(""); setFDocUrl(""); setFCovTypes([]); setFCovLimits({});
+    setDocExtractMsg("");
     if (fileRef.current) fileRef.current.value = "";
   }
 
@@ -159,6 +195,7 @@ export default function InsurancesPage() {
     setFStartDate(ins.start_date?.split("T")[0]??""); setFEndDate(ins.end_date?.split("T")[0]??"");
     setFStatus(ins.status??"active"); setFNotes(ins.notes??"");
     setFDocUrl(ins.document_url || ins.certificate_url || "");
+    setDocExtractMsg("");
     var limits = (ins.coverage_limits && typeof ins.coverage_limits==="object") ? ins.coverage_limits : {};
     var types = Array.isArray(ins.coverage_types) ? ins.coverage_types.slice() : [];
     Object.keys(limits).forEach(function(k){ if (!types.includes(k)) types.push(k); });
@@ -206,6 +243,11 @@ export default function InsurancesPage() {
       };
       if (activeTab==="building") { payload.total_premium = fPremium ? Number(fPremium) : null; payload.deductible = fDeductible ? Number(fDeductible) : null; }
       else {
+        // insurances_tenant.tenant_id is NOT NULL — derive it from the contract.
+        var selContract = contracts.find(function(c:any){ return c.id===fRefId; });
+        var tId = selContract?.tenant_id || existing?.tenant_id || null;
+        if (!tId) { throw new Error("לא נמצא שוכר משויך לחוזה הנבחר"); }
+        payload.tenant_id = tId;
         payload.coverage_types = fCovTypes;
         var limMap: Record<string,number> = {};
         fCovTypes.forEach(function(t){ var v = Number(fCovLimits[t]||0); if (v>0) limMap[t] = v; });
@@ -780,11 +822,19 @@ export default function InsurancesPage() {
                 </div>
                 <input type="text" value={fDocUrl} onChange={function(e){setFDocUrl(e.target.value);}} placeholder="או הדבק קישור (Drive / Dropbox / כל URL)" className={ic} dir="ltr"/>
                 {fDocUrl && (
-                  <div className="text-[11px] text-emerald-700 flex items-center gap-2">
+                  <div className="text-[11px] text-emerald-700 flex items-center gap-2 flex-wrap">
                     ✓ מסמך מצורף — <a href={fDocUrl} target="_blank" rel="noopener noreferrer" className="underline">פתח</a>
                     <button type="button" onClick={function(){setFDocUrl("");}} className="text-rose-600 underline">הסר</button>
                   </div>
                 )}
+                <div className="flex items-center gap-2 flex-wrap pt-1 border-t border-slate-200">
+                  <button type="button" onClick={readDocIntoForm} disabled={docExtracting || !fDocUrl}
+                    className="text-[11px] rounded bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 font-semibold disabled:opacity-50">
+                    {docExtracting ? "קורא..." : "🤖 קרא נתונים מהמסמך"}
+                  </button>
+                  {docExtractMsg && <span className="text-[11px] text-slate-600">{docExtractMsg}</span>}
+                </div>
+                <p className="text-[10px] text-slate-400">המערכת תקרא את המסמך (PDF/DOCX) ותמלא אוטומטית את הכיסויים וגבולות האחריות. הקישור חייב להיות ציבורי/משותף או קובץ שהועלה למערכת.</p>
               </div>
 
               <div><label className="mb-1 block text-xs font-semibold text-slate-700">הערות</label><input type="text" value={fNotes} onChange={function(e){setFNotes(e.target.value);}} className={ic} /></div>
