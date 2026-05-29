@@ -248,6 +248,9 @@ export default function InsurancesPage() {
         var tId = selContract?.tenant_id || existing?.tenant_id || null;
         if (!tId) { throw new Error("לא נמצא שוכר משויך לחוזה הנבחר"); }
         payload.tenant_id = tId;
+        // insurance_type is a NOT-NULL legacy column; certificates now carry
+        // multiple coverages in coverage_types — store the primary one here.
+        payload.insurance_type = fCovTypes[0] || existing?.insurance_type || "general";
         payload.coverage_types = fCovTypes;
         var limMap: Record<string,number> = {};
         fCovTypes.forEach(function(t){ var v = Number(fCovLimits[t]||0); if (v>0) limMap[t] = v; });
