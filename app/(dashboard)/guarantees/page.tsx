@@ -93,7 +93,7 @@ export default function GuaranteesPage() {
         .select("*, contracts(id, property_id, start_date, end_date, status, tenants(name), properties(name), contract_spaces(charge_method, fixed_rent, price_per_sqm, revenue_pct, min_rent, spaces(space_name, area)))")
         .order("end_date"),
       supabase.from("contracts")
-        .select("id, property_id, start_date, end_date, status, tenants(name), properties(name), contract_spaces(charge_method, fixed_rent, price_per_sqm, revenue_pct, min_rent, spaces(space_name, area)), guarantees(id, status, end_date)")
+        .select("id, property_id, start_date, end_date, status, is_amendment, parent_contract_id, guarantee_type, guarantee_amount, guarantee_months, tenants(name), properties(name), contract_spaces(charge_method, fixed_rent, price_per_sqm, revenue_pct, min_rent, spaces(space_name, area)), guarantees(id, status, end_date)")
         .in("status", ["active", "expiring", "extended", "upcoming"])
         .order("start_date", { ascending: false }),
     ]);
@@ -332,7 +332,7 @@ export default function GuaranteesPage() {
     if (filterSt === "underinsured") {
       if (g.status !== "active") return false;
       var m = coverageMonths(g);
-      return m !== null && m < MIN_COVERAGE_MONTHS;
+      return m !== null && m < expectedCoverageMonths(g);
     }
     // "active" — includes all health states that are still in-play
     return g.status === "active";
@@ -357,17 +357,71 @@ export default function GuaranteesPage() {
   const totalRequired = active.reduce(function (s, g) { return s + (g.amount_required ?? 0); }, 0);
   const typeInfo = function (v: string) { return GUARANTEE_TYPES.find(function (t) { return t.v === v; }) ?? GUARANTEE_TYPES[5]; };
 
-  // Contracts that should have at least one active guarantee but don't.
-  // Filtered by property selection so it follows the rest of the screen.
-  const missingGuarantees = contracts.filter(function(c: any) {
+  // Contract is treated as "no guarantee required" when its guarantee
+  // definition is explicitly empty or marked 'none'. The user told us this
+  // happens when the parties agreed there's no guarantee/other security —
+  // these should NOT be flagged as missing, just listed informatively.
+  function contractRequiresGuarantee(c: any): boolean {
+    var typ = (c.guarantee_type || "").toString().trim().toLowerCase();
+    if (typ === "" || typ === "none" || typ === "no" || typ === "ללא") return false;
+    var amt    = Number(c.guarantee_amount || 0);
+    var months = Number(c.guarantee_months || 0);
+    // If both the amount and months are zero AND there's no type that
+    // signals "yes" — also treat as no requirement.
+    if (amt === 0 && months === 0 && typ === "") return false;
+    return true;
+  }
+
+  // Build a map: parent-or-self id → array of guarantees on the whole
+  // family (parent + amendments). An amendment that doesn't touch the
+  // guarantee inherits whatever the parent has.
+  function familyGuarantees(c: any): any[] {
+    var pid = c.parent_contract_id || c.id;
+    var family = contracts.filter(function(x: any) {
+      return x.id === pid || x.parent_contract_id === pid;
+    });
+    var gs: any[] = [];
+    family.forEach(function(x: any) { (x.guarantees || []).forEach(function(g: any) { gs.push(g); }); });
+    // Also check standalone guarantees that point at any family member
+    guarantees.forEach(function(g: any) {
+      if (family.some(function(x){ return x.id === g.contract_id; }) && !gs.some(function(y){ return y.id === g.id; })) {
+        gs.push(g);
+      }
+    });
+    return gs;
+  }
+
+  // Only base contracts (skip amendments — they inherit their parent's
+  // guarantee unless they explicitly registered a new one).
+  const baseContractsForReport = contracts.filter(function(c: any) {
     if (filterPropIds.length > 0 && !filterPropIds.includes(c.property_id)) return false;
-    var hasActive = (c.guarantees || []).some(function(gg: any) {
+    if (c.is_amendment === true) return false;
+    if (c.parent_contract_id) return false;
+    return true;
+  });
+
+  // Three buckets: contracts that need a guarantee but don't have an
+  // active one; contracts whose contract explicitly defines no guarantee
+  // (informational only); and the rest (covered).
+  const missingGuarantees   = baseContractsForReport.filter(function(c: any) {
+    if (!contractRequiresGuarantee(c)) return false;
+    var hasActive = familyGuarantees(c).some(function(gg: any) {
       return gg.status === "active" && (!gg.end_date || daysLeft(gg.end_date) >= 0);
     });
     return !hasActive;
   });
+  const noGuaranteeDefined  = baseContractsForReport.filter(function(c: any) {
+    return !contractRequiresGuarantee(c);
+  });
 
-  // Underinsured: amount_required < MIN_COVERAGE_MONTHS × monthly rent.
+  // Underinsured: amount_required < expected months × monthly rent.
+  // The expected floor comes from contract.guarantee_months when set
+  // (some contracts agree on 6 months, some on 3, etc.) and falls back
+  // to the platform-wide MIN_COVERAGE_MONTHS otherwise.
+  function expectedCoverageMonths(g: any): number {
+    var m = Number(g?.contracts?.guarantee_months || 0);
+    return m > 0 ? m : MIN_COVERAGE_MONTHS;
+  }
   function coverageMonths(g: any): number | null {
     var rent = monthlyRentOf(g.contracts);
     if (!rent || rent <= 0) return null;
@@ -377,7 +431,7 @@ export default function GuaranteesPage() {
   }
   const underinsured = active.filter(function(g) {
     var m = coverageMonths(g);
-    return m !== null && m < MIN_COVERAGE_MONTHS;
+    return m !== null && m < expectedCoverageMonths(g);
   });
 
   return (
@@ -400,7 +454,7 @@ export default function GuaranteesPage() {
           { f: "expired",   label: "פג תוקף",    value: expired.length,    sub: "בתוקף 'פעיל' אך עברה תקפותם", color: expired.length > 0 ? "text-red-700" : "text-slate-400", bg: expired.length > 0 ? "bg-red-50" : "bg-white" },
           { f: "expiring",  label: "פגות בקרוב", value: expiring30.length + expiring60.length, sub: "ב-60 הימים הקרובים", color: (expiring30.length + expiring60.length) > 0 ? "text-yellow-700" : "text-slate-400", bg: (expiring30.length + expiring60.length) > 0 ? "bg-yellow-50" : "bg-white" },
           { f: "gap",       label: "עם פער",     value: hasGap.length,     sub: "בפועל < נדרש",            color: hasGap.length > 0 ? "text-orange-700" : "text-slate-400", bg: hasGap.length > 0 ? "bg-orange-50" : "bg-white" },
-          { f: "underinsured", label: "מתחת ל-3 חוד׳", value: underinsured.length, sub: "כיסוי < " + MIN_COVERAGE_MONTHS + " חוד׳ שכ״ד", color: underinsured.length > 0 ? "text-amber-700" : "text-slate-400", bg: underinsured.length > 0 ? "bg-amber-50" : "bg-white" },
+          { f: "underinsured", label: "כיסוי נמוך", value: underinsured.length, sub: "מתחת לסף שבהסכם", color: underinsured.length > 0 ? "text-amber-700" : "text-slate-400", bg: underinsured.length > 0 ? "bg-amber-50" : "bg-white" },
         ].map(function (k) {
           return (
             <button key={k.label} onClick={function () { setFilterSt(k.f as any); }}
@@ -448,13 +502,38 @@ export default function GuaranteesPage() {
         </div>
       )}
 
+      {/* Contracts with no guarantee defined — informational only */}
+      {noGuaranteeDefined.length > 0 && (
+        <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 mb-4">
+          <div className="font-bold text-slate-700 text-sm">ℹ️ אין הגדרה של ערבות בהסכם — {noGuaranteeDefined.length}</div>
+          <div className="text-xs text-slate-500 mt-0.5">
+            בהסכמים האלו לא הוגדרה דרישת ערבות (סוכם בין הצדדים שאין ערבות / ביטחון אחר). אין צורך לדרוש ערבות עבורם.
+          </div>
+          <div className="mt-3 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+            {noGuaranteeDefined.slice(0, 12).map(function(c: any) {
+              return (
+                <div key={c.id} className="rounded-lg bg-white border border-slate-200 p-2.5 text-xs">
+                  <div className="font-semibold text-slate-800">{(c.tenants as any)?.name}</div>
+                  <div className="text-slate-500">{(c.properties as any)?.name}</div>
+                  <div className="text-[10px] text-indigo-700 mt-0.5">יח&apos;: {spacesLabel(c)}</div>
+                  <div className="text-[10px] text-slate-400">{contractRange(c)}</div>
+                </div>
+              );
+            })}
+          </div>
+          {noGuaranteeDefined.length > 12 && (
+            <div className="text-[11px] text-slate-500 mt-2">ועוד {noGuaranteeDefined.length - 12} הסכמים...</div>
+          )}
+        </div>
+      )}
+
       <div className="flex gap-2 mb-4 flex-wrap">
         {[
           { v: "active",    l: "פעילות" },
           { v: "expired",   l: "פג תוקף" },
           { v: "expiring",  l: "פגות בקרוב" },
           { v: "gap",       l: "עם פער" },
-          { v: "underinsured", l: "מתחת ל-3 חוד׳" },
+          { v: "underinsured", l: "כיסוי נמוך" },
           { v: "returned",  l: "הוחזרו" },
           { v: "forfeited", l: "מומשו" },
           { v: "all",       l: "הכל" },
@@ -538,11 +617,12 @@ export default function GuaranteesPage() {
                       {(function() {
                         var m = coverageMonths(g);
                         if (m === null) return null;
-                        var lo = m < MIN_COVERAGE_MONTHS;
+                        var floor = expectedCoverageMonths(g);
+                        var lo = m < floor;
                         return (
                           <div className={"text-[10px] mt-0.5 font-semibold " + (lo ? "text-amber-700" : "text-emerald-700")}
-                               title={"נדרש ÷ שכ\"ד חודשי משוער (≈₪" + Math.round(monthlyRentOf(g.contracts) || 0).toLocaleString() + ")"}>
-                            {lo ? "⚠ " : "✓ "}≈{m.toFixed(1)} חוד&apos; שכ&quot;ד
+                               title={"נדרש ÷ שכ\"ד חודשי משוער (≈₪" + Math.round(monthlyRentOf(g.contracts) || 0).toLocaleString() + "). הסף בהסכם: " + floor + " חוד'"}>
+                            {lo ? "⚠ " : "✓ "}≈{m.toFixed(1)}/{floor} חוד&apos; שכ&quot;ד
                           </div>
                         );
                       })()}
