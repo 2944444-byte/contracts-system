@@ -1291,9 +1291,9 @@ function InsuranceTab({ properties }: { properties: any[] }) {
           <div className="rounded-lg bg-blue-50 border border-blue-200 p-4 mb-4">
             <div className="flex items-center justify-between flex-wrap gap-2">
               <div className="text-sm font-bold text-blue-800">✓ כבר נוצרו {existingCharges.length} חיובי ביטוח לשנת {year} לנכס זה</div>
-              <a href="/payments" className="text-xs rounded border border-blue-300 bg-white text-blue-700 hover:bg-blue-100 px-2 py-1 font-semibold" title="צפייה / תיקון / מחיקה במסך החיובים">לצפייה ותיקון →</a>
+              <button onClick={compute} disabled={computing || !policy} className="text-xs rounded border border-blue-300 bg-white text-blue-700 hover:bg-blue-100 px-2 py-1 font-semibold disabled:opacity-50" title="הצג את החישוב המפורט כאן (פירוט לכל שוכר)">📊 הצג חישוב מפורט</button>
             </div>
-            <div className="text-[11px] text-blue-600 mt-0.5">אין צורך ליצור שוב — יצירה חוזרת תיצור כפילות. לתיקון/מחיקה היכנס למסך חיובים.</div>
+            <div className="text-[11px] text-blue-600 mt-0.5">אין צורך ליצור חיובים שוב (יצירה חוזרת תיצור כפילות). למחיקה/עריכה של חיוב — מסך חיובים. אם טרם נוצרו מכתבים — לחץ &quot;הצג חישוב מפורט&quot; ואז &quot;צור מכתבים&quot;.</div>
             <div className="mt-2 rounded-lg bg-white border border-blue-100 divide-y divide-blue-50">
               {existingCharges.map(function(ch:any){
                 return (
