@@ -9,6 +9,7 @@ import { getGraceDaysForProperty, dueDateFromGrace } from '@/lib/grace-days';
 import AdvancesTab from '@/components/AdvancesTab';
 import CpiDiffTab from '@/components/CpiDiffTab';
 import SavedAdvancesTab from '@/components/SavedAdvancesTab';
+import CalcProgress, { CalcProgressState } from '@/components/CalcProgress';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 
@@ -740,6 +741,7 @@ function InsuranceTab({ properties }: { properties: any[] }) {
   // can see what was billed and avoid duplicating it).
   const [existingCharges, setExistingCharges] = useState<any[]>([]);
   const [existingLetters, setExistingLetters] = useState<any[]>([]);
+  const [progress, setProgress] = useState<CalcProgressState | null>(null);
   // Detected data issues to surface in the UI (e.g. a space assigned to two
   // active contracts simultaneously). Cleared on each compute().
   const [warnings, setWarnings] = useState<string[]>([]);
@@ -818,6 +820,7 @@ function InsuranceTab({ properties }: { properties: any[] }) {
   async function compute() {
     if (!propId || !policy) { alert("יש לבחור נכס עם ביטוח פעיל"); return; }
     setComputing(true);
+    setProgress({ current: 0, total: 0, label: "מחשב חלוקת ביטוח לפי מ\"ר-ימים...", startedAt: Date.now() });
     try {
       const premium = policy.annual_premium ?? 0;
       // Policy period — bound all tenancy intersections by this window
@@ -1139,7 +1142,7 @@ function InsuranceTab({ properties }: { properties: any[] }) {
       var saved = await loadSavedDispositions();
       setSpaceDispositions(saved || {});
     } catch (e: any) { alert("שגיאה: " + e?.message); }
-    finally { setComputing(false); }
+    finally { setComputing(false); setProgress(null); }
   }
 
   async function loadSavedDispositions(): Promise<Record<string, string>> {
@@ -1191,12 +1194,16 @@ function InsuranceTab({ properties }: { properties: any[] }) {
       if (!confirm("נמצאו " + willFix + " חיובי ביטוח קיימים לשנת " + year + ".\nלתקן אותם לפי החישוב הנוכחי? (הסכומים יעודכנו ויסומנו כמתוקנים; לשוכרים ללא חיוב ייווצר חיוב חדש)")) return;
     }
     setCreatingCharges(true);
+    setProgress({ current: 0, total: effective.length, label: willFix ? "מתקן חיובים..." : "יוצר חיובים...", startedAt: Date.now() });
     try {
       var graceDays = await getGraceDaysForProperty(propId);
       var dueDateStr = dueDateFromGrace(graceDays);
       var today = new Date().toLocaleDateString("he-IL");
       var updated = 0, created = 0;
+      var idx = 0;
       for (const r of effective) {
+        idx++;
+        setProgress({ current: idx, total: effective.length, label: (willFix ? "מתקן: " : "יוצר: ") + r.tenantName, startedAt: Date.now() });
         var baseNotes = "חיוב ביטוח מבנה " + year + (r.isPartialPeriod ? " (תקופה חלקית: " + r.daysInPolicy + "/" + r.policyDays + " ימים)" : "");
         var ex = byContract[r.contractId];
         if (ex) {
@@ -1224,7 +1231,7 @@ function InsuranceTab({ properties }: { properties: any[] }) {
         ? ("✅ תוקנו " + updated + " חיובים" + (created ? ", נוצרו " + created + " חדשים" : ""))
         : ("✅ נוצרו " + created + " חיובים"));
     } catch (e: any) { alert("שגיאה: " + e?.message); }
-    finally { setCreatingCharges(false); }
+    finally { setCreatingCharges(false); setProgress(null); }
   }
 
   // Create OR fix insurance letters: update the existing letter for a
@@ -1240,10 +1247,14 @@ function InsuranceTab({ properties }: { properties: any[] }) {
       if (!confirm("נמצאו " + willFix + " מכתבי ביטוח קיימים לשנת " + year + ".\nלתקן אותם? התוכן יעודכן והם יסומנו כ\"מכתב מתוקן\" במסך מכתבים.")) return;
     }
     setCreatingLetters(true);
+    setProgress({ current: 0, total: effective.length, label: willFix ? "מתקן מכתבים..." : "יוצר מכתבים...", startedAt: Date.now() });
     try {
       var today = new Date().toLocaleDateString("he-IL");
       var updated = 0, created = 0;
+      var lidx = 0;
       for (const r of effective) {
+        lidx++;
+        setProgress({ current: lidx, total: effective.length, label: (willFix ? "מתקן מכתב: " : "יוצר מכתב: ") + r.tenantName, startedAt: Date.now() });
         var periodLine = r.isPartialPeriod
           ? "תקופת חיוב: " + r.daysInPolicy + " מתוך " + r.policyDays + " ימים\n"
           : "";
@@ -1287,7 +1298,7 @@ function InsuranceTab({ properties }: { properties: any[] }) {
         ? ("✅ תוקנו " + updated + " מכתבים" + (created ? ", נוצרו " + created + " חדשים" : "") + " — סומנו כ\"מכתב מתוקן\" במסך מכתבים")
         : ("✅ נוצרו " + created + " מכתבים"));
     } catch (e: any) { alert("שגיאה: " + e?.message); }
-    finally { setCreatingLetters(false); }
+    finally { setCreatingLetters(false); setProgress(null); }
   }
 
   return (
@@ -1351,6 +1362,8 @@ function InsuranceTab({ properties }: { properties: any[] }) {
             </div>
           </div>
         )}
+
+        {progress && <div className="my-3"><CalcProgress {...progress} /></div>}
 
         <button onClick={compute} disabled={computing || !propId || !policy}
           className="rounded-lg bg-purple-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-purple-800 disabled:opacity-50">
@@ -1602,6 +1615,7 @@ function InsuranceTab({ properties }: { properties: any[] }) {
               </div>
             </div>
 
+            {progress && <div className="mt-4"><CalcProgress {...progress} /></div>}
             <div className="flex gap-3 mt-4">
               <button onClick={createCharges} disabled={creatingCharges || results.length === 0 || overBilled}
                 title={overBilled ? "לא ניתן ליצור חיובים כאשר סך החלקים עולה על 100% — תקן את הכפילות בנתוני החוזים" : (existingCharges.length > 0 ? "מעדכן את החיובים הקיימים לפי החישוב הנוכחי (מסמן כמתוקנים) ומוסיף לשוכרים חדשים" : "מוסיף שורת חיוב ביטוח לטבלת charges לכל שוכר")}
