@@ -256,6 +256,40 @@ export default function SafetyPage() {
     await loadAll();
   }
 
+  // Demand letter to the tenant for a tenant-responsibility check (e.g. fire
+  // license). Resolves the active contract from the inspection's linked units.
+  async function sendSafetyDemand(ins: any) {
+    var spaceIds = (ins.inspection_spaces || []).map(function(s:any){ return s.space_id; }).filter(Boolean);
+    if (spaceIds.length === 0) { alert("לבדיקה לא משויכות יחידות — לא ניתן לזהות שוכר. ערוך את הבדיקה ושייך יחידה."); return; }
+    try {
+      const { data: cs } = await supabase.from("contract_spaces")
+        .select("contracts(id, status, tenants(name), properties(name))")
+        .in("space_id", spaceIds);
+      var active = (cs || [])
+        .map(function(x:any){ return x.contracts; })
+        .filter(function(c:any){ return c && ["active","expiring","extended"].includes(c.status); });
+      if (active.length === 0) { alert("לא נמצא חוזה פעיל ליחידה המשויכת."); return; }
+      var contract = active[0];
+      var cat = ins.check_key ? catalogInfo(ins.check_key) : null;
+      var checkLabel = cat ? cat.l : typeInfo(ins.inspection_type).l;
+      var body = "שוכר/ת נכבד/ה " + (contract.tenants?.name || "") + ",\n\n" +
+        "בהתאם להוראות הסכם השכירות ונוהל הבטיחות, עליך להמציא/לחדש את האישור הבא עבור המושכר:\n" +
+        "• " + checkLabel + (ins.standard ? " (" + ins.standard + ")" : "") + "\n" +
+        (ins.next_inspection_date ? "מועד נדרש: " + fmtDate(ins.next_inspection_date) + "\n" : "") +
+        "\nנא להמציא אישור בתוקף בהקדם, ולהפקיד עותק במשרדנו לתיק הנכס.\n\nבברכה,\nהנהלת הנכס";
+      const { data, error } = await supabase.from("letters").insert({
+        contract_id: contract.id,
+        letter_type: "demand",
+        title: "דרישת אישור בטיחות — " + checkLabel,
+        content_json: { body: body, kind: "safety_demand" },
+        status: "draft",
+      }).select().single();
+      if (error) throw error;
+      await logAudit({ entity_type:"letter", entity_id:data.id, action:"safety_demand" });
+      alert("✅ נוצרה טיוטת מכתב דרישה — היכנס למסך מכתבים לעריכה והדפסה");
+    } catch (e:any) { alert("שגיאה: " + (e?.message || e)); }
+  }
+
   // Create all standard management checks for a property that don't exist yet.
   async function generateStandardChecks(propId: string, propName: string) {
     var existingKeys = new Set(inspections.filter(function(i){return i.property_id===propId;}).map(function(i){return i.check_key;}));
@@ -494,6 +528,10 @@ export default function SafetyPage() {
                     <td className="px-4 py-3">
                       <div className="flex gap-1 flex-wrap">
                         <button onClick={function(){openEdit(ins);}} title="ערוך / עדכן ביצוע בדיקה" className="text-xs border border-slate-200 rounded px-2 py-1 text-slate-600 hover:bg-slate-50">✏️ ערוך</button>
+                        {isTenant && (
+                          <button onClick={function(){sendSafetyDemand(ins);}} title="צור טיוטת מכתב דרישה לשוכר להמצאת/חידוש האישור"
+                            className="text-xs border border-amber-200 bg-amber-50 rounded px-2 py-1 text-amber-700 hover:bg-amber-100">✉ דרישה</button>
+                        )}
                         {(docs.length>0 ? docs.map(function(dc:any,i:number){ return <a key={i} href={dc.url} target="_blank" rel="noopener noreferrer" title="פתח אישור/תעודה" className="text-xs border border-blue-200 rounded px-2 py-1 text-blue-600 hover:bg-blue-50">📄</a>; }) : (ins.document_url && <a href={ins.document_url} target="_blank" rel="noopener noreferrer" title="פתח אישור/תעודה" className="text-xs border border-blue-200 rounded px-2 py-1 text-blue-600 hover:bg-blue-50">📄</a>))}
                         <button onClick={function(){handleDelete(ins.id);}} title="מחק בדיקה" className="text-xs border border-red-100 rounded px-2 py-1 text-red-400 hover:bg-red-50">🗑</button>
                       </div>
