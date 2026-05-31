@@ -500,10 +500,14 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
         if (Math.abs(r.difference) < 0.01) continue;
         if (r.isRevenueBased) { skippedRevenue++; continue; }
         const baseSubject = (r.difference > 0 ? "השלמת הפרש דמי ניהול " : "החזר דמי ניהול ") + year;
+        const lTaxable = vatTypeMap[r.contractId] === "taxable";
+        const lVat = lTaxable ? r.difference * vatPct : 0;
         const body = "שוכר/ת נכבד/ה,\n\nלאחר ביצוע התחשבנות דמי ניהול לשנת " + year + ":\n" +
           "מקדמה: " + fmtMoney(r.advance) + "\n" +
           "חלק בפועל: " + fmtMoney(r.actualShare) + "\n" +
-          "הפרש: " + fmtMoney(r.difference) + "\n\nבברכה,\nהנהלת הנכס";
+          "הפרש לפני מע\"מ: " + fmtMoney(r.difference) + "\n" +
+          (lTaxable ? "מע\"מ (" + Math.round(vatPct * 100) + "%): " + fmtMoney(lVat) + "\n" : "") +
+          "סה\"כ: " + fmtMoney(r.difference + lVat) + "\n\nבברכה,\nהנהלת הנכס";
         const exL = byContractL[r.contractId];
         if (exL) {
           const fixedTitle = "מכתב מתוקן — " + baseSubject;
@@ -1461,10 +1465,14 @@ function InsuranceTab({ properties }: { properties: any[] }) {
         var areaLine = r.areaRange
           ? "שטח (השתנה במהלך השנה): " + r.areaRange + " מ\"ר\n"
           : "שטח: " + r.area.toLocaleString("he-IL") + " מ\"ר\n";
+        var lTaxable = vatTypeMap[r.contractId] === "taxable";
+        var lVat = lTaxable ? r.charge * vatPct : 0;
         var body = "שוכר/ת נכבד/ה,\n\nלהלן חיוב ביטוח מבנה לשנת " + year + ":\n" +
           areaLine + periodLine +
           "חלק יחסי: " + r.pct.toFixed(2) + "%\n" +
-          "חיוב: " + fmtMoney(r.charge) + "\n\nבברכה,\nהנהלת הנכס";
+          "חיוב לפני מע\"מ: " + fmtMoney(r.charge) + "\n" +
+          (lTaxable ? "מע\"מ (" + Math.round(vatPct * 100) + "%): " + fmtMoney(lVat) + "\n" : "") +
+          "סה\"כ לתשלום: " + fmtMoney(r.charge + lVat) + "\n\nבברכה,\nהנהלת הנכס";
         var ex = byContract[r.contractId];
         if (ex) {
           var fixedTitle = "מכתב מתוקן — חיוב ביטוח מבנה " + year;
@@ -2211,11 +2219,15 @@ function WasteTab({ properties }: { properties: any[] }) {
         wlIdx++;
         setProgress({ current: wlIdx, total: results.length, label: (willFix ? "מתקן מכתב: " : "מכתב: ") + (r.spaces || r.contractId), startedAt: Date.now() });
         if (r.charge < 0.01) continue;
+        const lTaxable = vatTypeMap[r.contractId] === "taxable";
+        const lVat = lTaxable ? r.charge * vatPct : 0;
         const body = "שוכר/ת נכבד/ה,\n\nלהלן חיוב פינוי אשפה לתקופה " + periodLabel + ":\n" +
           "יחידות: " + r.spaces + "\n" +
           'שטח: ' + r.wasteArea.toLocaleString("he-IL") + ' מ"ר\n' +
           "אחוז: " + r.pct.toFixed(1) + "%\n" +
-          "חיוב: " + fmtMoney(r.charge) + "\n\nבברכה,\nהנהלת הנכס";
+          "חיוב לפני מע\"מ: " + fmtMoney(r.charge) + "\n" +
+          (lTaxable ? "מע\"מ (" + Math.round(vatPct * 100) + "%): " + fmtMoney(lVat) + "\n" : "") +
+          "סה\"כ לתשלום: " + fmtMoney(r.charge + lVat) + "\n\nבברכה,\nהנהלת הנכס";
         const exL = byContractL[r.contractId];
         if (exL) {
           const fixedTitle = "מכתב מתוקן — חיוב פינוי אשפה — " + periodLabel;
