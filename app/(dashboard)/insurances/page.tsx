@@ -89,11 +89,12 @@ export default function InsurancesPage() {
   const [reqDocUrl, setReqDocUrl] = useState("");
   const [reqExtracting, setReqExtracting] = useState(false);
   const [reqExtractMsg, setReqExtractMsg] = useState("");
+  const [insCharges, setInsCharges] = useState<any[]>([]);
 
   useEffect(function() { loadAll(); }, []);
 
   async function loadAll() {
-    const [{ data: b }, { data: t }, { data: p }, { data: c }] = await Promise.all([
+    const [{ data: b }, { data: t }, { data: p }, { data: c }, { data: ch }] = await Promise.all([
       supabase.from("insurances_building").select("*, properties(name)").order("end_date"),
       supabase.from("insurances_tenant").select("*, contracts(id, property_id, no_tenant_insurance_required, insurance_requirements, tenants(name), properties(name), contract_spaces(spaces(space_name)))").order("end_date"),
       supabase.from("properties").select("id,name").order("name"),
@@ -101,12 +102,30 @@ export default function InsurancesPage() {
         .select("id, tenant_id, property_id, start_date, end_date, status, is_amendment, parent_contract_id, no_tenant_insurance_required, insurance_requirements, tenants(name), properties(name), contract_spaces(spaces(space_name))")
         .in("status",["active","expiring","extended","upcoming"])
         .order("start_date", { ascending: false }),
+      // Existing insurance charges — to flag policies whose charge was already created.
+      supabase.from("charges").select("id, billing_period_start, contracts(property_id)").eq("charge_type", "insurance"),
     ]);
     setBuildingIns(b ?? []);
     setTenantIns(t ?? []);
     setProperties(p ?? []);
     setContracts(c ?? []);
+    setInsCharges(ch ?? []);
     setLoading(false);
+  }
+
+  // How many insurance charges already exist for a property in a given year.
+  function insChargeCountFor(propId: string, years: number[]): number {
+    return insCharges.filter(function(x:any){
+      if (x.contracts?.property_id !== propId) return false;
+      var y = x.billing_period_start ? new Date(x.billing_period_start).getFullYear() : 0;
+      return years.includes(y);
+    }).length;
+  }
+  function policyYears(b: any): number[] {
+    var ys: number[] = [];
+    if (b.start_date) ys.push(new Date(b.start_date).getFullYear());
+    if (b.end_date) { var ey = new Date(b.end_date).getFullYear(); if (!ys.includes(ey)) ys.push(ey); }
+    return ys.length ? ys : [new Date().getFullYear()];
   }
 
   function spacesLabel(contract: any): string {
@@ -726,10 +745,20 @@ export default function InsurancesPage() {
                     <td className="px-4 py-3">
                       <div className="flex gap-1 flex-wrap">
                         <button onClick={function(){openEdit(ins);}} title="ערוך פרטי ביטוח" className="text-xs border border-slate-200 rounded px-2 py-1 text-slate-600 hover:bg-slate-50">✏️ ערוך</button>
-                        {activeTab==="building" && (
-                          <a href="/billing" title={"עבור למסך חיובים ליצירת חיוב ביטוח לדיירים (פרו-רייט לפי מ\"ר-ימים)"}
-                            className="text-xs border border-emerald-200 bg-emerald-50 rounded px-2 py-1 text-emerald-700 hover:bg-emerald-100">💸 צור חיוב</a>
-                        )}
+                        {activeTab==="building" && (function(){
+                          var yrs = policyYears(ins);
+                          var n = insChargeCountFor(ins.property_id, yrs);
+                          if (n > 0) {
+                            return (
+                              <a href="/billing" title={"כבר נוצרו " + n + " חיובי ביטוח לנכס לשנת " + yrs.join("/") + " — לחץ לצפייה/תיקון. אין צורך ליצור שוב (מניעת כפילות)."}
+                                className="text-xs border border-green-300 bg-green-100 rounded px-2 py-1 text-green-800 font-semibold hover:bg-green-200">✓ חיוב נוצר ({n}) · תיקון</a>
+                            );
+                          }
+                          return (
+                            <a href="/billing" title={"עבור למסך חיובים ליצירת חיוב ביטוח לדיירים (פרו-רייט לפי מ\"ר-ימים)"}
+                              className="text-xs border border-emerald-200 bg-emerald-50 rounded px-2 py-1 text-emerald-700 hover:bg-emerald-100">💸 צור חיוב</a>
+                          );
+                        })()}
                         {activeTab==="tenant" && (
                           <button onClick={function(){openReqEditor(ins.contracts);}} title="הגדר דרישות ביטוח להסכם זה" className="text-xs border border-indigo-200 bg-indigo-50 rounded px-2 py-1 text-indigo-700 hover:bg-indigo-100">⚙ דרישות</button>
                         )}

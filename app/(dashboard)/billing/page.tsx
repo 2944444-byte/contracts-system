@@ -1141,6 +1141,22 @@ function InsuranceTab({ properties }: { properties: any[] }) {
 
   async function createCharges() {
     if (results.length === 0) return;
+    // Duplicate guard: warn if insurance charges for this year already exist
+    // for any of these contracts (prevents creating them twice by mistake).
+    try {
+      var effForCheck = buildEffectiveResults();
+      var contractIds = effForCheck.filter(function(r:any){ return r.charge >= 0.01; }).map(function(r:any){ return r.contractId; });
+      if (contractIds.length > 0) {
+        var { data: existing } = await supabase.from("charges")
+          .select("id")
+          .eq("charge_type", "insurance")
+          .eq("billing_period_start", year + "-01-01")
+          .in("contract_id", contractIds);
+        if (existing && existing.length > 0) {
+          if (!confirm("⚠ כבר קיימים " + existing.length + " חיובי ביטוח לשנת " + year + " עבור חלק מהשוכרים.\nיצירה חוזרת תיצור חיובים כפולים.\n\nליצור בכל זאת?")) return;
+        }
+      }
+    } catch (e) { /* non-fatal — proceed */ }
     setCreatingCharges(true);
     try {
       let count = 0;
@@ -1173,6 +1189,20 @@ function InsuranceTab({ properties }: { properties: any[] }) {
 
   async function createLetters() {
     if (results.length === 0) return;
+    // Duplicate guard: warn if insurance letters for this year already exist.
+    try {
+      var effLcheck = buildEffectiveResults();
+      var lcIds = effLcheck.filter(function(r:any){ return r.charge >= 0.01; }).map(function(r:any){ return r.contractId; });
+      if (lcIds.length > 0) {
+        var { data: exL } = await supabase.from("letters")
+          .select("id")
+          .eq("subject", "חיוב ביטוח מבנה " + year)
+          .in("contract_id", lcIds);
+        if (exL && exL.length > 0) {
+          if (!confirm("⚠ כבר נוצרו " + exL.length + " מכתבי ביטוח לשנת " + year + ".\nניתן לתקן/למחוק אותם במסך מכתבים.\n\nליצור מכתבים נוספים בכל זאת?")) return;
+        }
+      }
+    } catch (e) { /* non-fatal */ }
     setCreatingLetters(true);
     try {
       let count = 0;
