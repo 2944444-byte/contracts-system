@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit-log';
 import PropertyHierarchyFilter from '@/components/PropertyHierarchyFilter';
@@ -23,8 +23,58 @@ const SCOPES = [
   { v: "property", l: "נכס שלם",        icon: "🏗️", desc: "בדיקה כוללת לנכס" },
 ];
 
+// Standard required checks catalog, derived from the company's
+// "נוהל מעקב אישורים וביטוח". responsible: management = חברת ניהול (חלקים
+// ציבוריים/מערכות), tenant = שוכר. freq = recommended frequency in months.
+const CHECK_CATALOG = [
+  // ── Management responsibility (public / building systems) ──
+  { key:"electrical_inspection", l:"בדיקת חשמל ע\"י בודק מוסמך", type:"electrical", standard:"ת\"י / בודק מוסמך", freq:24, responsible:"management", scope:"public", note:"כולל לוחות חשמל, חיווט ורציפות הארקה" },
+  { key:"thermographic",         l:"סריקה תרמוגרפית ללוחות חשמל", type:"electrical", standard:"מעל 100A", freq:12, responsible:"management", scope:"public", note:"תיקון ליקויים וקבלת אישור 'אפס ליקויים'" },
+  { key:"extinguishers",         l:"בדיקת מטפים מיטלטלים",       type:"fire", standard:"ת\"י 129 ח'1 (טופס 2)", freq:12, responsible:"management", scope:"public", note:"טופס 2 חתום ע\"י חברה מוסמכת; נשלח למוקד כבאות" },
+  { key:"fire_detection",        l:"בדיקת מערכת גילוי אש ועשן",   type:"fire", standard:"ת\"י 1220 ח'11", freq:12, responsible:"management", scope:"public", note:"ע\"י גורם מוסמך/מהנדס" },
+  { key:"sprinklers",            l:"תחזוקת ספרינקלרים (מתזים)",   type:"fire", standard:"ת\"י 1928", freq:12, responsible:"management", scope:"public", note:"ע\"י חברה מוסמכת מת\"י" },
+  { key:"pa_system",             l:"בדיקת מערכת כריזה",           type:"fire", standard:"משטרת ישראל / ת\"י", freq:12, responsible:"management", scope:"public", note:"לפי דרישות" },
+  { key:"emergency_lighting",    l:"בדיקת תאורת חירום ושילוט מילוט", type:"fire", standard:"ת\"י תאורת חירום", freq:12, responsible:"management", scope:"public", note:"מעל דלתות יציאה ובמסדרונות" },
+  { key:"alarm",                 l:"מערכת אזעקה — תקינה ופעילה",  type:"other", standard:"בדיקה שנתית", freq:12, responsible:"management", scope:"public", note:"חיבור למוקד אם נדרש בפוליסה" },
+  { key:"elevators",             l:"בדיקת מעליות",                type:"elevator", standard:"מהנדס מוסמך", freq:6, responsible:"management", scope:"public", note:"כל 6 חודשים" },
+  { key:"solar_pv",              l:"תחזוקת מערכת סולארית (PV)",   type:"other", standard:"הוראות יצרן + קונסטרוקטור", freq:12, responsible:"management", scope:"public", note:"אישור עומסי רוח/שלג אם על הגג" },
+  { key:"fire_site_file",        l:"תיק שטח (תיק בטיחות אש)",     type:"fire", standard:"רשות הכבאות", freq:12, responsible:"management", scope:"public", note:"נהלי חירום, שרטוטים, דרכי גישה" },
+  // ── Tenant responsibility (their unit / business) ──
+  { key:"tenant_fire_license",   l:"אישור כיבוי אש לעסק השוכר",   type:"fire", standard:"רשות הכבאות / רישיון עסק", freq:12, responsible:"tenant", scope:"unit", note:"באחריות השוכר מול הרשות; עותק לתיק הנכס" },
+];
+function catalogInfo(key: string) { return CHECK_CATALOG.find(function(c){return c.key===key;}); }
+// Management-responsibility catalog keys — used for the per-property gap check.
+const MGMT_KEYS = CHECK_CATALOG.filter(function(c){return c.responsible==="management";}).map(function(c){return c.key;});
+
+// Fire requirements by property/use type, Part C of the procedure — reference only.
+const FIRE_BY_TYPE: Array<{type:string; icon:string; rows:string[]}> = [
+  { type:"משרדים", icon:"🏢", rows:["מטפי כיבוי תקניים (ת\"י 129)","גלאי עשן/אש + מערכת גילוי (ת\"י 1220)","תאורת חירום + שילוט מילוט","דלתות אש / חדרי מדרגות מוגנים","מערכת כריזת חירום (מעל גודל מסוים)","תיק בטיחות אש (תיק שטח)"] },
+  { type:"מסחר / חנויות", icon:"🛍️", rows:["מטפים + גלגלוני כיבוי (ת\"י 129)","מערכת גילוי אש ועשן (ת\"י 1220)","ספרינקלרים לפי שטח (ת\"י 1928)","תאורת חירום ושילוט מילוט","רישיון עסק + אישור כיבוי אש","דרכי מילוט פנויות ולא נעולות"] },
+  { type:"תעשייה", icon:"🏭", rows:["מערכת ספרינקלרים מלאה + מאגר (ת\"י 1928)","גילוי אש ועשן ממוען + גנרטור (ת\"י 1220)","מטפים + עמדות + ברזי שריפה (ת\"י 129)","סקר סיכוני אש / יועץ בטיחות","הפרדות אש / מחסומי אש (ת\"י 755/921)","אישור כבאות פרטני (לא תצהיר)"] },
+  { type:"לוגיסטיקה / מחסנים", icon:"📦", rows:["ספרינקלרים מותאמי גובה אחסון (ת\"י 1928)","גילוי אש ועשן על כל שטח ולוחות (ת\"י 1220)","מטפים + גלגלונים + ברזי כיבוי","פתחי שחרור עשן ואוורור","דרכי גישה לרכב כיבוי","אזעקה + חיבור למוקד; תיק שטח"] },
+];
+
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
 function daysLeft(d: string) { return Math.ceil((new Date(d).getTime()-Date.now())/86400000); }
+function addMonths(dateStr: string, months: number): string {
+  var d = new Date(dateStr);
+  if (isNaN(d.getTime())) return "";
+  d.setMonth(d.getMonth() + months);
+  return d.toISOString().slice(0,10);
+}
+
+type Health = "expired" | "due30" | "due60" | "valid" | "unknown";
+function healthOf(ins: any): Health {
+  if (ins.status === "expired") return "expired";
+  var nd = ins.next_inspection_date;
+  if (!nd) return "unknown";
+  var d = daysLeft(nd);
+  if (d < 0) return "expired";
+  if (d <= 30) return "due30";
+  if (d <= 60) return "due60";
+  return "valid";
+}
+function healthOrder(h: Health) { return ({expired:0,due30:1,due60:2,unknown:3,valid:4} as any)[h]; }
 
 export default function SafetyPage() {
   const [inspections, setInspections] = useState<any[]>([]);
@@ -37,11 +87,16 @@ export default function SafetyPage() {
   const [filterType,  setFilterType]  = useState("all");
   const [filterPropIds, setFilterPropIds] = useState<string[]>([]);
   const [filterScope, setFilterScope] = useState("all");
+  const [filterSt,    setFilterSt]    = useState<"all"|"valid"|"due"|"expired">("all");
+  const [showRef,     setShowRef]     = useState(false);
 
   // Form fields
   const [fPropertyId,     setFPropertyId]     = useState("");
+  const [fCheckKey,       setFCheckKey]       = useState("");
   const [fType,           setFType]           = useState("fire");
   const [fScope,          setFScope]          = useState("public");
+  const [fStandard,       setFStandard]       = useState("");
+  const [fFreq,           setFFreq]           = useState("");
   const [fSelectedSpaces, setFSelectedSpaces] = useState<string[]>([]);
   const [fInspector,      setFInspector]      = useState("");
   const [fCertNum,        setFCertNum]        = useState("");
@@ -50,17 +105,17 @@ export default function SafetyPage() {
   const [fStatus,         setFStatus]         = useState("valid");
   const [fNotes,          setFNotes]          = useState("");
   const [fResponsible,    setFResponsible]    = useState("management");
+  const [fDocUrl,         setFDocUrl]         = useState("");
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading]     = useState(false);
 
   useEffect(function() { loadAll(); }, []);
 
-  // Load spaces when property changes in form
   useEffect(function() {
     if (fPropertyId) {
       supabase.from("spaces").select("id,space_name,area").eq("property_id", fPropertyId).order("space_name")
         .then(function({ data }) { setSpaces(data ?? []); });
-    } else {
-      setSpaces([]);
-    }
+    } else { setSpaces([]); }
   }, [fPropertyId]);
 
   async function loadAll() {
@@ -75,18 +130,50 @@ export default function SafetyPage() {
     setLoading(false);
   }
 
-  function openNew() {
+  async function uploadFile(file: File): Promise<string> {
+    const safe = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+    const path = "safety/" + Date.now() + "_" + safe;
+    const { error: upErr } = await supabase.storage.from("documents").upload(path, file);
+    if (upErr) throw upErr;
+    const { data: urlData } = supabase.storage.from("documents").getPublicUrl(path);
+    return urlData.publicUrl;
+  }
+  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    try { setFDocUrl(await uploadFile(file)); }
+    catch (err: any) { alert("שגיאה בהעלאה: " + (err?.message || err)); }
+    finally { setUploading(false); }
+  }
+
+  // Apply a catalog template into the form.
+  function applyCatalog(key: string) {
+    var c = catalogInfo(key);
+    setFCheckKey(key);
+    if (!c) return;
+    setFType(c.type); setFScope(c.scope); setFStandard(c.standard);
+    setFFreq(String(c.freq)); setFResponsible(c.responsible);
+    setFNotes(function(prev){ return prev || c.note; });
+  }
+
+  function openNew(prefillPropId?: string, prefillKey?: string) {
     setIsNew(true); setEditingId("new");
-    setFPropertyId(""); setFType("fire"); setFScope("public");
+    setFPropertyId(prefillPropId || ""); setFType("fire"); setFScope("public");
+    setFCheckKey(""); setFStandard(""); setFFreq("");
     setFSelectedSpaces([]); setFInspector(""); setFCertNum("");
     setFLastDate(""); setFNextDate(""); setFStatus("valid");
-    setFNotes(""); setFResponsible("management");
+    setFNotes(""); setFResponsible("management"); setFDocUrl("");
+    if (fileRef.current) fileRef.current.value = "";
+    if (prefillKey) applyCatalog(prefillKey);
   }
 
   function openEdit(ins: any) {
     setIsNew(false); setEditingId(ins.id);
     setFPropertyId(ins.property_id??""); setFType(ins.inspection_type??"fire");
     setFScope(ins.scope ?? "public");
+    setFCheckKey(ins.check_key ?? ""); setFStandard(ins.standard ?? "");
+    setFFreq(ins.frequency_months ? String(ins.frequency_months) : "");
     setFResponsible(ins.responsible_party ?? "management");
     const linkedSpaces = (ins.inspection_spaces || []).map(function(s: any) { return s.space_id; });
     setFSelectedSpaces(linkedSpaces);
@@ -94,24 +181,50 @@ export default function SafetyPage() {
     setFLastDate(ins.last_inspection_date?.split("T")[0]??"");
     setFNextDate(ins.next_inspection_date?.split("T")[0]??"");
     setFStatus(ins.status??"valid"); setFNotes(ins.notes??"");
+    setFDocUrl(ins.document_url ?? "");
+    if (fileRef.current) fileRef.current.value = "";
   }
+
+  // Auto-fill next date when last date + frequency are present and next is empty.
+  useEffect(function() {
+    if (fLastDate && fFreq && !fNextDate) {
+      var nd = addMonths(fLastDate, Number(fFreq));
+      if (nd) setFNextDate(nd);
+    }
+  }, [fLastDate, fFreq]); // eslint-disable-line
 
   async function handleSave() {
     if (!fPropertyId) { alert("חובה: נכס"); return; }
     if (fScope === "unit" && fSelectedSpaces.length === 0) { alert("נא לבחור לפחות יחידה אחת"); return; }
     setSaving(true);
     try {
+      // Auto-derive status from next date when possible.
+      var derivedStatus = fStatus;
+      if (fNextDate) {
+        var dl = daysLeft(fNextDate);
+        derivedStatus = dl < 0 ? "expired" : "valid";
+      }
+      const existing = !isNew ? inspections.find(function(x){return x.id===editingId;}) : null;
+      const prevDocs: any[] = Array.isArray(existing?.documents) ? existing.documents : [];
+      const docs = prevDocs.slice();
+      if (fDocUrl && fDocUrl !== existing?.document_url) docs.push({ url: fDocUrl, uploaded_at: new Date().toISOString() });
+
       const payload: any = {
         property_id:           fPropertyId,
+        check_key:             fCheckKey || null,
         inspection_type:       fType,
+        standard:              fStandard || null,
+        frequency_months:      fFreq ? Number(fFreq) : null,
         scope:                 fScope,
         responsible_party:     fScope === "unit" ? "tenant" : fResponsible,
         inspector:             fInspector||null,
         certificate_number:    fCertNum||null,
         last_inspection_date:  fLastDate||null,
         next_inspection_date:  fNextDate||null,
-        status:                fStatus,
+        status:                derivedStatus,
         notes:                 fNotes||null,
+        document_url:          fDocUrl||null,
+        documents:             docs,
       };
       let recordId = editingId;
       if (isNew) {
@@ -125,15 +238,12 @@ export default function SafetyPage() {
         if (ue) throw new Error(ue.message);
         await logAudit({ entity_type:"safety", entity_id:editingId, action:"update" });
       }
-
-      // Save linked spaces (delete + re-insert)
       await supabase.from("inspection_spaces").delete().eq("inspection_id", recordId);
       if (fScope === "unit" && fSelectedSpaces.length > 0) {
         await supabase.from("inspection_spaces").insert(
           fSelectedSpaces.map(function(sid) { return { inspection_id: recordId, space_id: sid }; })
         );
       }
-
       setEditingId(""); await loadAll();
     } catch(e:any) { alert("שגיאה: "+e?.message); }
     finally { setSaving(false); }
@@ -142,6 +252,23 @@ export default function SafetyPage() {
   async function handleDelete(id: string) {
     if (!confirm("למחוק בדיקה?")) return;
     await supabase.from("safety_inspections").delete().eq("id", id);
+    await logAudit({ entity_type:"safety", entity_id:id, action:"delete" });
+    await loadAll();
+  }
+
+  // Create all standard management checks for a property that don't exist yet.
+  async function generateStandardChecks(propId: string, propName: string) {
+    var existingKeys = new Set(inspections.filter(function(i){return i.property_id===propId;}).map(function(i){return i.check_key;}));
+    var toAdd = CHECK_CATALOG.filter(function(c){ return c.responsible==="management" && !existingKeys.has(c.key); });
+    if (toAdd.length === 0) { alert("כל בדיקות התקן כבר קיימות לנכס זה."); return; }
+    if (!confirm("ליצור " + toAdd.length + " בדיקות תקן לנכס " + propName + "? (ללא תאריכים — תמלא אותם בהמשך)")) return;
+    var rows = toAdd.map(function(c){ return {
+      property_id: propId, check_key: c.key, inspection_type: c.type, standard: c.standard,
+      frequency_months: c.freq, scope: c.scope, responsible_party: c.responsible, status: "pending",
+      notes: c.note,
+    };});
+    await supabase.from("safety_inspections").insert(rows);
+    await logAudit({ entity_type:"safety", entity_id:propId, action:"generate_standard_checks", notes: toAdd.length+" בדיקות" });
     await loadAll();
   }
 
@@ -151,67 +278,137 @@ export default function SafetyPage() {
     });
   }
 
+  // ─── Filtering + sorting ───────────────────────────────────────────
   const filtered = inspections.filter(function(ins) {
     const mt = filterType==="all" || ins.inspection_type===filterType;
     const mp = filterPropIds.length===0 || filterPropIds.includes(ins.property_id);
     const ms = filterScope==="all" || (ins.scope ?? "public")===filterScope;
-    return mt && mp && ms;
+    var h = healthOf(ins);
+    var mst = filterSt==="all"
+      || (filterSt==="valid" && h==="valid")
+      || (filterSt==="due" && (h==="due30"||h==="due60"))
+      || (filterSt==="expired" && h==="expired");
+    return mt && mp && ms && mst;
+  });
+  const sorted = filtered.slice().sort(function(a,b){
+    var ha=healthOrder(healthOf(a)), hb=healthOrder(healthOf(b));
+    if (ha!==hb) return ha-hb;
+    var ea=a.next_inspection_date?new Date(a.next_inspection_date).getTime():Infinity;
+    var eb=b.next_inspection_date?new Date(b.next_inspection_date).getTime():Infinity;
+    return ea-eb;
   });
 
-  const expiring = inspections.filter(function(ins) {
-    return ins.next_inspection_date && daysLeft(ins.next_inspection_date) <= 60 && ins.status!=="expired";
-  });
-  const expired = inspections.filter(function(ins) { return ins.status==="expired"; });
-  const valid   = inspections.filter(function(ins) { return ins.status==="valid"; });
+  const propScoped = inspections.filter(function(ins){ return filterPropIds.length===0 || filterPropIds.includes(ins.property_id); });
+  const expiring = propScoped.filter(function(ins) { var h=healthOf(ins); return h==="due30"||h==="due60"; });
+  const expired  = propScoped.filter(function(ins) { return healthOf(ins)==="expired"; });
+  const valid    = propScoped.filter(function(ins) { return healthOf(ins)==="valid"; });
 
-  const typeInfo = function(v: string) {
-    return INSPECTION_TYPES.find(function(t){return t.v===v;}) ?? INSPECTION_TYPES[7];
-  };
-  const scopeInfo = function(v: string) {
-    return SCOPES.find(function(s){return s.v===v;}) ?? SCOPES[0];
-  };
+  // Per-property recommended management checks not yet set up.
+  const propsForGap = properties.filter(function(p){ return filterPropIds.length===0 || filterPropIds.includes(p.id); });
+  const missingByProperty = propsForGap.map(function(p:any){
+    var keys = new Set(inspections.filter(function(i){return i.property_id===p.id;}).map(function(i){return i.check_key;}));
+    var missing = CHECK_CATALOG.filter(function(c){ return c.responsible==="management" && !keys.has(c.key); });
+    return { p: p, missing: missing };
+  }).filter(function(x){ return x.missing.length>0; });
+
+  const typeInfo  = function(v: string) { return INSPECTION_TYPES.find(function(t){return t.v===v;}) ?? INSPECTION_TYPES[7]; };
+  const scopeInfo = function(v: string) { return SCOPES.find(function(s){return s.v===v;}) ?? SCOPES[0]; };
 
   return (
     <div dir="rtl">
-      <div className="mb-6 flex items-center justify-between">
+      <div className="mb-6 flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-3xl font-bold text-slate-800">בדיקות בטיחות</h1>
+          <h1 className="text-3xl font-bold text-slate-800">בדיקות בטיחות ואישורים</h1>
           <p className="text-sm text-slate-500 mt-1">
             {valid.length} תקינות
             {expiring.length > 0 && <span className="text-yellow-600 font-semibold"> | {expiring.length} פגות ב-60 יום</span>}
             {expired.length > 0 && <span className="text-red-600 font-semibold"> | {expired.length} פגו!</span>}
           </p>
         </div>
-        <button onClick={openNew} className="rounded-lg bg-blue-700 px-5 py-2.5 font-bold text-white hover:bg-blue-800">
-          + בדיקה חדשה
-        </button>
+        <div className="flex gap-2">
+          <button onClick={function(){setShowRef(!showRef);}} className="rounded-lg border border-slate-200 px-4 py-2.5 text-sm text-slate-600 hover:bg-slate-50" title="דרישות כיבוי אש לפי סוג נכס (מידע)">📖 דרישות לפי סוג</button>
+          <button onClick={function(){openNew();}} className="rounded-lg bg-blue-700 px-5 py-2.5 font-bold text-white hover:bg-blue-800" title="הוסף בדיקה/אישור חדש">+ בדיקה חדשה</button>
+        </div>
       </div>
 
-      {/* KPI */}
+      {/* Reference: fire requirements by property type */}
+      {showRef && (
+        <div className="rounded-xl border border-slate-200 bg-white p-4 mb-4">
+          <div className="text-sm font-bold text-slate-800 mb-2">📖 דרישות כיבוי אש טיפוסיות לפי סוג נכס</div>
+          <div className="text-[11px] text-slate-500 mb-3">הדרישה המחייבת בפועל נקבעת ע\"י הרשות הארצית לכבאות לאחר ביקורת/חוות דעת יועץ בטיחות. זהו מידע התשתית הטיפוסי.</div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+            {FIRE_BY_TYPE.map(function(ft){
+              return (
+                <div key={ft.type} className="rounded-lg border border-slate-200 p-3">
+                  <div className="font-bold text-slate-700 text-sm mb-1.5">{ft.icon} {ft.type}</div>
+                  <ul className="space-y-1">
+                    {ft.rows.map(function(r,i){ return <li key={i} className="text-[11px] text-slate-600">• {r}</li>; })}
+                  </ul>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* KPI — clickable filters */}
       <div className="grid grid-cols-4 gap-3 mb-5">
         {[
-          {label:"תקינות",       value:valid.length,    color:"text-green-700",  bg:"bg-green-50",   border:"border-green-200"  },
-          {label:"פגות ב-60י",  value:expiring.length, color:"text-yellow-700", bg:"bg-yellow-50",  border:"border-yellow-200" },
-          {label:"פגו!",         value:expired.length,  color:"text-red-700",   bg:expired.length>0?"bg-red-50":"bg-white",    border:expired.length>0?"border-red-200":"border-slate-200" },
-          {label:"סה\"כ",        value:inspections.length, color:"text-slate-600", bg:"bg-white",   border:"border-slate-200"  },
+          {f:"all",     label:"סה\"כ",       value:propScoped.length, color:"text-slate-600", bg:"bg-white"},
+          {f:"valid",   label:"תקינות",     value:valid.length,    color:"text-green-700", bg:"bg-white"},
+          {f:"due",     label:"פגות בקרוב", value:expiring.length, color:expiring.length>0?"text-yellow-700":"text-slate-400", bg:expiring.length>0?"bg-yellow-50":"bg-white"},
+          {f:"expired", label:"פגו!",       value:expired.length,  color:expired.length>0?"text-red-700":"text-slate-400", bg:expired.length>0?"bg-red-50":"bg-white"},
         ].map(function(k) {
           return (
-            <div key={k.label} className={"rounded-xl border p-3 text-center " + k.bg + " " + k.border}>
+            <button key={k.label} onClick={function(){setFilterSt(k.f as any);}}
+              className={"rounded-xl border p-3 text-center transition-all " + k.bg + (filterSt===k.f?" border-blue-500 ring-2 ring-blue-300":" border-slate-200")}>
               <div className={"text-2xl font-black " + k.color}>{k.value}</div>
               <div className={"text-xs font-semibold " + k.color}>{k.label}</div>
-            </div>
+            </button>
           );
         })}
       </div>
 
-      {/* Filters */}
       <div className="mb-4">
         <PropertyHierarchyFilter onChange={function(f) { setFilterPropIds(f.propertyIds); }} />
       </div>
-      <div className="flex gap-2 mb-4 flex-wrap">
+
+      {/* Missing standard checks alert */}
+      {missingByProperty.length > 0 && (
+        <div className="rounded-xl border-2 border-amber-300 bg-amber-50 p-4 mb-4">
+          <div className="font-bold text-amber-800 text-sm">⚠ בדיקות תקן מומלצות שטרם הוקמו — באחריות חברת הניהול</div>
+          <div className="text-xs text-amber-700 mt-0.5">לפי נוהל המעקב, אלו הבדיקות התקופתיות לחלקים הציבוריים/מערכות המבנה. הקם אותן כדי לשמור על תוקף הביטוח. (התאמת הרשימה לנכס נעשית לפי המערכות הקיימות בו.)</div>
+          <div className="mt-3 space-y-2">
+            {missingByProperty.map(function(x:any){
+              return (
+                <div key={x.p.id} className="rounded-lg bg-white border border-amber-200 p-2.5">
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <div className="font-semibold text-slate-800 text-sm">{x.p.name} — חסרות {x.missing.length} בדיקות</div>
+                    <button onClick={function(){generateStandardChecks(x.p.id, x.p.name);}} title="צור את כל בדיקות התקן החסרות לנכס בלחיצה אחת"
+                      className="text-[11px] rounded bg-amber-600 hover:bg-amber-700 text-white px-2 py-1 font-semibold">⚙ צור בדיקות תקן לנכס</button>
+                  </div>
+                  <div className="mt-1.5 flex flex-wrap gap-1">
+                    {x.missing.map(function(c:any){
+                      return (
+                        <button key={c.key} onClick={function(){openNew(x.p.id, c.key);}} title={c.note + " · " + c.standard}
+                          className="text-[10px] rounded border border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100 px-1.5 py-0.5">
+                          + {c.l}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Type/scope filters */}
+      <div className="flex gap-2 mb-4 flex-wrap items-center">
         <select value={filterScope} onChange={function(e){setFilterScope(e.target.value);}}
           className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">
-          <option value="all">כל הסוגים</option>
+          <option value="all">כל השיוכים</option>
           {SCOPES.map(function(s){return <option key={s.v} value={s.v}>{s.icon} {s.l}</option>;})}
         </select>
         {[{v:"all",l:"הכל"}, ...INSPECTION_TYPES.map(function(t){return {v:t.v,l:t.icon+" "+t.l};})].map(function(f) {
@@ -228,67 +425,77 @@ export default function SafetyPage() {
       {/* Table */}
       {loading ? (
         <div className="text-center py-12 text-slate-400">טוען...</div>
-      ) : filtered.length === 0 ? (
+      ) : sorted.length === 0 ? (
         <div className="rounded-xl border-2 border-dashed border-slate-200 bg-white p-12 text-center text-slate-400">
-          <div className="text-5xl mb-3">🔒</div><div>אין בדיקות בטיחות</div>
-          <button onClick={openNew} className="mt-3 text-blue-600 hover:underline text-sm">+ הוסף בדיקה</button>
+          <div className="text-5xl mb-3">🔒</div><div>אין בדיקות התואמות את הסינון</div>
+          <button onClick={function(){openNew();}} className="mt-3 text-blue-600 hover:underline text-sm">+ הוסף בדיקה</button>
         </div>
       ) : (
         <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
           <table className="w-full text-right text-sm">
             <thead className="bg-slate-50 border-b">
               <tr>
-                <th className="px-4 py-3 font-semibold text-slate-700">סוג</th>
+                <th className="px-4 py-3 font-semibold text-slate-700">בדיקה / סוג</th>
                 <th className="px-4 py-3 font-semibold text-slate-700">נכס</th>
-                <th className="px-4 py-3 font-semibold text-slate-700">שיוך</th>
-                <th className="px-4 py-3 font-semibold text-slate-700">מפקח</th>
+                <th className="px-4 py-3 font-semibold text-slate-700">שיוך / אחראי</th>
+                <th className="px-4 py-3 font-semibold text-slate-700">תדירות / תקן</th>
                 <th className="px-4 py-3 font-semibold text-slate-700">בדיקה הבאה</th>
                 <th className="px-4 py-3 font-semibold text-slate-700">סטטוס</th>
                 <th className="px-4 py-3 font-semibold text-slate-700">פעולות</th>
               </tr>
             </thead>
             <tbody>
-              {filtered.map(function(ins) {
+              {sorted.map(function(ins) {
                 const ti   = typeInfo(ins.inspection_type);
                 const sc   = scopeInfo(ins.scope ?? "public");
+                const cat  = ins.check_key ? catalogInfo(ins.check_key) : null;
+                const h    = healthOf(ins);
                 const d    = ins.next_inspection_date ? daysLeft(ins.next_inspection_date) : null;
-                const rowBg = ins.status==="expired" ? "bg-red-50" : d!==null&&d<=30 ? "bg-orange-50" : d!==null&&d<=60 ? "bg-yellow-50" : "hover:bg-slate-50";
+                const rowBg = h==="expired" ? "bg-red-50 border-r-4 border-red-500"
+                  : h==="due30" ? "bg-orange-50 border-r-4 border-orange-400"
+                  : h==="due60" ? "bg-yellow-50/40" : "hover:bg-slate-50";
                 const linkedSpaces = (ins.inspection_spaces || []).map(function(is: any) { return is.spaces?.space_name || ""; }).filter(Boolean);
+                const isTenant = (ins.responsible_party ?? (ins.scope==="unit"?"tenant":"management")) === "tenant";
+                const docs = Array.isArray(ins.documents) ? ins.documents : [];
                 return (
                   <tr key={ins.id} className={"border-t border-slate-100 " + rowBg}>
                     <td className="px-4 py-3">
-                      <span className="text-xl">{ti.icon}</span>
-                      <span className="text-xs font-semibold text-slate-700 mr-1">{ti.l}</span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-lg">{ti.icon}</span>
+                        <span className="text-xs font-semibold text-slate-800">{cat ? cat.l : ti.l}</span>
+                      </div>
                     </td>
                     <td className="px-4 py-3 font-medium text-slate-800">{ins.properties?.name}</td>
                     <td className="px-4 py-3">
                       <span className={"text-xs px-2 py-0.5 rounded-full font-semibold " +
-                        (sc.v==="public"?"bg-purple-100 text-purple-700":sc.v==="unit"?"bg-teal-100 text-teal-700":"bg-slate-100 text-slate-700")}>
-                        {sc.icon} {sc.l}
+                        (isTenant?"bg-teal-100 text-teal-700":"bg-purple-100 text-purple-700")}>
+                        {isTenant ? "🏠 שוכר" : "🏢 חברת ניהול"}
                       </span>
-                      {linkedSpaces.length > 0 && (
-                        <div className="text-xs text-slate-400 mt-0.5">{linkedSpaces.join(", ")}</div>
-                      )}
+                      {linkedSpaces.length > 0 && <div className="text-xs text-slate-400 mt-0.5">{linkedSpaces.join(", ")}</div>}
                     </td>
-                    <td className="px-4 py-3 text-slate-500 text-xs">{ins.inspector || "—"}</td>
+                    <td className="px-4 py-3 text-xs text-slate-500">
+                      {ins.frequency_months ? <div>כל {ins.frequency_months} חוד׳</div> : null}
+                      {ins.standard ? <div className="text-[10px] text-slate-400">{ins.standard}</div> : null}
+                    </td>
                     <td className="px-4 py-3">
                       <div className="text-xs font-medium text-slate-700">{fmtDate(ins.next_inspection_date)}</div>
-                      {d!==null && d<=60 && ins.status!=="expired" && (
-                        <div className={"text-xs font-bold " + (d<=0?"text-red-600":d<=30?"text-orange-600":"text-yellow-600")}>
-                          {d<=0 ? "פג!" : d+" יום"}
+                      {d!==null && h!=="valid" && (
+                        <div className={"text-xs font-bold " + (d<0?"text-red-600":d<=30?"text-orange-600":"text-yellow-600")}>
+                          {d<0 ? "פג לפני "+Math.abs(d)+" ימים" : "נותרו "+d+" ימים"}
                         </div>
                       )}
                     </td>
                     <td className="px-4 py-3">
                       <span className={"text-xs px-2 py-0.5 rounded-full font-semibold " +
-                        (ins.status==="valid"?"bg-green-100 text-green-700":ins.status==="expired"?"bg-red-100 text-red-700":"bg-yellow-100 text-yellow-700")}>
-                        {ins.status==="valid"?"תקינה":ins.status==="expired"?"פגה":"בהמתנה"}
+                        (h==="expired"?"bg-red-100 text-red-700":h==="valid"?"bg-green-100 text-green-700":h==="unknown"?"bg-slate-100 text-slate-600":"bg-yellow-100 text-yellow-700")}>
+                        {h==="expired"?"פגה":h==="valid"?"תקינה":h==="unknown"?"ללא תאריך":"מתקרבת"}
                       </span>
                     </td>
                     <td className="px-4 py-3">
-                      <div className="flex gap-1">
-                        <button onClick={function(){openEdit(ins);}} className="text-xs border border-slate-200 rounded px-2 py-1 text-slate-600 hover:bg-slate-50">✏️</button>
-                        <button onClick={function(){handleDelete(ins.id);}} className="text-xs border border-red-100 rounded px-2 py-1 text-red-400 hover:bg-red-50">🗑</button>
+                      <div className="flex gap-1 flex-wrap">
+                        <button onClick={function(){openEdit(ins);}} title="ערוך / עדכן ביצוע בדיקה" className="text-xs border border-slate-200 rounded px-2 py-1 text-slate-600 hover:bg-slate-50">✏️ ערוך</button>
+                        {(docs.length>0 ? docs.map(function(dc:any,i:number){ return <a key={i} href={dc.url} target="_blank" rel="noopener noreferrer" title="פתח אישור/תעודה" className="text-xs border border-blue-200 rounded px-2 py-1 text-blue-600 hover:bg-blue-50">📄</a>; }) : (ins.document_url && <a href={ins.document_url} target="_blank" rel="noopener noreferrer" title="פתח אישור/תעודה" className="text-xs border border-blue-200 rounded px-2 py-1 text-blue-600 hover:bg-blue-50">📄</a>))}
+                        <button onClick={function(){handleDelete(ins.id);}} title="מחק בדיקה" className="text-xs border border-red-100 rounded px-2 py-1 text-red-400 hover:bg-red-50">🗑</button>
                       </div>
                     </td>
                   </tr>
@@ -304,7 +511,7 @@ export default function SafetyPage() {
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={function(){setEditingId("");}}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={function(e){e.stopPropagation();}} dir="rtl">
             <div className="sticky top-0 bg-white border-b px-6 py-4 flex items-center justify-between">
-              <h2 className="font-bold text-slate-800 text-lg">{isNew?"בדיקה חדשה":"עריכת בדיקה"}</h2>
+              <h2 className="font-bold text-slate-800 text-lg">{isNew?"בדיקה / אישור חדש":"עריכת בדיקה"}</h2>
               <button onClick={function(){setEditingId("");}} className="text-2xl text-slate-400">×</button>
             </div>
             <div className="p-6 space-y-3">
@@ -316,13 +523,26 @@ export default function SafetyPage() {
                 </select>
               </div>
 
-              {/* Scope selector */}
+              {/* Catalog quick-pick */}
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">בדיקת תקן (ממלא אוטומטית סוג/תדירות/תקן)</label>
+                <select value={fCheckKey} onChange={function(e){applyCatalog(e.target.value);}} className={ic}>
+                  <option value="">— בדיקה מותאמת אישית —</option>
+                  <optgroup label="🏢 אחריות חברת ניהול">
+                    {CHECK_CATALOG.filter(function(c){return c.responsible==="management";}).map(function(c){return <option key={c.key} value={c.key}>{c.l} (כל {c.freq} חוד׳)</option>;})}
+                  </optgroup>
+                  <optgroup label="🏠 אחריות שוכר">
+                    {CHECK_CATALOG.filter(function(c){return c.responsible==="tenant";}).map(function(c){return <option key={c.key} value={c.key}>{c.l}</option>;})}
+                  </optgroup>
+                </select>
+              </div>
+
               <div>
                 <label className="mb-2 block text-xs font-semibold text-slate-700">שיוך בדיקה</label>
                 <div className="grid grid-cols-3 gap-2">
                   {SCOPES.map(function(s) {
                     return (
-                      <button key={s.v} type="button" onClick={function(){
+                      <button key={s.v} type="button" title={s.desc} onClick={function(){
                         setFScope(s.v);
                         if (s.v !== "unit") setFSelectedSpaces([]);
                         setFResponsible(s.v === "unit" ? "tenant" : "management");
@@ -330,14 +550,12 @@ export default function SafetyPage() {
                         className={"rounded-xl border p-2.5 text-center transition-all " + (fScope===s.v?"border-blue-500 bg-blue-50":"border-slate-200 hover:bg-slate-50")}>
                         <div className="text-xl">{s.icon}</div>
                         <div className={"text-xs font-bold " + (fScope===s.v?"text-blue-700":"text-slate-600")}>{s.l}</div>
-                        <div className="text-[10px] text-slate-400 mt-0.5">{s.desc}</div>
                       </button>
                     );
                   })}
                 </div>
               </div>
 
-              {/* Space picker for "unit" scope */}
               {fScope === "unit" && fPropertyId && spaces.length > 0 && (
                 <div>
                   <label className="mb-2 block text-xs font-semibold text-slate-700">בחר יחידות *</label>
@@ -354,13 +572,10 @@ export default function SafetyPage() {
                       );
                     })}
                   </div>
-                  {fSelectedSpaces.length > 0 && (
-                    <div className="text-xs text-teal-600 mt-1 font-semibold">{fSelectedSpaces.length} יחידות נבחרו</div>
-                  )}
+                  {fSelectedSpaces.length > 0 && <div className="text-xs text-teal-600 mt-1 font-semibold">{fSelectedSpaces.length} יחידות נבחרו</div>}
                 </div>
               )}
 
-              {/* Responsible party indicator */}
               <div className="rounded-lg bg-slate-50 border border-slate-200 px-3 py-2 flex items-center gap-2">
                 <span className="text-xs text-slate-500">אחראי:</span>
                 <span className={"text-xs font-bold " + (fScope === "unit" ? "text-teal-700" : "text-purple-700")}>
@@ -382,41 +597,45 @@ export default function SafetyPage() {
                   })}
                 </div>
               </div>
+
               <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-700">מפקח</label>
-                  <input type="text" value={fInspector} onChange={function(e){setFInspector(e.target.value);}} className={ic} />
-                </div>
-                <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-700">מספר תעודה</label>
-                  <input type="text" value={fCertNum} onChange={function(e){setFCertNum(e.target.value);}} className={ic} dir="ltr" />
-                </div>
-                <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-700">בדיקה אחרונה</label>
-                  <input type="date" value={fLastDate} onChange={function(e){setFLastDate(e.target.value);}} className={ic} />
-                </div>
+                <div><label className="mb-1 block text-xs font-semibold text-slate-700">תדירות (חודשים)</label><input type="number" value={fFreq} onChange={function(e){setFFreq(e.target.value);}} className={ic} placeholder="לדוגמה 12" /></div>
+                <div><label className="mb-1 block text-xs font-semibold text-slate-700">תקן / מקור</label><input type="text" value={fStandard} onChange={function(e){setFStandard(e.target.value);}} className={ic} /></div>
+                <div><label className="mb-1 block text-xs font-semibold text-slate-700">מבצע / מפקח</label><input type="text" value={fInspector} onChange={function(e){setFInspector(e.target.value);}} className={ic} /></div>
+                <div><label className="mb-1 block text-xs font-semibold text-slate-700">מספר תעודה</label><input type="text" value={fCertNum} onChange={function(e){setFCertNum(e.target.value);}} className={ic} dir="ltr" /></div>
+                <div><label className="mb-1 block text-xs font-semibold text-slate-700">בדיקה אחרונה</label><input type="date" value={fLastDate} onChange={function(e){setFLastDate(e.target.value);}} className={ic} /></div>
                 <div>
                   <label className="mb-1 block text-xs font-semibold text-slate-700">בדיקה הבאה</label>
                   <input type="date" value={fNextDate} onChange={function(e){setFNextDate(e.target.value);}} className={ic} />
+                  {fLastDate && fFreq && <button type="button" onClick={function(){var nd=addMonths(fLastDate,Number(fFreq)); if(nd)setFNextDate(nd);}} className="text-[10px] text-blue-600 hover:underline mt-0.5">חשב מ-{fFreq} חוד׳ →</button>}
                 </div>
               </div>
+
+              {/* Cloud document upload */}
+              <div className="rounded-lg border border-slate-200 bg-slate-50/50 p-3 space-y-2">
+                <label className="block text-xs font-semibold text-slate-700">📄 אישור / תעודת בדיקה (עליה לענן או קישור)</label>
+                <div className="flex gap-2 items-center flex-wrap">
+                  <input ref={fileRef} type="file" onChange={handleFileChange}
+                    className="text-xs file:rounded file:border-0 file:bg-blue-600 file:text-white file:px-3 file:py-1.5 file:font-semibold file:cursor-pointer file:ml-2"/>
+                  {uploading && <span className="text-xs text-blue-600">מעלה...</span>}
+                </div>
+                <input type="text" value={fDocUrl} onChange={function(e){setFDocUrl(e.target.value);}} placeholder="או הדבק קישור (Drive / Dropbox / כל URL)" className={ic} dir="ltr"/>
+                {fDocUrl && <div className="text-[11px] text-emerald-700 flex items-center gap-2">✓ מסמך מצורף — <a href={fDocUrl} target="_blank" rel="noopener noreferrer" className="underline">פתח</a><button type="button" onClick={function(){setFDocUrl("");}} className="text-rose-600 underline">הסר</button></div>}
+              </div>
+
               <div>
                 <label className="mb-1 block text-xs font-semibold text-slate-700">סטטוס</label>
                 <select value={fStatus} onChange={function(e){setFStatus(e.target.value);}} className={ic}>
                   <option value="valid">תקינה</option>
-                  <option value="pending">בהמתנה</option>
+                  <option value="pending">בהמתנה / טרם בוצעה</option>
                   <option value="expired">פגה</option>
                 </select>
+                <p className="text-[10px] text-slate-400 mt-1">הסטטוס יחושב אוטומטית לפי תאריך הבדיקה הבאה בעת השמירה.</p>
               </div>
-              <div>
-                <label className="mb-1 block text-xs font-semibold text-slate-700">הערות</label>
-                <input type="text" value={fNotes} onChange={function(e){setFNotes(e.target.value);}} className={ic} />
-              </div>
+              <div><label className="mb-1 block text-xs font-semibold text-slate-700">הערות</label><input type="text" value={fNotes} onChange={function(e){setFNotes(e.target.value);}} className={ic} /></div>
               <div className="flex gap-3 pt-2">
                 <button onClick={function(){setEditingId("");}} className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm text-slate-600">ביטול</button>
-                <button onClick={handleSave} disabled={saving} className="flex-1 rounded-xl bg-blue-700 py-2.5 text-sm font-bold text-white disabled:opacity-50">
-                  {saving?"שומר...":"שמור"}
-                </button>
+                <button onClick={handleSave} disabled={saving} className="flex-1 rounded-xl bg-blue-700 py-2.5 text-sm font-bold text-white disabled:opacity-50">{saving?"שומר...":"שמור"}</button>
               </div>
             </div>
           </div>
