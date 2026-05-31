@@ -1774,14 +1774,53 @@ function WasteTab({ properties }: { properties: any[] }) {
   const [creatingCharges, setCreatingCharges] = useState(false);
   const [creatingLetters, setCreatingLetters] = useState(false);
   const [progress, setProgress] = useState<CalcProgressState | null>(null);
+  const [existingWasteCharges, setExistingWasteCharges] = useState<any[]>([]);
+  const [existingWasteLetters, setExistingWasteLetters] = useState<any[]>([]);
 
   const [wasteGroups, setWasteGroups] = useState<any[]>([]);
 
   useEffect(function () {
-    if (!propId) { setSpaces([]); setResults([]); setWasteGroups([]); return; }
+    if (!propId) { setSpaces([]); setResults([]); setWasteGroups([]); setExistingWasteCharges([]); setExistingWasteLetters([]); return; }
     loadSpaces();
     loadWasteGroups();
-  }, [propId, year]);
+    loadWasteCost();
+    loadExistingWaste();
+  }, [propId, year, period]);
+
+  function periodLabelOf(): string { return period === "annual" ? "שנת " + year : period + " " + year; }
+
+  async function loadWasteCost() {
+    if (!propId) return;
+    const { data } = await supabase.from("waste_billing_inputs")
+      .select("cost").eq("property_id", propId).eq("year", year).eq("period", period).limit(1);
+    var row = data && data[0];
+    setWasteCost(row && row.cost != null ? String(row.cost) : "");
+  }
+  async function saveWasteCost() {
+    if (!propId) return;
+    try {
+      await supabase.from("waste_billing_inputs").upsert({
+        property_id: propId, year: year, period: period,
+        cost: wasteCost ? Number(wasteCost) : null, updated_at: new Date().toISOString(),
+      }, { onConflict: "property_id,year,period" });
+    } catch (e) { /* non-fatal */ }
+  }
+  async function loadExistingWaste() {
+    if (!propId) { setExistingWasteCharges([]); setExistingWasteLetters([]); return; }
+    var dates = getPeriodDates();
+    var lbl = periodLabelOf();
+    const [{ data: ch }, { data: lt }] = await Promise.all([
+      supabase.from("charges")
+        .select("id, total_amount, status, contract_id, notes, contracts(property_id, tenants(name))")
+        .eq("charge_type", "waste").eq("billing_period_start", dates.start),
+      supabase.from("letters")
+        .select("id, title, subject, contract_id, contracts(property_id)")
+        .eq("letter_type", "notice")
+        .or("subject.ilike.%פינוי אשפה — " + lbl + "%,title.ilike.%פינוי אשפה — " + lbl + "%"),
+    ]);
+    setExistingWasteCharges((ch ?? []).filter(function(x:any){ return x.contracts?.property_id === propId; }));
+    setExistingWasteLetters((lt ?? []).filter(function(x:any){ return x.contracts?.property_id === propId; }));
+  }
 
   async function loadSpaces() {
     const { data } = await supabase
@@ -1907,68 +1946,106 @@ function WasteTab({ properties }: { properties: any[] }) {
     finally { setComputing(false); setProgress(null); }
   }
 
+  // Create OR fix waste charges (update existing for the same contract+period,
+  // insert for new tenants).
   async function createCharges() {
     if (results.length === 0) return;
+    var billable = results.filter(function(r){ return r.charge >= 0.01; });
+    var byContract: Record<string, any> = {};
+    existingWasteCharges.forEach(function(c:any){ byContract[c.contract_id] = c; });
+    var willFix = billable.filter(function(r){ return byContract[r.contractId]; }).length;
+    if (willFix > 0) {
+      if (!confirm("נמצאו " + willFix + " חיובי פינוי אשפה קיימים ל" + periodLabelOf() + ".\nלתקן אותם לפי החישוב הנוכחי? (יסומנו כמתוקנים; לשוכרים ללא חיוב ייווצר חדש)")) return;
+    }
     setCreatingCharges(true);
-    setProgress({ current: 0, total: results.length, label: "יוצר חיובי פינוי אשפה...", startedAt: Date.now() });
+    setProgress({ current: 0, total: results.length, label: willFix ? "מתקן חיובי פינוי אשפה..." : "יוצר חיובי פינוי אשפה...", startedAt: Date.now() });
     try {
       const dates = getPeriodDates();
-      let count = 0;
+      let updated = 0, created = 0;
       var graceDays = await getGraceDaysForProperty(propId);
       var dueDateStr = dueDateFromGrace(graceDays);
+      var today = new Date().toLocaleDateString("he-IL");
       var wIdx = 0;
       for (const r of results) {
         wIdx++;
-        setProgress({ current: wIdx, total: results.length, label: "מעבד: " + (r.spaces || r.contractId), startedAt: Date.now() });
+        setProgress({ current: wIdx, total: results.length, label: (willFix ? "מתקן: " : "מעבד: ") + (r.spaces || r.contractId), startedAt: Date.now() });
         if (r.charge < 0.01) continue;
-        await supabase.from("charges").insert({
-          contract_id: r.contractId,
-          charge_type: "waste",
-          base_amount: r.charge,
-          vat_amount: 0,
-          total_amount: r.charge,
-          vat_type: "exempt",
-          billing_period_start: dates.start,
-          billing_period_end: dates.end,
-          due_date: dueDateStr,
-          status: "pending",
-          notes: "חיוב פינוי אשפה " + (period === "annual" ? year : period + " " + year),
-        });
-        count++;
+        const baseNotes = "חיוב פינוי אשפה " + (period === "annual" ? year : period + " " + year);
+        const ex = byContract[r.contractId];
+        if (ex) {
+          await supabase.from("charges").update({
+            base_amount: r.charge, vat_amount: 0, total_amount: r.charge,
+            notes: baseNotes + " [מתוקן " + today + "]",
+          }).eq("id", ex.id);
+          await logAudit({ entity_type: "charge", entity_id: ex.id, action: "fix_waste_charge", notes: "סכום מעודכן " + r.charge });
+          updated++;
+        } else {
+          await supabase.from("charges").insert({
+            contract_id: r.contractId, charge_type: "waste",
+            base_amount: r.charge, vat_amount: 0, total_amount: r.charge,
+            vat_type: "exempt", billing_period_start: dates.start,
+            billing_period_end: dates.end, due_date: dueDateStr,
+            status: "pending", notes: baseNotes,
+          });
+          created++;
+        }
       }
-      await logAudit({ entity_type: "billing", entity_id: propId, action: "create_waste_charges", notes: count + " חיובים" });
-      alert("✅ נוצרו " + count + " חיובים");
+      await logAudit({ entity_type: "billing", entity_id: propId, action: willFix ? "fix_waste_charges" : "create_waste_charges", notes: "עודכנו " + updated + ", נוצרו " + created });
+      await saveWasteCost();
+      await loadExistingWaste();
+      alert(willFix ? ("✅ תוקנו " + updated + " חיובים" + (created ? ", נוצרו " + created + " חדשים" : "")) : ("✅ נוצרו " + created + " חיובים"));
     } catch (e: any) { alert("שגיאה: " + e?.message); }
     finally { setCreatingCharges(false); setProgress(null); }
   }
 
   async function createLetters() {
     if (results.length === 0) return;
+    const periodLabel = periodLabelOf();
+    var billableL = results.filter(function(r){ return r.charge >= 0.01; });
+    var byContractL: Record<string, any> = {};
+    existingWasteLetters.forEach(function(l:any){ byContractL[l.contract_id] = l; });
+    var willFix = billableL.filter(function(r){ return byContractL[r.contractId]; }).length;
+    if (willFix > 0) {
+      if (!confirm("נמצאו " + willFix + " מכתבי פינוי אשפה קיימים ל" + periodLabel + ".\nלתקן אותם? יסומנו כ\"מכתב מתוקן\".")) return;
+    }
     setCreatingLetters(true);
-    setProgress({ current: 0, total: results.length, label: "יוצר מכתבי פינוי אשפה...", startedAt: Date.now() });
+    setProgress({ current: 0, total: results.length, label: willFix ? "מתקן מכתבי פינוי אשפה..." : "יוצר מכתבי פינוי אשפה...", startedAt: Date.now() });
     try {
-      const periodLabel = period === "annual" ? "שנת " + year : period + " " + year;
-      let count = 0;
+      let updated = 0, created = 0;
+      var today = new Date().toLocaleDateString("he-IL");
       var wlIdx = 0;
       for (const r of results) {
         wlIdx++;
-        setProgress({ current: wlIdx, total: results.length, label: "מכתב: " + (r.spaces || r.contractId), startedAt: Date.now() });
+        setProgress({ current: wlIdx, total: results.length, label: (willFix ? "מתקן מכתב: " : "מכתב: ") + (r.spaces || r.contractId), startedAt: Date.now() });
         if (r.charge < 0.01) continue;
-        await supabase.from("letters").insert({
-          contract_id: r.contractId,
-          letter_type: "notice",
-          subject: "חיוב פינוי אשפה — " + periodLabel,
-          body: "שוכר/ת נכבד/ה,\n\nלהלן חיוב פינוי אשפה לתקופה " + periodLabel + ":\n" +
-            "יחידות: " + r.spaces + "\n" +
-            'שטח: ' + r.wasteArea.toLocaleString("he-IL") + ' מ"ר\n' +
-            "אחוז: " + r.pct.toFixed(1) + "%\n" +
-            "חיוב: " + fmtMoney(r.charge) + "\n\nבברכה,\nהנהלת הנכס",
-          status: "draft",
-        });
-        count++;
+        const body = "שוכר/ת נכבד/ה,\n\nלהלן חיוב פינוי אשפה לתקופה " + periodLabel + ":\n" +
+          "יחידות: " + r.spaces + "\n" +
+          'שטח: ' + r.wasteArea.toLocaleString("he-IL") + ' מ"ר\n' +
+          "אחוז: " + r.pct.toFixed(1) + "%\n" +
+          "חיוב: " + fmtMoney(r.charge) + "\n\nבברכה,\nהנהלת הנכס";
+        const exL = byContractL[r.contractId];
+        if (exL) {
+          const fixedTitle = "מכתב מתוקן — חיוב פינוי אשפה — " + periodLabel;
+          await supabase.from("letters").update({
+            title: fixedTitle, subject: fixedTitle,
+            content_json: { body: body + "\n\n[מכתב מתוקן בתאריך " + today + "]", corrected: true, correctedAt: today },
+            body: body, status: "draft",
+          }).eq("id", exL.id);
+          await logAudit({ entity_type: "letter", entity_id: exL.id, action: "fix_waste_letter" });
+          updated++;
+        } else {
+          const origTitle = "חיוב פינוי אשפה — " + periodLabel;
+          await supabase.from("letters").insert({
+            contract_id: r.contractId, letter_type: "notice",
+            title: origTitle, subject: origTitle,
+            content_json: { body: body }, body: body, status: "draft",
+          });
+          created++;
+        }
       }
-      await logAudit({ entity_type: "billing", entity_id: propId, action: "create_waste_letters", notes: count + " מכתבים" });
-      alert("✅ נוצרו " + count + " מכתבים");
+      await logAudit({ entity_type: "billing", entity_id: propId, action: willFix ? "fix_waste_letters" : "create_waste_letters", notes: "עודכנו " + updated + ", נוצרו " + created });
+      await loadExistingWaste();
+      alert(willFix ? ("✅ תוקנו " + updated + " מכתבים" + (created ? ", נוצרו " + created + " חדשים" : "") + " — סומנו כ\"מכתב מתוקן\"") : ("✅ נוצרו " + created + " מכתבים"));
     } catch (e: any) { alert("שגיאה: " + e?.message); }
     finally { setCreatingLetters(false); setProgress(null); }
   }
@@ -2056,6 +2133,29 @@ function WasteTab({ properties }: { properties: any[] }) {
           </div>
         )}
 
+        {existingWasteCharges.length > 0 && (
+          <div className="rounded-lg bg-blue-50 border border-blue-200 p-4 my-4">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <div className="text-sm font-bold text-blue-800">✓ כבר נוצרו {existingWasteCharges.length} חיובי פינוי אשפה ל{periodLabelOf()} לנכס זה</div>
+              <button onClick={compute} disabled={computing || !propId || (!hasGroups && !wasteCost)} className="text-xs rounded border border-blue-300 bg-white text-blue-700 hover:bg-blue-100 px-2 py-1 font-semibold disabled:opacity-50" title="הצג את החישוב המפורט כאן">📊 הצג חישוב מפורט</button>
+            </div>
+            <div className="text-[11px] text-blue-600 mt-0.5">אין צורך ליצור שוב (יצירה חוזרת תיצור כפילות). למחיקה/עריכה — מסך חיובים.</div>
+            <div className="mt-2 rounded-lg bg-white border border-blue-100 divide-y divide-blue-50">
+              {existingWasteCharges.map(function(ch:any){
+                return (
+                  <div key={ch.id} className="flex items-center justify-between px-3 py-1.5 text-xs">
+                    <span className="font-medium text-slate-700">{ch.contracts?.tenants?.name || "—"}</span>
+                    <span className="flex items-center gap-2">
+                      <span className="font-semibold text-slate-800">{fmtMoney(ch.total_amount)}</span>
+                      <span className={"rounded-full px-1.5 py-0.5 text-[10px] font-semibold " + (ch.status==="paid"?"bg-green-100 text-green-700":"bg-amber-100 text-amber-700")}>{ch.status==="paid"?"שולם":"ממתין"}</span>
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {progress && <div className="my-3"><CalcProgress {...progress} /></div>}
 
         <button onClick={compute} disabled={computing || !propId || (!hasGroups && !wasteCost)}
@@ -2100,14 +2200,17 @@ function WasteTab({ properties }: { properties: any[] }) {
                 </tfoot>
               </table>
             </div>
+            {progress && <div className="mt-4"><CalcProgress {...progress} /></div>}
             <div className="flex gap-3 mt-4">
               <button onClick={createCharges} disabled={creatingCharges}
-                className="rounded-lg bg-blue-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-blue-800 disabled:opacity-50">
-                {creatingCharges ? "יוצר..." : "צור חיובים"}
+                title={existingWasteCharges.length > 0 ? "מעדכן את החיובים הקיימים לפי החישוב הנוכחי (מסמן כמתוקנים)" : "מוסיף שורת חיוב פינוי אשפה לכל שוכר"}
+                className={"rounded-lg px-5 py-2.5 text-sm font-bold text-white disabled:opacity-50 " + (existingWasteCharges.length > 0 ? "bg-amber-600 hover:bg-amber-700" : "bg-blue-700 hover:bg-blue-800")}>
+                {creatingCharges ? "שומר..." : existingWasteCharges.length > 0 ? ("🔧 תקן חיובים (" + existingWasteCharges.length + ")") : "צור חיובים"}
               </button>
               <button onClick={createLetters} disabled={creatingLetters}
-                className="rounded-lg border border-blue-200 bg-blue-50 px-5 py-2.5 text-sm font-bold text-blue-700 hover:bg-blue-100 disabled:opacity-50">
-                {creatingLetters ? "יוצר..." : "צור מכתבים"}
+                title={existingWasteLetters.length > 0 ? "מעדכן את המכתבים הקיימים ומסמן אותם כ'מכתב מתוקן'" : "יוצר טיוטות מכתבי פינוי אשפה"}
+                className={"rounded-lg border px-5 py-2.5 text-sm font-bold disabled:opacity-50 " + (existingWasteLetters.length > 0 ? "border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100" : "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100")}>
+                {creatingLetters ? "שומר..." : existingWasteLetters.length > 0 ? ("🔧 תקן מכתבים (" + existingWasteLetters.length + ")") : "צור מכתבים"}
               </button>
             </div>
           </div>

@@ -53,6 +53,7 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
   const [actualPaidInputs, setActualPaidInputs] = useState<Record<string, Record<string, string>>>({});
   const [creatingCharges, setCreatingCharges] = useState(false);
   const [creatingLetters, setCreatingLetters] = useState(false);
+  const [existingCpiCharges, setExistingCpiCharges] = useState<any[]>([]);
   const [savedMode, setSavedMode] = useState(false);
   const [savedInfo, setSavedInfo] = useState<{ count: number; savedAt: string } | null>(null);
   const [saving, setSaving] = useState(false);
@@ -62,8 +63,18 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
 
   // Auto-load saved on property/year change
   React.useEffect(function() {
-    if (propId) checkSavedDiff();
+    if (propId) { checkSavedDiff(); loadExistingCpiCharges(); }
+    else setExistingCpiCharges([]);
   }, [propId, year]);
+
+  async function loadExistingCpiCharges() {
+    if (!propId) { setExistingCpiCharges([]); return; }
+    var { data } = await supabase.from("charges")
+      .select("id, total_amount, status, contract_id, notes, contracts(property_id, tenants(name))")
+      .eq("charge_type", "cpi_diff")
+      .eq("billing_period_start", year + "-01-01");
+    setExistingCpiCharges((data ?? []).filter(function(x:any){ return x.contracts?.property_id === propId; }));
+  }
 
   async function checkSavedDiff() {
     var { data } = await supabase.from("cpi_diff_calculations")
@@ -700,36 +711,53 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
     return { diff: diff, interest: interest, total: diff + interest };
   }
 
+  // Create OR fix CPI-diff charges (update existing for the same contract+year,
+  // insert for new tenants).
   async function createCharges() {
+    var withDiff = results.filter(function(r) { return Math.abs(r.totalDifference) >= 1; });
+    var byContract: Record<string, any> = {};
+    existingCpiCharges.forEach(function(c:any){ byContract[c.contract_id] = c; });
+    var willFix = withDiff.filter(function(r){ return byContract[r.contractId]; }).length;
+    if (willFix > 0) {
+      if (!confirm("נמצאו " + willFix + " חיובי הפרשי הצמדה קיימים לשנת " + year + ".\nלתקן אותם לפי החישוב הנוכחי? (יסומנו כמתוקנים; לשוכרים ללא חיוב ייווצר חדש)")) return;
+    }
     setCreatingCharges(true);
     var chargeStart = Date.now();
-    var withDiff = results.filter(function(r) { return Math.abs(r.totalDifference) >= 1; });
-    setProgress({ current: 0, total: withDiff.length, label: "יוצר חיובי הפרשי הצמדה...", startedAt: chargeStart });
+    setProgress({ current: 0, total: withDiff.length, label: willFix ? "מתקן חיובי הפרשי הצמדה..." : "יוצר חיובי הפרשי הצמדה...", startedAt: chargeStart });
     try {
-      var count = 0;
-      // Grace days configured per-company; only "באיחור" once due_date passes.
+      var updated = 0, created = 0, idx = 0;
       var graceDays = await getGraceDaysForProperty(propId);
       var dueDateStr = dueDateFromGrace(graceDays);
+      var today = new Date().toLocaleDateString("he-IL");
       for (var r of results) {
         if (Math.abs(r.totalDifference) < 1) continue;
-        setProgress({ current: count + 1, total: withDiff.length, label: "יוצר חיוב — " + r.tenantName, startedAt: chargeStart });
-        await supabase.from("charges").insert({
-          contract_id: r.contractId,
-          charge_type: "cpi_diff",
-          base_amount: r.totalDifference > 0 ? r.totalDifference : -Math.abs(r.totalDifference),
-          vat_amount: 0,
-          total_amount: r.totalDifference,
-          vat_type: "exempt",
-          billing_period_start: year + "-01-01",
-          billing_period_end: year + "-12-31",
-          due_date: dueDateStr,
-          status: "pending",
-          notes: "הפרשי הצמדה שכ\"ד שנת " + year + (r.totalDifference > 0 ? " — לחיוב" : " — לזיכוי"),
-        });
-        count++;
+        idx++;
+        setProgress({ current: idx, total: withDiff.length, label: (willFix ? "מתקן — " : "יוצר חיוב — ") + r.tenantName, startedAt: chargeStart });
+        var signed = r.totalDifference;
+        var baseSigned = r.totalDifference > 0 ? r.totalDifference : -Math.abs(r.totalDifference);
+        var baseNotes = "הפרשי הצמדה שכ\"ד שנת " + year + (r.totalDifference > 0 ? " — לחיוב" : " — לזיכוי");
+        var ex = byContract[r.contractId];
+        if (ex) {
+          await supabase.from("charges").update({
+            base_amount: baseSigned, vat_amount: 0, total_amount: signed,
+            notes: baseNotes + " [מתוקן " + today + "]",
+          }).eq("id", ex.id);
+          await logAudit({ entity_type: "charge", entity_id: ex.id, action: "fix_cpi_diff_charge", notes: "סכום מעודכן " + signed });
+          updated++;
+        } else {
+          await supabase.from("charges").insert({
+            contract_id: r.contractId, charge_type: "cpi_diff",
+            base_amount: baseSigned, vat_amount: 0, total_amount: signed,
+            vat_type: "exempt", billing_period_start: year + "-01-01",
+            billing_period_end: year + "-12-31", due_date: dueDateStr,
+            status: "pending", notes: baseNotes,
+          });
+          created++;
+        }
       }
-      await logAudit({ entity_type: "billing", entity_id: propId, action: "create_cpi_diff_charges", notes: count + " חיובים" });
-      alert("✅ נוצרו " + count + " חיובי הפרשי הצמדה");
+      await logAudit({ entity_type: "billing", entity_id: propId, action: willFix ? "fix_cpi_diff_charges" : "create_cpi_diff_charges", notes: "עודכנו " + updated + ", נוצרו " + created });
+      await loadExistingCpiCharges();
+      alert(willFix ? ("✅ תוקנו " + updated + " חיובים" + (created ? ", נוצרו " + created + " חדשים" : "")) : ("✅ נוצרו " + created + " חיובי הפרשי הצמדה"));
     } catch (e: any) { alert("שגיאה: " + (e?.message || e)); }
     finally { setCreatingCharges(false); setProgress(null); }
   }
@@ -1196,8 +1224,10 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
                 {saving ? "שומר..." : savedMode ? "✅ נשמר — לחץ לשמור מחדש" : "💾 שמור חישוב"}
               </button>
               <button onClick={createCharges} disabled={creatingCharges}
+                title={existingCpiCharges.length > 0 ? "מעדכן את חיובי ההפרשים הקיימים לפי החישוב הנוכחי (מסמן כמתוקנים)" : "יוצר חיובי הפרשי הצמדה"}
+                style={existingCpiCharges.length > 0 ? { backgroundColor: "#d97706", borderColor: "#d97706" } : undefined}
                 className="rounded-lg bg-slate-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-slate-700 disabled:opacity-50">
-                {creatingCharges ? "יוצר..." : "📊 צור חיובי הפרשים"}
+                {creatingCharges ? "שומר..." : existingCpiCharges.length > 0 ? ("🔧 תקן חיובי הפרשים (" + existingCpiCharges.length + ")") : "📊 צור חיובי הפרשים"}
               </button>
               <button onClick={createLetters} disabled={creatingLetters}
                 className="rounded-lg border-2 border-purple-500 bg-purple-50 px-5 py-2.5 text-sm font-bold text-purple-700 hover:bg-purple-100 disabled:opacity-50">
