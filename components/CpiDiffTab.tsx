@@ -51,6 +51,10 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
   const [computing, setComputing] = useState(false);
   const [progress, setProgress] = useState<CalcProgressState | null>(null);
   const [results, setResults] = useState<CpiDiffRow[]>([]);
+  const [vatPct, setVatPct] = useState(0.18);
+  const [vatTypeMap, setVatTypeMap] = useState<Record<string, string>>({});
+  React.useEffect(function(){ getVatPct().then(setVatPct); }, []);
+  React.useEffect(function(){ if (results.length) getVatTypeMap(results.map(function(r:any){ return r.contractId; })).then(setVatTypeMap); }, [results]);
   const [actualPaidInputs, setActualPaidInputs] = useState<Record<string, Record<string, string>>>({});
   const [creatingCharges, setCreatingCharges] = useState(false);
   const [creatingLetters, setCreatingLetters] = useState(false);
@@ -1104,9 +1108,17 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
                 <div key={r.contractId} className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
                   <div className="px-5 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
                     <div className="font-bold text-slate-800 text-sm">{r.tenantName}</div>
-                    <div className={"text-sm font-bold " + (r.totalDifference > 0 ? "text-red-700" : r.totalDifference < 0 ? "text-green-700" : "text-slate-500")}>
-                      סה&quot;כ הפרש: {fmtMoney(r.totalDifference)}
-                    </div>
+                    {(function(){
+                      var taxable = vatTypeMap[r.contractId] === "taxable";
+                      var vatAmt = taxable ? r.totalDifference * vatPct : 0;
+                      var clr = r.totalDifference > 0 ? "text-red-700" : r.totalDifference < 0 ? "text-green-700" : "text-slate-500";
+                      return (
+                        <div className="text-left">
+                          <div className={"text-xs " + clr}>הפרש לפני מע&quot;מ: {fmtMoney(r.totalDifference)}{taxable ? " · מע\"מ " + fmtMoney(vatAmt) : " · פטור ממע\"מ"}</div>
+                          <div className={"text-sm font-bold " + clr}>כולל מע&quot;מ: {fmtMoney(r.totalDifference + vatAmt)}</div>
+                        </div>
+                      );
+                    })()}
                   </div>
                   <div className="overflow-x-auto">
                     <table className="w-full text-sm text-right min-w-[900px]">

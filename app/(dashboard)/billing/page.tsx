@@ -134,6 +134,9 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
   const [creatingCharges, setCreatingCharges] = useState(false);
   const [creatingLetters, setCreatingLetters] = useState(false);
   const [progress, setProgress] = useState<CalcProgressState | null>(null);
+  const [vatPct, setVatPct] = useState(0.18);
+  const [vatTypeMap, setVatTypeMap] = useState<Record<string, string>>({});
+  useEffect(function(){ getVatPct().then(setVatPct); }, []);
   // Management charges already created for this property + year.
   const [existingMgmtCharges, setExistingMgmtCharges] = useState<any[]>([]);
   const [existingMgmtLetters, setExistingMgmtLetters] = useState<any[]>([]);
@@ -406,6 +409,7 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
         };
       });
       setMgmtResults(results);
+      getVatTypeMap(results.map(function(r:any){ return r.contractId; })).then(setVatTypeMap);
       await saveActualInputs();
     } catch (e: any) { alert("שגיאה: " + e?.message); }
     finally { setComputing(false); setProgress(null); }
@@ -824,13 +828,17 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
                     <th className="px-4 py-3 font-semibold text-slate-700">שטח (מ&quot;ר)</th>
                     <th className="px-4 py-3 font-semibold text-slate-700">מקדמה</th>
                     <th className="px-4 py-3 font-semibold text-slate-700">חלק בפועל</th>
-                    <th className="px-4 py-3 font-semibold text-slate-700">הפרש</th>
+                    <th className="px-4 py-3 font-semibold text-slate-700">הפרש (לפני מע&quot;מ)</th>
+                    <th className="px-4 py-3 font-semibold text-slate-700">מע&quot;מ</th>
+                    <th className="px-4 py-3 font-semibold text-slate-700">הפרש כולל מע&quot;מ</th>
                   </tr>
                 </thead>
                 <tbody>
                   {mgmtResults.map(function (r) {
                     const color = r.difference > 0.01 ? "text-red-700 bg-red-50" : r.difference < -0.01 ? "text-green-700 bg-green-50" : "text-slate-600";
                     const isZeroBoth = r.advance < 0.01 && r.actualShare < 0.01;
+                    const taxable = !r.isRevenueBased && vatTypeMap[r.contractId] === "taxable";
+                    const vatAmt = taxable ? r.difference * vatPct : 0;
                     return (
                       <tr key={r.contractId} className={"border-t border-slate-100 " + (r.isRevenueBased ? "bg-purple-50/40" : "hover:bg-slate-50") + (isZeroBoth ? " opacity-60" : "")}>
                         <td className="px-4 py-3 font-semibold text-slate-800">
@@ -845,21 +853,33 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
                         <td className="px-4 py-3 text-slate-600">{r.chargedArea.toLocaleString("he-IL")}</td>
                         <td className="px-4 py-3">{fmtMoney(r.advance)}</td>
                         <td className="px-4 py-3">{fmtMoney(r.actualShare)}</td>
-                        <td className={"px-4 py-3 font-bold rounded " + (r.isRevenueBased ? "text-slate-500" : color)}>
+                        <td className={"px-4 py-3 font-semibold rounded " + (r.isRevenueBased ? "text-slate-500" : color)}>
                           {fmtMoney(r.difference)}
+                        </td>
+                        <td className="px-4 py-3 text-slate-500 text-xs">{r.isRevenueBased ? "—" : taxable ? fmtMoney(vatAmt) : "פטור"}</td>
+                        <td className={"px-4 py-3 font-bold rounded " + (r.isRevenueBased ? "text-slate-500" : color)}>
+                          {fmtMoney(r.difference + vatAmt)}
                         </td>
                       </tr>
                     );
                   })}
                 </tbody>
                 <tfoot className="bg-slate-50 border-t-2 border-slate-200">
-                  <tr>
-                    <td className="px-4 py-2.5 font-bold text-slate-700" colSpan={2}>סה&quot;כ</td>
-                    <td className="px-4 py-2.5 font-bold">{mgmtResults.reduce(function (s, r) { return s + r.chargedArea; }, 0).toLocaleString("he-IL")}</td>
-                    <td className="px-4 py-2.5 font-bold">{fmtMoney(mgmtResults.reduce(function (s, r) { return s + r.advance; }, 0))}</td>
-                    <td className="px-4 py-2.5 font-bold">{fmtMoney(mgmtResults.reduce(function (s, r) { return s + r.actualShare; }, 0))}</td>
-                    <td className="px-4 py-2.5 font-black">{fmtMoney(mgmtResults.reduce(function (s, r) { return s + r.difference; }, 0))}</td>
-                  </tr>
+                  {(function(){
+                    var totDiff = mgmtResults.reduce(function (s, r) { return s + r.difference; }, 0);
+                    var totVat = mgmtResults.reduce(function (s, r) { return s + (!r.isRevenueBased && vatTypeMap[r.contractId]==="taxable" ? r.difference*vatPct : 0); }, 0);
+                    return (
+                      <tr>
+                        <td className="px-4 py-2.5 font-bold text-slate-700" colSpan={2}>סה&quot;כ</td>
+                        <td className="px-4 py-2.5 font-bold">{mgmtResults.reduce(function (s, r) { return s + r.chargedArea; }, 0).toLocaleString("he-IL")}</td>
+                        <td className="px-4 py-2.5 font-bold">{fmtMoney(mgmtResults.reduce(function (s, r) { return s + r.advance; }, 0))}</td>
+                        <td className="px-4 py-2.5 font-bold">{fmtMoney(mgmtResults.reduce(function (s, r) { return s + r.actualShare; }, 0))}</td>
+                        <td className="px-4 py-2.5 font-bold">{fmtMoney(totDiff)}</td>
+                        <td className="px-4 py-2.5 text-slate-500 text-xs">{fmtMoney(totVat)}</td>
+                        <td className="px-4 py-2.5 font-black">{fmtMoney(totDiff + totVat)}</td>
+                      </tr>
+                    );
+                  })()}
                 </tfoot>
               </table>
             </div>
@@ -915,6 +935,9 @@ function InsuranceTab({ properties }: { properties: any[] }) {
   const [existingCharges, setExistingCharges] = useState<any[]>([]);
   const [existingLetters, setExistingLetters] = useState<any[]>([]);
   const [progress, setProgress] = useState<CalcProgressState | null>(null);
+  const [vatPct, setVatPct] = useState(0.18);
+  const [vatTypeMap, setVatTypeMap] = useState<Record<string, string>>({});
+  useEffect(function(){ getVatPct().then(setVatPct); }, []);
   // Detected data issues to surface in the UI (e.g. a space assigned to two
   // active contracts simultaneously). Cleared on each compute().
   const [warnings, setWarnings] = useState<string[]>([]);
@@ -1168,6 +1191,7 @@ function InsuranceTab({ properties }: { properties: any[] }) {
       });
 
       setResults(res);
+      getVatTypeMap(res.map(function(r:any){ return r.contractId; })).then(setVatTypeMap);
       setComputedTotalSqmDays(propertySqmDays);
       setComputedPolicyDays(policyDays);
 
@@ -1612,7 +1636,9 @@ function InsuranceTab({ properties }: { properties: any[] }) {
                     <th className="px-4 py-3 font-semibold text-slate-700">תקופה</th>
                     <th className="px-4 py-3 font-semibold text-slate-700">שטח (מ&quot;ר)</th>
                     <th className="px-4 py-3 font-semibold text-slate-700">% חלק</th>
-                    <th className="px-4 py-3 font-semibold text-slate-700">חיוב</th>
+                    <th className="px-4 py-3 font-semibold text-slate-700">לפני מע&quot;מ</th>
+                    <th className="px-4 py-3 font-semibold text-slate-700">מע&quot;מ</th>
+                    <th className="px-4 py-3 font-semibold text-slate-700">כולל מע&quot;מ</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1621,6 +1647,8 @@ function InsuranceTab({ properties }: { properties: any[] }) {
                     var periodCell = r.daysInPolicy === r.policyDays
                       ? "כל התקופה"
                       : r.daysInPolicy + "/" + r.policyDays + " ימים";
+                    var taxable = vatTypeMap[r.contractId] === "taxable";
+                    var vatAmt = taxable ? r.charge * vatPct : 0;
                     return (
                       <tr key={r.contractId} className={"border-t border-slate-100 " + (r.isPartialPeriod ? "bg-amber-50/40" : "hover:bg-slate-50")}>
                         <td className="px-4 py-3">
@@ -1636,7 +1664,9 @@ function InsuranceTab({ properties }: { properties: any[] }) {
                         <td className="px-4 py-3 text-xs text-slate-500">{periodCell}</td>
                         <td className="px-4 py-3 text-slate-600">{areaCell}</td>
                         <td className="px-4 py-3 text-slate-600">{r.pct.toFixed(2)}%</td>
-                        <td className="px-4 py-3 font-bold text-blue-700">{fmtMoney(r.charge)}</td>
+                        <td className="px-4 py-3 text-slate-700">{fmtMoney(r.charge)}</td>
+                        <td className="px-4 py-3 text-slate-500 text-xs">{taxable ? fmtMoney(vatAmt) : "פטור"}</td>
+                        <td className="px-4 py-3 font-bold text-blue-700">{fmtMoney(r.charge + vatAmt)}</td>
                       </tr>
                     );
                   })}
@@ -1648,13 +1678,20 @@ function InsuranceTab({ properties }: { properties: any[] }) {
                       {totPct.toFixed(2)}%
                       {overBilled && <span className="text-[10px] mr-1">⚠ חורג</span>}
                     </td>
-                    <td className="px-4 py-2.5 font-black text-blue-700">{fmtMoney(totCharge)}</td>
+                    {(function(){
+                      var totVat = displayResults.reduce(function(s, r){ return s + (vatTypeMap[r.contractId]==="taxable" ? r.charge*vatPct : 0); }, 0);
+                      return (<>
+                        <td className="px-4 py-2.5 font-bold text-slate-700">{fmtMoney(totCharge)}</td>
+                        <td className="px-4 py-2.5 text-slate-500 text-xs">{fmtMoney(totVat)}</td>
+                        <td className="px-4 py-2.5 font-black text-blue-700">{fmtMoney(totCharge + totVat)}</td>
+                      </>);
+                    })()}
                   </tr>
                   {!overBilled && ownerSelf > 0.5 && (
                     <tr className="border-t border-slate-200">
                       <td className="px-4 py-2.5 font-semibold text-amber-700" colSpan={3}>חלק בעלים (שטח פנוי / לא מבוטח על-ידי שוכרים)</td>
                       <td className="px-4 py-2.5 font-semibold text-amber-700">{ownerSelf.toFixed(2)}%</td>
-                      <td className="px-4 py-2.5 font-bold text-amber-700">{fmtMoney(ownerCharge)}</td>
+                      <td className="px-4 py-2.5 font-bold text-amber-700" colSpan={3}>{fmtMoney(ownerCharge)}</td>
                     </tr>
                   )}
                 </tfoot>
@@ -1829,6 +1866,9 @@ function WasteTab({ properties }: { properties: any[] }) {
   const [progress, setProgress] = useState<CalcProgressState | null>(null);
   const [existingWasteCharges, setExistingWasteCharges] = useState<any[]>([]);
   const [existingWasteLetters, setExistingWasteLetters] = useState<any[]>([]);
+  const [vatPct, setVatPct] = useState(0.18);
+  const [vatTypeMap, setVatTypeMap] = useState<Record<string, string>>({});
+  useEffect(function(){ getVatPct().then(setVatPct); }, []);
 
   const [wasteGroups, setWasteGroups] = useState<any[]>([]);
 
@@ -2091,6 +2131,7 @@ function WasteTab({ properties }: { properties: any[] }) {
         }
       }
       setResults(res);
+      getVatTypeMap(res.map(function(r:any){ return r.contractId; })).then(setVatTypeMap);
     } catch (e: any) { alert("שגיאה: " + e?.message); }
     finally { setComputing(false); setProgress(null); }
   }
@@ -2325,30 +2366,44 @@ function WasteTab({ properties }: { properties: any[] }) {
                     <th className="px-4 py-3 font-semibold text-slate-700">{"יחידות משתתפות"}</th>
                     <th className="px-4 py-3 font-semibold text-slate-700">{'שטח (מ"ר)'}</th>
                     <th className="px-4 py-3 font-semibold text-slate-700">%</th>
-                    <th className="px-4 py-3 font-semibold text-slate-700">{"חיוב"}</th>
+                    <th className="px-4 py-3 font-semibold text-slate-700">לפני מע&quot;מ</th>
+                    <th className="px-4 py-3 font-semibold text-slate-700">מע&quot;מ</th>
+                    <th className="px-4 py-3 font-semibold text-slate-700">כולל מע&quot;מ</th>
                   </tr>
                 </thead>
                 <tbody>
                   {results.map(function (r) {
+                    var taxable = vatTypeMap[r.contractId] === "taxable";
+                    var vatAmt = taxable ? r.charge * vatPct : 0;
                     return (
                       <tr key={r.contractId} className="border-t border-slate-100 hover:bg-slate-50">
                         <td className="px-4 py-3 font-semibold text-slate-800">{r.tenantName}</td>
                         <td className="px-4 py-3 text-xs text-slate-600">{r.spaces}</td>
                         <td className="px-4 py-3 text-slate-600">{r.wasteArea.toLocaleString("he-IL")}</td>
                         <td className="px-4 py-3 text-slate-600">{r.pct.toFixed(1)}%</td>
-                        <td className="px-4 py-3 font-bold text-blue-700">{fmtMoney(r.charge)}</td>
+                        <td className="px-4 py-3 text-slate-700">{fmtMoney(r.charge)}</td>
+                        <td className="px-4 py-3 text-slate-500 text-xs">{taxable ? fmtMoney(vatAmt) : "פטור"}</td>
+                        <td className="px-4 py-3 font-bold text-blue-700">{fmtMoney(r.charge + vatAmt)}</td>
                       </tr>
                     );
                   })}
                 </tbody>
                 <tfoot className="bg-slate-50 border-t-2 border-slate-200">
-                  <tr>
-                    <td className="px-4 py-2.5 font-bold text-slate-700">{'סה"כ'}</td>
-                    <td className="px-4 py-2.5" />
-                    <td className="px-4 py-2.5 font-bold">{results.reduce(function (s, r) { return s + r.wasteArea; }, 0).toLocaleString("he-IL")}</td>
-                    <td className="px-4 py-2.5 font-bold">{results.reduce(function (s, r) { return s + r.pct; }, 0).toFixed(1)}%</td>
-                    <td className="px-4 py-2.5 font-black text-blue-700">{fmtMoney(results.reduce(function (s, r) { return s + r.charge; }, 0))}</td>
-                  </tr>
+                  {(function(){
+                    var totBase = results.reduce(function (s, r) { return s + r.charge; }, 0);
+                    var totVat = results.reduce(function (s, r) { return s + (vatTypeMap[r.contractId]==="taxable" ? r.charge*vatPct : 0); }, 0);
+                    return (
+                      <tr>
+                        <td className="px-4 py-2.5 font-bold text-slate-700">{'סה"כ'}</td>
+                        <td className="px-4 py-2.5" />
+                        <td className="px-4 py-2.5 font-bold">{results.reduce(function (s, r) { return s + r.wasteArea; }, 0).toLocaleString("he-IL")}</td>
+                        <td className="px-4 py-2.5 font-bold">{results.reduce(function (s, r) { return s + r.pct; }, 0).toFixed(1)}%</td>
+                        <td className="px-4 py-2.5 font-bold">{fmtMoney(totBase)}</td>
+                        <td className="px-4 py-2.5 text-slate-500 text-xs">{fmtMoney(totVat)}</td>
+                        <td className="px-4 py-2.5 font-black text-blue-700">{fmtMoney(totBase + totVat)}</td>
+                      </tr>
+                    );
+                  })()}
                 </tfoot>
               </table>
             </div>
