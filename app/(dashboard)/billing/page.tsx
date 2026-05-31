@@ -1133,10 +1133,28 @@ function InsuranceTab({ properties }: { properties: any[] }) {
         .sort(function(a, b) { return b.vacantSqmDays - a.vacantSqmDays; });
 
       setSpaceVacancies(vacancies);
-      // Reset disposition state per compute() so stale ids don't leak
-      setSpaceDispositions({});
+      // Restore the saved dispositions for this property+year so the recompute
+      // reproduces exactly what was billed (e.g. a vacant unit assigned to the
+      // continuing tenant). Falls back to "owner" default when none saved.
+      var saved = await loadSavedDispositions();
+      setSpaceDispositions(saved || {});
     } catch (e: any) { alert("שגיאה: " + e?.message); }
     finally { setComputing(false); }
+  }
+
+  async function loadSavedDispositions(): Promise<Record<string, string>> {
+    if (!propId) return {};
+    const { data } = await supabase.from("insurance_billing_dispositions")
+      .select("dispositions").eq("property_id", propId).eq("year", year).limit(1);
+    var d = data && data[0] && data[0].dispositions;
+    return (d && typeof d === "object") ? d : {};
+  }
+  async function saveDispositions() {
+    if (!propId) return;
+    try {
+      await supabase.from("insurance_billing_dispositions")
+        .upsert({ property_id: propId, year: year, dispositions: spaceDispositions, updated_at: new Date().toISOString() }, { onConflict: "property_id,year" });
+    } catch (e) { /* non-fatal */ }
   }
 
   // Recomputes per-tenant charge with the current vacancy dispositions
@@ -1200,6 +1218,7 @@ function InsuranceTab({ properties }: { properties: any[] }) {
         }
       }
       await logAudit({ entity_type: "billing", entity_id: propId, action: willFix ? "fix_ins_charges" : "create_ins_charges", notes: "עודכנו " + updated + ", נוצרו " + created });
+      await saveDispositions();
       await loadExistingCharges();
       alert(willFix
         ? ("✅ תוקנו " + updated + " חיובים" + (created ? ", נוצרו " + created + " חדשים" : ""))
@@ -1262,6 +1281,7 @@ function InsuranceTab({ properties }: { properties: any[] }) {
         }
       }
       await logAudit({ entity_type: "billing", entity_id: propId, action: willFix ? "fix_ins_letters" : "create_ins_letters", notes: "עודכנו " + updated + ", נוצרו " + created });
+      await saveDispositions();
       await loadExistingCharges();
       alert(willFix
         ? ("✅ תוקנו " + updated + " מכתבים" + (created ? ", נוצרו " + created + " חדשים" : "") + " — סומנו כ\"מכתב מתוקן\" במסך מכתבים")
