@@ -6,6 +6,7 @@ import PropertyHierarchyFilter from '@/components/PropertyHierarchyFilter';
 import BillingGroupsManager from '@/components/BillingGroupsManager';
 import { fetchCpiAdjusted } from '@/lib/cpi-server';
 import { getGraceDaysForProperty, dueDateFromGrace } from '@/lib/grace-days';
+import { getVatPct, getVatTypeMap, applyVat } from '@/lib/vat';
 import AdvancesTab from '@/components/AdvancesTab';
 import CpiDiffTab from '@/components/CpiDiffTab';
 import SavedAdvancesTab from '@/components/SavedAdvancesTab';
@@ -429,6 +430,8 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
       var graceDays = await getGraceDaysForProperty(propId);
       var dueDateStr = dueDateFromGrace(graceDays);
       var today = new Date().toLocaleDateString("he-IL");
+      var vatPct = await getVatPct();
+      var vatMap = await getVatTypeMap(billable.map(function(r:any){ return r.contractId; }));
       var mIdx = 0;
       for (const r of mgmtResults) {
         mIdx++;
@@ -439,20 +442,21 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
         if (r.isRevenueBased) { skippedRevenue++; continue; }
         const base = Math.abs(r.difference);
         const signed = r.difference > 0 ? base : -base;
+        const v = applyVat(signed, vatMap[r.contractId] === "taxable", vatPct);
         const baseNotes = "התחשבנות דמי ניהול " + year + (r.difference > 0 ? " — לחיוב" : " — לזיכוי");
         const ex = byContract[r.contractId];
         if (ex) {
           await supabase.from("charges").update({
-            base_amount: signed, vat_amount: 0, total_amount: signed,
+            base_amount: v.base, vat_amount: v.vat, total_amount: v.total, vat_type: v.vatType,
             notes: baseNotes + " [מתוקן " + today + "]",
           }).eq("id", ex.id);
-          await logAudit({ entity_type: "charge", entity_id: ex.id, action: "fix_mgmt_charge", notes: "סכום מעודכן " + signed });
+          await logAudit({ entity_type: "charge", entity_id: ex.id, action: "fix_mgmt_charge", notes: "סכום מעודכן " + v.total });
           updated++;
         } else {
           await supabase.from("charges").insert({
             contract_id: r.contractId, charge_type: "management",
-            base_amount: signed, vat_amount: 0, total_amount: signed,
-            vat_type: "exempt", billing_period_start: year + "-01-01",
+            base_amount: v.base, vat_amount: v.vat, total_amount: v.total,
+            vat_type: v.vatType, billing_period_start: year + "-01-01",
             billing_period_end: year + "-12-31", due_date: dueDateStr,
             status: "pending", notes: baseNotes,
           });
@@ -1368,25 +1372,28 @@ function InsuranceTab({ properties }: { properties: any[] }) {
       var graceDays = await getGraceDaysForProperty(propId);
       var dueDateStr = dueDateFromGrace(graceDays);
       var today = new Date().toLocaleDateString("he-IL");
+      var vatPct = await getVatPct();
+      var vatMap = await getVatTypeMap(effective.map(function(r:any){ return r.contractId; }));
       var updated = 0, created = 0;
       var idx = 0;
       for (const r of effective) {
         idx++;
         setProgress({ current: idx, total: effective.length, label: (willFix ? "מתקן: " : "יוצר: ") + r.tenantName, startedAt: Date.now() });
         var baseNotes = "חיוב ביטוח מבנה " + year + (r.isPartialPeriod ? " (תקופה חלקית: " + r.daysInPolicy + "/" + r.policyDays + " ימים)" : "");
+        var v = applyVat(r.charge, vatMap[r.contractId] === "taxable", vatPct);
         var ex = byContract[r.contractId];
         if (ex) {
           await supabase.from("charges").update({
-            base_amount: r.charge, vat_amount: 0, total_amount: r.charge,
+            base_amount: v.base, vat_amount: v.vat, total_amount: v.total, vat_type: v.vatType,
             notes: baseNotes + " [מתוקן " + today + "]",
           }).eq("id", ex.id);
-          await logAudit({ entity_type: "charge", entity_id: ex.id, action: "fix_ins_charge", notes: "סכום מעודכן " + r.charge });
+          await logAudit({ entity_type: "charge", entity_id: ex.id, action: "fix_ins_charge", notes: "סכום מעודכן " + v.total });
           updated++;
         } else {
           await supabase.from("charges").insert({
             contract_id: r.contractId, charge_type: "insurance",
-            base_amount: r.charge, vat_amount: 0, total_amount: r.charge,
-            vat_type: "exempt", billing_period_start: year + "-01-01",
+            base_amount: v.base, vat_amount: v.vat, total_amount: v.total,
+            vat_type: v.vatType, billing_period_start: year + "-01-01",
             billing_period_end: year + "-12-31", due_date: dueDateStr,
             status: "pending", notes: baseNotes,
           });
@@ -2107,25 +2114,28 @@ function WasteTab({ properties }: { properties: any[] }) {
       var graceDays = await getGraceDaysForProperty(propId);
       var dueDateStr = dueDateFromGrace(graceDays);
       var today = new Date().toLocaleDateString("he-IL");
+      var vatPct = await getVatPct();
+      var vatMap = await getVatTypeMap(billable.map(function(r:any){ return r.contractId; }));
       var wIdx = 0;
       for (const r of results) {
         wIdx++;
         setProgress({ current: wIdx, total: results.length, label: (willFix ? "מתקן: " : "מעבד: ") + (r.spaces || r.contractId), startedAt: Date.now() });
         if (r.charge < 0.01) continue;
         const baseNotes = "חיוב פינוי אשפה " + (period === "annual" ? year : period + " " + year);
+        const v = applyVat(r.charge, vatMap[r.contractId] === "taxable", vatPct);
         const ex = byContract[r.contractId];
         if (ex) {
           await supabase.from("charges").update({
-            base_amount: r.charge, vat_amount: 0, total_amount: r.charge,
+            base_amount: v.base, vat_amount: v.vat, total_amount: v.total, vat_type: v.vatType,
             notes: baseNotes + " [מתוקן " + today + "]",
           }).eq("id", ex.id);
-          await logAudit({ entity_type: "charge", entity_id: ex.id, action: "fix_waste_charge", notes: "סכום מעודכן " + r.charge });
+          await logAudit({ entity_type: "charge", entity_id: ex.id, action: "fix_waste_charge", notes: "סכום מעודכן " + v.total });
           updated++;
         } else {
           await supabase.from("charges").insert({
             contract_id: r.contractId, charge_type: "waste",
-            base_amount: r.charge, vat_amount: 0, total_amount: r.charge,
-            vat_type: "exempt", billing_period_start: dates.start,
+            base_amount: v.base, vat_amount: v.vat, total_amount: v.total,
+            vat_type: v.vatType, billing_period_start: dates.start,
             billing_period_end: dates.end, due_date: dueDateStr,
             status: "pending", notes: baseNotes,
           });

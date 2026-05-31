@@ -4,6 +4,7 @@ import { supabase } from "@/lib/supabase";
 import { logAudit } from "@/lib/audit-log";
 import { fetchCpiAdjusted, fetchHighestChainedCpi, fetchCpiAdjustedWithRetry, fetchHighestChainedCpiWithRetry } from "@/lib/cpi-server";
 import { getGraceDaysForProperty, dueDateFromGrace } from "@/lib/grace-days";
+import { getVatPct, getVatTypeMap, applyVat } from "@/lib/vat";
 import CalcProgress, { CalcProgressState } from "./CalcProgress";
 import { tierAppliesAtYear, buildSpaceRentSchedule, rentAtDate } from "@/lib/contract-utils";
 
@@ -729,26 +730,28 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
       var graceDays = await getGraceDaysForProperty(propId);
       var dueDateStr = dueDateFromGrace(graceDays);
       var today = new Date().toLocaleDateString("he-IL");
+      var vatPct = await getVatPct();
+      var vatMap = await getVatTypeMap(withDiff.map(function(r:any){ return r.contractId; }));
       for (var r of results) {
         if (Math.abs(r.totalDifference) < 1) continue;
         idx++;
         setProgress({ current: idx, total: withDiff.length, label: (willFix ? "מתקן — " : "יוצר חיוב — ") + r.tenantName, startedAt: chargeStart });
-        var signed = r.totalDifference;
         var baseSigned = r.totalDifference > 0 ? r.totalDifference : -Math.abs(r.totalDifference);
+        var v = applyVat(baseSigned, vatMap[r.contractId] === "taxable", vatPct);
         var baseNotes = "הפרשי הצמדה שכ\"ד שנת " + year + (r.totalDifference > 0 ? " — לחיוב" : " — לזיכוי");
         var ex = byContract[r.contractId];
         if (ex) {
           await supabase.from("charges").update({
-            base_amount: baseSigned, vat_amount: 0, total_amount: signed,
+            base_amount: v.base, vat_amount: v.vat, total_amount: v.total, vat_type: v.vatType,
             notes: baseNotes + " [מתוקן " + today + "]",
           }).eq("id", ex.id);
-          await logAudit({ entity_type: "charge", entity_id: ex.id, action: "fix_cpi_diff_charge", notes: "סכום מעודכן " + signed });
+          await logAudit({ entity_type: "charge", entity_id: ex.id, action: "fix_cpi_diff_charge", notes: "סכום מעודכן " + v.total });
           updated++;
         } else {
           await supabase.from("charges").insert({
             contract_id: r.contractId, charge_type: "cpi_diff",
-            base_amount: baseSigned, vat_amount: 0, total_amount: signed,
-            vat_type: "exempt", billing_period_start: year + "-01-01",
+            base_amount: v.base, vat_amount: v.vat, total_amount: v.total,
+            vat_type: v.vatType, billing_period_start: year + "-01-01",
             billing_period_end: year + "-12-31", due_date: dueDateStr,
             status: "pending", notes: baseNotes,
           });
