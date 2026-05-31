@@ -135,6 +135,7 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
   const [progress, setProgress] = useState<CalcProgressState | null>(null);
   // Management charges already created for this property + year.
   const [existingMgmtCharges, setExistingMgmtCharges] = useState<any[]>([]);
+  const [existingMgmtLetters, setExistingMgmtLetters] = useState<any[]>([]);
 
   const selProp = allProperties.find(function (p) { return p.id === propId; });
   const totalArea = selProp?.total_area ?? 0;
@@ -176,12 +177,19 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
     } catch (e) { /* non-fatal */ }
   }
   async function loadExistingMgmtCharges() {
-    if (!propId) { setExistingMgmtCharges([]); return; }
-    const { data } = await supabase.from("charges")
-      .select("id, total_amount, status, contract_id, notes, contracts(property_id, tenants(name))")
-      .eq("charge_type", "management")
-      .eq("billing_period_start", year + "-01-01");
-    setExistingMgmtCharges((data ?? []).filter(function(x:any){ return x.contracts?.property_id === propId; }));
+    if (!propId) { setExistingMgmtCharges([]); setExistingMgmtLetters([]); return; }
+    const [{ data: ch }, { data: lt }] = await Promise.all([
+      supabase.from("charges")
+        .select("id, total_amount, status, contract_id, notes, contracts(property_id, tenants(name))")
+        .eq("charge_type", "management")
+        .eq("billing_period_start", year + "-01-01"),
+      supabase.from("letters")
+        .select("id, title, subject, contract_id, contracts(property_id)")
+        .eq("letter_type", "demand")
+        .or("subject.ilike.%דמי ניהול " + year + "%,title.ilike.%דמי ניהול " + year + "%"),
+    ]);
+    setExistingMgmtCharges((ch ?? []).filter(function(x:any){ return x.contracts?.property_id === propId; }));
+    setExistingMgmtLetters((lt ?? []).filter(function(x:any){ return x.contracts?.property_id === propId; }));
   }
 
   async function loadMgmtGroups() {
@@ -370,41 +378,57 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
     finally { setComputing(false); setProgress(null); }
   }
 
+  // Create OR fix management-reconciliation charges (update existing for the
+  // same contract+year, insert for new tenants).
   async function createCharges() {
     if (mgmtResults.length === 0) return;
+    var billable = mgmtResults.filter(function(r){ return Math.abs(r.difference) >= 0.01 && !r.isRevenueBased; });
+    var byContract: Record<string, any> = {};
+    existingMgmtCharges.forEach(function(c:any){ byContract[c.contract_id] = c; });
+    var willFix = billable.filter(function(r){ return byContract[r.contractId]; }).length;
+    if (willFix > 0) {
+      if (!confirm("נמצאו " + willFix + " חיובי דמי ניהול קיימים לשנת " + year + ".\nלתקן אותם לפי החישוב הנוכחי? (הסכומים יעודכנו ויסומנו כמתוקנים; לשוכרים ללא חיוב ייווצר חדש)")) return;
+    }
     setCreatingCharges(true);
-    setProgress({ current: 0, total: mgmtResults.length, label: "יוצר חיובי דמי ניהול...", startedAt: Date.now() });
+    setProgress({ current: 0, total: mgmtResults.length, label: willFix ? "מתקן חיובי דמי ניהול..." : "יוצר חיובי דמי ניהול...", startedAt: Date.now() });
     try {
-      let count = 0;
+      let updated = 0, created = 0;
       let skippedRevenue = 0;
       var graceDays = await getGraceDaysForProperty(propId);
       var dueDateStr = dueDateFromGrace(graceDays);
+      var today = new Date().toLocaleDateString("he-IL");
       var mIdx = 0;
       for (const r of mgmtResults) {
         mIdx++;
-        setProgress({ current: mIdx, total: mgmtResults.length, label: "מעבד: " + r.tenantName, startedAt: Date.now() });
+        setProgress({ current: mIdx, total: mgmtResults.length, label: (willFix ? "מתקן: " : "מעבד: ") + r.tenantName, startedAt: Date.now() });
         if (Math.abs(r.difference) < 0.01) continue;
         // Revenue-% tenants: skip — their mgmt is part of the % rent on the
         // revenue page, not a separate charge.
         if (r.isRevenueBased) { skippedRevenue++; continue; }
         const base = Math.abs(r.difference);
-        await supabase.from("charges").insert({
-          contract_id: r.contractId,
-          charge_type: "management",
-          base_amount: r.difference > 0 ? base : -base,
-          vat_amount: 0,
-          total_amount: r.difference > 0 ? base : -base,
-          vat_type: "exempt",
-          billing_period_start: year + "-01-01",
-          billing_period_end: year + "-12-31",
-          due_date: dueDateStr,
-          status: "pending",
-          notes: "התחשבנות דמי ניהול " + year + (r.difference > 0 ? " — לחיוב" : " — לזיכוי"),
-        });
-        count++;
+        const signed = r.difference > 0 ? base : -base;
+        const baseNotes = "התחשבנות דמי ניהול " + year + (r.difference > 0 ? " — לחיוב" : " — לזיכוי");
+        const ex = byContract[r.contractId];
+        if (ex) {
+          await supabase.from("charges").update({
+            base_amount: signed, vat_amount: 0, total_amount: signed,
+            notes: baseNotes + " [מתוקן " + today + "]",
+          }).eq("id", ex.id);
+          await logAudit({ entity_type: "charge", entity_id: ex.id, action: "fix_mgmt_charge", notes: "סכום מעודכן " + signed });
+          updated++;
+        } else {
+          await supabase.from("charges").insert({
+            contract_id: r.contractId, charge_type: "management",
+            base_amount: signed, vat_amount: 0, total_amount: signed,
+            vat_type: "exempt", billing_period_start: year + "-01-01",
+            billing_period_end: year + "-12-31", due_date: dueDateStr,
+            status: "pending", notes: baseNotes,
+          });
+          created++;
+        }
       }
-      await logAudit({ entity_type: "billing", entity_id: propId, action: "create_mgmt_charges", notes: count + " חיובים" + (skippedRevenue ? " (דולג " + skippedRevenue + " % פידיון)" : "") });
-      var msg = "✅ נוצרו " + count + " חיובים";
+      await logAudit({ entity_type: "billing", entity_id: propId, action: willFix ? "fix_mgmt_charges" : "create_mgmt_charges", notes: "עודכנו " + updated + ", נוצרו " + created + (skippedRevenue ? " (דולג " + skippedRevenue + " % פידיון)" : "") });
+      var msg = willFix ? ("✅ תוקנו " + updated + " חיובים" + (created ? ", נוצרו " + created + " חדשים" : "")) : ("✅ נוצרו " + created + " חיובים");
       if (skippedRevenue > 0) msg += "\nדולגו " + skippedRevenue + " שוכרי % פידיון (דמי הניהול כלולים בשכ\"ד המחזור)";
       await saveActualInputs();
       await loadExistingMgmtCharges();
@@ -413,38 +437,56 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
     finally { setCreatingCharges(false); setProgress(null); }
   }
 
+  // Create OR fix management letters (update existing → "מכתב מתוקן", insert new).
   async function createLetters() {
     if (mgmtResults.length === 0) return;
+    var billableL = mgmtResults.filter(function(r){ return Math.abs(r.difference) >= 0.01 && !r.isRevenueBased; });
+    var byContractL: Record<string, any> = {};
+    existingMgmtLetters.forEach(function(l:any){ byContractL[l.contract_id] = l; });
+    var willFix = billableL.filter(function(r){ return byContractL[r.contractId]; }).length;
+    if (willFix > 0) {
+      if (!confirm("נמצאו " + willFix + " מכתבי דמי ניהול קיימים לשנת " + year + ".\nלתקן אותם? התוכן יעודכן והם יסומנו כ\"מכתב מתוקן\".")) return;
+    }
     setCreatingLetters(true);
-    setProgress({ current: 0, total: mgmtResults.length, label: "יוצר מכתבי דמי ניהול...", startedAt: Date.now() });
+    setProgress({ current: 0, total: mgmtResults.length, label: willFix ? "מתקן מכתבי דמי ניהול..." : "יוצר מכתבי דמי ניהול...", startedAt: Date.now() });
     try {
-      let count = 0;
+      let updated = 0, created = 0;
       let skippedRevenue = 0;
+      var today = new Date().toLocaleDateString("he-IL");
       var lmIdx = 0;
       for (const r of mgmtResults) {
         lmIdx++;
-        setProgress({ current: lmIdx, total: mgmtResults.length, label: "מכתב: " + r.tenantName, startedAt: Date.now() });
+        setProgress({ current: lmIdx, total: mgmtResults.length, label: (willFix ? "מתקן מכתב: " : "מכתב: ") + r.tenantName, startedAt: Date.now() });
         if (Math.abs(r.difference) < 0.01) continue;
         if (r.isRevenueBased) { skippedRevenue++; continue; }
-        const subject = r.difference > 0
-          ? "השלמת הפרש דמי ניהול " + year
-          : "החזר דמי ניהול " + year;
+        const baseSubject = (r.difference > 0 ? "השלמת הפרש דמי ניהול " : "החזר דמי ניהול ") + year;
         const body = "שוכר/ת נכבד/ה,\n\nלאחר ביצוע התחשבנות דמי ניהול לשנת " + year + ":\n" +
           "מקדמה: " + fmtMoney(r.advance) + "\n" +
           "חלק בפועל: " + fmtMoney(r.actualShare) + "\n" +
           "הפרש: " + fmtMoney(r.difference) + "\n\nבברכה,\nהנהלת הנכס";
-        await supabase.from("letters").insert({
-          contract_id: r.contractId,
-          letter_type: "demand",
-          subject,
-          body,
-          status: "draft",
-        });
-        count++;
+        const exL = byContractL[r.contractId];
+        if (exL) {
+          const fixedTitle = "מכתב מתוקן — " + baseSubject;
+          await supabase.from("letters").update({
+            title: fixedTitle, subject: fixedTitle,
+            content_json: { body: body + "\n\n[מכתב מתוקן בתאריך " + today + "]", corrected: true, correctedAt: today },
+            body: body, status: "draft",
+          }).eq("id", exL.id);
+          await logAudit({ entity_type: "letter", entity_id: exL.id, action: "fix_mgmt_letter" });
+          updated++;
+        } else {
+          await supabase.from("letters").insert({
+            contract_id: r.contractId, letter_type: "demand",
+            title: baseSubject, subject: baseSubject,
+            content_json: { body: body }, body: body, status: "draft",
+          });
+          created++;
+        }
       }
-      await logAudit({ entity_type: "billing", entity_id: propId, action: "create_mgmt_letters", notes: count + " מכתבים" + (skippedRevenue ? " (דולג " + skippedRevenue + " % פידיון)" : "") });
-      var msg2 = "✅ נוצרו " + count + " מכתבים";
+      await logAudit({ entity_type: "billing", entity_id: propId, action: willFix ? "fix_mgmt_letters" : "create_mgmt_letters", notes: "עודכנו " + updated + ", נוצרו " + created + (skippedRevenue ? " (דולג " + skippedRevenue + " % פידיון)" : "") });
+      var msg2 = willFix ? ("✅ תוקנו " + updated + " מכתבים" + (created ? ", נוצרו " + created + " חדשים" : "") + " — סומנו כ\"מכתב מתוקן\"") : ("✅ נוצרו " + created + " מכתבים");
       if (skippedRevenue > 0) msg2 += "\nדולגו " + skippedRevenue + " שוכרי % פידיון";
+      await loadExistingMgmtCharges();
       alert(msg2);
     } catch (e: any) { alert("שגיאה: " + e?.message); }
     finally { setCreatingLetters(false); setProgress(null); }
@@ -785,16 +827,17 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
               </div>
             </div>
 
+            {progress && <div className="mt-4"><CalcProgress {...progress} /></div>}
             <div className="flex gap-3 mt-4">
               <button onClick={createCharges} disabled={creatingCharges || billableCount === 0}
-                title={billableCount === 0 ? "אין הפרשים לחיוב" : "מוסיף " + billableCount + " שורות חיוב לטבלת charges"}
-                className="rounded-lg bg-blue-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-blue-800 disabled:opacity-50">
-                {creatingCharges ? "יוצר..." : "צור " + billableCount + " חיובים"}
+                title={billableCount === 0 ? "אין הפרשים לחיוב" : (existingMgmtCharges.length > 0 ? "מעדכן את החיובים הקיימים לפי החישוב הנוכחי (מסמן כמתוקנים) ומוסיף לשוכרים חדשים" : "מוסיף " + billableCount + " שורות חיוב לטבלת charges")}
+                className={"rounded-lg px-5 py-2.5 text-sm font-bold text-white disabled:opacity-50 " + (existingMgmtCharges.length > 0 ? "bg-amber-600 hover:bg-amber-700" : "bg-blue-700 hover:bg-blue-800")}>
+                {creatingCharges ? "שומר..." : existingMgmtCharges.length > 0 ? ("🔧 תקן חיובים (" + existingMgmtCharges.length + ")") : "צור " + billableCount + " חיובים"}
               </button>
               <button onClick={createLetters} disabled={creatingLetters || billableCount === 0}
-                title={billableCount === 0 ? "אין הפרשים למכתב" : "יוצר " + billableCount + " טיוטות מכתבי דרישה/החזר"}
-                className="rounded-lg border border-blue-200 bg-blue-50 px-5 py-2.5 text-sm font-bold text-blue-700 hover:bg-blue-100 disabled:opacity-50">
-                {creatingLetters ? "יוצר..." : "צור " + billableCount + " מכתבים"}
+                title={billableCount === 0 ? "אין הפרשים למכתב" : (existingMgmtLetters.length > 0 ? "מעדכן את המכתבים הקיימים ומסמן אותם כ'מכתב מתוקן'" : "יוצר " + billableCount + " טיוטות מכתבי דרישה/החזר")}
+                className={"rounded-lg border px-5 py-2.5 text-sm font-bold disabled:opacity-50 " + (existingMgmtLetters.length > 0 ? "border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100" : "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100")}>
+                {creatingLetters ? "שומר..." : existingMgmtLetters.length > 0 ? ("🔧 תקן מכתבים (" + existingMgmtLetters.length + ")") : "צור " + billableCount + " מכתבים"}
               </button>
             </div>
           </div>
