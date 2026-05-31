@@ -35,6 +35,7 @@ export default function LettersPage() {
   const [filterYear,   setFilterYear]   = useState<string>("");
   const [filterType,   setFilterType]   = useState<string>("");
   const [filterProp,   setFilterProp]   = useState<string>("");
+  const [filterStatus, setFilterStatus] = useState<string>("");
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
 
   function toggleGroup(key: string) {
@@ -45,7 +46,7 @@ export default function LettersPage() {
 
   async function loadAll() {
     const [{ data: l }, { data: c }, { data: t }] = await Promise.all([
-      supabase.from("letters").select("*, contracts(tenants(name),properties(id,name))").order("created_at",{ascending:false}),
+      supabase.from("letters").select("*, contracts(tenants(name,primary_email,contact_email,contact_name),properties(id,name))").order("created_at",{ascending:false}),
       supabase.from("contracts").select("id,tenants(name,contact_name),properties(name,address)").in("status",["active","expiring","extended"]),
       supabase.from("document_templates").select("*").eq("is_active",true).order("name"),
     ]);
@@ -322,10 +323,32 @@ export default function LettersPage() {
 
   const typeInfo = function(v: string) { return LETTER_TYPES.find(function(t){return t.v===v;})??LETTER_TYPES[4]; };
 
+  function recipientEmail(l: any): string {
+    return l.contracts?.tenants?.primary_email || l.contracts?.tenants?.contact_email || "";
+  }
+
+  // Record that a letter was sent — to whom and when (visible in the list).
+  async function markSent(l: any, to: string) {
+    try {
+      await supabase.from("letters").update({ status: "sent", sent_at: new Date().toISOString(), sent_to: to || null }).eq("id", l.id);
+      await logAudit({ entity_type: "letter", entity_id: l.id, action: "sent", notes: to || "" });
+      await loadAll();
+    } catch (e: any) { /* non-fatal */ }
+  }
+  async function markSentManual(l: any) {
+    var to = recipientEmail(l) || (l.contracts?.tenants?.name || "");
+    if (!confirm("לסמן את המכתב כנשלח אל " + (to || "השוכר") + "?")) return;
+    await markSent(l, recipientEmail(l));
+  }
+  async function unmarkSent(l: any) {
+    await supabase.from("letters").update({ status: "draft", sent_at: null, sent_to: null }).eq("id", l.id);
+    await loadAll();
+  }
+
   function handleEmail(l: any) {
     var title = l.title || l.subject || "מכתב";
     var tenant = l.contracts?.tenants?.name || "";
-    var email = l.contracts?.tenants?.primary_email || "";
+    var email = recipientEmail(l);
     var subject = encodeURIComponent(title);
     var emailBody = encodeURIComponent(
       "שלום " + tenant + ",\n\n" +
@@ -335,6 +358,8 @@ export default function LettersPage() {
       "הנהלת הנכס"
     );
     window.open("mailto:" + email + "?subject=" + subject + "&body=" + emailBody, "_self");
+    // Record the send (recipient + timestamp) so it's traceable in the list.
+    markSent(l, email);
   }
 
   return (
@@ -369,6 +394,10 @@ export default function LettersPage() {
           var pid = l.property_id || l.contracts?.properties?.id || "";
           var pname = l.contracts?.properties?.name || "ללא נכס";
           if (filterProp && (pid || pname) !== filterProp) return false;
+          if (filterStatus) {
+            var st = l.status === "sent" ? "sent" : "draft";
+            if (st !== filterStatus) return false;
+          }
           if (search) {
             var q = search.toLowerCase();
             var hay = ((l.title || "") + " " + (l.contracts?.tenants?.name || "") + " " + (l.contracts?.properties?.name || "")).toLowerCase();
@@ -413,8 +442,13 @@ export default function LettersPage() {
                 <option value="">🏢 נכס: הכל</option>
                 {Object.keys(allProps).map(function(k){ return <option key={k} value={k}>{allProps[k]}</option>; })}
               </select>
-              {(search||filterYear||filterType||filterProp) && (
-                <button onClick={function(){setSearch("");setFilterYear("");setFilterType("");setFilterProp("");}} className="text-xs text-slate-500 hover:text-slate-700 px-2 py-1 border border-slate-200 rounded">✕ נקה</button>
+              <select value={filterStatus} onChange={function(e){setFilterStatus(e.target.value);}} className={ic + " w-36"}>
+                <option value="">✉️ סטטוס: הכל</option>
+                <option value="draft">טיוטה</option>
+                <option value="sent">נשלח</option>
+              </select>
+              {(search||filterYear||filterType||filterProp||filterStatus) && (
+                <button onClick={function(){setSearch("");setFilterYear("");setFilterType("");setFilterProp("");setFilterStatus("");}} className="text-xs text-slate-500 hover:text-slate-700 px-2 py-1 border border-slate-200 rounded">✕ נקה</button>
               )}
               <div className="text-xs text-slate-500 mr-auto">
                 {filtered.length} מתוך {letters.length}
@@ -447,19 +481,36 @@ export default function LettersPage() {
                           <tbody>
                             {g.items.map(function(l: any) {
                               const ti = typeInfo(l.letter_type);
+                              const isSent = l.status === "sent";
+                              const recEmail = recipientEmail(l);
                               return (
                                 <tr key={l.id} className="border-t border-slate-100 hover:bg-slate-50">
                                   <td className="px-4 py-2.5 w-10 text-base">{ti.icon}</td>
                                   <td className="px-2 py-2.5">
                                     <div className="font-semibold text-slate-800">{l.title || "—"}</div>
-                                    <div className="text-xs text-slate-500">{l.contracts?.tenants?.name}</div>
+                                    <div className="text-xs text-slate-500">
+                                      אל: {l.contracts?.tenants?.name || "—"}{recEmail ? " · " + recEmail : ""}
+                                    </div>
                                   </td>
-                                  <td className="px-2 py-2.5 text-xs text-slate-500 whitespace-nowrap w-24">{fmtDate(l.created_at)}</td>
-                                  <td className="px-4 py-2.5 w-44">
-                                    <div className="flex gap-1 justify-end">
-                                      <button onClick={function(){setPreview(l);}} className="text-xs border border-slate-200 rounded px-2 py-1 text-slate-600 hover:bg-slate-50" title="תצוגה">👁</button>
-                                      <button onClick={function(){handlePrint(l);}} className="text-xs border border-blue-200 rounded px-2 py-1 text-blue-600 hover:bg-blue-50" title="הדפסה">🖨</button>
-                                      <button onClick={function(){handleEmail(l);}} className="text-xs border border-green-200 rounded px-2 py-1 text-green-600 hover:bg-green-50" title="אימייל">📧</button>
+                                  <td className="px-2 py-2.5 w-32">
+                                    {isSent ? (
+                                      <div className="text-[11px]">
+                                        <span className="bg-green-100 text-green-700 rounded-full px-2 py-0.5 font-semibold">✓ נשלח</span>
+                                        <div className="text-slate-400 mt-0.5">{fmtDate(l.sent_at)}{l.sent_to ? " · " + l.sent_to : ""}</div>
+                                      </div>
+                                    ) : (
+                                      <span className="text-[11px] bg-slate-100 text-slate-500 rounded-full px-2 py-0.5">טיוטה</span>
+                                    )}
+                                  </td>
+                                  <td className="px-2 py-2.5 text-xs text-slate-400 whitespace-nowrap w-20">{fmtDate(l.created_at)}</td>
+                                  <td className="px-4 py-2.5 w-52">
+                                    <div className="flex gap-1 justify-end flex-wrap">
+                                      <button onClick={function(){setPreview(l);}} className="text-xs border border-slate-200 rounded px-2 py-1 text-slate-600 hover:bg-slate-50" title="תצוגה מקדימה">👁</button>
+                                      <button onClick={function(){handlePrint(l);}} className="text-xs border border-blue-200 rounded px-2 py-1 text-blue-600 hover:bg-blue-50" title="הדפסה / PDF">🖨</button>
+                                      <button onClick={function(){handleEmail(l);}} className="text-xs border border-green-200 rounded px-2 py-1 text-green-600 hover:bg-green-50" title="שלח במייל (מסמן כנשלח)">📧</button>
+                                      {isSent
+                                        ? <button onClick={function(){unmarkSent(l);}} className="text-xs border border-slate-200 rounded px-2 py-1 text-slate-500 hover:bg-slate-50" title="החזר לטיוטה">↩</button>
+                                        : <button onClick={function(){markSentManual(l);}} className="text-xs border border-emerald-200 rounded px-2 py-1 text-emerald-600 hover:bg-emerald-50" title="סמן כנשלח (אם נשלח בדואר/ידנית)">✓ נשלח</button>}
                                       <button onClick={function(){deleteLetter(l.id);}} className="text-xs border border-red-100 rounded px-2 py-1 text-red-400 hover:bg-red-50" title="מחק">🗑</button>
                                     </div>
                                   </td>
