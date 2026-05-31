@@ -71,7 +71,7 @@ export default function UnitsPage() {
       supabase.from("spaces").select("*, properties(name, total_area)"),
       supabase
         .from("contract_spaces")
-        .select("space_id, contracts(id, status, is_amendment, parent_contract_id, amendment_number, start_date, end_date, tenants(name, contact_phone, contact_email), rent_per_sqm, charged_area)"),
+        .select("space_id, contracts(id, status, is_amendment, parent_contract_id, amendment_number, amendment_date, start_date, end_date, tenants(name, contact_phone, contact_email), rent_per_sqm, charged_area)"),
     ]);
 
     const today = new Date();
@@ -104,9 +104,15 @@ export default function UnitsPage() {
     Object.keys(families).forEach((fid) => {
       const snaps = families[fid];
       const baseEntry = snaps.find((s) => !s.contract.is_amendment) || snaps[0];
-      const latest = snaps.slice().sort(function (a, b) {
-        return (a.contract.amendment_number || 0) - (b.contract.amendment_number || 0);
-      })[snaps.length - 1];
+      // "Latest" snapshot = the one that took effect last. Rank by effective
+      // date (amendment_date, else start_date) and break ties by amendment_number.
+      const rank = function (e: any): number {
+        const c = e.contract;
+        const dt = c.amendment_date || c.start_date;
+        const t = dt ? new Date(dt).getTime() : 0;
+        return t * 1000 + (c.amendment_number || 0);
+      };
+      const latest = snaps.slice().sort(function (a, b) { return rank(a) - rank(b); })[snaps.length - 1];
       const holder = baseEntry.contract;
       const holderActive = holder.status === "active" || holder.status === "upcoming";
       latest.spaceIds.forEach((sid) => {
