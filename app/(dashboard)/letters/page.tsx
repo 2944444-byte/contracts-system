@@ -494,7 +494,14 @@ export default function LettersPage() {
                                 <tr key={l.id} className="border-t border-slate-100 hover:bg-slate-50">
                                   <td className="px-4 py-2.5 w-10 text-base">{ti.icon}</td>
                                   <td className="px-2 py-2.5">
-                                    <div className="font-semibold text-slate-800">{l.title || "—"}</div>
+                                    <div className="font-semibold text-slate-800 flex items-center gap-1.5">
+                                      {l.title || "—"}
+                                      {(function(){
+                                        var cj = l.content_json; if (typeof cj === "string") { try { cj = JSON.parse(cj); } catch(e){ cj = null; } }
+                                        var corrected = (cj && cj.corrected) || (l.title || "").indexOf("מתוקן") !== -1;
+                                        return corrected ? <span className="text-[10px] bg-amber-100 text-amber-700 rounded-full px-1.5 py-0.5 font-semibold">🔧 מתוקן</span> : null;
+                                      })()}
+                                    </div>
                                     <div className="text-xs text-slate-500">
                                       אל: {l.contracts?.tenants?.name || "—"}{recEmail ? " · " + recEmail : ""}
                                     </div>

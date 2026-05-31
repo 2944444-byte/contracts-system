@@ -739,6 +739,7 @@ function InsuranceTab({ properties }: { properties: any[] }) {
   // Insurance charges already created for this property + year (so the manager
   // can see what was billed and avoid duplicating it).
   const [existingCharges, setExistingCharges] = useState<any[]>([]);
+  const [existingLetters, setExistingLetters] = useState<any[]>([]);
   // Detected data issues to surface in the UI (e.g. a space assigned to two
   // active contracts simultaneously). Cleared on each compute().
   const [warnings, setWarnings] = useState<string[]>([]);
@@ -799,13 +800,19 @@ function InsuranceTab({ properties }: { properties: any[] }) {
   }
 
   async function loadExistingCharges() {
-    if (!propId) { setExistingCharges([]); return; }
-    const { data } = await supabase.from("charges")
-      .select("id, total_amount, status, created_at, notes, contract_id, contracts(property_id, tenants(name))")
-      .eq("charge_type", "insurance")
-      .eq("billing_period_start", year + "-01-01");
-    var rows = (data ?? []).filter(function(x:any){ return x.contracts?.property_id === propId; });
-    setExistingCharges(rows);
+    if (!propId) { setExistingCharges([]); setExistingLetters([]); return; }
+    const [{ data: chData }, { data: ltData }] = await Promise.all([
+      supabase.from("charges")
+        .select("id, total_amount, status, created_at, notes, contract_id, contracts(property_id, tenants(name))")
+        .eq("charge_type", "insurance")
+        .eq("billing_period_start", year + "-01-01"),
+      supabase.from("letters")
+        .select("id, title, subject, contract_id, contracts(property_id)")
+        .eq("letter_type", "notice")
+        .or("subject.eq.חיוב ביטוח מבנה " + year + ",title.eq.חיוב ביטוח מבנה " + year + ",title.eq.מכתב מתוקן — חיוב ביטוח מבנה " + year),
+    ]);
+    setExistingCharges((chData ?? []).filter(function(x:any){ return x.contracts?.property_id === propId; }));
+    setExistingLetters((ltData ?? []).filter(function(x:any){ return x.contracts?.property_id === propId; }));
   }
 
   async function compute() {
@@ -1153,97 +1160,112 @@ function InsuranceTab({ properties }: { properties: any[] }) {
     });
   }
 
+  // Create OR fix insurance charges: update existing rows for the same
+  // contract+year (so amounts are corrected, not duplicated), and insert new
+  // ones for tenants that don't yet have a charge.
   async function createCharges() {
     if (results.length === 0) return;
-    // Duplicate guard: warn if insurance charges for this year already exist
-    // for any of these contracts (prevents creating them twice by mistake).
-    try {
-      var effForCheck = buildEffectiveResults();
-      var contractIds = effForCheck.filter(function(r:any){ return r.charge >= 0.01; }).map(function(r:any){ return r.contractId; });
-      if (contractIds.length > 0) {
-        var { data: existing } = await supabase.from("charges")
-          .select("id")
-          .eq("charge_type", "insurance")
-          .eq("billing_period_start", year + "-01-01")
-          .in("contract_id", contractIds);
-        if (existing && existing.length > 0) {
-          if (!confirm("⚠ כבר קיימים " + existing.length + " חיובי ביטוח לשנת " + year + " עבור חלק מהשוכרים.\nיצירה חוזרת תיצור חיובים כפולים.\n\nליצור בכל זאת?")) return;
-        }
-      }
-    } catch (e) { /* non-fatal — proceed */ }
+    var effective = buildEffectiveResults().filter(function(r:any){ return r.charge >= 0.01; });
+    var byContract: Record<string, any> = {};
+    existingCharges.forEach(function(c:any){ byContract[c.contract_id] = c; });
+    var willFix = effective.filter(function(r:any){ return byContract[r.contractId]; }).length;
+    if (willFix > 0) {
+      if (!confirm("נמצאו " + willFix + " חיובי ביטוח קיימים לשנת " + year + ".\nלתקן אותם לפי החישוב הנוכחי? (הסכומים יעודכנו ויסומנו כמתוקנים; לשוכרים ללא חיוב ייווצר חיוב חדש)")) return;
+    }
     setCreatingCharges(true);
     try {
-      let count = 0;
-      var effective = buildEffectiveResults();
-      // Grace days configured per-company; only "באיחור" once due_date passes.
       var graceDays = await getGraceDaysForProperty(propId);
       var dueDateStr = dueDateFromGrace(graceDays);
+      var today = new Date().toLocaleDateString("he-IL");
+      var updated = 0, created = 0;
       for (const r of effective) {
-        if (r.charge < 0.01) continue;
-        await supabase.from("charges").insert({
-          contract_id: r.contractId,
-          charge_type: "insurance",
-          base_amount: r.charge,
-          vat_amount: 0,
-          total_amount: r.charge,
-          vat_type: "exempt",
-          billing_period_start: year + "-01-01",
-          billing_period_end: year + "-12-31",
-          due_date: dueDateStr,
-          status: "pending",
-          notes: "חיוב ביטוח מבנה " + year + (r.isPartialPeriod ? " (תקופה חלקית: " + r.daysInPolicy + "/" + r.policyDays + " ימים)" : ""),
-        });
-        count++;
+        var baseNotes = "חיוב ביטוח מבנה " + year + (r.isPartialPeriod ? " (תקופה חלקית: " + r.daysInPolicy + "/" + r.policyDays + " ימים)" : "");
+        var ex = byContract[r.contractId];
+        if (ex) {
+          await supabase.from("charges").update({
+            base_amount: r.charge, vat_amount: 0, total_amount: r.charge,
+            notes: baseNotes + " [מתוקן " + today + "]",
+          }).eq("id", ex.id);
+          await logAudit({ entity_type: "charge", entity_id: ex.id, action: "fix_ins_charge", notes: "סכום מעודכן " + r.charge });
+          updated++;
+        } else {
+          await supabase.from("charges").insert({
+            contract_id: r.contractId, charge_type: "insurance",
+            base_amount: r.charge, vat_amount: 0, total_amount: r.charge,
+            vat_type: "exempt", billing_period_start: year + "-01-01",
+            billing_period_end: year + "-12-31", due_date: dueDateStr,
+            status: "pending", notes: baseNotes,
+          });
+          created++;
+        }
       }
-      await logAudit({ entity_type: "billing", entity_id: propId, action: "create_ins_charges", notes: count + " חיובים" });
+      await logAudit({ entity_type: "billing", entity_id: propId, action: willFix ? "fix_ins_charges" : "create_ins_charges", notes: "עודכנו " + updated + ", נוצרו " + created });
       await loadExistingCharges();
-      alert("✅ נוצרו " + count + " חיובים");
+      alert(willFix
+        ? ("✅ תוקנו " + updated + " חיובים" + (created ? ", נוצרו " + created + " חדשים" : ""))
+        : ("✅ נוצרו " + created + " חיובים"));
     } catch (e: any) { alert("שגיאה: " + e?.message); }
     finally { setCreatingCharges(false); }
   }
 
+  // Create OR fix insurance letters: update the existing letter for a
+  // contract+year (renaming it "מכתב מתוקן …" so it's tracked in /letters)
+  // and create new ones for tenants that don't yet have a letter.
   async function createLetters() {
     if (results.length === 0) return;
-    // Duplicate guard: warn if insurance letters for this year already exist.
-    try {
-      var effLcheck = buildEffectiveResults();
-      var lcIds = effLcheck.filter(function(r:any){ return r.charge >= 0.01; }).map(function(r:any){ return r.contractId; });
-      if (lcIds.length > 0) {
-        var { data: exL } = await supabase.from("letters")
-          .select("id")
-          .eq("subject", "חיוב ביטוח מבנה " + year)
-          .in("contract_id", lcIds);
-        if (exL && exL.length > 0) {
-          if (!confirm("⚠ כבר נוצרו " + exL.length + " מכתבי ביטוח לשנת " + year + ".\nניתן לתקן/למחוק אותם במסך מכתבים.\n\nליצור מכתבים נוספים בכל זאת?")) return;
-        }
-      }
-    } catch (e) { /* non-fatal */ }
+    var effective = buildEffectiveResults().filter(function(r:any){ return r.charge >= 0.01; });
+    var byContract: Record<string, any> = {};
+    existingLetters.forEach(function(l:any){ byContract[l.contract_id] = l; });
+    var willFix = effective.filter(function(r:any){ return byContract[r.contractId]; }).length;
+    if (willFix > 0) {
+      if (!confirm("נמצאו " + willFix + " מכתבי ביטוח קיימים לשנת " + year + ".\nלתקן אותם? התוכן יעודכן והם יסומנו כ\"מכתב מתוקן\" במסך מכתבים.")) return;
+    }
     setCreatingLetters(true);
     try {
-      let count = 0;
-      var effective = buildEffectiveResults();
+      var today = new Date().toLocaleDateString("he-IL");
+      var updated = 0, created = 0;
       for (const r of effective) {
-        if (r.charge < 0.01) continue;
         var periodLine = r.isPartialPeriod
           ? "תקופת חיוב: " + r.daysInPolicy + " מתוך " + r.policyDays + " ימים\n"
           : "";
         var areaLine = r.areaRange
           ? "שטח (השתנה במהלך השנה): " + r.areaRange + " מ\"ר\n"
           : "שטח: " + r.area.toLocaleString("he-IL") + " מ\"ר\n";
-        await supabase.from("letters").insert({
-          contract_id: r.contractId,
-          letter_type: "notice",
-          subject: "חיוב ביטוח מבנה " + year,
-          body: "שוכר/ת נכבד/ה,\n\nלהלן חיוב ביטוח מבנה לשנת " + year + ":\n" +
-            areaLine + periodLine +
-            "חלק יחסי: " + r.pct.toFixed(2) + "%\n" +
-            "חיוב: " + fmtMoney(r.charge) + "\n\nבברכה,\nהנהלת הנכס",
-          status: "draft",
-        });
-        count++;
+        var body = "שוכר/ת נכבד/ה,\n\nלהלן חיוב ביטוח מבנה לשנת " + year + ":\n" +
+          areaLine + periodLine +
+          "חלק יחסי: " + r.pct.toFixed(2) + "%\n" +
+          "חיוב: " + fmtMoney(r.charge) + "\n\nבברכה,\nהנהלת הנכס";
+        var ex = byContract[r.contractId];
+        if (ex) {
+          var fixedTitle = "מכתב מתוקן — חיוב ביטוח מבנה " + year;
+          await supabase.from("letters").update({
+            title: fixedTitle,
+            subject: fixedTitle,
+            content_json: { body: body + "\n\n[מכתב מתוקן בתאריך " + today + "]", corrected: true, correctedAt: today },
+            body: body,
+            status: "draft",
+          }).eq("id", ex.id);
+          await logAudit({ entity_type: "letter", entity_id: ex.id, action: "fix_ins_letter" });
+          updated++;
+        } else {
+          var origTitle = "חיוב ביטוח מבנה " + year;
+          await supabase.from("letters").insert({
+            contract_id: r.contractId,
+            letter_type: "notice",
+            title: origTitle,
+            subject: origTitle,
+            content_json: { body: body },
+            body: body,
+            status: "draft",
+          });
+          created++;
+        }
       }
-      await logAudit({ entity_type: "billing", entity_id: propId, action: "create_ins_letters", notes: count + " מכתבים" });
-      alert("✅ נוצרו " + count + " מכתבים");
+      await logAudit({ entity_type: "billing", entity_id: propId, action: willFix ? "fix_ins_letters" : "create_ins_letters", notes: "עודכנו " + updated + ", נוצרו " + created });
+      await loadExistingCharges();
+      alert(willFix
+        ? ("✅ תוקנו " + updated + " מכתבים" + (created ? ", נוצרו " + created + " חדשים" : "") + " — סומנו כ\"מכתב מתוקן\" במסך מכתבים")
+        : ("✅ נוצרו " + created + " מכתבים"));
     } catch (e: any) { alert("שגיאה: " + e?.message); }
     finally { setCreatingLetters(false); }
   }
@@ -1562,14 +1584,14 @@ function InsuranceTab({ properties }: { properties: any[] }) {
 
             <div className="flex gap-3 mt-4">
               <button onClick={createCharges} disabled={creatingCharges || results.length === 0 || overBilled}
-                title={overBilled ? "לא ניתן ליצור חיובים כאשר סך החלקים עולה על 100% — תקן את הכפילות בנתוני החוזים" : "מוסיף שורת חיוב ביטוח לטבלת charges לכל שוכר"}
-                className="rounded-lg bg-blue-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-blue-800 disabled:opacity-50">
-                {creatingCharges ? "יוצר..." : "צור חיובים"}
+                title={overBilled ? "לא ניתן ליצור חיובים כאשר סך החלקים עולה על 100% — תקן את הכפילות בנתוני החוזים" : (existingCharges.length > 0 ? "מעדכן את החיובים הקיימים לפי החישוב הנוכחי (מסמן כמתוקנים) ומוסיף לשוכרים חדשים" : "מוסיף שורת חיוב ביטוח לטבלת charges לכל שוכר")}
+                className={"rounded-lg px-5 py-2.5 text-sm font-bold text-white disabled:opacity-50 " + (existingCharges.length > 0 ? "bg-amber-600 hover:bg-amber-700" : "bg-blue-700 hover:bg-blue-800")}>
+                {creatingCharges ? "שומר..." : existingCharges.length > 0 ? ("🔧 תקן חיובים (" + existingCharges.length + ")") : "צור חיובים"}
               </button>
               <button onClick={createLetters} disabled={creatingLetters || results.length === 0 || overBilled}
-                title={overBilled ? "לא ניתן ליצור מכתבים כאשר סך החלקים עולה על 100%" : "יוצר טיוטות מכתבי חיוב ביטוח לשוכרים"}
-                className="rounded-lg border border-blue-200 bg-blue-50 px-5 py-2.5 text-sm font-bold text-blue-700 hover:bg-blue-100 disabled:opacity-50">
-                {creatingLetters ? "יוצר..." : "צור מכתבים"}
+                title={overBilled ? "לא ניתן ליצור מכתבים כאשר סך החלקים עולה על 100%" : (existingLetters.length > 0 ? "מעדכן את המכתבים הקיימים ומסמן אותם כ'מכתב מתוקן'" : "יוצר טיוטות מכתבי חיוב ביטוח לשוכרים")}
+                className={"rounded-lg border px-5 py-2.5 text-sm font-bold disabled:opacity-50 " + (existingLetters.length > 0 ? "border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100" : "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100")}>
+                {creatingLetters ? "שומר..." : existingLetters.length > 0 ? ("🔧 תקן מכתבים (" + existingLetters.length + ")") : "צור מכתבים"}
               </button>
             </div>
           </div>
