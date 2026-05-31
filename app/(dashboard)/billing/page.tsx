@@ -1869,7 +1869,7 @@ function WasteTab({ properties }: { properties: any[] }) {
       // same tenant (e.g. Yehonatan's offices contract appearing 3× → 163%).
       const { data: baseContracts } = await supabase
         .from("contracts")
-        .select("id, charged_area, tenants(name), contract_spaces(space_id, spaces(id, space_name, area, uses_waste_service))")
+        .select("id, charged_area, start_date, end_date, tenants(name), contract_spaces(space_id, spaces(id, space_name, area, uses_waste_service))")
         .eq("property_id", propId)
         .eq("is_amendment", false)
         .in("status", ["active", "expiring", "extended"]);
@@ -1894,16 +1894,32 @@ function WasteTab({ properties }: { properties: any[] }) {
         const ams = (amendsByParent[b.id] || []).slice().sort(function(x:any,y:any){ return (x.amendment_number||0) - (y.amendment_number||0); });
         const latest = ams.length > 0 ? ams[ams.length - 1] : null;
         const effSpaces = (latest && latest.contract_spaces && latest.contract_spaces.length > 0) ? latest.contract_spaces : b.contract_spaces;
-        return { id: b.id, charged_area: b.charged_area, tenants: b.tenants, contract_spaces: effSpaces };
+        return { id: b.id, charged_area: b.charged_area, start_date: b.start_date, end_date: b.end_date, tenants: b.tenants, contract_spaces: effSpaces };
       });
+
+      // ── Time-proportional model (sqm-days) ────────────────────────────
+      // Each contract pays in proportion to area × days-held within the
+      // period. The denominator is only the HELD sqm-days, so any vacant
+      // time is automatically redistributed among the active units — the
+      // sum of charges always equals the actual waste cost (no gap).
+      const dates = getPeriodDates();
+      const pStart = new Date(dates.start), pEnd = new Date(dates.end);
+      const periodDays = Math.max(1, Math.floor((pEnd.getTime() - pStart.getTime()) / 86400000) + 1);
+      const activeDays = function(c: any): number {
+        const cs = c.start_date ? new Date(c.start_date) : pStart;
+        const ce = c.end_date ? new Date(c.end_date) : pEnd;
+        const s = cs.getTime() > pStart.getTime() ? cs : pStart;
+        const e = ce.getTime() < pEnd.getTime() ? ce : pEnd;
+        const d = Math.floor((e.getTime() - s.getTime()) / 86400000) + 1;
+        return Math.max(0, Math.min(periodDays, d));
+      };
 
       const res: WasteResult[] = [];
 
       if (hasGroups) {
-        // NEW: use billing groups
-        // Build map: space_id → { groupId, groupName, annualAmount, groupTotalArea }
-        type SpaceGroupInfo = { groupId: string; groupName: string; annualAmount: number; groupTotalArea: number; };
+        type SpaceGroupInfo = { groupId: string; groupName: string; annualAmount: number; };
         const spaceGroupMap = new Map<string, SpaceGroupInfo>();
+        const groupCost: Record<string, number> = {};
         for (const g of wasteGroups) {
           const groupSpaceIds = (g.billing_group_spaces || []).map((x: any) => x.space_id);
           const groupTotalArea = groupSpaceIds.reduce((s: number, sid: string) => {
@@ -1911,61 +1927,81 @@ function WasteTab({ properties }: { properties: any[] }) {
             return s + (Number(sp?.area) || 0);
           }, 0);
           const annual = Number(g.annual_amount) || (Number(g.rate_per_sqm_monthly) || 0) * groupTotalArea * 12;
-          for (const sid of groupSpaceIds) {
-            spaceGroupMap.set(sid, { groupId: g.id, groupName: g.name, annualAmount: annual, groupTotalArea });
-          }
+          groupCost[g.id] = annual * periodFactor; // full period cost of the group
+          for (const sid of groupSpaceIds) spaceGroupMap.set(sid, { groupId: g.id, groupName: g.name, annualAmount: annual });
         }
 
-        for (const c of contracts ?? []) {
+        // Pass 1: per-contract per-group sqm-days + group denominators (held only).
+        const cgSqmDays: Record<string, Record<string, number>> = {};
+        const groupDenom: Record<string, number> = {};
+        const meta: Record<string, { area: number; days: number; groups: Set<string>; names: string[] }> = {};
+        for (const c of contracts) {
           const cs = (c.contract_spaces ?? []).filter((x: any) => x.spaces && spaceGroupMap.has(x.space_id));
           if (cs.length === 0) continue;
-          let totalCharge = 0;
-          let totalArea = 0;
-          const groupNamesSet = new Set<string>();
-          const spaceNames: string[] = [];
+          const days = activeDays(c);
+          if (days <= 0) continue;
           for (const x of cs) {
             const info = spaceGroupMap.get(x.space_id)!;
-            const spArea = Number(x.spaces?.area) || 0;
-            const spShare = info.groupTotalArea > 0 ? (info.annualAmount * (spArea / info.groupTotalArea) * periodFactor) : 0;
-            totalCharge += spShare;
-            totalArea += spArea;
-            groupNamesSet.add(info.groupName);
-            if (x.spaces?.space_name) spaceNames.push(x.spaces.space_name);
+            const area = Number(x.spaces?.area) || 0;
+            const sd = area * days;
+            if (!cgSqmDays[c.id]) cgSqmDays[c.id] = {};
+            cgSqmDays[c.id][info.groupId] = (cgSqmDays[c.id][info.groupId] || 0) + sd;
+            groupDenom[info.groupId] = (groupDenom[info.groupId] || 0) + sd;
+            if (!meta[c.id]) meta[c.id] = { area: 0, days: days, groups: new Set(), names: [] };
+            meta[c.id].area += area;
+            meta[c.id].groups.add(info.groupName);
+            if (x.spaces?.space_name) meta[c.id].names.push(x.spaces.space_name);
           }
-          const groupIds: string[] = Array.from(new Set(cs.map((x: any) => spaceGroupMap.get(x.space_id)!.groupId as string)));
-          let totalGroupArea = 0;
-          for (const gid of groupIds) {
-            const g = wasteGroups.find((g) => g.id === gid);
-            totalGroupArea += (g?.billing_group_spaces || []).reduce((ss: number, bs: any) => {
-              const sp = spaces.find((x) => x.id === bs.space_id);
-              return ss + (Number(sp?.area) || 0);
-            }, 0);
+        }
+        const totalCost = Object.values(groupCost).reduce((s, v) => s + v, 0);
+        // Pass 2: each contract's charge = Σ groupCost × (its sqm-days / group sqm-days held).
+        for (const c of contracts) {
+          const cgs = cgSqmDays[c.id];
+          if (!cgs) continue;
+          let charge = 0;
+          for (const gid of Object.keys(cgs)) {
+            const denom = groupDenom[gid] || 0;
+            charge += denom > 0 ? (groupCost[gid] * (cgs[gid] / denom)) : 0;
           }
-          const pct = totalGroupArea > 0 ? (totalArea / totalGroupArea) * 100 : 0;
+          const m = meta[c.id];
+          const partial = m.days < periodDays;
           res.push({
             contractId: c.id,
             tenantName: (c.tenants as any)?.name ?? "—",
-            spaces: spaceNames.join(", ") + " | " + Array.from(groupNamesSet).join(" + "),
-            wasteArea: totalArea,
-            pct,
-            charge: totalCharge,
+            spaces: m.names.join(", ") + " | " + Array.from(m.groups).join(" + ") + (partial ? " ⏱ " + m.days + "/" + periodDays + " ימים" : ""),
+            wasteArea: m.area,
+            pct: totalCost > 0 ? (charge / totalCost) * 100 : 0,
+            charge,
           });
         }
       } else {
-        // LEGACY: single waste cost + uses_waste_service flag
+        // LEGACY: single waste cost + uses_waste_service flag — sqm-days split.
         const cost = Number(wasteCost) * periodFactor;
         const participatingIds = new Set(participatingSpaces.map(function (s) { return s.id; }));
-
-        for (const c of contracts ?? []) {
-          const contractSpaces = (c.contract_spaces ?? []).filter(function (cs: any) {
-            return cs.spaces && participatingIds.has(cs.space_id);
-          });
+        const rows: Array<{ c: any; area: number; days: number; names: string; sqmDays: number }> = [];
+        let denom = 0;
+        for (const c of contracts) {
+          const contractSpaces = (c.contract_spaces ?? []).filter(function (cs: any) { return cs.spaces && participatingIds.has(cs.space_id); });
           if (contractSpaces.length === 0) continue;
-          const wasteArea = contractSpaces.reduce(function (s: number, cs: any) { return s + (cs.spaces?.area ?? 0); }, 0);
-          const spaceNames = contractSpaces.map(function (cs: any) { return cs.spaces?.space_name ?? ""; }).filter(Boolean).join(", ");
-          const pct = totalWasteArea > 0 ? (wasteArea / totalWasteArea) * 100 : 0;
-          const charge = totalWasteArea > 0 ? cost * (wasteArea / totalWasteArea) : 0;
-          res.push({ contractId: c.id, tenantName: (c.tenants as any)?.name ?? "—", spaces: spaceNames, wasteArea, pct, charge });
+          const days = activeDays(c);
+          if (days <= 0) continue;
+          const area = contractSpaces.reduce(function (s: number, cs: any) { return s + (Number(cs.spaces?.area) || 0); }, 0);
+          const names = contractSpaces.map(function (cs: any) { return cs.spaces?.space_name ?? ""; }).filter(Boolean).join(", ");
+          const sqmDays = area * days;
+          denom += sqmDays;
+          rows.push({ c, area, days, names, sqmDays });
+        }
+        for (const r of rows) {
+          const partial = r.days < periodDays;
+          const charge = denom > 0 ? cost * (r.sqmDays / denom) : 0;
+          res.push({
+            contractId: r.c.id,
+            tenantName: (r.c.tenants as any)?.name ?? "—",
+            spaces: r.names + (partial ? " ⏱ " + r.days + "/" + periodDays + " ימים" : ""),
+            wasteArea: r.area,
+            pct: cost > 0 ? (charge / cost) * 100 : 0,
+            charge,
+          });
         }
       }
       setResults(res);
