@@ -1864,12 +1864,38 @@ function WasteTab({ properties }: { properties: any[] }) {
       // Period factor: fraction of annual
       const periodFactor = period === "annual" ? 1 : 0.25;
 
-      // Load contracts with their spaces
-      const { data: contracts } = await supabase
+      // Load BASE contracts (no amendments). Amendments are separate snapshot
+      // rows that repeat the unit set — counting them would double/triple the
+      // same tenant (e.g. Yehonatan's offices contract appearing 3× → 163%).
+      const { data: baseContracts } = await supabase
         .from("contracts")
         .select("id, charged_area, tenants(name), contract_spaces(space_id, spaces(id, space_name, area, uses_waste_service))")
         .eq("property_id", propId)
+        .eq("is_amendment", false)
         .in("status", ["active", "expiring", "extended"]);
+      const baseList = baseContracts ?? [];
+      const baseIds = baseList.map(function(c:any){ return c.id; });
+
+      // For each base, use the LATEST amendment's spaces when amendments exist
+      // (so unit swaps like Golf's are reflected), else the base's own spaces.
+      const amendsByParent: Record<string, any[]> = {};
+      if (baseIds.length > 0) {
+        const { data: amends } = await supabase
+          .from("contracts")
+          .select("id, parent_contract_id, amendment_number, contract_spaces(space_id, spaces(id, space_name, area, uses_waste_service))")
+          .in("parent_contract_id", baseIds)
+          .eq("is_amendment", true);
+        (amends ?? []).forEach(function(a:any){
+          if (!amendsByParent[a.parent_contract_id]) amendsByParent[a.parent_contract_id] = [];
+          amendsByParent[a.parent_contract_id].push(a);
+        });
+      }
+      const contracts: any[] = baseList.map(function(b:any){
+        const ams = (amendsByParent[b.id] || []).slice().sort(function(x:any,y:any){ return (x.amendment_number||0) - (y.amendment_number||0); });
+        const latest = ams.length > 0 ? ams[ams.length - 1] : null;
+        const effSpaces = (latest && latest.contract_spaces && latest.contract_spaces.length > 0) ? latest.contract_spaces : b.contract_spaces;
+        return { id: b.id, charged_area: b.charged_area, tenants: b.tenants, contract_spaces: effSpaces };
+      });
 
       const res: WasteResult[] = [];
 
@@ -1906,14 +1932,15 @@ function WasteTab({ properties }: { properties: any[] }) {
             groupNamesSet.add(info.groupName);
             if (x.spaces?.space_name) spaceNames.push(x.spaces.space_name);
           }
-          const totalGroupArea = Array.from(new Set(cs.map((x: any) => spaceGroupMap.get(x.space_id)!.groupId)))
-            .reduce((s, gid) => {
-              const g = wasteGroups.find((g) => g.id === gid);
-              return s + ((g?.billing_group_spaces || []).reduce((ss: number, bs: any) => {
-                const sp = spaces.find((x) => x.id === bs.space_id);
-                return ss + (Number(sp?.area) || 0);
-              }, 0));
+          const groupIds: string[] = Array.from(new Set(cs.map((x: any) => spaceGroupMap.get(x.space_id)!.groupId as string)));
+          let totalGroupArea = 0;
+          for (const gid of groupIds) {
+            const g = wasteGroups.find((g) => g.id === gid);
+            totalGroupArea += (g?.billing_group_spaces || []).reduce((ss: number, bs: any) => {
+              const sp = spaces.find((x) => x.id === bs.space_id);
+              return ss + (Number(sp?.area) || 0);
             }, 0);
+          }
           const pct = totalGroupArea > 0 ? (totalArea / totalGroupArea) * 100 : 0;
           res.push({
             contractId: c.id,
