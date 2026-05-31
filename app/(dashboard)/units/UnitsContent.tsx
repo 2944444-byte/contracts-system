@@ -71,37 +71,67 @@ export default function UnitsPage() {
       supabase.from("spaces").select("*, properties(name, total_area)"),
       supabase
         .from("contract_spaces")
-        .select("space_id, contracts(id, status, start_date, end_date, tenants(name, contact_phone, contact_email), rent_per_sqm, charged_area)"),
+        .select("space_id, contracts(id, status, is_amendment, parent_contract_id, amendment_number, start_date, end_date, tenants(name, contact_phone, contact_email), rent_per_sqm, charged_area)"),
     ]);
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
+    // Group contract_spaces by the specific contract row (base OR amendment),
+    // collecting the unit set each row holds.
+    const byContract: Record<string, { contract: any; spaceIds: Set<string> }> = {};
+    (contractSpaces ?? []).forEach((cs: any) => {
+      const c = cs.contracts;
+      if (!c) return;
+      if (!byContract[c.id]) byContract[c.id] = { contract: c, spaceIds: new Set() };
+      byContract[c.id].spaceIds.add(cs.space_id);
+    });
+
+    // Group rows into contract families (parent or self). Amendments are
+    // sequential snapshots; the CURRENT unit set is the latest snapshot's, so a
+    // swapped unit follows the latest amendment (e.g. Golf 2026 → חנות 4, while
+    // חנות 6 moved to Yehonatan), instead of the stale original base rows.
+    const families: Record<string, Array<{ contract: any; spaceIds: Set<string> }>> = {};
+    Object.keys(byContract).forEach((cid) => {
+      const entry = byContract[cid];
+      const fid = entry.contract.parent_contract_id || entry.contract.id;
+      if (!families[fid]) families[fid] = [];
+      families[fid].push(entry);
+    });
+
+    // space_id → holder (the family's BASE contract, for status/tenant/dates).
+    const spaceHolder: Record<string, any> = {};
+    Object.keys(families).forEach((fid) => {
+      const snaps = families[fid];
+      const baseEntry = snaps.find((s) => !s.contract.is_amendment) || snaps[0];
+      const latest = snaps.slice().sort(function (a, b) {
+        return (a.contract.amendment_number || 0) - (b.contract.amendment_number || 0);
+      })[snaps.length - 1];
+      const holder = baseEntry.contract;
+      const holderActive = holder.status === "active" || holder.status === "upcoming";
+      latest.spaceIds.forEach((sid) => {
+        const existing = spaceHolder[sid];
+        const existingActive = existing && (existing.status === "active" || existing.status === "upcoming");
+        if (!existing || (holderActive && !existingActive)) spaceHolder[sid] = holder;
+      });
+    });
+
     const enriched = (spaceData ?? []).map((space: any) => {
-      // Find contract_spaces rows for this space
-      const links = (contractSpaces ?? []).filter((cs: any) => cs.space_id === space.id);
-
-      const activeLease = links.find(
-        (cs: any) => cs.contracts && cs.contracts.status === "active"
-      )?.contracts;
-      const pendingLease = links.find(
-        (cs: any) => cs.contracts && cs.contracts.status === "upcoming"
-      )?.contracts;
-
+      const holder = spaceHolder[space.id];
       let status = "vacant";
       let tenant = null;
       let leaseInfo = null;
 
-      if (activeLease) {
-        const endDate = new Date(activeLease.end_date);
+      if (holder && holder.status === "active") {
+        const endDate = new Date(holder.end_date);
         const daysLeft = Math.ceil((endDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
         status = daysLeft <= 60 ? "future_vacant" : "occupied";
-        tenant = activeLease.tenants;
-        leaseInfo = activeLease;
-      } else if (pendingLease) {
+        tenant = holder.tenants;
+        leaseInfo = holder;
+      } else if (holder && holder.status === "upcoming") {
         status = "reserved";
-        tenant = pendingLease.tenants;
-        leaseInfo = pendingLease;
+        tenant = holder.tenants;
+        leaseInfo = holder;
       }
 
       return { ...space, computedStatus: status, tenant, leaseInfo };
@@ -210,7 +240,7 @@ export default function UnitsPage() {
       .from("contract_spaces")
       .select("contract_id")
       .eq("space_id", id);
-    const cIds = [...new Set((linkedContracts || []).map((r: any) => r.contract_id))];
+    const cIds = Array.from(new Set((linkedContracts || []).map((r: any) => r.contract_id)));
     const msg =
       cIds.length > 0
         ? `למחוק יחידה זו? פעולה זו תמחק גם ${cIds.length} חוזים וכל הנתונים הקשורים אליהם!`
