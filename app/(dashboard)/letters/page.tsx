@@ -345,19 +345,26 @@ export default function LettersPage() {
     await loadAll();
   }
 
+  // Extract the actual letter text from content_json (string or object).
+  function letterBodyText(l: any): string {
+    var cj = l.content_json;
+    if (typeof cj === "string") { try { cj = JSON.parse(cj); } catch (e) { return cj; } }
+    return (cj && cj.body) || l.body || "";
+  }
+
+  // Open the user's LOCAL mail program (mailto) pre-filled with the real
+  // letter content, then mark the letter as sent for traceability.
   function handleEmail(l: any) {
     var title = l.title || l.subject || "מכתב";
     var tenant = l.contracts?.tenants?.name || "";
     var email = recipientEmail(l);
-    var subject = encodeURIComponent(title);
-    var emailBody = encodeURIComponent(
-      "שלום " + tenant + ",\n\n" +
-      "מצורף בזאת " + title + ".\n" +
-      "נא לעיין ולפעול בהתאם.\n\n" +
-      "בברכה,\n" +
-      "הנהלת הנכס"
-    );
-    window.open("mailto:" + email + "?subject=" + subject + "&body=" + emailBody, "_self");
+    var body = letterBodyText(l).trim() ||
+      ("שלום " + tenant + ",\n\nמצורף בזאת " + title + ".\nנא לעיין ולפעול בהתאם.\n\nבברכה,\nהנהלת הנכס");
+    var mailto = "mailto:" + encodeURIComponent(email) +
+      "?subject=" + encodeURIComponent(title) +
+      "&body=" + encodeURIComponent(body);
+    // window.location triggers the OS mail handler reliably without leaving the app.
+    window.location.href = mailto;
     // Record the send (recipient + timestamp) so it's traceable in the list.
     markSent(l, email);
   }
