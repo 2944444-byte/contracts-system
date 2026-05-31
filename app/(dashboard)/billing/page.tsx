@@ -192,6 +192,30 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
     setExistingMgmtLetters((lt ?? []).filter(function(x:any){ return x.contracts?.property_id === propId; }));
   }
 
+  // Delete the whole reconciliation for this property+year: removes the
+  // created charges, cancels the letters, and clears the saved actual costs.
+  async function deleteReconciliation() {
+    const nC = existingMgmtCharges.length, nL = existingMgmtLetters.length;
+    if (nC === 0 && nL === 0) {
+      if (!confirm("למחוק את הסכומים שהוזנו להתחשבנות " + year + "? (לא נוצרו חיובים/מכתבים)")) return;
+    } else {
+      if (!confirm("למחוק את התחשבנות דמי ניהול לשנת " + year + "?\nיימחקו " + nC + " חיובים" + (nL ? " ו-" + nL + " מכתבים" : "") + " והסכומים שהוזנו.\nפעולה זו אינה הפיכה.")) return;
+    }
+    try {
+      if (existingMgmtCharges.length > 0) {
+        await supabase.from("charges").delete().in("id", existingMgmtCharges.map(function(c:any){ return c.id; }));
+      }
+      if (existingMgmtLetters.length > 0) {
+        await supabase.from("letters").delete().in("id", existingMgmtLetters.map(function(l:any){ return l.id; }));
+      }
+      await supabase.from("mgmt_reconciliation_inputs").delete().eq("property_id", propId).eq("year", year);
+      await logAudit({ entity_type: "billing", entity_id: propId, action: "delete_mgmt_reconciliation", notes: nC + " חיובים, " + nL + " מכתבים" });
+      setActualCost(""); setDefaultActualCost(""); setGroupActualCosts({}); setMgmtResults([]);
+      await loadExistingMgmtCharges();
+      alert("✅ נמחקה ההתחשבנות (" + nC + " חיובים" + (nL ? ", " + nL + " מכתבים" : "") + ")");
+    } catch (e: any) { alert("שגיאה: " + e?.message); }
+  }
+
   async function loadMgmtGroups() {
     const { data } = await supabase.from("billing_groups")
       .select("*,billing_group_spaces(space_id)")
@@ -278,8 +302,16 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
     finally { setSaving(false); }
   }
 
+  // Reconciliation (actual cost) is only meaningful once the year is over —
+  // block entering actuals for a year that hasn't ended yet.
+  const yearEnded = new Date().getTime() > new Date(year, 11, 31, 23, 59, 59).getTime();
+
   async function computeReconciliation() {
     if (!propId) { alert("יש לבחור נכס"); return; }
+    if (!yearEnded) {
+      alert("לא ניתן לבצע התחשבנות דמי ניהול לשנת " + year + " לפני סיומה (31.12." + year + ").\nההתחשבנות מבוצעת מול העלות בפועל הידועה רק בתום השנה.");
+      return;
+    }
     const hasGroups = mgmtGroupsData.length > 0;
     if (!hasGroups && !actualCost) { alert("יש להזין עלות בפועל"); return; }
     setComputing(true);
@@ -669,6 +701,11 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
       {/* Section B: Reconciliation */}
       <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
         <h2 className="text-lg font-bold text-slate-800 mb-4">התחשבנות — עלות בפועל לשנה {year}</h2>
+        {propId && !yearEnded && (
+          <div className="rounded-lg bg-amber-50 border border-amber-300 p-3 mb-4 text-sm text-amber-800">
+            ⏳ שנת {year} טרם הסתיימה. לא ניתן לבצע התחשבנות דמי ניהול לפני תום השנה (31.12.{year}), כיוון שהעלות בפועל ידועה רק בסיומה. ניתן לבצע התחשבנות לשנים שהסתיימו.
+          </div>
+        )}
         <div className="grid grid-cols-2 gap-4 mb-4">
           <div>
             <label className="mb-1 block text-xs font-semibold text-slate-700">נכס</label>
@@ -732,7 +769,10 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
           <div className="rounded-lg bg-blue-50 border border-blue-200 p-4 my-4">
             <div className="flex items-center justify-between flex-wrap gap-2">
               <div className="text-sm font-bold text-blue-800">✓ כבר נוצרו {existingMgmtCharges.length} חיובי התחשבנות דמי ניהול לשנת {year} לנכס זה</div>
-              <button onClick={computeReconciliation} disabled={computing || !propId} className="text-xs rounded border border-blue-300 bg-white text-blue-700 hover:bg-blue-100 px-2 py-1 font-semibold disabled:opacity-50" title="הצג את החישוב המפורט כאן">📊 הצג חישוב מפורט</button>
+              <div className="flex gap-1.5">
+                <button onClick={computeReconciliation} disabled={computing || !propId} className="text-xs rounded border border-blue-300 bg-white text-blue-700 hover:bg-blue-100 px-2 py-1 font-semibold disabled:opacity-50" title="הצג את החישוב המפורט כאן">📊 הצג חישוב מפורט</button>
+                <button onClick={deleteReconciliation} className="text-xs rounded border border-rose-300 bg-white text-rose-700 hover:bg-rose-50 px-2 py-1 font-semibold" title="מחק את ההתחשבנות: ימחקו החיובים והמכתבים שנוצרו והסכומים שהוזנו">🗑 מחק התחשבנות</button>
+              </div>
             </div>
             <div className="text-[11px] text-blue-600 mt-0.5">אין צורך ליצור שוב (יצירה חוזרת תיצור כפילות). למחיקה/עריכה — מסך חיובים. הסכומים שהוזנו נשמרו ומוצגים למעלה.</div>
             <div className="mt-2 rounded-lg bg-white border border-blue-100 divide-y divide-blue-50">
@@ -754,10 +794,16 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
 
         {progress && <div className="my-3"><CalcProgress {...progress} /></div>}
 
-        <button onClick={computeReconciliation} disabled={computing || !propId}
-          className="rounded-lg bg-purple-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-purple-800 disabled:opacity-50">
-          {computing ? "מחשב..." : "חשב"}
-        </button>
+        <div className="flex gap-3 items-center">
+          <button onClick={computeReconciliation} disabled={computing || !propId || !yearEnded}
+            title={!yearEnded ? "שנת " + year + " טרם הסתיימה — לא ניתן להתחשבן לפני תום השנה" : "חשב התחשבנות מול העלות בפועל"}
+            className="rounded-lg bg-purple-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-purple-800 disabled:opacity-50">
+            {computing ? "מחשב..." : "חשב"}
+          </button>
+          {propId && (existingMgmtCharges.length > 0 || existingMgmtLetters.length > 0) && (
+            <button onClick={deleteReconciliation} className="rounded-lg border border-rose-300 px-4 py-2.5 text-sm font-bold text-rose-700 hover:bg-rose-50" title="מחק התחשבנות — חיובים, מכתבים והסכומים שהוזנו">🗑 מחק התחשבנות</button>
+          )}
+        </div>
 
         {mgmtResults.length > 0 && (() => {
           // Counts for footer/buttons
