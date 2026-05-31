@@ -1882,7 +1882,7 @@ function WasteTab({ properties }: { properties: any[] }) {
       if (baseIds.length > 0) {
         const { data: amends } = await supabase
           .from("contracts")
-          .select("id, parent_contract_id, amendment_number, contract_spaces(space_id, spaces(id, space_name, area, uses_waste_service))")
+          .select("id, parent_contract_id, amendment_number, amendment_date, start_date, contract_spaces(space_id, spaces(id, space_name, area, uses_waste_service))")
           .in("parent_contract_id", baseIds)
           .eq("is_amendment", true);
         (amends ?? []).forEach(function(a:any){
@@ -1890,29 +1890,59 @@ function WasteTab({ properties }: { properties: any[] }) {
           amendsByParent[a.parent_contract_id].push(a);
         });
       }
-      const contracts: any[] = baseList.map(function(b:any){
-        const ams = (amendsByParent[b.id] || []).slice().sort(function(x:any,y:any){ return (x.amendment_number||0) - (y.amendment_number||0); });
-        const latest = ams.length > 0 ? ams[ams.length - 1] : null;
-        const effSpaces = (latest && latest.contract_spaces && latest.contract_spaces.length > 0) ? latest.contract_spaces : b.contract_spaces;
-        return { id: b.id, charged_area: b.charged_area, start_date: b.start_date, end_date: b.end_date, tenants: b.tenants, contract_spaces: effSpaces };
-      });
-
-      // ── Time-proportional model (sqm-days) ────────────────────────────
-      // Each contract pays in proportion to area × days-held within the
-      // period. The denominator is only the HELD sqm-days, so any vacant
-      // time is automatically redistributed among the active units — the
-      // sum of charges always equals the actual waste cost (no gap).
+      // ── Time-proportional model with a snapshot timeline ──────────────
+      // Amendments are sequential snapshots of the unit set, each effective
+      // from its amendment_date until the next one. For the SELECTED period
+      // we use the snapshot(s) effective DURING that period — so Golf in 2025
+      // is charged for חנות 6 (held that year), not the units they swapped to
+      // in 2026. Each contract pays by area × days-held; the denominator is
+      // only the HELD sqm-days, so vacant time is redistributed among active
+      // units and Σ charges always equals the actual cost (no gap).
       const dates = getPeriodDates();
-      const pStart = new Date(dates.start), pEnd = new Date(dates.end);
-      const periodDays = Math.max(1, Math.floor((pEnd.getTime() - pStart.getTime()) / 86400000) + 1);
-      const activeDays = function(c: any): number {
-        const cs = c.start_date ? new Date(c.start_date) : pStart;
-        const ce = c.end_date ? new Date(c.end_date) : pEnd;
-        const s = cs.getTime() > pStart.getTime() ? cs : pStart;
-        const e = ce.getTime() < pEnd.getTime() ? ce : pEnd;
-        const d = Math.floor((e.getTime() - s.getTime()) / 86400000) + 1;
-        return Math.max(0, Math.min(periodDays, d));
+      const pStart = new Date(dates.start).getTime();
+      const pEndExcl = new Date(dates.end).getTime() + 86400000; // exclusive end
+      const periodDays = Math.max(1, Math.round((pEndExcl - pStart) / 86400000));
+      const overlapDays = function(aStartT: number, aEndExclT: number): number {
+        const s = Math.max(aStartT, pStart);
+        const e = Math.min(aEndExclT, pEndExcl);
+        return Math.max(0, Math.round((e - s) / 86400000));
       };
+
+      // For each base contract, accumulate days-held per space within the
+      // period using its snapshot timeline (base + amendments).
+      type Held = { area: number; days: number; name: string };
+      const contracts: any[] = baseList.map(function(b:any){
+        const ams = (amendsByParent[b.id] || []).slice().sort(function(x:any,y:any){
+          var dx = x.amendment_date ? new Date(x.amendment_date).getTime() : (x.start_date ? new Date(x.start_date).getTime() : 0);
+          var dy = y.amendment_date ? new Date(y.amendment_date).getTime() : (y.start_date ? new Date(y.start_date).getTime() : 0);
+          return dx - dy;
+        });
+        const baseStartT = b.start_date ? new Date(b.start_date).getTime() : pStart;
+        const contractEndExclT = b.end_date ? new Date(b.end_date).getTime() + 86400000 : pEndExcl;
+        // Snapshot points: base first, then each amendment by its date.
+        const points: Array<{ t: number; spaces: any[] }> = [{ t: baseStartT, spaces: b.contract_spaces || [] }];
+        ams.forEach(function(a:any){
+          var t = a.amendment_date ? new Date(a.amendment_date).getTime() : (a.start_date ? new Date(a.start_date).getTime() : baseStartT);
+          points.push({ t: t, spaces: (a.contract_spaces && a.contract_spaces.length > 0) ? a.contract_spaces : [] });
+        });
+        // Each snapshot is effective [t_i, t_{i+1}); empty spaces inherit prior.
+        const held: Record<string, Held> = {};
+        for (let i = 0; i < points.length; i++) {
+          const segStart = points[i].t;
+          const segEnd = i < points.length - 1 ? points[i + 1].t : contractEndExclT;
+          const d = overlapDays(segStart, segEnd);
+          if (d <= 0) continue;
+          let segSpaces = points[i].spaces;
+          if ((!segSpaces || segSpaces.length === 0) && i > 0) segSpaces = points[i - 1].spaces;
+          (segSpaces || []).forEach(function(x:any){
+            if (!x.spaces) return;
+            const sid = x.space_id;
+            if (!held[sid]) held[sid] = { area: Number(x.spaces?.area) || 0, days: 0, name: x.spaces?.space_name || "" };
+            held[sid].days += d;
+          });
+        }
+        return { id: b.id, charged_area: b.charged_area, tenants: b.tenants, held: held };
+      });
 
       const res: WasteResult[] = [];
 
@@ -1931,26 +1961,26 @@ function WasteTab({ properties }: { properties: any[] }) {
           for (const sid of groupSpaceIds) spaceGroupMap.set(sid, { groupId: g.id, groupName: g.name, annualAmount: annual });
         }
 
-        // Pass 1: per-contract per-group sqm-days + group denominators (held only).
+        // Pass 1: per-contract per-group sqm-days (from the held timeline) +
+        // group denominators (held days only).
         const cgSqmDays: Record<string, Record<string, number>> = {};
         const groupDenom: Record<string, number> = {};
-        const meta: Record<string, { area: number; days: number; groups: Set<string>; names: string[] }> = {};
+        const meta: Record<string, { area: number; maxDays: number; groups: Set<string>; names: string[] }> = {};
         for (const c of contracts) {
-          const cs = (c.contract_spaces ?? []).filter((x: any) => x.spaces && spaceGroupMap.has(x.space_id));
-          if (cs.length === 0) continue;
-          const days = activeDays(c);
-          if (days <= 0) continue;
-          for (const x of cs) {
-            const info = spaceGroupMap.get(x.space_id)!;
-            const area = Number(x.spaces?.area) || 0;
-            const sd = area * days;
+          const heldIds = Object.keys(c.held).filter(function(sid:string){ return spaceGroupMap.has(sid) && c.held[sid].days > 0; });
+          if (heldIds.length === 0) continue;
+          for (const sid of heldIds) {
+            const info = spaceGroupMap.get(sid)!;
+            const h = c.held[sid];
+            const sd = h.area * h.days;
             if (!cgSqmDays[c.id]) cgSqmDays[c.id] = {};
             cgSqmDays[c.id][info.groupId] = (cgSqmDays[c.id][info.groupId] || 0) + sd;
             groupDenom[info.groupId] = (groupDenom[info.groupId] || 0) + sd;
-            if (!meta[c.id]) meta[c.id] = { area: 0, days: days, groups: new Set(), names: [] };
-            meta[c.id].area += area;
+            if (!meta[c.id]) meta[c.id] = { area: 0, maxDays: 0, groups: new Set(), names: [] };
+            meta[c.id].area += h.area;
+            meta[c.id].maxDays = Math.max(meta[c.id].maxDays, h.days);
             meta[c.id].groups.add(info.groupName);
-            if (x.spaces?.space_name) meta[c.id].names.push(x.spaces.space_name);
+            if (h.name) meta[c.id].names.push(h.name);
           }
         }
         const totalCost = Object.values(groupCost).reduce((s, v) => s + v, 0);
@@ -1964,11 +1994,11 @@ function WasteTab({ properties }: { properties: any[] }) {
             charge += denom > 0 ? (groupCost[gid] * (cgs[gid] / denom)) : 0;
           }
           const m = meta[c.id];
-          const partial = m.days < periodDays;
+          const partial = m.maxDays < periodDays;
           res.push({
             contractId: c.id,
             tenantName: (c.tenants as any)?.name ?? "—",
-            spaces: m.names.join(", ") + " | " + Array.from(m.groups).join(" + ") + (partial ? " ⏱ " + m.days + "/" + periodDays + " ימים" : ""),
+            spaces: m.names.join(", ") + " | " + Array.from(m.groups).join(" + ") + (partial ? " ⏱ " + m.maxDays + "/" + periodDays + " ימים" : ""),
             wasteArea: m.area,
             pct: totalCost > 0 ? (charge / totalCost) * 100 : 0,
             charge,
@@ -1978,26 +2008,29 @@ function WasteTab({ properties }: { properties: any[] }) {
         // LEGACY: single waste cost + uses_waste_service flag — sqm-days split.
         const cost = Number(wasteCost) * periodFactor;
         const participatingIds = new Set(participatingSpaces.map(function (s) { return s.id; }));
-        const rows: Array<{ c: any; area: number; days: number; names: string; sqmDays: number }> = [];
+        const rows: Array<{ c: any; area: number; maxDays: number; names: string; sqmDays: number }> = [];
         let denom = 0;
         for (const c of contracts) {
-          const contractSpaces = (c.contract_spaces ?? []).filter(function (cs: any) { return cs.spaces && participatingIds.has(cs.space_id); });
-          if (contractSpaces.length === 0) continue;
-          const days = activeDays(c);
-          if (days <= 0) continue;
-          const area = contractSpaces.reduce(function (s: number, cs: any) { return s + (Number(cs.spaces?.area) || 0); }, 0);
-          const names = contractSpaces.map(function (cs: any) { return cs.spaces?.space_name ?? ""; }).filter(Boolean).join(", ");
-          const sqmDays = area * days;
+          const heldIds = Object.keys(c.held).filter(function(sid:string){ return participatingIds.has(sid) && c.held[sid].days > 0; });
+          if (heldIds.length === 0) continue;
+          let area = 0, sqmDays = 0, maxDays = 0; const names: string[] = [];
+          for (const sid of heldIds) {
+            const h = c.held[sid];
+            area += h.area;
+            sqmDays += h.area * h.days;
+            maxDays = Math.max(maxDays, h.days);
+            if (h.name) names.push(h.name);
+          }
           denom += sqmDays;
-          rows.push({ c, area, days, names, sqmDays });
+          rows.push({ c, area, maxDays, names: names.join(", "), sqmDays });
         }
         for (const r of rows) {
-          const partial = r.days < periodDays;
+          const partial = r.maxDays < periodDays;
           const charge = denom > 0 ? cost * (r.sqmDays / denom) : 0;
           res.push({
             contractId: r.c.id,
             tenantName: (r.c.tenants as any)?.name ?? "—",
-            spaces: r.names + (partial ? " ⏱ " + r.days + "/" + periodDays + " ימים" : ""),
+            spaces: r.names + (partial ? " ⏱ " + r.maxDays + "/" + periodDays + " ימים" : ""),
             wasteArea: r.area,
             pct: cost > 0 ? (charge / cost) * 100 : 0,
             charge,
