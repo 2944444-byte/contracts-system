@@ -132,6 +132,7 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
   const [computing, setComputing] = useState(false);
   const [creatingCharges, setCreatingCharges] = useState(false);
   const [creatingLetters, setCreatingLetters] = useState(false);
+  const [progress, setProgress] = useState<CalcProgressState | null>(null);
 
   const selProp = allProperties.find(function (p) { return p.id === propId; });
   const totalArea = selProp?.total_area ?? 0;
@@ -234,6 +235,7 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
     const hasGroups = mgmtGroupsData.length > 0;
     if (!hasGroups && !actualCost) { alert("יש להזין עלות בפועל"); return; }
     setComputing(true);
+    setProgress({ current: 0, total: 0, label: "מחשב התחשבנות דמי ניהול...", startedAt: Date.now() });
     try {
       // Load active BASE contracts only. Amendments share a tenant name with
       // the base, so including them would duplicate tenants in the table
@@ -324,18 +326,22 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
       });
       setMgmtResults(results);
     } catch (e: any) { alert("שגיאה: " + e?.message); }
-    finally { setComputing(false); }
+    finally { setComputing(false); setProgress(null); }
   }
 
   async function createCharges() {
     if (mgmtResults.length === 0) return;
     setCreatingCharges(true);
+    setProgress({ current: 0, total: mgmtResults.length, label: "יוצר חיובי דמי ניהול...", startedAt: Date.now() });
     try {
       let count = 0;
       let skippedRevenue = 0;
       var graceDays = await getGraceDaysForProperty(propId);
       var dueDateStr = dueDateFromGrace(graceDays);
+      var mIdx = 0;
       for (const r of mgmtResults) {
+        mIdx++;
+        setProgress({ current: mIdx, total: mgmtResults.length, label: "מעבד: " + r.tenantName, startedAt: Date.now() });
         if (Math.abs(r.difference) < 0.01) continue;
         // Revenue-% tenants: skip — their mgmt is part of the % rent on the
         // revenue page, not a separate charge.
@@ -361,16 +367,20 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
       if (skippedRevenue > 0) msg += "\nדולגו " + skippedRevenue + " שוכרי % פידיון (דמי הניהול כלולים בשכ\"ד המחזור)";
       alert(msg);
     } catch (e: any) { alert("שגיאה: " + e?.message); }
-    finally { setCreatingCharges(false); }
+    finally { setCreatingCharges(false); setProgress(null); }
   }
 
   async function createLetters() {
     if (mgmtResults.length === 0) return;
     setCreatingLetters(true);
+    setProgress({ current: 0, total: mgmtResults.length, label: "יוצר מכתבי דמי ניהול...", startedAt: Date.now() });
     try {
       let count = 0;
       let skippedRevenue = 0;
+      var lmIdx = 0;
       for (const r of mgmtResults) {
+        lmIdx++;
+        setProgress({ current: lmIdx, total: mgmtResults.length, label: "מכתב: " + r.tenantName, startedAt: Date.now() });
         if (Math.abs(r.difference) < 0.01) continue;
         if (r.isRevenueBased) { skippedRevenue++; continue; }
         const subject = r.difference > 0
@@ -394,7 +404,7 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
       if (skippedRevenue > 0) msg2 += "\nדולגו " + skippedRevenue + " שוכרי % פידיון";
       alert(msg2);
     } catch (e: any) { alert("שגיאה: " + e?.message); }
-    finally { setCreatingLetters(false); }
+    finally { setCreatingLetters(false); setProgress(null); }
   }
 
   return (
@@ -631,6 +641,8 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
               className={ic + " max-w-xs"} placeholder="0" />
           </div>
         )}
+
+        {progress && <div className="my-3"><CalcProgress {...progress} /></div>}
 
         <button onClick={computeReconciliation} disabled={computing || !propId}
           className="rounded-lg bg-purple-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-purple-800 disabled:opacity-50">
@@ -1650,6 +1662,7 @@ function WasteTab({ properties }: { properties: any[] }) {
   const [computing, setComputing] = useState(false);
   const [creatingCharges, setCreatingCharges] = useState(false);
   const [creatingLetters, setCreatingLetters] = useState(false);
+  const [progress, setProgress] = useState<CalcProgressState | null>(null);
 
   const [wasteGroups, setWasteGroups] = useState<any[]>([]);
 
@@ -1696,6 +1709,7 @@ function WasteTab({ properties }: { properties: any[] }) {
     if (!propId) { alert("יש לבחור נכס"); return; }
     if (!hasGroups && !wasteCost) { alert("יש להגדיר קבוצות אשפה או להזין עלות שנתית"); return; }
     setComputing(true);
+    setProgress({ current: 0, total: 0, label: "מחשב חלוקת פינוי אשפה...", startedAt: Date.now() });
     try {
       // Period factor: fraction of annual
       const periodFactor = period === "annual" ? 1 : 0.25;
@@ -1779,18 +1793,22 @@ function WasteTab({ properties }: { properties: any[] }) {
       }
       setResults(res);
     } catch (e: any) { alert("שגיאה: " + e?.message); }
-    finally { setComputing(false); }
+    finally { setComputing(false); setProgress(null); }
   }
 
   async function createCharges() {
     if (results.length === 0) return;
     setCreatingCharges(true);
+    setProgress({ current: 0, total: results.length, label: "יוצר חיובי פינוי אשפה...", startedAt: Date.now() });
     try {
       const dates = getPeriodDates();
       let count = 0;
       var graceDays = await getGraceDaysForProperty(propId);
       var dueDateStr = dueDateFromGrace(graceDays);
+      var wIdx = 0;
       for (const r of results) {
+        wIdx++;
+        setProgress({ current: wIdx, total: results.length, label: "מעבד: " + (r.spaces || r.contractId), startedAt: Date.now() });
         if (r.charge < 0.01) continue;
         await supabase.from("charges").insert({
           contract_id: r.contractId,
@@ -1810,16 +1828,20 @@ function WasteTab({ properties }: { properties: any[] }) {
       await logAudit({ entity_type: "billing", entity_id: propId, action: "create_waste_charges", notes: count + " חיובים" });
       alert("✅ נוצרו " + count + " חיובים");
     } catch (e: any) { alert("שגיאה: " + e?.message); }
-    finally { setCreatingCharges(false); }
+    finally { setCreatingCharges(false); setProgress(null); }
   }
 
   async function createLetters() {
     if (results.length === 0) return;
     setCreatingLetters(true);
+    setProgress({ current: 0, total: results.length, label: "יוצר מכתבי פינוי אשפה...", startedAt: Date.now() });
     try {
       const periodLabel = period === "annual" ? "שנת " + year : period + " " + year;
       let count = 0;
+      var wlIdx = 0;
       for (const r of results) {
+        wlIdx++;
+        setProgress({ current: wlIdx, total: results.length, label: "מכתב: " + (r.spaces || r.contractId), startedAt: Date.now() });
         if (r.charge < 0.01) continue;
         await supabase.from("letters").insert({
           contract_id: r.contractId,
@@ -1837,7 +1859,7 @@ function WasteTab({ properties }: { properties: any[] }) {
       await logAudit({ entity_type: "billing", entity_id: propId, action: "create_waste_letters", notes: count + " מכתבים" });
       alert("✅ נוצרו " + count + " מכתבים");
     } catch (e: any) { alert("שגיאה: " + e?.message); }
-    finally { setCreatingLetters(false); }
+    finally { setCreatingLetters(false); setProgress(null); }
   }
 
   const PERIODS: { v: typeof period; l: string }[] = [
@@ -1922,6 +1944,8 @@ function WasteTab({ properties }: { properties: any[] }) {
             )}
           </div>
         )}
+
+        {progress && <div className="my-3"><CalcProgress {...progress} /></div>}
 
         <button onClick={compute} disabled={computing || !propId || (!hasGroups && !wasteCost)}
           className="rounded-lg bg-purple-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-purple-800 disabled:opacity-50">
