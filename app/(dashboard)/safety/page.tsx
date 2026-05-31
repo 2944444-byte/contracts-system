@@ -79,14 +79,15 @@ function healthOrder(h: Health) { return ({expired:0,due30:1,due60:2,unknown:3,v
 export default function SafetyPage() {
   const [inspections, setInspections] = useState<any[]>([]);
   const [properties,  setProperties]  = useState<any[]>([]);
+  const [contracts,   setContracts]   = useState<any[]>([]);
   const [spaces,      setSpaces]      = useState<any[]>([]);
   const [loading,     setLoading]     = useState(true);
   const [editingId,   setEditingId]   = useState("");
   const [isNew,       setIsNew]       = useState(false);
   const [saving,      setSaving]      = useState(false);
+  const [activeTab,   setActiveTab]   = useState<"public"|"tenant">("public");
   const [filterType,  setFilterType]  = useState("all");
   const [filterPropIds, setFilterPropIds] = useState<string[]>([]);
-  const [filterScope, setFilterScope] = useState("all");
   const [filterSt,    setFilterSt]    = useState<"all"|"valid"|"due"|"expired">("all");
   const [showRef,     setShowRef]     = useState(false);
 
@@ -119,15 +120,28 @@ export default function SafetyPage() {
   }, [fPropertyId]);
 
   async function loadAll() {
-    const [{ data: ins }, { data: pr }] = await Promise.all([
+    const [{ data: ins }, { data: pr }, { data: c }] = await Promise.all([
       supabase.from("safety_inspections")
         .select("*, properties(name), inspection_spaces(space_id, spaces(space_name))")
         .order("next_inspection_date"),
       supabase.from("properties").select("id,name").order("name"),
+      supabase.from("contracts")
+        .select("id, tenant_id, property_id, status, is_amendment, parent_contract_id, tenants(name), properties(name), contract_spaces(space_id, spaces(space_name))")
+        .in("status", ["active","expiring","extended","upcoming"])
+        .order("start_date", { ascending: false }),
     ]);
     setInspections(ins ?? []);
     setProperties(pr ?? []);
+    setContracts(c ?? []);
     setLoading(false);
+  }
+
+  function spacesLabel(contract: any): string {
+    var arr = contract?.contract_spaces || [];
+    var names = arr.map(function(cs: any){ return cs?.spaces?.space_name; }).filter(Boolean);
+    if (names.length === 0) return "—";
+    if (names.length <= 3) return names.join(" · ");
+    return names.slice(0,3).join(" · ") + " +" + (names.length-3);
   }
 
   async function uploadFile(file: File): Promise<string> {
@@ -159,13 +173,17 @@ export default function SafetyPage() {
 
   function openNew(prefillPropId?: string, prefillKey?: string) {
     setIsNew(true); setEditingId("new");
-    setFPropertyId(prefillPropId || ""); setFType("fire"); setFScope("public");
+    var tenantTab = activeTab === "tenant";
+    setFPropertyId(prefillPropId || ""); setFType("fire");
+    setFScope(tenantTab ? "unit" : "public");
     setFCheckKey(""); setFStandard(""); setFFreq("");
     setFSelectedSpaces([]); setFInspector(""); setFCertNum("");
     setFLastDate(""); setFNextDate(""); setFStatus("valid");
-    setFNotes(""); setFResponsible("management"); setFDocUrl("");
+    setFNotes(""); setFResponsible(tenantTab ? "tenant" : "management"); setFDocUrl("");
     if (fileRef.current) fileRef.current.value = "";
+    // On the tenant tab, default to the tenant fire-license check if none given.
     if (prefillKey) applyCatalog(prefillKey);
+    else if (tenantTab) applyCatalog("tenant_fire_license");
   }
 
   function openEdit(ins: any) {
@@ -312,17 +330,24 @@ export default function SafetyPage() {
     });
   }
 
-  // ─── Filtering + sorting ───────────────────────────────────────────
-  const filtered = inspections.filter(function(ins) {
+  // A record belongs to the tenant tab when its responsibility is the tenant
+  // (or scope=unit); otherwise it's a public/building (management) record.
+  function tabOf(ins: any): "public"|"tenant" {
+    var rp = ins.responsible_party ?? (ins.scope === "unit" ? "tenant" : "management");
+    return rp === "tenant" ? "tenant" : "public";
+  }
+
+  // ─── Filtering + sorting (within the active tab) ──────────────────
+  const tabList = inspections.filter(function(ins){ return tabOf(ins) === activeTab; });
+  const filtered = tabList.filter(function(ins) {
     const mt = filterType==="all" || ins.inspection_type===filterType;
     const mp = filterPropIds.length===0 || filterPropIds.includes(ins.property_id);
-    const ms = filterScope==="all" || (ins.scope ?? "public")===filterScope;
     var h = healthOf(ins);
     var mst = filterSt==="all"
       || (filterSt==="valid" && h==="valid")
       || (filterSt==="due" && (h==="due30"||h==="due60"))
       || (filterSt==="expired" && h==="expired");
-    return mt && mp && ms && mst;
+    return mt && mp && mst;
   });
   const sorted = filtered.slice().sort(function(a,b){
     var ha=healthOrder(healthOf(a)), hb=healthOrder(healthOf(b));
@@ -332,18 +357,39 @@ export default function SafetyPage() {
     return ea-eb;
   });
 
-  const propScoped = inspections.filter(function(ins){ return filterPropIds.length===0 || filterPropIds.includes(ins.property_id); });
+  const propScoped = tabList.filter(function(ins){ return filterPropIds.length===0 || filterPropIds.includes(ins.property_id); });
   const expiring = propScoped.filter(function(ins) { var h=healthOf(ins); return h==="due30"||h==="due60"; });
   const expired  = propScoped.filter(function(ins) { return healthOf(ins)==="expired"; });
   const valid    = propScoped.filter(function(ins) { return healthOf(ins)==="valid"; });
+  const publicCount = inspections.filter(function(i){ return tabOf(i)==="public"; }).length;
+  const tenantCount = inspections.filter(function(i){ return tabOf(i)==="tenant"; }).length;
 
-  // Per-property recommended management checks not yet set up.
+  // PUBLIC tab gap: per-property management checks not yet set up.
   const propsForGap = properties.filter(function(p){ return filterPropIds.length===0 || filterPropIds.includes(p.id); });
   const missingByProperty = propsForGap.map(function(p:any){
     var keys = new Set(inspections.filter(function(i){return i.property_id===p.id;}).map(function(i){return i.check_key;}));
     var missing = CHECK_CATALOG.filter(function(c){ return c.responsible==="management" && !keys.has(c.key); });
     return { p: p, missing: missing };
   }).filter(function(x){ return x.missing.length>0; });
+
+  // TENANT tab gap: active contracts (units) with no tenant safety check.
+  const tenantInspections = inspections.filter(function(i){ return tabOf(i)==="tenant"; });
+  function contractHasTenantCheck(contract: any): boolean {
+    var contractSpaceIds = new Set((contract.contract_spaces||[]).map(function(cs:any){return cs.space_id;}));
+    return tenantInspections.some(function(ins:any){
+      var insSpaceIds = (ins.inspection_spaces||[]).map(function(s:any){return s.space_id;});
+      if (insSpaceIds.some(function(id:string){ return contractSpaceIds.has(id); })) return true;
+      if (ins.tenant_id && contract.tenant_id && ins.tenant_id === contract.tenant_id) return true;
+      return false;
+    });
+  }
+  const baseActiveContracts = contracts.filter(function(c:any){
+    if (filterPropIds.length>0 && !filterPropIds.includes(c.property_id)) return false;
+    if (c.is_amendment===true) return false;
+    if (c.parent_contract_id) return false;
+    return true;
+  });
+  const contractsMissingTenantCheck = baseActiveContracts.filter(function(c:any){ return !contractHasTenantCheck(c); });
 
   const typeInfo  = function(v: string) { return INSPECTION_TYPES.find(function(t){return t.v===v;}) ?? INSPECTION_TYPES[7]; };
   const scopeInfo = function(v: string) { return SCOPES.find(function(s){return s.v===v;}) ?? SCOPES[0]; };
@@ -361,8 +407,22 @@ export default function SafetyPage() {
         </div>
         <div className="flex gap-2">
           <button onClick={function(){setShowRef(!showRef);}} className="rounded-lg border border-slate-200 px-4 py-2.5 text-sm text-slate-600 hover:bg-slate-50" title="דרישות כיבוי אש לפי סוג נכס (מידע)">📖 דרישות לפי סוג</button>
-          <button onClick={function(){openNew();}} className="rounded-lg bg-blue-700 px-5 py-2.5 font-bold text-white hover:bg-blue-800" title="הוסף בדיקה/אישור חדש">+ בדיקה חדשה</button>
+          <button onClick={function(){openNew();}} className="rounded-lg bg-blue-700 px-5 py-2.5 font-bold text-white hover:bg-blue-800" title={activeTab==="tenant"?"הוסף אישור בטיחות לשוכר":"הוסף בדיקה לחלקים הציבוריים/מערכות המבנה"}>+ {activeTab==="tenant"?"אישור שוכר":"בדיקה"} חדש</button>
         </div>
+      </div>
+
+      {/* Tabs: public (management) vs tenant (units/contracts) */}
+      <div className="flex gap-1 mb-5 border-b border-slate-200">
+        {[{v:"public",l:"🏢 ציבורי / מבנה (חברת ניהול)",c:publicCount},{v:"tenant",l:"🏠 יחידות / שוכרים (חוזים)",c:tenantCount}].map(function(t) {
+          return (
+            <button key={t.v} onClick={function(){setActiveTab(t.v as any); setFilterSt("all"); setFilterType("all");}}
+              className={"px-4 py-2.5 text-sm font-semibold border-b-2 -mb-px " +
+                (activeTab===t.v?"border-blue-600 text-blue-700":"border-transparent text-slate-500 hover:text-slate-700")}>
+              {t.l}
+              <span className="mr-2 text-xs bg-slate-100 text-slate-500 rounded-full px-1.5 py-0.5">{t.c}</span>
+            </button>
+          );
+        })}
       </div>
 
       {/* Reference: fire requirements by property type */}
@@ -407,8 +467,30 @@ export default function SafetyPage() {
         <PropertyHierarchyFilter onChange={function(f) { setFilterPropIds(f.propertyIds); }} />
       </div>
 
-      {/* Missing standard checks alert */}
-      {missingByProperty.length > 0 && (
+      {/* TENANT tab: contracts (units) with no tenant safety check */}
+      {activeTab==="tenant" && contractsMissingTenantCheck.length > 0 && (
+        <div className="rounded-xl border-2 border-rose-200 bg-rose-50 p-4 mb-4">
+          <div className="font-bold text-rose-800 text-sm">⚠ שוכרים ללא אישור בטיחות — {contractsMissingTenantCheck.length}</div>
+          <div className="text-xs text-rose-600 mt-0.5">חוזים פעילים שלא נרשם עבורם אישור בטיחות (למשל אישור כיבוי אש לעסק השוכר). באחריות השוכר להמציא — עותק לתיק הנכס.</div>
+          <div className="mt-3 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+            {contractsMissingTenantCheck.slice(0,15).map(function(c:any){
+              return (
+                <div key={c.id} className="rounded-lg bg-white border border-rose-200 p-2.5 text-xs">
+                  <div className="font-semibold text-slate-800">{(c.tenants as any)?.name}</div>
+                  <div className="text-slate-500">{(c.properties as any)?.name}</div>
+                  <div className="text-[10px] text-indigo-700 mt-0.5">יח&apos;: {spacesLabel(c)}</div>
+                  <button onClick={function(){openNew(c.property_id, "tenant_fire_license");}} title="הוסף אישור בטיחות עבור שוכר זה"
+                    className="mt-1.5 text-[11px] rounded bg-rose-600 hover:bg-rose-700 text-white px-2 py-1 font-semibold">+ הוסף אישור</button>
+                </div>
+              );
+            })}
+          </div>
+          {contractsMissingTenantCheck.length>15 && <div className="text-[11px] text-rose-600 mt-2">ועוד {contractsMissingTenantCheck.length-15} שוכרים...</div>}
+        </div>
+      )}
+
+      {/* PUBLIC tab: per-property management checks not yet set up */}
+      {activeTab==="public" && missingByProperty.length > 0 && (
         <div className="rounded-xl border-2 border-amber-300 bg-amber-50 p-4 mb-4">
           <div className="font-bold text-amber-800 text-sm">⚠ בדיקות תקן מומלצות שטרם הוקמו — באחריות חברת הניהול</div>
           <div className="text-xs text-amber-700 mt-0.5">לפי נוהל המעקב, אלו הבדיקות התקופתיות לחלקים הציבוריים/מערכות המבנה. הקם אותן כדי לשמור על תוקף הביטוח. (התאמת הרשימה לנכס נעשית לפי המערכות הקיימות בו.)</div>
@@ -438,13 +520,8 @@ export default function SafetyPage() {
         </div>
       )}
 
-      {/* Type/scope filters */}
+      {/* Type filters */}
       <div className="flex gap-2 mb-4 flex-wrap items-center">
-        <select value={filterScope} onChange={function(e){setFilterScope(e.target.value);}}
-          className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">
-          <option value="all">כל השיוכים</option>
-          {SCOPES.map(function(s){return <option key={s.v} value={s.v}>{s.icon} {s.l}</option>;})}
-        </select>
         {[{v:"all",l:"הכל"}, ...INSPECTION_TYPES.map(function(t){return {v:t.v,l:t.icon+" "+t.l};})].map(function(f) {
           return (
             <button key={f.v} onClick={function(){setFilterType(f.v);}}
