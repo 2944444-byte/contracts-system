@@ -41,7 +41,7 @@ export default function UnitsPage() {
     const [{ data: sp }, { data: pr }, { data: c }] = await Promise.all([
       supabase.from("spaces").select("*, properties(name, total_area)").order("space_name"),
       supabase.from("properties").select("id,name,total_area").order("name"),
-      supabase.from("contracts").select("id,tenant_id,tenants(name),contract_spaces(space_id)").in("status",["active","expiring","extended"]),
+      supabase.from("contracts").select("id,tenant_id,status,is_amendment,parent_contract_id,amendment_number,amendment_date,start_date,tenants(name),contract_spaces(space_id)").in("status",["active","expiring","extended"]),
     ]);
     setSpaces(sp??[]); setProperties(pr??[]); setContracts(c??[]); setLoading(false);
   }
@@ -66,7 +66,7 @@ export default function UnitsPage() {
   async function handleDelete(id: string) {
     if (!confirm("למחוק יחידה זו? פעולה זו תמחק גם חוזים מקושרים!")) return;
     const { data: linked } = await supabase.from("contract_spaces").select("contract_id").eq("space_id", id);
-    const cIds = [...new Set((linked||[]).map((r:any)=>r.contract_id))];
+    const cIds = Array.from(new Set((linked||[]).map((r:any)=>r.contract_id)));
     for (const cId of cIds) {
       await supabase.from("charges").delete().eq("contract_id", cId);
       await supabase.from("contract_spaces").delete().eq("contract_id", cId);
@@ -82,9 +82,44 @@ export default function UnitsPage() {
     await loadAll();
   }
 
+  // Current tenant per unit, honoring amendments: a unit follows the LATEST
+  // snapshot of each contract family (base + amendments). So after Golf's
+  // 13.3.2026 amendment swapped them to חנות 4 (and חנות 6 to Yehonatan), each
+  // unit shows its up-to-date occupant — not the stale original base rows.
+  const spaceHolderMap: Record<string, string> = (function() {
+    const byContract: Record<string, { contract: any; spaceIds: string[] }> = {};
+    contracts.forEach(function(c: any) {
+      if (!byContract[c.id]) byContract[c.id] = { contract: c, spaceIds: [] };
+      (c.contract_spaces ?? []).forEach(function(cs: any) {
+        if (byContract[c.id].spaceIds.indexOf(cs.space_id) === -1) byContract[c.id].spaceIds.push(cs.space_id);
+      });
+    });
+    const families: Record<string, Array<{ contract: any; spaceIds: string[] }>> = {};
+    Object.keys(byContract).forEach(function(cid) {
+      const e = byContract[cid];
+      const fid = e.contract.parent_contract_id || e.contract.id;
+      if (!families[fid]) families[fid] = [];
+      families[fid].push(e);
+    });
+    const rank = function(e: any): number {
+      const c = e.contract;
+      const dt = c.amendment_date || c.start_date;
+      return (dt ? new Date(dt).getTime() : 0) * 1000 + (c.amendment_number || 0);
+    };
+    const map: Record<string, string> = {};
+    Object.keys(families).forEach(function(fid) {
+      const snaps = families[fid];
+      const baseEntry = snaps.find(function(s) { return !s.contract.is_amendment; }) || snaps[0];
+      const latest = snaps.slice().sort(function(a, b) { return rank(a) - rank(b); })[snaps.length - 1];
+      const name = baseEntry.contract.tenants?.name || null;
+      if (!name) return;
+      latest.spaceIds.forEach(function(sid) { if (!map[sid]) map[sid] = name; });
+    });
+    return map;
+  })();
+
   function tenantForSpace(spaceId: string) {
-    for (const c of contracts) { if ((c.contract_spaces??[]).some(function(cs:any){return cs.space_id===spaceId;})) return c.tenants?.name??null; }
-    return null;
+    return spaceHolderMap[spaceId] ?? null;
   }
 
   const filtered = spaces.filter(function(s){ return (filterPropIds.length===0||filterPropIds.includes(s.property_id))&&(filterSt==="all"||s.status===filterSt); });
