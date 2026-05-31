@@ -133,16 +133,56 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
   const [creatingCharges, setCreatingCharges] = useState(false);
   const [creatingLetters, setCreatingLetters] = useState(false);
   const [progress, setProgress] = useState<CalcProgressState | null>(null);
+  // Management charges already created for this property + year.
+  const [existingMgmtCharges, setExistingMgmtCharges] = useState<any[]>([]);
 
   const selProp = allProperties.find(function (p) { return p.id === propId; });
   const totalArea = selProp?.total_area ?? 0;
 
   // load spaces when property changes to detect mixed use
   useEffect(function () {
-    if (!propId) { setIsMixed(false); setMixedRows([]); setMgmtGroupsData([]); return; }
+    if (!propId) { setIsMixed(false); setMixedRows([]); setMgmtGroupsData([]); setExistingMgmtCharges([]); return; }
     loadSpaces();
     loadMgmtGroups();
+    loadActualInputs();
+    loadExistingMgmtCharges();
   }, [propId, year]);
+
+  // Persist the entered actual-cost inputs per property+year, so reopening the
+  // reconciliation restores them (same idea as the insurance dispositions).
+  async function loadActualInputs() {
+    if (!propId) return;
+    const { data } = await supabase.from("mgmt_reconciliation_inputs")
+      .select("actual_cost, default_actual_cost, group_actual_costs")
+      .eq("property_id", propId).eq("year", year).limit(1);
+    var row = data && data[0];
+    setActualCost(row && row.actual_cost != null ? String(row.actual_cost) : "");
+    setDefaultActualCost(row && row.default_actual_cost != null ? String(row.default_actual_cost) : "");
+    var g = (row && row.group_actual_costs && typeof row.group_actual_costs === "object") ? row.group_actual_costs : {};
+    var gm: Record<string, string> = {};
+    Object.keys(g).forEach(function(k){ gm[k] = g[k] != null ? String(g[k]) : ""; });
+    setGroupActualCosts(gm);
+  }
+  async function saveActualInputs() {
+    if (!propId) return;
+    try {
+      await supabase.from("mgmt_reconciliation_inputs").upsert({
+        property_id: propId, year: year,
+        actual_cost: actualCost ? Number(actualCost) : null,
+        default_actual_cost: defaultActualCost ? Number(defaultActualCost) : null,
+        group_actual_costs: groupActualCosts,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "property_id,year" });
+    } catch (e) { /* non-fatal */ }
+  }
+  async function loadExistingMgmtCharges() {
+    if (!propId) { setExistingMgmtCharges([]); return; }
+    const { data } = await supabase.from("charges")
+      .select("id, total_amount, status, contract_id, notes, contracts(property_id, tenants(name))")
+      .eq("charge_type", "management")
+      .eq("billing_period_start", year + "-01-01");
+    setExistingMgmtCharges((data ?? []).filter(function(x:any){ return x.contracts?.property_id === propId; }));
+  }
 
   async function loadMgmtGroups() {
     const { data } = await supabase.from("billing_groups")
@@ -325,6 +365,7 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
         };
       });
       setMgmtResults(results);
+      await saveActualInputs();
     } catch (e: any) { alert("שגיאה: " + e?.message); }
     finally { setComputing(false); setProgress(null); }
   }
@@ -365,6 +406,8 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
       await logAudit({ entity_type: "billing", entity_id: propId, action: "create_mgmt_charges", notes: count + " חיובים" + (skippedRevenue ? " (דולג " + skippedRevenue + " % פידיון)" : "") });
       var msg = "✅ נוצרו " + count + " חיובים";
       if (skippedRevenue > 0) msg += "\nדולגו " + skippedRevenue + " שוכרי % פידיון (דמי הניהול כלולים בשכ\"ד המחזור)";
+      await saveActualInputs();
+      await loadExistingMgmtCharges();
       alert(msg);
     } catch (e: any) { alert("שגיאה: " + e?.message); }
     finally { setCreatingCharges(false); setProgress(null); }
@@ -639,6 +682,31 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
             <label className="mb-1 block text-xs font-semibold text-slate-700">עלות בפועל לשנה (₪)</label>
             <input type="number" value={actualCost} onChange={function (e) { setActualCost(e.target.value); }}
               className={ic + " max-w-xs"} placeholder="0" />
+          </div>
+        )}
+
+        {/* Management charges already created for this property + year */}
+        {existingMgmtCharges.length > 0 && (
+          <div className="rounded-lg bg-blue-50 border border-blue-200 p-4 my-4">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <div className="text-sm font-bold text-blue-800">✓ כבר נוצרו {existingMgmtCharges.length} חיובי התחשבנות דמי ניהול לשנת {year} לנכס זה</div>
+              <button onClick={computeReconciliation} disabled={computing || !propId} className="text-xs rounded border border-blue-300 bg-white text-blue-700 hover:bg-blue-100 px-2 py-1 font-semibold disabled:opacity-50" title="הצג את החישוב המפורט כאן">📊 הצג חישוב מפורט</button>
+            </div>
+            <div className="text-[11px] text-blue-600 mt-0.5">אין צורך ליצור שוב (יצירה חוזרת תיצור כפילות). למחיקה/עריכה — מסך חיובים. הסכומים שהוזנו נשמרו ומוצגים למעלה.</div>
+            <div className="mt-2 rounded-lg bg-white border border-blue-100 divide-y divide-blue-50">
+              {existingMgmtCharges.map(function(ch:any){
+                var isCredit = Number(ch.total_amount) < 0;
+                return (
+                  <div key={ch.id} className="flex items-center justify-between px-3 py-1.5 text-xs">
+                    <span className="font-medium text-slate-700">{ch.contracts?.tenants?.name || "—"}</span>
+                    <span className="flex items-center gap-2">
+                      <span className={"font-semibold " + (isCredit ? "text-emerald-700" : "text-slate-800")}>{isCredit ? "זיכוי " : ""}{fmtMoney(Math.abs(Number(ch.total_amount)))}</span>
+                      <span className={"rounded-full px-1.5 py-0.5 text-[10px] font-semibold " + (ch.status==="paid"?"bg-green-100 text-green-700":"bg-amber-100 text-amber-700")}>{ch.status==="paid"?"שולם":"ממתין"}</span>
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
 
