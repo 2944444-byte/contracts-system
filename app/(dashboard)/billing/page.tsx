@@ -736,6 +736,9 @@ function InsuranceTab({ properties }: { properties: any[] }) {
   const [computing, setComputing] = useState(false);
   const [creatingCharges, setCreatingCharges] = useState(false);
   const [creatingLetters, setCreatingLetters] = useState(false);
+  // Insurance charges already created for this property + year (so the manager
+  // can see what was billed and avoid duplicating it).
+  const [existingCharges, setExistingCharges] = useState<any[]>([]);
   // Detected data issues to surface in the UI (e.g. a space assigned to two
   // active contracts simultaneously). Cleared on each compute().
   const [warnings, setWarnings] = useState<string[]>([]);
@@ -792,6 +795,17 @@ function InsuranceTab({ properties }: { properties: any[] }) {
       .limit(1);
     setPolicy(data?.[0] ?? null);
     setResults([]);
+    loadExistingCharges();
+  }
+
+  async function loadExistingCharges() {
+    if (!propId) { setExistingCharges([]); return; }
+    const { data } = await supabase.from("charges")
+      .select("id, total_amount, status, created_at, notes, contract_id, contracts(property_id, tenants(name))")
+      .eq("charge_type", "insurance")
+      .eq("billing_period_start", year + "-01-01");
+    var rows = (data ?? []).filter(function(x:any){ return x.contracts?.property_id === propId; });
+    setExistingCharges(rows);
   }
 
   async function compute() {
@@ -1182,6 +1196,7 @@ function InsuranceTab({ properties }: { properties: any[] }) {
         count++;
       }
       await logAudit({ entity_type: "billing", entity_id: propId, action: "create_ins_charges", notes: count + " חיובים" });
+      await loadExistingCharges();
       alert("✅ נוצרו " + count + " חיובים");
     } catch (e: any) { alert("שגיאה: " + e?.message); }
     finally { setCreatingCharges(false); }
@@ -1270,6 +1285,30 @@ function InsuranceTab({ properties }: { properties: any[] }) {
             {"לא נמצא ביטוח מבנה פעיל לנכס זה"}
           </div>
         ) : null}
+
+        {/* Charges already created for this property + year */}
+        {existingCharges.length > 0 && (
+          <div className="rounded-lg bg-blue-50 border border-blue-200 p-4 mb-4">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <div className="text-sm font-bold text-blue-800">✓ כבר נוצרו {existingCharges.length} חיובי ביטוח לשנת {year} לנכס זה</div>
+              <a href="/payments" className="text-xs rounded border border-blue-300 bg-white text-blue-700 hover:bg-blue-100 px-2 py-1 font-semibold" title="צפייה / תיקון / מחיקה במסך החיובים">לצפייה ותיקון →</a>
+            </div>
+            <div className="text-[11px] text-blue-600 mt-0.5">אין צורך ליצור שוב — יצירה חוזרת תיצור כפילות. לתיקון/מחיקה היכנס למסך חיובים.</div>
+            <div className="mt-2 rounded-lg bg-white border border-blue-100 divide-y divide-blue-50">
+              {existingCharges.map(function(ch:any){
+                return (
+                  <div key={ch.id} className="flex items-center justify-between px-3 py-1.5 text-xs">
+                    <span className="font-medium text-slate-700">{ch.contracts?.tenants?.name || "—"}</span>
+                    <span className="flex items-center gap-2">
+                      <span className="font-semibold text-slate-800">{fmtMoney(ch.total_amount)}</span>
+                      <span className={"rounded-full px-1.5 py-0.5 text-[10px] font-semibold " + (ch.status==="paid"?"bg-green-100 text-green-700":"bg-amber-100 text-amber-700")}>{ch.status==="paid"?"שולם":"ממתין"}</span>
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         <button onClick={compute} disabled={computing || !propId || !policy}
           className="rounded-lg bg-purple-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-purple-800 disabled:opacity-50">
