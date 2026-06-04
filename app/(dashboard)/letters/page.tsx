@@ -38,9 +38,27 @@ export default function LettersPage() {
   const [filterStatus, setFilterStatus] = useState<string>("");
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
 
+  // Multi-select for merge-send: which letter ids are checked.
+  const [selected, setSelected] = useState<Record<string, boolean>>({});
+  // When set, shows the merged-letter preview modal (one entry per recipient).
+  const [mergeView, setMergeView] = useState<any[] | null>(null);
+
   function toggleGroup(key: string) {
     setCollapsedGroups(function(prev) { return { ...prev, [key]: !prev[key] }; });
   }
+
+  function toggleSelect(id: string) {
+    setSelected(function(prev) { var n = { ...prev }; if (n[id]) delete n[id]; else n[id] = true; return n; });
+  }
+  function setGroupSelected(items: any[], on: boolean) {
+    setSelected(function(prev) {
+      var n = { ...prev };
+      items.forEach(function(l) { if (on) n[l.id] = true; else delete n[l.id]; });
+      return n;
+    });
+  }
+  function clearSelection() { setSelected({}); }
+  const selectedIds = function() { return Object.keys(selected).filter(function(k){ return selected[k]; }); };
 
   useEffect(function() { loadAll(); }, []);
 
@@ -341,8 +359,99 @@ export default function LettersPage() {
     await markSent(l, recipientEmail(l));
   }
   async function unmarkSent(l: any) {
-    await supabase.from("letters").update({ status: "draft", sent_at: null, sent_to: null }).eq("id", l.id);
+    await supabase.from("letters").update({ status: "ready", sent_at: null, sent_to: null }).eq("id", l.id);
     await loadAll();
+  }
+  // Move a letter between draft ⇄ ready-to-send (without touching sent state).
+  async function setLetterStatus(l: any, status: string) {
+    await supabase.from("letters").update({ status: status }).eq("id", l.id);
+    await loadAll();
+  }
+
+  // ─── Bulk / merge actions over the current multi-selection ───
+  function recipientKeyOf(l: any): string {
+    return recipientEmail(l) || (l.contracts?.tenants?.name || "ללא נמען");
+  }
+  // Group the selected letters by recipient and build one merged body per
+  // recipient — so a tenant who has several charges the same day gets ONE
+  // email/letter instead of many.
+  function buildMergedGroups(ids: string[]): any[] {
+    var byRecip: Record<string, any> = {};
+    ids.forEach(function(id) {
+      var l = letters.find(function(x){ return x.id === id; });
+      if (!l) return;
+      var key = recipientKeyOf(l);
+      if (!byRecip[key]) {
+        byRecip[key] = {
+          key: key,
+          email: recipientEmail(l),
+          tenant: l.contracts?.tenants?.name || "",
+          letters: [],
+        };
+      }
+      byRecip[key].letters.push(l);
+    });
+    return Object.values(byRecip).map(function(g: any) {
+      var titles = g.letters.map(function(l: any){ return l.title || "מכתב"; });
+      var subject = g.letters.length === 1
+        ? titles[0]
+        : "ריכוז דרישות תשלום — " + g.letters.length + " נושאים";
+      var parts: string[] = ["שלום " + (g.tenant || "") + ",", ""];
+      if (g.letters.length > 1) {
+        parts.push("להלן ריכוז " + g.letters.length + " דרישות/הודעות:");
+        parts.push("");
+      }
+      g.letters.forEach(function(l: any, i: number) {
+        if (g.letters.length > 1) parts.push("━━━━━ " + (i + 1) + ". " + (l.title || "מכתב") + " ━━━━━");
+        parts.push(letterBodyText(l).trim());
+        parts.push("");
+      });
+      return { key: g.key, email: g.email, tenant: g.tenant, subject: subject, body: parts.join("\n"), letters: g.letters };
+    });
+  }
+  function openMergePreview() {
+    var ids = selectedIds();
+    if (ids.length === 0) { alert("יש לבחור מכתבים"); return; }
+    setMergeView(buildMergedGroups(ids));
+  }
+  // Send each recipient group as a single email (local mail client) and mark
+  // every letter in it as sent.
+  async function sendMergeGroup(g: any) {
+    var mailto = "mailto:" + encodeURIComponent(g.email || "") +
+      "?subject=" + encodeURIComponent(g.subject) +
+      "&body=" + encodeURIComponent(g.body);
+    window.open(mailto, "_blank");
+    for (var i = 0; i < g.letters.length; i++) {
+      await supabase.from("letters").update({ status: "sent", sent_at: new Date().toISOString(), sent_to: g.email || null }).eq("id", g.letters[i].id);
+    }
+    await logAudit({ entity_type: "letter", entity_id: g.letters[0].id, action: "merge_sent", notes: g.letters.length + " מכתבים → " + (g.email || g.tenant) });
+  }
+  async function sendAllMergeGroups() {
+    if (!mergeView) return;
+    for (var i = 0; i < mergeView.length; i++) { await sendMergeGroup(mergeView[i]); }
+    setMergeView(null); clearSelection(); await loadAll();
+  }
+  async function bulkMarkSent() {
+    var ids = selectedIds();
+    if (ids.length === 0) return;
+    if (!confirm("לסמן " + ids.length + " מכתבים כנשלחו (ידנית)?")) return;
+    for (var i = 0; i < ids.length; i++) {
+      var l = letters.find(function(x){ return x.id === ids[i]; });
+      await supabase.from("letters").update({ status: "sent", sent_at: new Date().toISOString(), sent_to: l ? recipientEmail(l) : null }).eq("id", ids[i]);
+    }
+    clearSelection(); await loadAll();
+  }
+  async function bulkSetReady() {
+    var ids = selectedIds();
+    for (var i = 0; i < ids.length; i++) { await supabase.from("letters").update({ status: "ready" }).eq("id", ids[i]); }
+    clearSelection(); await loadAll();
+  }
+  async function bulkDelete() {
+    var ids = selectedIds();
+    if (ids.length === 0) return;
+    if (!confirm("למחוק " + ids.length + " מכתבים?")) return;
+    await supabase.from("letters").delete().in("id", ids);
+    clearSelection(); await loadAll();
   }
 
   // Extract the actual letter text from content_json (string or object).
@@ -369,10 +478,22 @@ export default function LettersPage() {
     markSent(l, email);
   }
 
+  var statusCounts = letters.reduce(function(a: any, l: any) {
+    var s = l.status || "draft"; a[s] = (a[s] || 0) + 1; return a;
+  }, {} as Record<string, number>);
+
   return (
-    <div dir="rtl">
+    <div dir="rtl" className={selectedIds().length > 0 ? "pb-24" : ""}>
       <div className="mb-6 flex items-center justify-between">
-        <div><h1 className="text-3xl font-bold text-slate-800">מכתבים</h1><p className="text-sm text-slate-500 mt-1">{letters.length} מכתבים</p></div>
+        <div>
+          <h1 className="text-3xl font-bold text-slate-800">מכתבים</h1>
+          <p className="text-sm text-slate-500 mt-1 flex items-center gap-2 flex-wrap">
+            <span>{letters.length} מכתבים</span>
+            {statusCounts.draft ? <span className="text-slate-400">· ✎ {statusCounts.draft} טיוטה</span> : null}
+            {statusCounts.ready ? <span className="text-blue-600">· 📤 {statusCounts.ready} מוכן לשליחה</span> : null}
+            {statusCounts.sent ? <span className="text-green-600">· ✓ {statusCounts.sent} נשלח</span> : null}
+          </p>
+        </div>
         <button onClick={openNew} className="rounded-lg bg-blue-700 px-5 py-2.5 font-bold text-white hover:bg-blue-800">+ מכתב חדש</button>
       </div>
 
@@ -402,7 +523,7 @@ export default function LettersPage() {
           var pname = l.contracts?.properties?.name || "ללא נכס";
           if (filterProp && (pid || pname) !== filterProp) return false;
           if (filterStatus) {
-            var st = l.status === "sent" ? "sent" : "draft";
+            var st = l.status || "draft";
             if (st !== filterStatus) return false;
           }
           if (search) {
@@ -452,6 +573,7 @@ export default function LettersPage() {
               <select value={filterStatus} onChange={function(e){setFilterStatus(e.target.value);}} className={ic + " w-36"}>
                 <option value="">✉️ סטטוס: הכל</option>
                 <option value="draft">טיוטה</option>
+                <option value="ready">מוכן לשליחה</option>
                 <option value="sent">נשלח</option>
               </select>
               {(search||filterYear||filterType||filterProp||filterStatus) && (
@@ -470,29 +592,42 @@ export default function LettersPage() {
               <div className="space-y-3">
                 {groupList.map(function(g) {
                   var collapsed = !!collapsedGroups[g.key];
+                  var allSel = g.items.length > 0 && g.items.every(function(l: any){ return selected[l.id]; });
                   return (
                     <div key={g.key} className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-                      <button
-                        onClick={function(){toggleGroup(g.key);}}
-                        className="w-full flex items-center justify-between px-4 py-3 bg-slate-50 hover:bg-slate-100 transition-colors text-right"
-                      >
+                      <div className="w-full flex items-center justify-between px-4 py-3 bg-slate-50 hover:bg-slate-100 transition-colors text-right">
                         <div className="flex items-center gap-2">
-                          <span className="text-lg">🏢</span>
-                          <span className="font-bold text-slate-800">{g.name}</span>
-                          <span className="text-xs text-slate-500">— {g.items.length} מכתבים</span>
+                          <input
+                            type="checkbox"
+                            checked={allSel}
+                            onChange={function(e){ setGroupSelected(g.items, e.target.checked); }}
+                            className="w-4 h-4 cursor-pointer accent-blue-600"
+                            title="בחר את כל המכתבים בנכס"
+                          />
+                          <button onClick={function(){toggleGroup(g.key);}} className="flex items-center gap-2">
+                            <span className="text-lg">🏢</span>
+                            <span className="font-bold text-slate-800">{g.name}</span>
+                            <span className="text-xs text-slate-500">— {g.items.length} מכתבים</span>
+                          </button>
                         </div>
-                        <span className="text-slate-400 text-sm">{collapsed ? "▶" : "▼"}</span>
-                      </button>
+                        <button onClick={function(){toggleGroup(g.key);}} className="text-slate-400 text-sm">{collapsed ? "▶" : "▼"}</button>
+                      </div>
                       {!collapsed && (
                         <table className="w-full text-right text-sm">
                           <tbody>
                             {g.items.map(function(l: any) {
                               const ti = typeInfo(l.letter_type);
-                              const isSent = l.status === "sent";
+                              const st = l.status || "draft";
+                              const isSent = st === "sent";
+                              const isReady = st === "ready";
                               const recEmail = recipientEmail(l);
+                              const checked = !!selected[l.id];
                               return (
-                                <tr key={l.id} className="border-t border-slate-100 hover:bg-slate-50">
-                                  <td className="px-4 py-2.5 w-10 text-base">{ti.icon}</td>
+                                <tr key={l.id} className={"border-t border-slate-100 hover:bg-slate-50" + (checked ? " bg-blue-50/40" : "")}>
+                                  <td className="pr-4 pl-1 py-2.5 w-8">
+                                    <input type="checkbox" checked={checked} onChange={function(){toggleSelect(l.id);}} className="w-4 h-4 cursor-pointer accent-blue-600" />
+                                  </td>
+                                  <td className="px-1 py-2.5 w-8 text-base">{ti.icon}</td>
                                   <td className="px-2 py-2.5">
                                     <div className="font-semibold text-slate-800 flex items-center gap-1.5">
                                       {l.title || "—"}
@@ -512,19 +647,24 @@ export default function LettersPage() {
                                         <span className="bg-green-100 text-green-700 rounded-full px-2 py-0.5 font-semibold">✓ נשלח</span>
                                         <div className="text-slate-400 mt-0.5">{fmtDate(l.sent_at)}{l.sent_to ? " · " + l.sent_to : ""}</div>
                                       </div>
+                                    ) : isReady ? (
+                                      <span className="text-[11px] bg-blue-100 text-blue-700 rounded-full px-2 py-0.5 font-semibold">📤 מוכן לשליחה</span>
                                     ) : (
-                                      <span className="text-[11px] bg-slate-100 text-slate-500 rounded-full px-2 py-0.5">טיוטה</span>
+                                      <span className="text-[11px] bg-slate-100 text-slate-500 rounded-full px-2 py-0.5">✎ טיוטה</span>
                                     )}
                                   </td>
                                   <td className="px-2 py-2.5 text-xs text-slate-400 whitespace-nowrap w-20">{fmtDate(l.created_at)}</td>
-                                  <td className="px-4 py-2.5 w-52">
+                                  <td className="px-4 py-2.5 w-56">
                                     <div className="flex gap-1 justify-end flex-wrap">
                                       <button onClick={function(){setPreview(l);}} className="text-xs border border-slate-200 rounded px-2 py-1 text-slate-600 hover:bg-slate-50" title="תצוגה מקדימה">👁</button>
                                       <button onClick={function(){handlePrint(l);}} className="text-xs border border-blue-200 rounded px-2 py-1 text-blue-600 hover:bg-blue-50" title="הדפסה / PDF">🖨</button>
+                                      {!isSent && (isReady
+                                        ? <button onClick={function(){setLetterStatus(l, "draft");}} className="text-xs border border-slate-200 rounded px-2 py-1 text-slate-500 hover:bg-slate-50" title="החזר לטיוטה">✎</button>
+                                        : <button onClick={function(){setLetterStatus(l, "ready");}} className="text-xs border border-blue-200 rounded px-2 py-1 text-blue-600 hover:bg-blue-50" title="סמן כמוכן לשליחה">📤</button>)}
                                       <button onClick={function(){handleEmail(l);}} className="text-xs border border-green-200 rounded px-2 py-1 text-green-600 hover:bg-green-50" title="שלח במייל (מסמן כנשלח)">📧</button>
                                       {isSent
-                                        ? <button onClick={function(){unmarkSent(l);}} className="text-xs border border-slate-200 rounded px-2 py-1 text-slate-500 hover:bg-slate-50" title="החזר לטיוטה">↩</button>
-                                        : <button onClick={function(){markSentManual(l);}} className="text-xs border border-emerald-200 rounded px-2 py-1 text-emerald-600 hover:bg-emerald-50" title="סמן כנשלח (אם נשלח בדואר/ידנית)">✓ נשלח</button>}
+                                        ? <button onClick={function(){unmarkSent(l);}} className="text-xs border border-slate-200 rounded px-2 py-1 text-slate-500 hover:bg-slate-50" title="החזר ל'מוכן לשליחה'">↩</button>
+                                        : <button onClick={function(){markSentManual(l);}} className="text-xs border border-emerald-200 rounded px-2 py-1 text-emerald-600 hover:bg-emerald-50" title="סמן כנשלח (אם נשלח בדואר/ידנית)">✓</button>}
                                       <button onClick={function(){deleteLetter(l.id);}} className="text-xs border border-red-100 rounded px-2 py-1 text-red-400 hover:bg-red-50" title="מחק">🗑</button>
                                     </div>
                                   </td>
@@ -542,6 +682,62 @@ export default function LettersPage() {
           </>
         );
       })()}
+
+      {/* ─── Sticky multi-select action bar ─── */}
+      {selectedIds().length > 0 && (
+        <div className="fixed bottom-0 inset-x-0 z-40 bg-white border-t border-slate-200 shadow-[0_-4px_12px_rgba(0,0,0,0.06)] px-4 py-3" dir="rtl">
+          <div className="max-w-5xl mx-auto flex items-center gap-2 flex-wrap">
+            <span className="font-bold text-slate-800 text-sm">{selectedIds().length} מכתבים נבחרו</span>
+            <span className="text-xs text-slate-400">{Object.keys(buildMergedGroups(selectedIds()).reduce(function(a:any,g:any){a[g.key]=1;return a;},{})).length} נמענים</span>
+            <div className="flex gap-2 mr-auto flex-wrap">
+              <button onClick={openMergePreview} className="rounded-lg bg-blue-700 px-4 py-2 text-sm font-bold text-white hover:bg-blue-800">📧 מזג ושלח במייל</button>
+              <button onClick={bulkSetReady} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100">📤 סמן מוכן לשליחה</button>
+              <button onClick={bulkMarkSent} className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-100">✓ סמן כנשלח</button>
+              <button onClick={bulkDelete} className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-600 hover:bg-red-100">🗑 מחק</button>
+              <button onClick={clearSelection} className="rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-500 hover:bg-slate-50">נקה בחירה</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── Merged-letter preview before sending ─── */}
+      {mergeView && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={function(){setMergeView(null);}}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={function(e){e.stopPropagation();}} dir="rtl">
+            <div className="sticky top-0 bg-white border-b px-6 py-4 flex items-center justify-between">
+              <div>
+                <h2 className="font-bold text-slate-800 text-lg">תצוגה מקדימה לפני שליחה</h2>
+                <p className="text-xs text-slate-500 mt-0.5">{mergeView.length} מיילים · מכתב מאוחד לכל נמען</p>
+              </div>
+              <button onClick={function(){setMergeView(null);}} className="text-2xl text-slate-400">×</button>
+            </div>
+            <div className="p-6 space-y-4">
+              {mergeView.map(function(g: any, gi: number) {
+                return (
+                  <div key={gi} className="rounded-xl border border-slate-200 overflow-hidden">
+                    <div className="bg-slate-50 px-4 py-2.5 border-b border-slate-200 flex items-center justify-between">
+                      <div className="text-sm">
+                        <span className="font-bold text-slate-800">{g.tenant || "נמען"}</span>
+                        <span className="text-slate-400 text-xs mr-2">{g.email || "אין כתובת מייל"}</span>
+                      </div>
+                      <span className="text-[11px] bg-blue-100 text-blue-700 rounded-full px-2 py-0.5 font-semibold">{g.letters.length} מכתבים → מייל אחד</span>
+                    </div>
+                    <div className="p-3">
+                      <div className="text-xs font-semibold text-slate-600 mb-1">נושא: {g.subject}</div>
+                      <div className="text-xs text-slate-700 whitespace-pre-wrap bg-slate-50 rounded-lg p-3 border max-h-52 overflow-y-auto">{g.body}</div>
+                      {!g.email && <div className="text-[11px] text-amber-600 mt-1">⚠️ אין כתובת מייל לנמען — המייל ייפתח ריק ותצטרך להזין כתובת ידנית.</div>}
+                    </div>
+                  </div>
+                );
+              })}
+              <div className="flex gap-3 pt-1">
+                <button onClick={function(){setMergeView(null);}} className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm text-slate-600">ביטול</button>
+                <button onClick={sendAllMergeGroups} className="flex-1 rounded-xl bg-blue-700 py-2.5 text-sm font-bold text-white hover:bg-blue-800">📧 שלח {mergeView.length} מיילים וסמן כנשלח</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {editingId && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={function(){setEditingId("");}}>

@@ -188,7 +188,7 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
         .eq("charge_type", "management")
         .eq("billing_period_start", year + "-01-01"),
       supabase.from("letters")
-        .select("id, title, subject, contract_id, contracts(property_id)")
+        .select("id, title, contract_id, status, contracts(property_id)")
         .eq("letter_type", "demand")
         .or("subject.ilike.%דמי ניהול " + year + "%,title.ilike.%דמי ניהול " + year + "%"),
     ]);
@@ -511,19 +511,22 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
         const exL = byContractL[r.contractId];
         if (exL) {
           const fixedTitle = "מכתב מתוקן — " + baseSubject;
-          await supabase.from("letters").update({
-            title: fixedTitle, subject: fixedTitle,
+          const { error: upErr } = await supabase.from("letters").update({
+            title: fixedTitle,
             content_json: { body: body + "\n\n[מכתב מתוקן בתאריך " + today + "]", corrected: true, correctedAt: today },
-            body: body, status: "draft",
+            status: "ready", sent_at: null, sent_to: null,
           }).eq("id", exL.id);
+          if (upErr) { alert("שגיאה בעדכון מכתב: " + upErr.message); throw upErr; }
           await logAudit({ entity_type: "letter", entity_id: exL.id, action: "fix_mgmt_letter" });
           updated++;
         } else {
-          await supabase.from("letters").insert({
-            contract_id: r.contractId, letter_type: "demand",
-            title: baseSubject, subject: baseSubject,
-            content_json: { body: body }, body: body, status: "draft",
+          const { error: insErr } = await supabase.from("letters").insert({
+            contract_id: r.contractId, property_id: propId, letter_type: "demand",
+            title: baseSubject,
+            content_json: { body: body }, status: "ready",
+            billing_year: year, billing_type: "management",
           });
+          if (insErr) { alert("שגיאה ביצירת מכתב: " + insErr.message); throw insErr; }
           created++;
         }
       }
@@ -1009,7 +1012,7 @@ function InsuranceTab({ properties }: { properties: any[] }) {
         .eq("charge_type", "insurance")
         .eq("billing_period_start", year + "-01-01"),
       supabase.from("letters")
-        .select("id, title, subject, contract_id, contracts(property_id)")
+        .select("id, title, contract_id, status, contracts(property_id)")
         .eq("letter_type", "notice")
         .or("subject.eq.חיוב ביטוח מבנה " + year + ",title.eq.חיוב ביטוח מבנה " + year + ",title.eq.מכתב מתוקן — חיוב ביטוח מבנה " + year),
     ]);
@@ -1476,26 +1479,27 @@ function InsuranceTab({ properties }: { properties: any[] }) {
         var ex = byContract[r.contractId];
         if (ex) {
           var fixedTitle = "מכתב מתוקן — חיוב ביטוח מבנה " + year;
-          await supabase.from("letters").update({
+          var { error: upErr } = await supabase.from("letters").update({
             title: fixedTitle,
-            subject: fixedTitle,
             content_json: { body: body + "\n\n[מכתב מתוקן בתאריך " + today + "]", corrected: true, correctedAt: today },
-            body: body,
-            status: "draft",
+            status: "ready", sent_at: null, sent_to: null,
           }).eq("id", ex.id);
+          if (upErr) { alert("שגיאה בעדכון מכתב: " + upErr.message); throw upErr; }
           await logAudit({ entity_type: "letter", entity_id: ex.id, action: "fix_ins_letter" });
           updated++;
         } else {
           var origTitle = "חיוב ביטוח מבנה " + year;
-          await supabase.from("letters").insert({
+          var { error: insErr } = await supabase.from("letters").insert({
             contract_id: r.contractId,
+            property_id: propId,
             letter_type: "notice",
             title: origTitle,
-            subject: origTitle,
             content_json: { body: body },
-            body: body,
-            status: "draft",
+            status: "ready",
+            billing_year: year,
+            billing_type: "insurance",
           });
+          if (insErr) { alert("שגיאה ביצירת מכתב: " + insErr.message); throw insErr; }
           created++;
         }
       }
@@ -1915,7 +1919,7 @@ function WasteTab({ properties }: { properties: any[] }) {
         .select("id, total_amount, status, contract_id, notes, contracts(property_id, tenants(name))")
         .eq("charge_type", "waste").eq("billing_period_start", dates.start),
       supabase.from("letters")
-        .select("id, title, subject, contract_id, contracts(property_id)")
+        .select("id, title, contract_id, status, contracts(property_id)")
         .eq("letter_type", "notice")
         .or("subject.ilike.%פינוי אשפה — " + lbl + "%,title.ilike.%פינוי אשפה — " + lbl + "%"),
     ]);
@@ -2231,20 +2235,23 @@ function WasteTab({ properties }: { properties: any[] }) {
         const exL = byContractL[r.contractId];
         if (exL) {
           const fixedTitle = "מכתב מתוקן — חיוב פינוי אשפה — " + periodLabel;
-          await supabase.from("letters").update({
-            title: fixedTitle, subject: fixedTitle,
+          const { error: upErr } = await supabase.from("letters").update({
+            title: fixedTitle,
             content_json: { body: body + "\n\n[מכתב מתוקן בתאריך " + today + "]", corrected: true, correctedAt: today },
-            body: body, status: "draft",
+            status: "ready", sent_at: null, sent_to: null,
           }).eq("id", exL.id);
+          if (upErr) { alert("שגיאה בעדכון מכתב: " + upErr.message); throw upErr; }
           await logAudit({ entity_type: "letter", entity_id: exL.id, action: "fix_waste_letter" });
           updated++;
         } else {
           const origTitle = "חיוב פינוי אשפה — " + periodLabel;
-          await supabase.from("letters").insert({
-            contract_id: r.contractId, letter_type: "notice",
-            title: origTitle, subject: origTitle,
-            content_json: { body: body }, body: body, status: "draft",
+          const { error: insErr } = await supabase.from("letters").insert({
+            contract_id: r.contractId, property_id: propId, letter_type: "notice",
+            title: origTitle,
+            content_json: { body: body }, status: "ready",
+            billing_year: year, billing_type: "waste",
           });
+          if (insErr) { alert("שגיאה ביצירת מכתב: " + insErr.message); throw insErr; }
           created++;
         }
       }
