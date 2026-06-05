@@ -3,6 +3,8 @@ import { useState, useEffect, useRef } from "react";
 import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit-log';
 import PropertyHierarchyFilter from '@/components/PropertyHierarchyFilter';
+import { loadCompanyInfo, letterContent } from '@/lib/letter-format';
+import { businessDeadline } from '@/lib/business-days';
 
 // Minimum months of rent that a guarantee should cover. Below this, the
 // row is flagged "underinsured". Industry norm in Israel is ~3 months.
@@ -94,6 +96,10 @@ export default function GuaranteesPage() {
   const newFileRef = useRef<HTMLInputElement>(null);
   const [fUploading, setFUploading] = useState(false);
 
+  // Guarantee-renewal letter modal.
+  const [guarLetter, setGuarLetter] = useState<any | null>(null);
+  const [guarSaving, setGuarSaving] = useState(false);
+
   useEffect(function () { loadAll(); }, []);
 
   async function loadAll() {
@@ -127,6 +133,79 @@ export default function GuaranteesPage() {
       }
     });
     return counted > 0 ? total : null;
+  }
+
+  // ─── Guarantee-renewal letter ───
+  // Open the renewal-letter modal for a guarantee: pulls the existing
+  // number/amount/expiry, computes the contractually-required amount, and flags
+  // when it exceeds the current guarantee by >5% (→ demand a corrected amount).
+  function openGuaranteeLetter(g: any) {
+    var contract = contracts.find(function(c){ return c.id === (g.contracts?.id || g.contract_id); }) || g.contracts || {};
+    var monthly = monthlyRentOf(contract) || monthlyRentOf(g.contracts) || 0;
+    var months = Number(contract.guarantee_months) || 0;
+    var currentAmount = Number(g.amount_actual) || Number(g.amount_required) || Number(contract.guarantee_amount) || 0;
+    var requiredNow = (months > 0 && monthly > 0) ? Math.round(months * monthly) : (Number(g.amount_required) || Number(contract.guarantee_amount) || 0);
+    var changePct = currentAmount > 0 ? ((requiredNow - currentAmount) / currentAmount) * 100 : 0;
+    var needsUpdate = requiredNow > 0 && currentAmount > 0 && changePct > 5;
+    var deadline = g.end_date ? businessDeadline(g.end_date, 5) : null;
+    setGuarLetter({
+      g: g, tenantName: g.contracts?.tenants?.name || (contract as any)?.tenants?.name || "",
+      monthly: monthly, months: months, currentAmount: currentAmount, requiredNow: requiredNow,
+      changePct: changePct, needsUpdate: needsUpdate, includeUpdate: needsUpdate,
+      deadlineLabel: deadline ? deadline.label : "",
+      propId: g.contracts?.property_id || (contract as any)?.property_id || "",
+    });
+  }
+
+  // Build the formal renewal-letter body. `companyName` is filled at create time.
+  function buildGuaranteeBody(s: any, companyName: string): string {
+    var g = s.g;
+    var body = "לכבוד\n" + s.tenantName + "\n\nשלום רב,\n\n";
+    body += "הנדון: חידוש ערבות" + (g.reference_number ? " מס' " + g.reference_number : "") + "\n\n";
+    body += "בהתאם להוראות הסכם השכירות, ולקראת מועד פקיעת הערבות שבידינו, נבקשכם לחדש את הערבות כמפורט להלן:\n\n";
+    body += "פרטי הערבות הקיימת:\n";
+    body += "מספר ערבות: " + (g.reference_number || "—") + "\n";
+    if (g.bank) body += "בנק/מנפיק: " + g.bank + (g.branch ? " סניף " + g.branch : "") + "\n";
+    body += "סכום הערבות: " + fmtMoney(s.currentAmount) + "\n";
+    body += "בתוקף עד: " + fmtDate(g.end_date) + "\n\n";
+    if (s.includeUpdate && s.needsUpdate) {
+      body += "עדכון סכום הערבות:\n";
+      body += "בהתאם לסעיף הערבות בהסכם, ולאור שינוי מהותי בתנאי ההסכם (הגדלת שטחים / עליית דמי שכירות מעבר למדד) בשיעור של כ-" + Math.round(s.changePct) + "% מעל סכום הערבות הקיים, עודכן סכום הערבות הנדרש:\n";
+      if (s.months > 0 && s.monthly > 0) body += "חישוב: " + s.months + " חודשי שכירות × " + fmtMoney(s.monthly) + " = " + fmtMoney(s.requiredNow) + "\n";
+      body += "סכום ערבות נדרש מעודכן: " + fmtMoney(s.requiredNow) + " (במקום " + fmtMoney(s.currentAmount) + ")\n\n";
+      body += "לפיכך נבקשכם להמציא ערבות חדשה בתוקף ובסכום המעודכן כאמור.\n\n";
+    } else {
+      body += "נבקשכם להמציא ערבות חדשה בתוקף, באותו סכום ובתנאים זהים.\n\n";
+    }
+    if (s.deadlineLabel) body += "יש להמציא את הערבות המחודשת עד ולא יאוחר מיום " + s.deadlineLabel + " (5 ימי עסקים ממועד פקיעת הערבות הנוכחית).\n\n";
+    body += "אי-המצאת ערבות בתוקף במועד עלולה להוות הפרה של הסכם השכירות.\n\n";
+    body += "בכבוד רב ובברכה,\n\n" + (companyName || "הנהלת הנכס");
+    return body;
+  }
+
+  async function createGuaranteeLetter() {
+    if (!guarLetter) return;
+    setGuarSaving(true);
+    try {
+      var ci = await loadCompanyInfo(guarLetter.propId);
+      var body = buildGuaranteeBody(guarLetter, ci.companyName);
+      var ref = guarLetter.g.reference_number || guarLetter.g.bank || "";
+      var title = "חידוש ערבות" + (ref ? " " + ref : "");
+      var { data, error } = await supabase.from("letters").insert({
+        contract_id: guarLetter.g.contract_id,
+        property_id: guarLetter.propId,
+        letter_type: "demand",
+        title: title,
+        content_json: letterContent(body, ci, { kind: "guarantee_renewal", guaranteeId: guarLetter.g.id, tenant: guarLetter.tenantName }),
+        status: "ready",
+        billing_type: "guarantee",
+      }).select().single();
+      if (error) throw error;
+      await logAudit({ entity_type: "letter", entity_id: data.id, action: "guarantee_renewal_letter", notes: guarLetter.tenantName });
+      setGuarLetter(null);
+      alert("✅ נוצר מכתב חידוש ערבות — נמצא במסך מכתבים (📤 מוכן לשליחה, אייקון 🏦)");
+    } catch (e: any) { alert("שגיאה: " + (e?.message || e)); }
+    finally { setGuarSaving(false); }
   }
 
   // Upload a file to the documents bucket; returns the public URL.
@@ -729,6 +808,12 @@ export default function GuaranteesPage() {
                             🔄 החלפה
                           </button>
                         )}
+                        {g.contract_id && (
+                          <button onClick={function () { openGuaranteeLetter(g); }} title="צור מכתב דרישה לחידוש הערבות (עם מספר וסכום, ומועד 5 ימי עסקים)"
+                            className="text-xs border border-amber-200 bg-amber-50 rounded px-2 py-1 text-amber-700 hover:bg-amber-100">
+                            🏦 מכתב חידוש
+                          </button>
+                        )}
                         {/* Documents list — original + every extension/replacement attachment */}
                         {(function() {
                           var docs: any[] = Array.isArray(g.documents) ? g.documents.slice() : [];
@@ -925,6 +1010,72 @@ export default function GuaranteesPage() {
               <div className="flex gap-3 pt-2">
                 <button onClick={function () { setExtendingId(""); }} className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm text-slate-600">ביטול</button>
                 <button onClick={handleExtend} className="flex-1 rounded-xl bg-blue-700 py-2.5 text-sm font-bold text-white">⏰ הארך</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── Guarantee-renewal letter modal ─── */}
+      {guarLetter && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={function(){setGuarLetter(null);}}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={function(e){e.stopPropagation();}} dir="rtl">
+            <div className="sticky top-0 bg-white border-b px-6 py-4 flex items-center justify-between">
+              <div>
+                <h2 className="font-bold text-slate-800 text-lg">🏦 מכתב חידוש ערבות</h2>
+                <p className="text-xs text-slate-500 mt-0.5">{guarLetter.tenantName}</p>
+              </div>
+              <button onClick={function(){setGuarLetter(null);}} className="text-2xl text-slate-400">×</button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div className="rounded-lg bg-slate-50 border border-slate-200 p-3">
+                  <div className="text-xs text-slate-500">מספר ערבות</div>
+                  <div className="font-bold text-slate-800">{guarLetter.g.reference_number || "—"}</div>
+                </div>
+                <div className="rounded-lg bg-slate-50 border border-slate-200 p-3">
+                  <div className="text-xs text-slate-500">בתוקף עד</div>
+                  <div className="font-bold text-slate-800">{fmtDate(guarLetter.g.end_date)}</div>
+                </div>
+                <div className="rounded-lg bg-slate-50 border border-slate-200 p-3">
+                  <div className="text-xs text-slate-500">סכום קיים</div>
+                  <div className="font-bold text-slate-800">{fmtMoney(guarLetter.currentAmount)}</div>
+                </div>
+                <div className="rounded-lg bg-amber-50 border border-amber-200 p-3">
+                  <div className="text-xs text-amber-700">מועד אחרון להמצאה (5 ימי עסקים)</div>
+                  <div className="font-bold text-amber-800">{guarLetter.deadlineLabel || "—"}</div>
+                </div>
+              </div>
+
+              {guarLetter.requiredNow > 0 && (
+                <div className={"rounded-xl border p-3 text-sm " + (guarLetter.needsUpdate ? "border-red-200 bg-red-50" : "border-green-200 bg-green-50")}>
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold text-slate-700">סכום נדרש לפי ההסכם</span>
+                    <span className="font-bold">{fmtMoney(guarLetter.requiredNow)}</span>
+                  </div>
+                  {guarLetter.months > 0 && guarLetter.monthly > 0 && (
+                    <div className="text-xs text-slate-500 mt-1">חישוב: {guarLetter.months} חודשים × {fmtMoney(guarLetter.monthly)}</div>
+                  )}
+                  {guarLetter.needsUpdate ? (
+                    <label className="flex items-center gap-2 mt-2 text-xs font-semibold text-red-700 cursor-pointer">
+                      <input type="checkbox" checked={guarLetter.includeUpdate} onChange={function(e){ setGuarLetter({ ...guarLetter, includeUpdate: e.target.checked }); }} className="w-4 h-4 accent-red-600"/>
+                      שינוי של כ-{Math.round(guarLetter.changePct)}% — לכלול דרישה לעדכון סכום הערבות במכתב
+                    </label>
+                  ) : (
+                    <div className="text-xs text-green-700 mt-1">✓ הסכום הקיים תואם לדרישת ההסכם (אין צורך בעדכון).</div>
+                  )}
+                </div>
+              )}
+
+              <div>
+                <div className="text-xs font-semibold text-slate-600 mb-1">תצוגה מקדימה של נוסח המכתב</div>
+                <div className="text-xs text-slate-700 whitespace-pre-wrap bg-slate-50 rounded-lg p-3 border max-h-60 overflow-y-auto">{buildGuaranteeBody(guarLetter, "")}</div>
+                <div className="text-[11px] text-slate-400 mt-1">הכותרת הרשמית (לוגו, שם החברה, חתימה) תתווסף אוטומטית בהדפסה.</div>
+              </div>
+
+              <div className="flex gap-3 pt-1">
+                <button onClick={function(){setGuarLetter(null);}} className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm text-slate-600">ביטול</button>
+                <button onClick={createGuaranteeLetter} disabled={guarSaving} className="flex-1 rounded-xl bg-amber-600 py-2.5 text-sm font-bold text-white hover:bg-amber-700 disabled:opacity-50">{guarSaving ? "יוצר..." : "🏦 צור מכתב חידוש"}</button>
               </div>
             </div>
           </div>
