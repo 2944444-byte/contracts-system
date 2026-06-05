@@ -15,6 +15,41 @@ const LETTER_TYPES = [
 
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
 
+// Purpose-based categories — what the letter is actually about, used for the
+// row icon and the "סוג" filter. This is more meaningful than the raw
+// letter_type, because e.g. a payment demand and an insurance-certificate
+// demand are both letter_type "demand" but mean very different things.
+const LETTER_CATEGORIES = [
+  { key: "money",       icon: "💰", label: "דרישת תשלום / כספי" },
+  { key: "certificate", icon: "🛡️", label: "דרישת אישור (ביטוח/אש)" },
+  { key: "guarantee",   icon: "🏦", label: "חידוש ערבות" },
+  { key: "renewal",     icon: "🔄", label: "חידוש חוזה" },
+  { key: "notice",      icon: "📢", label: "הודעה" },
+  { key: "other",       icon: "📄", label: "אחר" },
+];
+
+function parseCj(l: any): any {
+  var cj = l.content_json;
+  if (typeof cj === "string") { try { cj = JSON.parse(cj); } catch (e) { cj = {}; } }
+  return cj || {};
+}
+
+// Classify a letter by purpose. Money = all billing letters (advances, rent
+// redemption, CPI diff, insurance/management/waste charges, any debt). Cert =
+// insurance / fire-safety certificate renewal requests. Guarantee = guarantee
+// renewal requests.
+function letterCategory(l: any): string {
+  var kind = parseCj(l).kind || "";
+  if (kind === "insurance_demand" || kind === "safety_demand" || kind === "certificate_demand") return "certificate";
+  if (kind === "guarantee_renewal" || l.billing_type === "guarantee" || l.letter_type === "guarantee") return "guarantee";
+  if (l.billing_type) return "money";            // every auto-generated billing letter
+  if (l.letter_type === "demand" || l.letter_type === "indexation") return "money";
+  if (l.letter_type === "renewal") return "renewal";
+  if (l.letter_type === "notice") return "notice";
+  return "other";
+}
+const categoryInfo = function(key: string) { return LETTER_CATEGORIES.find(function(c){ return c.key === key; }) || LETTER_CATEGORIES[5]; };
+
 export default function LettersPage() {
   const [letters,   setLetters]   = useState<any[]>([]);
   const [contracts, setContracts] = useState<any[]>([]);
@@ -516,7 +551,7 @@ export default function LettersPage() {
         allYears.sort(function(a, b) { return b - a; });
 
         var filtered = letters.filter(function(l: any) {
-          if (filterType && l.letter_type !== filterType) return false;
+          if (filterType && letterCategory(l) !== filterType) return false;
           var ly = l.billing_year || (l.created_at ? new Date(l.created_at).getFullYear() : 0);
           if (filterYear && String(ly) !== filterYear) return false;
           var pid = l.property_id || l.contracts?.properties?.id || "";
@@ -562,9 +597,9 @@ export default function LettersPage() {
                 <option value="">📅 שנה: הכל</option>
                 {allYears.map(function(y){ return <option key={y} value={String(y)}>{y}</option>; })}
               </select>
-              <select value={filterType} onChange={function(e){setFilterType(e.target.value);}} className={ic + " w-40"}>
+              <select value={filterType} onChange={function(e){setFilterType(e.target.value);}} className={ic + " w-48"}>
                 <option value="">📋 סוג: הכל</option>
-                {LETTER_TYPES.map(function(t){ return <option key={t.v} value={t.v}>{t.icon} {t.l}</option>; })}
+                {LETTER_CATEGORIES.map(function(c){ return <option key={c.key} value={c.key}>{c.icon} {c.label}</option>; })}
               </select>
               <select value={filterProp} onChange={function(e){setFilterProp(e.target.value);}} className={ic + " w-44"}>
                 <option value="">🏢 נכס: הכל</option>
@@ -616,7 +651,7 @@ export default function LettersPage() {
                         <table className="w-full text-right text-sm">
                           <tbody>
                             {g.items.map(function(l: any) {
-                              const ti = typeInfo(l.letter_type);
+                              const cat = categoryInfo(letterCategory(l));
                               const st = l.status || "draft";
                               const isSent = st === "sent";
                               const isReady = st === "ready";
@@ -627,7 +662,7 @@ export default function LettersPage() {
                                   <td className="pr-4 pl-1 py-2.5 w-8">
                                     <input type="checkbox" checked={checked} onChange={function(){toggleSelect(l.id);}} className="w-4 h-4 cursor-pointer accent-blue-600" />
                                   </td>
-                                  <td className="px-1 py-2.5 w-8 text-base">{ti.icon}</td>
+                                  <td className="px-1 py-2.5 w-8 text-base" title={cat.label}>{cat.icon}</td>
                                   <td className="px-2 py-2.5">
                                     <div className="font-semibold text-slate-800 flex items-center gap-1.5">
                                       {l.title || "—"}
