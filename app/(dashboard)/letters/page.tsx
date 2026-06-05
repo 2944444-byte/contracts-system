@@ -374,7 +374,6 @@ export default function LettersPage() {
     await supabase.from("letters").delete().eq("id",id); await loadAll();
   }
 
-  const typeInfo = function(v: string) { return LETTER_TYPES.find(function(t){return t.v===v;})??LETTER_TYPES[4]; };
 
   function recipientEmail(l: any): string {
     return l.contracts?.tenants?.primary_email || l.contracts?.tenants?.contact_email || "";
@@ -569,16 +568,26 @@ export default function LettersPage() {
           return true;
         });
 
-        // Group by property
-        var groups: Record<string, { name: string; key: string; items: any[] }> = {};
-        filtered.forEach(function(l: any) {
-          var pid = l.property_id || l.contracts?.properties?.id || "";
-          var pname = l.contracts?.properties?.name || "ללא נכס";
-          var key = pid || pname;
-          if (!groups[key]) groups[key] = { name: pname, key: key, items: [] };
-          groups[key].items.push(l);
-        });
-        var groupList = Object.values(groups).sort(function(a, b) { return a.name.localeCompare(b.name, "he"); });
+        // Group a subset of letters by property. `prefix` keeps the collapse
+        // keys unique across the two send-state sections (same property can
+        // appear in both "ממתינים" and "נשלחו").
+        var buildGroups = function(items: any[], prefix: string) {
+          var groups: Record<string, { name: string; key: string; items: any[] }> = {};
+          items.forEach(function(l: any) {
+            var pid = l.property_id || l.contracts?.properties?.id || "";
+            var pname = l.contracts?.properties?.name || "ללא נכס";
+            var key = prefix + ":" + (pid || pname);
+            if (!groups[key]) groups[key] = { name: pname, key: key, items: [] };
+            groups[key].items.push(l);
+          });
+          return Object.values(groups).sort(function(a, b) { return a.name.localeCompare(b.name, "he"); });
+        };
+
+        // Split: not-yet-sent (draft + ready) vs already sent.
+        var unsentLetters = filtered.filter(function(l: any){ return (l.status || "draft") !== "sent"; });
+        var sentLetters   = filtered.filter(function(l: any){ return (l.status || "draft") === "sent"; });
+        var unsentGroups = buildGroups(unsentLetters, "unsent");
+        var sentGroups   = buildGroups(sentLetters, "sent");
 
         return (
           <>
@@ -624,8 +633,9 @@ export default function LettersPage() {
                 לא נמצאו מכתבים התואמים את הסינון
               </div>
             ) : (
-              <div className="space-y-3">
-                {groupList.map(function(g) {
+              <div className="space-y-5">
+                {(function(){
+                  var renderGroup = function(g: any) {
                   var collapsed = !!collapsedGroups[g.key];
                   var allSel = g.items.length > 0 && g.items.every(function(l: any){ return selected[l.id]; });
                   return (
@@ -711,7 +721,30 @@ export default function LettersPage() {
                       )}
                     </div>
                   );
-                })}
+                  };
+                  return (
+                    <>
+                      {unsentGroups.length > 0 && (
+                        <div className="mb-5">
+                          <div className="flex items-center gap-2 mb-2 px-1">
+                            <span className="text-sm font-bold text-slate-700">📤 ממתינים לשליחה</span>
+                            <span className="text-xs bg-blue-100 text-blue-700 rounded-full px-2 py-0.5 font-semibold">{unsentLetters.length}</span>
+                          </div>
+                          <div className="space-y-3">{unsentGroups.map(renderGroup)}</div>
+                        </div>
+                      )}
+                      {sentGroups.length > 0 && (
+                        <div>
+                          <div className="flex items-center gap-2 mb-2 px-1 pt-3 border-t border-slate-200">
+                            <span className="text-sm font-bold text-slate-700">✓ נשלחו</span>
+                            <span className="text-xs bg-green-100 text-green-700 rounded-full px-2 py-0.5 font-semibold">{sentLetters.length}</span>
+                          </div>
+                          <div className="space-y-3">{sentGroups.map(renderGroup)}</div>
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
               </div>
             )}
           </>
