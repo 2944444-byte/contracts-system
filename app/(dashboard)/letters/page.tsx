@@ -28,6 +28,15 @@ const LETTER_CATEGORIES = [
   { key: "other",       icon: "📄", label: "אחר" },
 ];
 
+// Recipient domains — a tenant/organization can route each domain to a
+// different contact person (finance, certificates, guarantees, general).
+const RECIPIENT_DOMAINS = [
+  { key: "money",       icon: "💰", label: "כספים / חיובים" },
+  { key: "certificate", icon: "🛡️", label: "אישורי ביטוח/אש" },
+  { key: "guarantee",   icon: "🏦", label: "ערבויות" },
+  { key: "general",     icon: "📄", label: "כללי (ברירת מחדל)" },
+];
+
 function parseCj(l: any): any {
   var cj = l.content_json;
   if (typeof cj === "string") { try { cj = JSON.parse(cj); } catch (e) { cj = {}; } }
@@ -77,6 +86,9 @@ export default function LettersPage() {
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   // When set, shows the merged-letter preview modal (one entry per recipient).
   const [mergeView, setMergeView] = useState<any[] | null>(null);
+  // Recipients editor modal state ({tenantId, tenantName, rows}).
+  const [recip, setRecip] = useState<any | null>(null);
+  const [recipSaving, setRecipSaving] = useState(false);
 
   function toggleGroup(key: string) {
     setCollapsedGroups(function(prev) { return { ...prev, [key]: !prev[key] }; });
@@ -99,7 +111,7 @@ export default function LettersPage() {
 
   async function loadAll() {
     const [{ data: l }, { data: c }, { data: t }] = await Promise.all([
-      supabase.from("letters").select("*, contracts(tenants(name,primary_email,contact_email,contact_name),properties(id,name))").order("created_at",{ascending:false}),
+      supabase.from("letters").select("*, contracts(tenant_id, tenants(id,name,primary_email,contact_email,email,contact_name,contacts),properties(id,name))").order("created_at",{ascending:false}),
       supabase.from("contracts").select("id,tenants(name,contact_name),properties(name,address)").in("status",["active","expiring","extended"]),
       supabase.from("document_templates").select("*").eq("is_active",true).order("name"),
     ]);
@@ -375,8 +387,70 @@ export default function LettersPage() {
   }
 
 
+  // Which recipient-domain a letter routes to. Money/cert/guarantee each get
+  // their own contact; everything else falls back to "general".
+  function routeDomain(l: any): string {
+    var cat = letterCategory(l);
+    return (cat === "money" || cat === "certificate" || cat === "guarantee") ? cat : "general";
+  }
+  // Resolve the best recipient for a letter, honoring per-domain contacts stored
+  // on tenants.contacts (each contact may carry a `domains` array). Falls back:
+  // domain contact → general contact → any contact with email → tenant emails.
+  function resolveRecipient(l: any): { email: string; name: string; source: string } {
+    var t = l.contracts?.tenants || {};
+    var contacts = Array.isArray(t.contacts) ? t.contacts : [];
+    var dom = routeDomain(l);
+    var byDomain = contacts.find(function(c: any){ return c && c.email && Array.isArray(c.domains) && c.domains.indexOf(dom) !== -1; });
+    if (byDomain) return { email: byDomain.email, name: byDomain.name || "", source: dom };
+    var general = contacts.find(function(c: any){ return c && c.email && Array.isArray(c.domains) && c.domains.indexOf("general") !== -1; });
+    if (general) return { email: general.email, name: general.name || "", source: "general" };
+    var any = contacts.find(function(c: any){ return c && c.email; });
+    if (any) return { email: any.email, name: any.name || "", source: "contact" };
+    return { email: t.primary_email || t.contact_email || t.email || "", name: t.name || "", source: "tenant" };
+  }
   function recipientEmail(l: any): string {
-    return l.contracts?.tenants?.primary_email || l.contracts?.tenants?.contact_email || "";
+    return resolveRecipient(l).email;
+  }
+
+  // ─── Recipients editor (per-tenant, per-domain contacts) ───
+  function openRecipients(l: any) {
+    var t = l.contracts?.tenants || {};
+    var tid = t.id || l.contracts?.tenant_id || "";
+    if (!tid) { alert("לא נמצא שוכר משויך למכתב"); return; }
+    var existing = Array.isArray(t.contacts) ? t.contacts : [];
+    // Seed an empty row if the tenant has no contacts yet, pre-filling any
+    // legacy tenant-level email so nothing is lost.
+    var seed = existing.length ? existing.map(function(c: any){ return { name: c.name || "", email: c.email || "", phone: c.phone || "", role: c.role || "", domains: Array.isArray(c.domains) ? c.domains : [] }; })
+      : [{ name: t.contact_name || "", email: t.primary_email || t.contact_email || t.email || "", phone: t.phone || "", role: "", domains: ["general"] }];
+    setRecip({ tenantId: tid, tenantName: t.name || "", rows: seed });
+  }
+  function recipUpdate(i: number, patch: any) {
+    setRecip(function(prev: any){ if (!prev) return prev; var rows = prev.rows.slice(); rows[i] = { ...rows[i], ...patch }; return { ...prev, rows: rows }; });
+  }
+  function recipToggleDomain(i: number, dom: string) {
+    setRecip(function(prev: any){
+      if (!prev) return prev;
+      var rows = prev.rows.slice();
+      var ds = Array.isArray(rows[i].domains) ? rows[i].domains.slice() : [];
+      var at = ds.indexOf(dom);
+      if (at === -1) ds.push(dom); else ds.splice(at, 1);
+      rows[i] = { ...rows[i], domains: ds };
+      return { ...prev, rows: rows };
+    });
+  }
+  function recipAddRow() { setRecip(function(prev: any){ if (!prev) return prev; return { ...prev, rows: prev.rows.concat([{ name: "", email: "", phone: "", role: "", domains: [] }]) }; }); }
+  function recipRemoveRow(i: number) { setRecip(function(prev: any){ if (!prev) return prev; var rows = prev.rows.slice(); rows.splice(i, 1); return { ...prev, rows: rows }; }); }
+  async function recipSave() {
+    if (!recip) return;
+    var clean = recip.rows.filter(function(r: any){ return (r.name || "").trim() || (r.email || "").trim(); });
+    setRecipSaving(true);
+    try {
+      var { error } = await supabase.from("tenants").update({ contacts: clean }).eq("id", recip.tenantId);
+      if (error) throw error;
+      await logAudit({ entity_type: "tenant", entity_id: recip.tenantId, action: "update_recipients", notes: clean.length + " אנשי קשר" });
+      setRecip(null); await loadAll();
+    } catch (e: any) { alert("שגיאה בשמירת נמענים: " + (e?.message || e)); }
+    finally { setRecipSaving(false); }
   }
 
   // Record that a letter was sent — to whom and when (visible in the list).
@@ -682,8 +756,20 @@ export default function LettersPage() {
                                         return corrected ? <span className="text-[10px] bg-amber-100 text-amber-700 rounded-full px-1.5 py-0.5 font-semibold">🔧 מתוקן</span> : null;
                                       })()}
                                     </div>
-                                    <div className="text-xs text-slate-500">
-                                      אל: {l.contracts?.tenants?.name || "—"}{recEmail ? " · " + recEmail : ""}
+                                    <div className="text-xs text-slate-500 flex items-center gap-1 flex-wrap">
+                                      <span>אל: {l.contracts?.tenants?.name || "—"}</span>
+                                      {(function(){
+                                        var rec = resolveRecipient(l);
+                                        var dom = RECIPIENT_DOMAINS.find(function(d){ return d.key === routeDomain(l); });
+                                        return (
+                                          <>
+                                            {rec.email
+                                              ? <span className="text-slate-600">· {dom ? dom.icon : ""} {rec.email}{rec.name ? " (" + rec.name + ")" : ""}</span>
+                                              : <span className="text-amber-600">· ⚠ אין נמען</span>}
+                                            <button onClick={function(){openRecipients(l);}} className="text-blue-500 hover:text-blue-700 border border-slate-200 rounded px-1 leading-none" title="עריכת נמענים לפי תחום">✎ נמענים</button>
+                                          </>
+                                        );
+                                      })()}
                                     </div>
                                   </td>
                                   <td className="px-2 py-2.5 w-32">
@@ -801,6 +887,52 @@ export default function LettersPage() {
               <div className="flex gap-3 pt-1">
                 <button onClick={function(){setMergeView(null);}} className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm text-slate-600">ביטול</button>
                 <button onClick={sendAllMergeGroups} className="flex-1 rounded-xl bg-blue-700 py-2.5 text-sm font-bold text-white hover:bg-blue-800">📧 שלח {mergeView.length} מיילים וסמן כנשלח</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── Recipients editor: per-domain contacts for a tenant ─── */}
+      {recip && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={function(){setRecip(null);}}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto" onClick={function(e){e.stopPropagation();}} dir="rtl">
+            <div className="sticky top-0 bg-white border-b px-6 py-4 flex items-center justify-between">
+              <div>
+                <h2 className="font-bold text-slate-800 text-lg">נמענים — {recip.tenantName}</h2>
+                <p className="text-xs text-slate-500 mt-0.5">לכל איש קשר ניתן לשייך תחומים. מכתב מנותב אוטומטית לאיש הקשר של התחום שלו (כספים / אישורים / ערבויות), אחרת ל"כללי".</p>
+              </div>
+              <button onClick={function(){setRecip(null);}} className="text-2xl text-slate-400">×</button>
+            </div>
+            <div className="p-6 space-y-3">
+              {recip.rows.map(function(r: any, i: number) {
+                return (
+                  <div key={i} className="rounded-xl border border-slate-200 p-3 space-y-2">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                      <input value={r.name} onChange={function(e){recipUpdate(i,{name:e.target.value});}} placeholder="שם איש קשר" className={ic}/>
+                      <input value={r.email} onChange={function(e){recipUpdate(i,{email:e.target.value});}} placeholder="אימייל" className={ic} type="email" dir="ltr"/>
+                      <input value={r.phone} onChange={function(e){recipUpdate(i,{phone:e.target.value});}} placeholder="טלפון" className={ic} dir="ltr"/>
+                    </div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-xs text-slate-500">תחומים:</span>
+                      {RECIPIENT_DOMAINS.map(function(d){
+                        var on = Array.isArray(r.domains) && r.domains.indexOf(d.key) !== -1;
+                        return (
+                          <button key={d.key} type="button" onClick={function(){recipToggleDomain(i,d.key);}}
+                            className={"rounded-full border px-2.5 py-1 text-xs font-semibold " + (on ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-200 text-slate-500 hover:bg-slate-50")}>
+                            {d.icon} {d.label}
+                          </button>
+                        );
+                      })}
+                      <button onClick={function(){recipRemoveRow(i);}} className="mr-auto text-xs text-red-400 hover:text-red-600 border border-red-100 rounded px-2 py-1">🗑 הסר</button>
+                    </div>
+                  </div>
+                );
+              })}
+              <button onClick={recipAddRow} className="text-sm text-blue-600 hover:underline">+ הוסף איש קשר</button>
+              <div className="flex gap-3 pt-2">
+                <button onClick={function(){setRecip(null);}} className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm text-slate-600">ביטול</button>
+                <button onClick={recipSave} disabled={recipSaving} className="flex-1 rounded-xl bg-blue-700 py-2.5 text-sm font-bold text-white disabled:opacity-50">{recipSaving ? "שומר..." : "שמור נמענים"}</button>
               </div>
             </div>
           </div>
