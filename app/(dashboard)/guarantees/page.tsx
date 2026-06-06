@@ -4,7 +4,7 @@ import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit-log';
 import PropertyHierarchyFilter from '@/components/PropertyHierarchyFilter';
 import { loadCompanyInfo, letterContent } from '@/lib/letter-format';
-import { businessDeadline } from '@/lib/business-days';
+import { computeGuaranteeRenewal, buildGuaranteeRenewalBody } from '@/lib/guarantee-letters';
 
 // Minimum months of rent that a guarantee should cover. Below this, the
 // row is flagged "underinsured". Industry norm in Israel is ~3 months.
@@ -141,46 +141,14 @@ export default function GuaranteesPage() {
   // when it exceeds the current guarantee by >5% (→ demand a corrected amount).
   function openGuaranteeLetter(g: any) {
     var contract = contracts.find(function(c){ return c.id === (g.contracts?.id || g.contract_id); }) || g.contracts || {};
-    var monthly = monthlyRentOf(contract) || monthlyRentOf(g.contracts) || 0;
-    var months = Number(contract.guarantee_months) || 0;
-    var currentAmount = Number(g.amount_actual) || Number(g.amount_required) || Number(contract.guarantee_amount) || 0;
-    var requiredNow = (months > 0 && monthly > 0) ? Math.round(months * monthly) : (Number(g.amount_required) || Number(contract.guarantee_amount) || 0);
-    var changePct = currentAmount > 0 ? ((requiredNow - currentAmount) / currentAmount) * 100 : 0;
-    var needsUpdate = requiredNow > 0 && currentAmount > 0 && changePct > 5;
-    var deadline = g.end_date ? businessDeadline(g.end_date, 5) : null;
+    var calc = computeGuaranteeRenewal(g, contract);
     setGuarLetter({
       g: g, tenantName: g.contracts?.tenants?.name || (contract as any)?.tenants?.name || "",
-      monthly: monthly, months: months, currentAmount: currentAmount, requiredNow: requiredNow,
-      changePct: changePct, needsUpdate: needsUpdate, includeUpdate: needsUpdate,
-      deadlineLabel: deadline ? deadline.label : "",
+      includeUpdate: calc.needsUpdate,
       propId: g.contracts?.property_id || (contract as any)?.property_id || "",
+      monthly: calc.monthly, months: calc.months, currentAmount: calc.currentAmount, requiredNow: calc.requiredNow,
+      changePct: calc.changePct, needsUpdate: calc.needsUpdate, deadlineLabel: calc.deadlineLabel,
     });
-  }
-
-  // Build the formal renewal-letter body. `companyName` is filled at create time.
-  function buildGuaranteeBody(s: any, companyName: string): string {
-    var g = s.g;
-    var body = "לכבוד\n" + s.tenantName + "\n\nשלום רב,\n\n";
-    body += "הנדון: חידוש ערבות" + (g.reference_number ? " מס' " + g.reference_number : "") + "\n\n";
-    body += "בהתאם להוראות הסכם השכירות, ולקראת מועד פקיעת הערבות שבידינו, נבקשכם לחדש את הערבות כמפורט להלן:\n\n";
-    body += "פרטי הערבות הקיימת:\n";
-    body += "מספר ערבות: " + (g.reference_number || "—") + "\n";
-    if (g.bank) body += "בנק/מנפיק: " + g.bank + (g.branch ? " סניף " + g.branch : "") + "\n";
-    body += "סכום הערבות: " + fmtMoney(s.currentAmount) + "\n";
-    body += "בתוקף עד: " + fmtDate(g.end_date) + "\n\n";
-    if (s.includeUpdate && s.needsUpdate) {
-      body += "עדכון סכום הערבות:\n";
-      body += "בהתאם לסעיף הערבות בהסכם, ולאור שינוי מהותי בתנאי ההסכם (הגדלת שטחים / עליית דמי שכירות מעבר למדד) בשיעור של כ-" + Math.round(s.changePct) + "% מעל סכום הערבות הקיים, עודכן סכום הערבות הנדרש:\n";
-      if (s.months > 0 && s.monthly > 0) body += "חישוב: " + s.months + " חודשי שכירות × " + fmtMoney(s.monthly) + " = " + fmtMoney(s.requiredNow) + "\n";
-      body += "סכום ערבות נדרש מעודכן: " + fmtMoney(s.requiredNow) + " (במקום " + fmtMoney(s.currentAmount) + ")\n\n";
-      body += "לפיכך נבקשכם להמציא ערבות חדשה בתוקף ובסכום המעודכן כאמור.\n\n";
-    } else {
-      body += "נבקשכם להמציא ערבות חדשה בתוקף, באותו סכום ובתנאים זהים.\n\n";
-    }
-    if (s.deadlineLabel) body += "יש להמציא את הערבות המחודשת עד ולא יאוחר מיום " + s.deadlineLabel + " (5 ימי עסקים ממועד פקיעת הערבות הנוכחית).\n\n";
-    body += "אי-המצאת ערבות בתוקף במועד עלולה להוות הפרה של הסכם השכירות.\n\n";
-    body += "בכבוד רב ובברכה,\n\n" + (companyName || "הנהלת הנכס");
-    return body;
   }
 
   async function createGuaranteeLetter() {
@@ -188,7 +156,7 @@ export default function GuaranteesPage() {
     setGuarSaving(true);
     try {
       var ci = await loadCompanyInfo(guarLetter.propId);
-      var body = buildGuaranteeBody(guarLetter, ci.companyName);
+      var body = buildGuaranteeRenewalBody(guarLetter, ci.companyName);
       var ref = guarLetter.g.reference_number || guarLetter.g.bank || "";
       var title = "חידוש ערבות" + (ref ? " " + ref : "");
       var { data, error } = await supabase.from("letters").insert({
@@ -1069,7 +1037,7 @@ export default function GuaranteesPage() {
 
               <div>
                 <div className="text-xs font-semibold text-slate-600 mb-1">תצוגה מקדימה של נוסח המכתב</div>
-                <div className="text-xs text-slate-700 whitespace-pre-wrap bg-slate-50 rounded-lg p-3 border max-h-60 overflow-y-auto">{buildGuaranteeBody(guarLetter, "")}</div>
+                <div className="text-xs text-slate-700 whitespace-pre-wrap bg-slate-50 rounded-lg p-3 border max-h-60 overflow-y-auto">{buildGuaranteeRenewalBody(guarLetter, "")}</div>
                 <div className="text-[11px] text-slate-400 mt-1">הכותרת הרשמית (לוגו, שם החברה, חתימה) תתווסף אוטומטית בהדפסה.</div>
               </div>
 

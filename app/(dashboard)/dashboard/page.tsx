@@ -31,6 +31,7 @@ export default function DashboardPage() {
   const [spaces, setSpaces] = useState<any[]>([]);
   const [guarantees, setGuarantees] = useState<any[]>([]);
   const [alerts, setAlerts] = useState<any[]>([]);
+  const [unsentLetters, setUnsentLetters] = useState<any[]>([]);
   const [cpiRatios, setCpiRatios] = useState<Record<string, number>>({});
   const [cpiProgress, setCpiProgress] = useState<CalcProgressState | null>(null);
 
@@ -60,6 +61,12 @@ export default function DashboardPage() {
     setSpaces(sp ?? []);
     setGuarantees(gu ?? []);
     setAlerts(al ?? []);
+
+    // Letters waiting to be sent (draft + ready) — surfaced as a banner.
+    const { data: ul } = await supabase.from("letters")
+      .select("id,title,status,billing_type,contracts(tenants(name))")
+      .in("status", ["draft", "ready"]).order("created_at", { ascending: false });
+    setUnsentLetters(ul ?? []);
 
     // Compute per-contract CPI ratios.
     // Group contracts by (base date + mechanism) to dedupe CBS calls — but
@@ -252,6 +259,24 @@ export default function DashboardPage() {
         </div>
       ) : (
         <>
+          {unsentLetters.length > 0 && (() => {
+            var guarCount = unsentLetters.filter(function(l:any){ return l.billing_type === "guarantee"; }).length;
+            return (
+              <button onClick={function(){router.push("/letters");}}
+                className="w-full mb-4 flex items-center justify-between gap-3 rounded-2xl border border-amber-300 bg-amber-50 px-5 py-3.5 text-right hover:bg-amber-100 transition-colors">
+                <div className="flex items-center gap-3">
+                  <span className="text-2xl">✉️</span>
+                  <div>
+                    <div className="font-bold text-amber-800">{unsentLetters.length} מכתבים ממתינים לשליחה</div>
+                    <div className="text-xs text-amber-700">
+                      {guarCount > 0 ? "כולל " + guarCount + " מכתבי חידוש ערבות · " : ""}לחץ למסך המכתבים לבדיקה ושליחה
+                    </div>
+                  </div>
+                </div>
+                <span className="text-amber-600 font-bold text-sm whitespace-nowrap">למכתבים →</span>
+              </button>
+            );
+          })()}
           {cpiProgress && (
             <div className="mb-3">
               <CalcProgress {...cpiProgress} />

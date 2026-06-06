@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { runAlertSync, buildAlertsDigestHtml } from "@/lib/alerts-sync";
+import { autoCreateGuaranteeRenewalLetters, getUnsentLetters, buildLettersReminderHtml } from "@/lib/guarantee-letters";
 import { sendEmail } from "@/lib/email-utils";
 
 export const runtime = "nodejs";
@@ -27,17 +28,35 @@ export async function GET(req: NextRequest) {
 
   const { created, newAlerts } = await runAlertSync(supabase);
 
+  // Auto-create guarantee-renewal letters for guarantees expiring within 30 days
+  // (idempotent — skips guarantees that already have a renewal letter).
+  let createdGuaranteeLetters: Array<{ tenantName: string; ref: string; deadline: string; needsUpdate: boolean }> = [];
+  try { createdGuaranteeLetters = await autoCreateGuaranteeRenewalLetters(supabase, 30); }
+  catch (e) { /* best-effort */ }
+
+  // All letters still waiting to be sent (for the manager reminder).
+  let unsent: any[] = [];
+  try { unsent = await getUnsentLetters(supabase); } catch (e) { /* best-effort */ }
+
+  // Email the manager when there's anything to act on: new alerts, newly
+  // auto-created guarantee letters, or letters still waiting to be sent.
   let emailed = false; let emailError: string | undefined;
-  if (newAlerts.length > 0) {
+  const hasLettersReminder = createdGuaranteeLetters.length > 0 || unsent.length > 0;
+  if (newAlerts.length > 0 || hasLettersReminder) {
     try {
       // Recipient: first company with an email, else ALERT_EMAIL env.
       const { data: companies } = await supabase.from("companies").select("email").not("email", "is", null).limit(1);
       const to = (companies && companies[0]?.email) || process.env.ALERT_EMAIL || "";
       if (to) {
+        const alertsHtml = newAlerts.length > 0 ? buildAlertsDigestHtml(newAlerts) : "";
+        const lettersHtml = buildLettersReminderHtml(unsent, createdGuaranteeLetters);
+        const subjParts: string[] = [];
+        if (newAlerts.length > 0) subjParts.push(`${newAlerts.length} התראות`);
+        if (unsent.length > 0) subjParts.push(`${unsent.length} מכתבים לשליחה`);
         const res = await sendEmail({
           to,
-          subject: `התראות מערכת — ${newAlerts.length} חדשות (${new Date().toLocaleDateString("he-IL")})`,
-          html: buildAlertsDigestHtml(newAlerts),
+          subject: `PropManager — ${subjParts.join(" · ") || "סיכום יומי"} (${new Date().toLocaleDateString("he-IL")})`,
+          html: alertsHtml + lettersHtml,
         });
         emailed = res.ok; emailError = res.error;
       } else {
@@ -46,5 +65,9 @@ export async function GET(req: NextRequest) {
     } catch (e: any) { emailError = e?.message || String(e); }
   }
 
-  return NextResponse.json({ ok: true, created, emailed, emailError });
+  return NextResponse.json({
+    ok: true, created, emailed, emailError,
+    guaranteeLettersCreated: createdGuaranteeLetters.length,
+    unsentLetters: unsent.length,
+  });
 }
