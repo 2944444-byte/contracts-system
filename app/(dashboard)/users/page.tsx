@@ -16,11 +16,57 @@ export default function UsersPage() {
   const [fRole,     setFRole]     = useState("viewer");
   const [fPassword, setFPassword] = useState("");
 
+  // Property-access assignment modal.
+  const [properties, setProperties] = useState<any[]>([]);
+  const [pgroups,     setPgroups]    = useState<any[]>([]);
+  const [accessUser,  setAccessUser] = useState<any | null>(null);
+  const [accessSel,   setAccessSel]  = useState<Record<string, boolean>>({});
+  const [accessSaving,setAccessSaving]= useState(false);
+
   useEffect(function() { loadUsers(); }, []);
 
   async function loadUsers() {
-    const { data } = await supabase.from("user_profiles").select("*").order("created_at",{ascending:false});
-    setUsers(data??[]); setLoading(false);
+    const [{ data }, { data: p }, { data: g }] = await Promise.all([
+      supabase.from("user_profiles").select("*").order("created_at",{ascending:false}),
+      supabase.from("properties").select("id,name,group_id").order("name"),
+      supabase.from("property_groups").select("id,group_name").order("group_name"),
+    ]);
+    setUsers(data??[]); setProperties(p??[]); setPgroups(g??[]); setLoading(false);
+  }
+
+  // ─── Per-user property access (drives the letters CC mechanism) ───
+  async function openAccess(u: any) {
+    const { data } = await supabase.from("user_property_access").select("property_id").eq("user_id", u.id);
+    const sel: Record<string, boolean> = {};
+    (data ?? []).forEach(function(r: any){ sel[r.property_id] = true; });
+    setAccessSel(sel);
+    setAccessUser(u);
+  }
+  function toggleAccess(pid: string) {
+    setAccessSel(function(prev){ var n = { ...prev }; if (n[pid]) delete n[pid]; else n[pid] = true; return n; });
+  }
+  function setGroupAccess(propIds: string[], on: boolean) {
+    setAccessSel(function(prev){ var n = { ...prev }; propIds.forEach(function(id){ if (on) n[id] = true; else delete n[id]; }); return n; });
+  }
+  async function saveAccess() {
+    if (!accessUser) return;
+    setAccessSaving(true);
+    try {
+      const { data: cur } = await supabase.from("user_property_access").select("id,property_id").eq("user_id", accessUser.id);
+      const curIds: Record<string, string> = {};
+      (cur ?? []).forEach(function(r: any){ curIds[r.property_id] = r.id; });
+      const want = Object.keys(accessSel).filter(function(k){ return accessSel[k]; });
+      const toAdd = want.filter(function(pid){ return !curIds[pid]; });
+      const toRemoveIds = Object.keys(curIds).filter(function(pid){ return !accessSel[pid]; }).map(function(pid){ return curIds[pid]; });
+      if (toAdd.length > 0) {
+        await supabase.from("user_property_access").insert(toAdd.map(function(pid){ return { user_id: accessUser.id, property_id: pid, role: accessUser.role || "manager" }; }));
+      }
+      if (toRemoveIds.length > 0) {
+        await supabase.from("user_property_access").delete().in("id", toRemoveIds);
+      }
+      setAccessUser(null); showMsg("✅ הרשאות הנכסים נשמרו");
+    } catch (e: any) { alert("שגיאה: " + (e?.message || e)); }
+    finally { setAccessSaving(false); }
   }
 
   function showMsg(m: string) { setMsg(m); setTimeout(function(){setMsg("");},3000); }
@@ -77,6 +123,7 @@ export default function UsersPage() {
                     <td className="px-4 py-3"><span className={"text-xs px-2 py-0.5 rounded-full font-semibold "+(u.is_active?"bg-green-100 text-green-700":"bg-slate-100 text-slate-500")}>{u.is_active?"פעיל":"מושבת"}</span></td>
                     <td className="px-4 py-3"><div className="flex gap-1">
                       <select value={u.role} onChange={function(e){handleUpdateRole(u.id,e.target.value);}} className="text-xs border border-slate-200 rounded px-2 py-1 bg-white">{ROLES.map(function(r){return <option key={r.v} value={r.v}>{r.l}</option>;})}</select>
+                      <button onClick={function(){openAccess(u);}} className="text-xs border border-indigo-200 text-indigo-600 rounded px-2 py-1 hover:bg-indigo-50" title="שייך נכסים — מי שמשויך מקבל עותק (CC) של מכתבי החיובים לאותו נכס">🏢 נכסים</button>
                       <button onClick={function(){handleToggle(u.id,u.is_active);}} className={"text-xs border rounded px-2 py-1 "+(u.is_active?"border-red-100 text-red-500 hover:bg-red-50":"border-green-200 text-green-600 hover:bg-green-50")}>{u.is_active?"השבת":"הפעל"}</button>
                     </div></td>
                   </tr>
@@ -104,6 +151,65 @@ export default function UsersPage() {
           </div>
         </div>
       )}
+
+      {/* ─── Property-access assignment ─── */}
+      {accessUser && (() => {
+        var ungrouped = properties.filter(function(p){ return !p.group_id; });
+        var selCount = Object.keys(accessSel).filter(function(k){ return accessSel[k]; }).length;
+        var renderProp = function(p: any) {
+          var on = !!accessSel[p.id];
+          return (
+            <label key={p.id} className={"flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer text-sm "+(on?"border-indigo-300 bg-indigo-50":"border-slate-200 hover:bg-slate-50")}>
+              <input type="checkbox" checked={on} onChange={function(){toggleAccess(p.id);}} className="w-4 h-4 accent-indigo-600"/>
+              <span className="text-slate-700">{p.name}</span>
+            </label>
+          );
+        };
+        return (
+          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={function(){setAccessUser(null);}}>
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={function(e){e.stopPropagation();}} dir="rtl">
+              <div className="sticky top-0 bg-white border-b px-6 py-4 flex items-center justify-between">
+                <div>
+                  <h2 className="font-bold text-slate-800 text-lg">נכסים מורשים — {accessUser.full_name || accessUser.email}</h2>
+                  <p className="text-xs text-slate-500 mt-0.5">המשתמש יקבל עותק (CC) של מכתבי החיובים לנכסים המסומנים. {selCount} נבחרו.</p>
+                </div>
+                <button onClick={function(){setAccessUser(null);}} className="text-2xl text-slate-400">×</button>
+              </div>
+              <div className="p-6 space-y-4">
+                <div className="flex gap-2">
+                  <button onClick={function(){setGroupAccess(properties.map(function(p){return p.id;}), true);}} className="text-xs border border-slate-200 rounded px-2 py-1 text-slate-600 hover:bg-slate-50">בחר הכל</button>
+                  <button onClick={function(){setGroupAccess(properties.map(function(p){return p.id;}), false);}} className="text-xs border border-slate-200 rounded px-2 py-1 text-slate-600 hover:bg-slate-50">נקה הכל</button>
+                </div>
+                {pgroups.map(function(g){
+                  var gp = properties.filter(function(p){ return p.group_id === g.id; });
+                  if (gp.length === 0) return null;
+                  var allOn = gp.every(function(p){ return accessSel[p.id]; });
+                  return (
+                    <div key={g.id}>
+                      <div className="flex items-center gap-2 mb-1.5">
+                        <span className="text-sm font-bold text-slate-700">📁 {g.group_name}</span>
+                        <button onClick={function(){setGroupAccess(gp.map(function(p){return p.id;}), !allOn);}} className="text-[11px] text-indigo-600 hover:underline">{allOn?"נקה קבוצה":"בחר קבוצה"}</button>
+                      </div>
+                      <div className="grid grid-cols-2 md:grid-cols-3 gap-2">{gp.map(renderProp)}</div>
+                    </div>
+                  );
+                })}
+                {ungrouped.length > 0 && (
+                  <div>
+                    <div className="text-sm font-bold text-slate-700 mb-1.5">🏢 ללא קבוצה</div>
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-2">{ungrouped.map(renderProp)}</div>
+                  </div>
+                )}
+                {properties.length === 0 && <div className="text-sm text-slate-400 text-center py-6">אין נכסים</div>}
+                <div className="flex gap-3 pt-2">
+                  <button onClick={function(){setAccessUser(null);}} className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm text-slate-600">ביטול</button>
+                  <button onClick={saveAccess} disabled={accessSaving} className="flex-1 rounded-xl bg-indigo-700 py-2.5 text-sm font-bold text-white disabled:opacity-50">{accessSaving?"שומר...":"שמור הרשאות"}</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
