@@ -478,29 +478,57 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
     finally { setCreatingCharges(false); setProgress(null); }
   }
 
-  // Create OR fix management letters (update existing → "מכתב מתוקן", insert new).
+  // Create management letters with duplicate protection: fresh DB lookup decides
+  // create / replace-unsent / correction-for-sent per tenant.
   async function createLetters() {
     if (mgmtResults.length === 0) return;
     var billableL = mgmtResults.filter(function(r){ return Math.abs(r.difference) >= 0.01 && !r.isRevenueBased; });
+    if (billableL.length === 0) { alert("אין הפרשים ליצירת מכתבים"); return; }
+
+    var cids = billableL.map(function(r:any){ return r.contractId; });
+    var { data: existRows } = await supabase.from("letters")
+      .select("id, contract_id, status").eq("billing_type", "management").eq("billing_year", year).in("contract_id", cids);
     var byContractL: Record<string, any> = {};
-    existingMgmtLetters.forEach(function(l:any){ byContractL[l.contract_id] = l; });
-    var willFix = billableL.filter(function(r){ return byContractL[r.contractId]; }).length;
-    if (willFix > 0) {
-      if (!confirm("נמצאו " + willFix + " מכתבי דמי ניהול קיימים לשנת " + year + ".\nלתקן אותם? התוכן יעודכן והם יסומנו כ\"מכתב מתוקן\".")) return;
+    (existRows || []).forEach(function(l:any){ if (!byContractL[l.contract_id] || l.status === "sent") byContractL[l.contract_id] = l; });
+
+    var toCreate: any[] = [], toReplace: any[] = [], toCorrect: any[] = [];
+    billableL.forEach(function(r:any){
+      var ex = byContractL[r.contractId];
+      if (!ex) toCreate.push({ r: r });
+      else if (ex.status === "sent") toCorrect.push({ r: r, ex: ex });
+      else toReplace.push({ r: r, ex: ex });
+    });
+
+    var doReplace = true;
+    if (toReplace.length > 0) {
+      doReplace = confirm("נמצאו " + toReplace.length + " מכתבי דמי ניהול קיימים שטרם נשלחו.\n\nאישור = יוחלפו בנוסח/סכום המעודכן (ללא כפילות).\nביטול = יידלגו.");
     }
+    var doCorrect = false, correctionReason = "";
+    if (toCorrect.length > 0) {
+      doCorrect = confirm("⚠️ נמצאו " + toCorrect.length + " מכתבי דמי ניהול שכבר נשלחו.\n\nאישור = ייווצר מכתב תיקון נפרד (המקור יישמר).\nביטול = יידלגו.");
+      if (doCorrect) {
+        correctionReason = (prompt("נמק את סיבת התיקון (תופיע במכתב התיקון):", "") || "").trim();
+        if (!correctionReason) { doCorrect = false; alert("לא הוזנה סיבה — מכתבי התיקון דולגו."); }
+      }
+    }
+
+    var plan: any[] = [];
+    toCreate.forEach(function(x){ plan.push({ r: x.r, mode: "create" }); });
+    if (doReplace) toReplace.forEach(function(x){ plan.push({ r: x.r, mode: "replace", ex: x.ex }); });
+    if (doCorrect) toCorrect.forEach(function(x){ plan.push({ r: x.r, mode: "correct", ex: x.ex }); });
+    if (plan.length === 0) { alert("לא בוצעו פעולות."); return; }
+
     setCreatingLetters(true);
-    setProgress({ current: 0, total: mgmtResults.length, label: willFix ? "מתקן מכתבי דמי ניהול..." : "יוצר מכתבי דמי ניהול...", startedAt: Date.now() });
+    setProgress({ current: 0, total: plan.length, label: "מטפל במכתבי דמי ניהול...", startedAt: Date.now() });
     try {
       var ci = await loadCompanyInfo(propId);
-      let updated = 0, created = 0;
-      let skippedRevenue = 0;
+      let created = 0, replaced = 0, corrected = 0;
       var today = new Date().toLocaleDateString("he-IL");
       var lmIdx = 0;
-      for (const r of mgmtResults) {
+      for (const item of plan) {
+        var r = item.r;
         lmIdx++;
-        setProgress({ current: lmIdx, total: mgmtResults.length, label: (willFix ? "מתקן מכתב: " : "מכתב: ") + r.tenantName, startedAt: Date.now() });
-        if (Math.abs(r.difference) < 0.01) continue;
-        if (r.isRevenueBased) { skippedRevenue++; continue; }
+        setProgress({ current: lmIdx, total: plan.length, label: r.tenantName, startedAt: Date.now() });
         const owe = r.difference > 0;
         const baseSubject = (owe ? "השלמת הפרש דמי ניהול " : "החזר דמי ניהול ") + year;
         const lTaxable = vatTypeMap[r.contractId] === "taxable";
@@ -512,7 +540,8 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
 
         // ── Formal body (matches advances / CPI-diff letters) ──
         var body = "לכבוד\n" + r.tenantName + "\n\nשלום רב,\n\n";
-        body += "הנדון: " + baseSubject + "\n\n";
+        body += "הנדון: " + (item.mode === "correct" ? "מכתב תיקון — " : "") + baseSubject + "\n\n";
+        if (item.mode === "correct") body += "מכתב זה מהווה תיקון למכתב התחשבנות דמי הניהול שנשלח אליכם. סיבת התיקון: " + correctionReason + "\n\n";
         body += "בהתאם להסכם השכירות, ולאחר השלמת ההתחשבנות השנתית של דמי הניהול מול העלויות בפועל לשנת " + year + ", להלן הפירוט:\n\n";
         if (unitsTxt) body += "יחידות: " + unitsTxt + "\n";
         body += "מקדמות ששולמו: " + fmtMoney(r.advance) + "\n";
@@ -537,17 +566,23 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
         if (lTaxable) appendix += "KV|מע\"מ (" + Math.round(vatPct * 100) + "%)|" + fmtMoney(lVat) + "\n";
         appendix += "KV|" + totalLabel + "|" + fmtMoney(absTotal) + "\n";
 
-        const exL = byContractL[r.contractId];
-        if (exL) {
-          const fixedTitle = "מכתב מתוקן — " + baseSubject;
+        if (item.mode === "replace") {
           const { error: upErr } = await supabase.from("letters").update({
-            title: fixedTitle,
-            content_json: letterContent(body, ci, { appendix: appendix, year: year, tenant: r.tenantName, corrected: true, correctedAt: today }),
+            title: baseSubject,
+            content_json: letterContent(body, ci, { appendix: appendix, year: year, tenant: r.tenantName }),
             status: "ready", sent_at: null, sent_to: null,
-          }).eq("id", exL.id);
+          }).eq("id", item.ex.id);
           if (upErr) { alert("שגיאה בעדכון מכתב: " + upErr.message); throw upErr; }
-          await logAudit({ entity_type: "letter", entity_id: exL.id, action: "fix_mgmt_letter" });
-          updated++;
+          replaced++;
+        } else if (item.mode === "correct") {
+          const { error: cErr } = await supabase.from("letters").insert({
+            contract_id: r.contractId, property_id: propId, letter_type: "demand",
+            title: "מכתב תיקון — " + baseSubject,
+            content_json: letterContent(body, ci, { appendix: appendix, year: year, tenant: r.tenantName, corrected: true, correctedAt: today, correctionReason: correctionReason }),
+            status: "ready", billing_year: year, billing_type: "management",
+          });
+          if (cErr) { alert("שגיאה ביצירת מכתב תיקון: " + cErr.message); throw cErr; }
+          corrected++;
         } else {
           const { error: insErr } = await supabase.from("letters").insert({
             contract_id: r.contractId, property_id: propId, letter_type: "demand",
@@ -560,11 +595,9 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
           created++;
         }
       }
-      await logAudit({ entity_type: "billing", entity_id: propId, action: willFix ? "fix_mgmt_letters" : "create_mgmt_letters", notes: "עודכנו " + updated + ", נוצרו " + created + (skippedRevenue ? " (דולג " + skippedRevenue + " % פידיון)" : "") });
-      var msg2 = willFix ? ("✅ תוקנו " + updated + " מכתבים" + (created ? ", נוצרו " + created + " חדשים" : "") + " — סומנו כ\"מכתב מתוקן\"") : ("✅ נוצרו " + created + " מכתבים");
-      if (skippedRevenue > 0) msg2 += "\nדולגו " + skippedRevenue + " שוכרי % פידיון";
+      await logAudit({ entity_type: "billing", entity_id: propId, action: "create_mgmt_letters", notes: "נוצרו " + created + ", הוחלפו " + replaced + ", תיקונים " + corrected });
       await loadExistingMgmtCharges();
-      alert(msg2);
+      alert("✅ הושלם — נוצרו " + created + ", הוחלפו " + replaced + ", מכתבי תיקון " + corrected);
     } catch (e: any) { alert("שגיאה: " + e?.message); }
     finally { setCreatingLetters(false); setProgress(null); }
   }
@@ -1471,37 +1504,69 @@ function InsuranceTab({ properties }: { properties: any[] }) {
     finally { setCreatingCharges(false); setProgress(null); }
   }
 
-  // Create OR fix insurance letters: update the existing letter for a
-  // contract+year (renaming it "מכתב מתוקן …" so it's tracked in /letters)
-  // and create new ones for tenants that don't yet have a letter.
+  // Create insurance letters with duplicate protection: a FRESH DB lookup
+  // decides, per tenant, whether to create / replace an unsent letter / issue a
+  // correction for an already-sent one — so the same tenant never gets doubles.
   async function createLetters() {
     if (results.length === 0) return;
     var effective = buildEffectiveResults().filter(function(r:any){ return r.charge >= 0.01; });
-    var byContract: Record<string, any> = {};
-    existingLetters.forEach(function(l:any){ byContract[l.contract_id] = l; });
-    var willFix = effective.filter(function(r:any){ return byContract[r.contractId]; }).length;
-    if (willFix > 0) {
-      if (!confirm("נמצאו " + willFix + " מכתבי ביטוח קיימים לשנת " + year + ".\nלתקן אותם? התוכן יעודכן והם יסומנו כ\"מכתב מתוקן\" במסך מכתבים.")) return;
+    if (effective.length === 0) { alert("אין חיובים ליצירת מכתבים"); return; }
+
+    // Fresh lookup — never trust stale in-memory state (this is what caused
+    // duplicates). One existing insurance letter per contract+year.
+    var cids = effective.map(function(r:any){ return r.contractId; });
+    var { data: existRows } = await supabase.from("letters")
+      .select("id, contract_id, status").eq("billing_type", "insurance").eq("billing_year", year).in("contract_id", cids);
+    var exByContract: Record<string, any> = {};
+    (existRows || []).forEach(function(l:any){ if (!exByContract[l.contract_id] || l.status === "sent") exByContract[l.contract_id] = l; });
+
+    var toCreate: any[] = [], toReplace: any[] = [], toCorrect: any[] = [];
+    effective.forEach(function(r:any){
+      var ex = exByContract[r.contractId];
+      if (!ex) toCreate.push({ r: r });
+      else if (ex.status === "sent") toCorrect.push({ r: r, ex: ex });
+      else toReplace.push({ r: r, ex: ex });
+    });
+
+    var doReplace = true;
+    if (toReplace.length > 0) {
+      doReplace = confirm("נמצאו " + toReplace.length + " מכתבי ביטוח קיימים שטרם נשלחו.\n\nאישור = יוחלפו בנוסח/סכום המעודכן (ללא כפילות).\nביטול = יידלגו.");
     }
+    var doCorrect = false, correctionReason = "";
+    if (toCorrect.length > 0) {
+      doCorrect = confirm("⚠️ נמצאו " + toCorrect.length + " מכתבי ביטוח שכבר נשלחו.\n\nאישור = ייווצר מכתב תיקון נפרד (המקור יישמר).\nביטול = יידלגו.");
+      if (doCorrect) {
+        correctionReason = (prompt("נמק את סיבת התיקון (תופיע במכתב התיקון):", "") || "").trim();
+        if (!correctionReason) { doCorrect = false; alert("לא הוזנה סיבה — מכתבי התיקון דולגו."); }
+      }
+    }
+
+    var plan: any[] = [];
+    toCreate.forEach(function(x){ plan.push({ r: x.r, mode: "create" }); });
+    if (doReplace) toReplace.forEach(function(x){ plan.push({ r: x.r, mode: "replace", ex: x.ex }); });
+    if (doCorrect) toCorrect.forEach(function(x){ plan.push({ r: x.r, mode: "correct", ex: x.ex }); });
+    if (plan.length === 0) { alert("לא בוצעו פעולות."); return; }
+
     setCreatingLetters(true);
-    setProgress({ current: 0, total: effective.length, label: willFix ? "מתקן מכתבים..." : "יוצר מכתבים...", startedAt: Date.now() });
+    setProgress({ current: 0, total: plan.length, label: "מטפל במכתבים...", startedAt: Date.now() });
     try {
       var ci = await loadCompanyInfo(propId);
       var today = new Date().toLocaleDateString("he-IL");
-      var updated = 0, created = 0;
+      var created = 0, replaced = 0, corrected = 0;
       var lidx = 0;
-      for (const r of effective) {
+      for (const item of plan) {
+        var r = item.r;
         lidx++;
-        setProgress({ current: lidx, total: effective.length, label: (willFix ? "מתקן מכתב: " : "יוצר מכתב: ") + r.tenantName, startedAt: Date.now() });
+        setProgress({ current: lidx, total: plan.length, label: r.tenantName, startedAt: Date.now() });
         var lTaxable = vatTypeMap[r.contractId] === "taxable";
         var lVat = lTaxable ? r.charge * vatPct : 0;
         var lTotal = r.charge + lVat;
         var unitsTxt = (r.spaceNames && r.spaceNames !== "—") ? r.spaceNames : "";
         var areaTxt = r.areaRange ? r.areaRange + " מ\"ר (השתנה במהלך השנה)" : r.area.toLocaleString("he-IL") + " מ\"ר";
 
-        // ── Formal body (matches advances / CPI-diff letters) ──
         var body = "לכבוד\n" + r.tenantName + "\n\nשלום רב,\n\n";
-        body += "הנדון: חיוב ביטוח מבנה לשנת " + year + "\n\n";
+        body += "הנדון: " + (item.mode === "correct" ? "מכתב תיקון — " : "") + "חיוב ביטוח מבנה לשנת " + year + "\n\n";
+        if (item.mode === "correct") body += "מכתב זה מהווה תיקון למכתב חיוב הביטוח שנשלח אליכם. סיבת התיקון: " + correctionReason + "\n\n";
         body += "בהתאם להוראות הסכם השכירות, הרינו להעביר אליכם את חלקכם היחסי בעלות ביטוח המבנה לשנת " + year + ", המחושב לפי שטח היחידות שבחזקתכם מתוך כלל שטח הנכס:\n\n";
         if (unitsTxt) body += "יחידות: " + unitsTxt + "\n";
         body += "שטח מושכר: " + areaTxt + "\n";
@@ -1514,39 +1579,38 @@ function InsuranceTab({ properties }: { properties: any[] }) {
         if (ci.bankLine) body += ci.bankLine + "\n";
         body += "\nבכבוד רב ובברכה,\n\n" + (ci.companyName || "הנהלת הנכס");
 
-        var ex = byContract[r.contractId];
-        if (ex) {
-          var fixedTitle = "מכתב מתוקן — חיוב ביטוח מבנה " + year;
+        if (item.mode === "replace") {
           var { error: upErr } = await supabase.from("letters").update({
-            title: fixedTitle,
-            content_json: letterContent(body, ci, { year: year, tenant: r.tenantName, corrected: true, correctedAt: today }),
-            status: "ready", sent_at: null, sent_to: null,
-          }).eq("id", ex.id);
-          if (upErr) { alert("שגיאה בעדכון מכתב: " + upErr.message); throw upErr; }
-          await logAudit({ entity_type: "letter", entity_id: ex.id, action: "fix_ins_letter" });
-          updated++;
-        } else {
-          var origTitle = "חיוב ביטוח מבנה " + year;
-          var { error: insErr } = await supabase.from("letters").insert({
-            contract_id: r.contractId,
-            property_id: propId,
-            letter_type: "notice",
-            title: origTitle,
+            title: "חיוב ביטוח מבנה " + year,
             content_json: letterContent(body, ci, { year: year, tenant: r.tenantName }),
-            status: "ready",
-            billing_year: year,
-            billing_type: "insurance",
+            status: "ready", sent_at: null, sent_to: null,
+          }).eq("id", item.ex.id);
+          if (upErr) { alert("שגיאה בעדכון מכתב: " + upErr.message); throw upErr; }
+          replaced++;
+        } else if (item.mode === "correct") {
+          var { error: cErr } = await supabase.from("letters").insert({
+            contract_id: r.contractId, property_id: propId, letter_type: "notice",
+            title: "מכתב תיקון — חיוב ביטוח מבנה " + year,
+            content_json: letterContent(body, ci, { year: year, tenant: r.tenantName, corrected: true, correctedAt: today, correctionReason: correctionReason }),
+            status: "ready", billing_year: year, billing_type: "insurance",
+          });
+          if (cErr) { alert("שגיאה ביצירת מכתב תיקון: " + cErr.message); throw cErr; }
+          corrected++;
+        } else {
+          var { error: insErr } = await supabase.from("letters").insert({
+            contract_id: r.contractId, property_id: propId, letter_type: "notice",
+            title: "חיוב ביטוח מבנה " + year,
+            content_json: letterContent(body, ci, { year: year, tenant: r.tenantName }),
+            status: "ready", billing_year: year, billing_type: "insurance",
           });
           if (insErr) { alert("שגיאה ביצירת מכתב: " + insErr.message); throw insErr; }
           created++;
         }
       }
-      await logAudit({ entity_type: "billing", entity_id: propId, action: willFix ? "fix_ins_letters" : "create_ins_letters", notes: "עודכנו " + updated + ", נוצרו " + created });
+      await logAudit({ entity_type: "billing", entity_id: propId, action: "create_ins_letters", notes: "נוצרו " + created + ", הוחלפו " + replaced + ", תיקונים " + corrected });
       await saveDispositions();
       await loadExistingCharges();
-      alert(willFix
-        ? ("✅ תוקנו " + updated + " מכתבים" + (created ? ", נוצרו " + created + " חדשים" : "") + " — סומנו כ\"מכתב מתוקן\" במסך מכתבים")
-        : ("✅ נוצרו " + created + " מכתבים"));
+      alert("✅ הושלם — נוצרו " + created + ", הוחלפו " + replaced + ", מכתבי תיקון " + corrected);
     } catch (e: any) { alert("שגיאה: " + e?.message); }
     finally { setCreatingLetters(false); setProgress(null); }
   }
@@ -2241,35 +2305,70 @@ function WasteTab({ properties }: { properties: any[] }) {
     finally { setCreatingCharges(false); setProgress(null); }
   }
 
+  // Waste letters with the same duplicate protection as insurance. The dedup
+  // key is contract + period (matched via the period label in the title).
   async function createLetters() {
     if (results.length === 0) return;
     const periodLabel = periodLabelOf();
     var billableL = results.filter(function(r){ return r.charge >= 0.01; });
-    var byContractL: Record<string, any> = {};
-    existingWasteLetters.forEach(function(l:any){ byContractL[l.contract_id] = l; });
-    var willFix = billableL.filter(function(r){ return byContractL[r.contractId]; }).length;
-    if (willFix > 0) {
-      if (!confirm("נמצאו " + willFix + " מכתבי פינוי אשפה קיימים ל" + periodLabel + ".\nלתקן אותם? יסומנו כ\"מכתב מתוקן\".")) return;
+    if (billableL.length === 0) { alert("אין חיובים ליצירת מכתבים"); return; }
+
+    // Fresh lookup of existing waste letters for this period (title carries it).
+    var cids = billableL.map(function(r:any){ return r.contractId; });
+    var { data: existRows } = await supabase.from("letters")
+      .select("id, contract_id, status, title").eq("billing_type", "waste").eq("billing_year", year).in("contract_id", cids);
+    var exByContract: Record<string, any> = {};
+    (existRows || []).forEach(function(l:any){
+      if ((l.title || "").indexOf(periodLabel) === -1) return; // different period
+      if (!exByContract[l.contract_id] || l.status === "sent") exByContract[l.contract_id] = l;
+    });
+
+    var toCreate: any[] = [], toReplace: any[] = [], toCorrect: any[] = [];
+    billableL.forEach(function(r:any){
+      var ex = exByContract[r.contractId];
+      if (!ex) toCreate.push({ r: r });
+      else if (ex.status === "sent") toCorrect.push({ r: r, ex: ex });
+      else toReplace.push({ r: r, ex: ex });
+    });
+
+    var doReplace = true;
+    if (toReplace.length > 0) {
+      doReplace = confirm("נמצאו " + toReplace.length + " מכתבי פינוי אשפה קיימים ל" + periodLabel + " שטרם נשלחו.\n\nאישור = יוחלפו בנוסח/סכום המעודכן (ללא כפילות).\nביטול = יידלגו.");
     }
+    var doCorrect = false, correctionReason = "";
+    if (toCorrect.length > 0) {
+      doCorrect = confirm("⚠️ נמצאו " + toCorrect.length + " מכתבי פינוי אשפה שכבר נשלחו.\n\nאישור = ייווצר מכתב תיקון נפרד (המקור יישמר).\nביטול = יידלגו.");
+      if (doCorrect) {
+        correctionReason = (prompt("נמק את סיבת התיקון (תופיע במכתב התיקון):", "") || "").trim();
+        if (!correctionReason) { doCorrect = false; alert("לא הוזנה סיבה — מכתבי התיקון דולגו."); }
+      }
+    }
+
+    var plan: any[] = [];
+    toCreate.forEach(function(x){ plan.push({ r: x.r, mode: "create" }); });
+    if (doReplace) toReplace.forEach(function(x){ plan.push({ r: x.r, mode: "replace", ex: x.ex }); });
+    if (doCorrect) toCorrect.forEach(function(x){ plan.push({ r: x.r, mode: "correct", ex: x.ex }); });
+    if (plan.length === 0) { alert("לא בוצעו פעולות."); return; }
+
     setCreatingLetters(true);
-    setProgress({ current: 0, total: results.length, label: willFix ? "מתקן מכתבי פינוי אשפה..." : "יוצר מכתבי פינוי אשפה...", startedAt: Date.now() });
+    setProgress({ current: 0, total: plan.length, label: "מטפל במכתבי פינוי אשפה...", startedAt: Date.now() });
     try {
       var ci = await loadCompanyInfo(propId);
-      let updated = 0, created = 0;
       var today = new Date().toLocaleDateString("he-IL");
+      var created = 0, replaced = 0, corrected = 0;
       var wlIdx = 0;
-      for (const r of results) {
+      for (const item of plan) {
+        var r = item.r;
         wlIdx++;
-        setProgress({ current: wlIdx, total: results.length, label: (willFix ? "מתקן מכתב: " : "מכתב: ") + (r.spaces || r.contractId), startedAt: Date.now() });
-        if (r.charge < 0.01) continue;
+        setProgress({ current: wlIdx, total: plan.length, label: (r.spaces || r.tenantName), startedAt: Date.now() });
         const lTaxable = vatTypeMap[r.contractId] === "taxable";
         const lVat = lTaxable ? r.charge * vatPct : 0;
         const lTotal = r.charge + lVat;
         const unitsTxt = (r.spaces && r.spaces !== "—") ? r.spaces : "";
 
-        // ── Formal body (matches advances / CPI-diff letters) ──
         var body = "לכבוד\n" + r.tenantName + "\n\nשלום רב,\n\n";
-        body += "הנדון: חיוב פינוי אשפה — " + periodLabel + "\n\n";
+        body += "הנדון: " + (item.mode === "correct" ? "מכתב תיקון — " : "") + "חיוב פינוי אשפה — " + periodLabel + "\n\n";
+        if (item.mode === "correct") body += "מכתב זה מהווה תיקון למכתב חיוב פינוי האשפה שנשלח אליכם. סיבת התיקון: " + correctionReason + "\n\n";
         body += "בהתאם להסכם השכירות, להלן חלקכם היחסי בעלות פינוי האשפה לתקופה " + periodLabel + ", המחושב לפי שטח היחידות שבחזקתכם:\n\n";
         if (unitsTxt) body += "יחידות: " + unitsTxt + "\n";
         body += "שטח מושכר: " + r.wasteArea.toLocaleString("he-IL") + " מ\"ר\n\n";
@@ -2280,33 +2379,37 @@ function WasteTab({ properties }: { properties: any[] }) {
         if (ci.bankLine) body += ci.bankLine + "\n";
         body += "\nבכבוד רב ובברכה,\n\n" + (ci.companyName || "הנהלת הנכס");
 
-        const exL = byContractL[r.contractId];
-        if (exL) {
-          const fixedTitle = "מכתב מתוקן — חיוב פינוי אשפה — " + periodLabel;
+        if (item.mode === "replace") {
           const { error: upErr } = await supabase.from("letters").update({
-            title: fixedTitle,
-            content_json: letterContent(body, ci, { year: year, tenant: r.tenantName, corrected: true, correctedAt: today }),
+            title: "חיוב פינוי אשפה — " + periodLabel,
+            content_json: letterContent(body, ci, { year: year, period: periodLabel, tenant: r.tenantName }),
             status: "ready", sent_at: null, sent_to: null,
-          }).eq("id", exL.id);
+          }).eq("id", item.ex.id);
           if (upErr) { alert("שגיאה בעדכון מכתב: " + upErr.message); throw upErr; }
-          await logAudit({ entity_type: "letter", entity_id: exL.id, action: "fix_waste_letter" });
-          updated++;
+          replaced++;
+        } else if (item.mode === "correct") {
+          const { error: cErr } = await supabase.from("letters").insert({
+            contract_id: r.contractId, property_id: propId, letter_type: "notice",
+            title: "מכתב תיקון — חיוב פינוי אשפה — " + periodLabel,
+            content_json: letterContent(body, ci, { year: year, period: periodLabel, tenant: r.tenantName, corrected: true, correctedAt: today, correctionReason: correctionReason }),
+            status: "ready", billing_year: year, billing_type: "waste",
+          });
+          if (cErr) { alert("שגיאה ביצירת מכתב תיקון: " + cErr.message); throw cErr; }
+          corrected++;
         } else {
-          const origTitle = "חיוב פינוי אשפה — " + periodLabel;
           const { error: insErr } = await supabase.from("letters").insert({
             contract_id: r.contractId, property_id: propId, letter_type: "notice",
-            title: origTitle,
-            content_json: letterContent(body, ci, { year: year, tenant: r.tenantName }),
-            status: "ready",
-            billing_year: year, billing_type: "waste",
+            title: "חיוב פינוי אשפה — " + periodLabel,
+            content_json: letterContent(body, ci, { year: year, period: periodLabel, tenant: r.tenantName }),
+            status: "ready", billing_year: year, billing_type: "waste",
           });
           if (insErr) { alert("שגיאה ביצירת מכתב: " + insErr.message); throw insErr; }
           created++;
         }
       }
-      await logAudit({ entity_type: "billing", entity_id: propId, action: willFix ? "fix_waste_letters" : "create_waste_letters", notes: "עודכנו " + updated + ", נוצרו " + created });
+      await logAudit({ entity_type: "billing", entity_id: propId, action: "create_waste_letters", notes: "נוצרו " + created + ", הוחלפו " + replaced + ", תיקונים " + corrected });
       await loadExistingWaste();
-      alert(willFix ? ("✅ תוקנו " + updated + " מכתבים" + (created ? ", נוצרו " + created + " חדשים" : "") + " — סומנו כ\"מכתב מתוקן\"") : ("✅ נוצרו " + created + " מכתבים"));
+      alert("✅ הושלם — נוצרו " + created + ", הוחלפו " + replaced + ", מכתבי תיקון " + corrected);
     } catch (e: any) { alert("שגיאה: " + e?.message); }
     finally { setCreatingLetters(false); setProgress(null); }
   }
