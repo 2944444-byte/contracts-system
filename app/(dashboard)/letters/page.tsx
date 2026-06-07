@@ -121,9 +121,10 @@ export default function LettersPage() {
   // Recipients editor modal state ({tenantId, tenantName, rows}).
   const [recip, setRecip] = useState<any | null>(null);
   const [recipSaving, setRecipSaving] = useState(false);
-  // CC directory: who gets a tracking copy of each send (authorized users for
-  // the property + the owning company email).
-  const [ccDir, setCcDir] = useState<{ accessByProp: Record<string, string[]>; billingUsers: string[]; companyByProp: Record<string, string> }>({ accessByProp: {}, billingUsers: [], companyByProp: {} });
+  // CC directory: who gets a tracking copy of each send. A user qualifies ONLY
+  // when BOTH conditions hold — a billing-capable role AND assignment to that
+  // property. accessByProp already encodes the intersection.
+  const [ccDir, setCcDir] = useState<{ accessByProp: Record<string, string[]>; companyByProp: Record<string, string> }>({ accessByProp: {}, companyByProp: {} });
 
   function toggleGroup(key: string) {
     setCollapsedGroups(function(prev) { return { ...prev, [key]: !prev[key] }; });
@@ -165,16 +166,16 @@ export default function LettersPage() {
         supabase.from("user_property_access").select("user_id,property_id"),
         supabase.from("properties").select("id,companies(email)"),
       ]);
+      // Only billing-capable users are eligible at all — so accessByProp is the
+      // intersection (assigned-to-property AND can-bill).
       var emailById: Record<string, string> = {};
-      var billingUsers: string[] = [];
       (profs ?? []).forEach(function(u: any) {
-        if (u.email) emailById[u.id] = u.email;
-        if (u.email && BILLING_ROLES.indexOf((u.role || "").toLowerCase()) !== -1) billingUsers.push(u.email);
+        if (u.email && BILLING_ROLES.indexOf((u.role || "").toLowerCase()) !== -1) emailById[u.id] = u.email;
       });
       var accessByProp: Record<string, string[]> = {};
       (access ?? []).forEach(function(a: any) {
         var em = emailById[a.user_id];
-        if (!em) return;
+        if (!em) return; // user isn't billing-capable → not a CC recipient
         if (!accessByProp[a.property_id]) accessByProp[a.property_id] = [];
         if (accessByProp[a.property_id].indexOf(em) === -1) accessByProp[a.property_id].push(em);
       });
@@ -183,21 +184,20 @@ export default function LettersPage() {
         var ce = p.companies?.email;
         if (ce) companyByProp[p.id] = ce;
       });
-      setCcDir({ accessByProp: accessByProp, billingUsers: billingUsers, companyByProp: companyByProp });
+      setCcDir({ accessByProp: accessByProp, companyByProp: companyByProp });
     } catch (e) { /* best-effort */ }
   }
 
-  // CC list for a set of property ids: authorized users for those properties
-  // (or all billing users if none are assigned), plus the owning company email.
+  // CC list for a set of property ids: ONLY users who both can bill AND are
+  // assigned to one of those properties, plus the owning company email. No
+  // fallback — an unassigned billing user is never CC'd.
   function ccForProps(propIds: string[], excludeEmail?: string): string[] {
     var out: string[] = [];
-    var anyAccess = false;
     (propIds || []).forEach(function(pid) {
-      (ccDir.accessByProp[pid] || []).forEach(function(e) { anyAccess = true; if (out.indexOf(e) === -1) out.push(e); });
+      (ccDir.accessByProp[pid] || []).forEach(function(e) { if (out.indexOf(e) === -1) out.push(e); });
       var ce = ccDir.companyByProp[pid];
       if (ce && out.indexOf(ce) === -1) out.push(ce);
     });
-    if (!anyAccess) ccDir.billingUsers.forEach(function(e) { if (out.indexOf(e) === -1) out.push(e); });
     return out.filter(function(e) { return e && e !== excludeEmail; });
   }
 
