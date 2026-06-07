@@ -108,7 +108,7 @@ export default function UsersPage() {
         {ROLES.map(function(r){const cnt=users.filter(function(u){return u.role===r.v&&u.is_active;}).length;return <div key={r.v} className="rounded-xl border border-slate-200 bg-white p-3 text-center"><div className="text-2xl">{r.icon}</div><div className="text-xl font-black text-slate-800">{cnt}</div><div className="text-xs text-slate-500">{r.l}</div></div>;})}
       </div>
 
-      {loading ? <div className="text-center py-12 text-slate-400">טוען...</div> : (
+      {loading ? <div className="flex items-center justify-center gap-2 py-12 text-slate-400 text-sm"><span className="inline-block w-4 h-4 rounded-full border-2 border-slate-200 border-t-blue-600 animate-spin" aria-label="loading"></span>טוען...</div> : (
         <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
           <table className="w-full text-right text-sm">
             <thead className="bg-slate-50 border-b"><tr><th className="px-4 py-3 font-semibold text-slate-700">משתמש</th><th className="px-4 py-3 font-semibold text-slate-700">אימייל</th><th className="px-4 py-3 font-semibold text-slate-700">תפקיד</th><th className="px-4 py-3 font-semibold text-slate-700">סטטוס</th><th className="px-4 py-3 font-semibold text-slate-700">פעולות</th></tr></thead>

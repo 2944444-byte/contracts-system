@@ -58,7 +58,7 @@ export default function EditPropertyPage() {
 
   const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 
-  if (loading) return <div dir="rtl" className="text-center py-12 text-slate-400">טוען...</div>;
+  if (loading) return <div dir="rtl" className="flex items-center justify-center gap-2 py-12 text-slate-400 text-sm"><span className="inline-block w-4 h-4 rounded-full border-2 border-slate-200 border-t-blue-600 animate-spin" aria-label="loading"></span>טוען...</div>;
 
   return (
     <div dir="rtl" className="max-w-2xl mx-auto pb-12">

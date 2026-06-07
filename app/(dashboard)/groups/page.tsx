@@ -121,7 +121,7 @@ export default function GroupsPage() {
         <button onClick={openNew} className="rounded-lg bg-blue-700 px-5 py-2.5 font-bold text-white hover:bg-blue-800">+ קבוצה</button>
       </div>
 
-      {loading ? <div className="text-center py-12 text-slate-400">טוען...</div> : groups.length===0 ? (
+      {loading ? <div className="flex items-center justify-center gap-2 py-12 text-slate-400 text-sm"><span className="inline-block w-4 h-4 rounded-full border-2 border-slate-200 border-t-blue-600 animate-spin" aria-label="loading"></span>טוען...</div> : groups.length===0 ? (
         <div className="rounded-xl border-2 border-dashed border-slate-200 bg-white p-12 text-center text-slate-400">
           <div className="text-5xl mb-3">📁</div>
           <div>אין קבוצות</div>

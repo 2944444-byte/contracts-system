@@ -155,7 +155,7 @@ export default function ParkingPage() {
       </div>
 
       {/* Content */}
-      {loading ? <div className="text-center py-12 text-slate-400">טוען...</div> : Object.keys(propGroups).length === 0 ? (
+      {loading ? <div className="flex items-center justify-center gap-2 py-12 text-slate-400 text-sm"><span className="inline-block w-4 h-4 rounded-full border-2 border-slate-200 border-t-blue-600 animate-spin" aria-label="loading"></span>טוען...</div> : Object.keys(propGroups).length === 0 ? (
         <div className="rounded-xl border-2 border-dashed border-slate-200 bg-white p-12 text-center text-slate-400">
           <div className="text-5xl mb-3">🅿️</div><div>אין חניות</div>
           <button onClick={openNew} className="mt-3 text-blue-600 hover:underline text-sm">+ הוסף</button>

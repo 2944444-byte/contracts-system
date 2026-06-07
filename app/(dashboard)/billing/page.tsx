@@ -95,7 +95,7 @@ export default function BillingPage() {
       </div>
 
       {loading ? (
-        <div className="text-center py-12 text-slate-400">{"טוען..."}</div>
+        <div className="flex items-center justify-center gap-2 py-12 text-slate-400 text-sm"><span className="inline-block w-4 h-4 rounded-full border-2 border-slate-200 border-t-blue-600 animate-spin" aria-label="loading"></span>{"טוען..."}</div>
       ) : (
         <>
           {activeTab === "management" && <ManagementTab properties={internalProps} allProperties={properties} />}

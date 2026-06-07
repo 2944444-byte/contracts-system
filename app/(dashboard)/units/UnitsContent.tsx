@@ -344,7 +344,7 @@ export default function UnitsPage() {
 
       {/* Grouped cards */}
       {loading ? (
-        <div className="text-center py-12 text-slate-400">טוען...</div>
+        <div className="flex items-center justify-center gap-2 py-12 text-slate-400 text-sm"><span className="inline-block w-4 h-4 rounded-full border-2 border-slate-200 border-t-blue-600 animate-spin" aria-label="loading"></span>טוען...</div>
       ) : filtered.length === 0 ? (
         <div className="text-center py-12 text-slate-400">
           <div className="text-4xl mb-2">🏠</div>

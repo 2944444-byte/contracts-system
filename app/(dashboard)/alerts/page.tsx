@@ -49,7 +49,7 @@ export default function AlertsPage() {
   async function bulkClose() {
     if (!selected.size) return;
     if (!confirm(`לסגור ${selected.size} התראות?`)) return;
-    for (const id of selected) await supabase.from("alerts").update({is_resolved:true}).eq("id",id);
+    for (const id of Array.from(selected)) await supabase.from("alerts").update({is_resolved:true}).eq("id",id);
     setSelected(new Set());
     await loadAlerts();
   }
@@ -127,7 +127,7 @@ export default function AlertsPage() {
         )}
       </div>
 
-      {loading ? <div className="text-center py-12 text-slate-400">טוען...</div> : filtered.length===0 ? (
+      {loading ? <div className="flex items-center justify-center gap-2 py-12 text-slate-400 text-sm"><span className="inline-block w-4 h-4 rounded-full border-2 border-slate-200 border-t-blue-600 animate-spin" aria-label="loading"></span>טוען...</div> : filtered.length===0 ? (
         <div className="rounded-xl border-2 border-dashed border-slate-200 bg-white p-12 text-center text-slate-400">
           <div className="text-5xl mb-3">🎉</div>
           <div className="font-semibold text-slate-600">אין התראות {filterSt==="open"?"פתוחות":""}</div>
