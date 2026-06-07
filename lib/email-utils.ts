@@ -17,7 +17,10 @@ export async function sendEmail(payload: EmailPayload): Promise<{ok:boolean;erro
   if (!apiKey) return {ok:false,error:"RESEND_API_KEY not configured"};
   try {
     const body: any = {
-      from: payload.from ?? "PropManager <noreply@propmanager.co.il>",
+      // Sender: explicit > EMAIL_FROM env (set to a domain verified in Resend) >
+      // Resend's shared test sender (works without domain verification, but only
+      // delivers to the Resend account owner's address).
+      from: payload.from ?? process.env.EMAIL_FROM ?? "PropManager <onboarding@resend.dev>",
       to: [payload.to],
       subject: payload.subject,
       html: payload.html,
