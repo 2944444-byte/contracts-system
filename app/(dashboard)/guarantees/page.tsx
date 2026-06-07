@@ -5,6 +5,7 @@ import { logAudit } from '@/lib/audit-log';
 import PropertyHierarchyFilter from '@/components/PropertyHierarchyFilter';
 import { loadCompanyInfo, letterContent } from '@/lib/letter-format';
 import { computeGuaranteeRenewal, buildGuaranteeRenewalBody } from '@/lib/guarantee-letters';
+import { PageHero } from '@/components/ui';
 
 // Minimum months of rent that a guarantee should cover. Below this, the
 // row is flagged "underinsured". Industry norm in Israel is ~3 months.
@@ -526,15 +527,9 @@ export default function GuaranteesPage() {
 
   return (
     <div dir="rtl">
-      <div className="mb-6 flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-3xl font-bold text-slate-800">ערבויות</h1>
-          <p className="text-sm text-slate-500 mt-1">
-            {active.length} פעילות | סה&quot;כ בפועל {fmtMoney(totalActive)} / נדרש {fmtMoney(totalRequired)}
-          </p>
-        </div>
-        <button onClick={function() { openNew(); }} className="rounded-lg bg-blue-700 px-5 py-2.5 font-bold text-white hover:bg-blue-800" title="צור ערבות חדשה לשוכר">+ ערבות חדשה</button>
-      </div>
+      <PageHero title="ערבויות" icon="🏦" tone="emerald"
+        subtitle={active.length + " פעילות | סה\"כ בפועל " + fmtMoney(totalActive) + " / נדרש " + fmtMoney(totalRequired)}
+        actionLabel="+ ערבות חדשה" onAction={function(){ openNew(); }} />
 
       {/* KPIs — clickable filters */}
       <div className="grid grid-cols-6 gap-3 mb-5">

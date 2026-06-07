@@ -3,6 +3,7 @@ import { useState, useEffect, useRef } from "react";
 import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit-log';
 import PropertyHierarchyFilter from '@/components/PropertyHierarchyFilter';
+import { PageHero } from '@/components/ui';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 
@@ -396,20 +397,18 @@ export default function SafetyPage() {
 
   return (
     <div dir="rtl">
-      <div className="mb-6 flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-3xl font-bold text-slate-800">בדיקות בטיחות ואישורים</h1>
-          <p className="text-sm text-slate-500 mt-1">
-            {valid.length} תקינות
-            {expiring.length > 0 && <span className="text-yellow-600 font-semibold"> | {expiring.length} פגות ב-60 יום</span>}
-            {expired.length > 0 && <span className="text-red-600 font-semibold"> | {expired.length} פגו!</span>}
-          </p>
-        </div>
-        <div className="flex gap-2">
-          <button onClick={function(){setShowRef(!showRef);}} className="rounded-lg border border-slate-200 px-4 py-2.5 text-sm text-slate-600 hover:bg-slate-50" title="דרישות כיבוי אש לפי סוג נכס (מידע)">📖 דרישות לפי סוג</button>
-          <button onClick={function(){openNew();}} className="rounded-lg bg-blue-700 px-5 py-2.5 font-bold text-white hover:bg-blue-800" title={activeTab==="tenant"?"הוסף אישור בטיחות לשוכר":"הוסף בדיקה לחלקים הציבוריים/מערכות המבנה"}>+ {activeTab==="tenant"?"אישור שוכר":"בדיקה"} חדש</button>
-        </div>
-      </div>
+      <PageHero title="בדיקות בטיחות ואישורים" icon="🧯" tone="rose"
+        subtitle={<>
+          {valid.length} תקינות
+          {expiring.length > 0 && <span className="text-amber-200 font-semibold"> | {expiring.length} פגות ב-60 יום</span>}
+          {expired.length > 0 && <span className="text-rose-100 font-semibold"> | {expired.length} פגו!</span>}
+        </>}
+        actions={
+          <>
+            <button onClick={function(){setShowRef(!showRef);}} className="rounded-xl bg-white/15 backdrop-blur border border-white/25 px-3 py-2 text-sm text-white hover:bg-white/25" title="דרישות כיבוי אש לפי סוג נכס (מידע)">📖 דרישות לפי סוג</button>
+            <button onClick={function(){openNew();}} className="rounded-xl bg-white text-rose-700 px-4 py-2 text-sm font-bold hover:bg-rose-50 shadow-sm" title={activeTab==="tenant"?"הוסף אישור בטיחות לשוכר":"הוסף בדיקה לחלקים הציבוריים/מערכות המבנה"}>+ {activeTab==="tenant"?"אישור שוכר":"בדיקה"} חדש</button>
+          </>
+        } />
 
       {/* Tabs: public (management) vs tenant (units/contracts) */}
       <div className="flex gap-1 mb-5 border-b border-slate-200">

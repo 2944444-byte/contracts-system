@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit-log';
 import { fetchCpiAdjusted, fetchHighestChainedCpi } from '@/lib/cpi-server';
+import { PageHero } from '@/components/ui';
 import { getKnownIndexMonth } from '@/lib/cpi-utils';
 import CalcProgress, { CalcProgressState } from '@/components/CalcProgress';
 
@@ -204,15 +205,7 @@ export default function TenantsPage() {
 
   return (
     <div dir="rtl">
-      <div className="mb-6 flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold text-slate-800">שוכרים</h1>
-          <p className="text-sm text-slate-500 mt-1">{tenants.length} שוכרים</p>
-        </div>
-        <button onClick={openNew} className="rounded-lg bg-blue-700 px-5 py-2.5 font-bold text-white hover:bg-blue-800">
-          + שוכר חדש
-        </button>
-      </div>
+      <PageHero title="שוכרים" subtitle={tenants.length + " שוכרים"} icon="👤" tone="violet" actionLabel="+ שוכר חדש" onAction={openNew} />
 
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-5">
         {/* רשימה */}

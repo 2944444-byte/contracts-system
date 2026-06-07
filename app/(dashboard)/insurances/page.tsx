@@ -3,6 +3,7 @@ import { useState, useEffect, useRef } from "react";
 import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit-log';
 import PropertyHierarchyFilter from '@/components/PropertyHierarchyFilter';
+import { PageHero } from '@/components/ui';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 
@@ -513,21 +514,13 @@ export default function InsurancesPage() {
 
   return (
     <div dir="rtl">
-      <div className="mb-6 flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-3xl font-bold text-slate-800">ביטוחים</h1>
-          <p className="text-sm text-slate-500 mt-1">
-            {active.length} פעילים
-            {expiring.length>0 && <span className="text-yellow-600 font-semibold"> | {expiring.length} פגות ב-60י</span>}
-            {expired.length>0 && <span className="text-red-600 font-semibold"> | {expired.length} פגו</span>}
-            {activeTab==="building" && totalBuildingPremium>0 && <span className="text-slate-500"> | סה&quot;כ פרמיה {fmtMoney(totalBuildingPremium)}</span>}
-          </p>
-        </div>
-        <button onClick={function(){openNew();}} className="rounded-lg bg-blue-700 px-5 py-2.5 font-bold text-white hover:bg-blue-800"
-          title={activeTab==="building"?"הוסף פוליסת ביטוח מבנה לנכס":"הוסף אישור/פוליסת ביטוח שוכר"}>
-          + ביטוח חדש
-        </button>
-      </div>
+      <PageHero title="ביטוחים" icon="🛡️" tone="blue" actionLabel="+ ביטוח חדש" onAction={function(){openNew();}}
+        subtitle={<>
+          {active.length} פעילים
+          {expiring.length>0 && <span className="text-amber-200 font-semibold"> | {expiring.length} פגות ב-60י</span>}
+          {expired.length>0 && <span className="text-rose-200 font-semibold"> | {expired.length} פגו</span>}
+          {activeTab==="building" && totalBuildingPremium>0 && <span> | סה&quot;כ פרמיה {fmtMoney(totalBuildingPremium)}</span>}
+        </>} />
 
       {/* Tabs */}
       <div className="flex gap-1 mb-5 border-b border-slate-200">

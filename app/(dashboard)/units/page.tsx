@@ -4,6 +4,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit-log';
 import PropertyHierarchyFilter from '@/components/PropertyHierarchyFilter';
+import { PageHero } from '@/components/ui';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 const SPACE_TYPES = [{v:"office",l:"משרדים",icon:"💼"},{v:"retail",l:"מסחר",icon:"🏪"},{v:"store",l:"חנות",icon:"🏬"},{v:"warehouse",l:"מחסן",icon:"📦"},{v:"industrial",l:"תעשיה",icon:"🏭"},{v:"yard",l:"חצר פתוחה",icon:"🌳"},{v:"other",l:"אחר",icon:"🚪"}];
@@ -142,13 +143,9 @@ export default function UnitsPage() {
 
   return (
     <div dir="rtl">
-      <div className="mb-6 flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold text-slate-800">יחידות</h1>
-          <p className="text-sm text-slate-500 mt-1">{spaces.length} יחידות | {occupied} מושכרות | {vacant} פנויות</p>
-        </div>
-        <button onClick={openNew} className="rounded-lg bg-blue-700 px-5 py-2.5 font-bold text-white hover:bg-blue-800">+ יחידה</button>
-      </div>
+      <PageHero title="יחידות" icon="🚪" tone="blue"
+        subtitle={spaces.length + " יחידות | " + occupied + " מושכרות | " + vacant + " פנויות"}
+        actionLabel="+ יחידה" onAction={openNew} />
 
       {/* Global stats */}
       <div className="grid grid-cols-4 gap-3 mb-5">

@@ -62,6 +62,51 @@ export function PageHeader(props: { title: string; subtitle?: React.ReactNode; a
   );
 }
 
+// Gradient page header banner — the consistent screen title treatment.
+const HERO_TONES: Record<string, string> = {
+  blue:    "from-blue-700 via-blue-600 to-indigo-600",
+  emerald: "from-emerald-700 via-emerald-600 to-teal-600",
+  violet:  "from-violet-700 via-purple-600 to-fuchsia-600",
+  amber:   "from-amber-600 via-orange-600 to-rose-600",
+  slate:   "from-slate-700 via-slate-600 to-slate-800",
+  rose:    "from-rose-700 via-pink-600 to-fuchsia-600",
+};
+export function PageHero(props: {
+  title: React.ReactNode;
+  subtitle?: React.ReactNode;
+  icon?: React.ReactNode;
+  tone?: keyof typeof HERO_TONES;
+  actionLabel?: React.ReactNode;
+  onAction?: () => void;
+  actions?: React.ReactNode;
+}) {
+  return (
+    <div className={"rounded-3xl bg-gradient-to-bl text-white p-6 mb-5 shadow-lg " + (HERO_TONES[props.tone || "blue"])}>
+      <div className="flex items-start justify-between flex-wrap gap-4">
+        <div className="flex items-center gap-3 min-w-0">
+          {props.icon != null && (
+            <div className="w-12 h-12 rounded-2xl bg-white/15 backdrop-blur flex items-center justify-center text-2xl shrink-0">{props.icon}</div>
+          )}
+          <div className="min-w-0">
+            <h1 className="text-3xl font-black tracking-tight">{props.title}</h1>
+            {props.subtitle != null && <p className="text-white/80 text-sm mt-1">{props.subtitle}</p>}
+          </div>
+        </div>
+        {(props.actions || props.actionLabel) && (
+          <div className="flex items-center gap-2 flex-wrap">
+            {props.actions}
+            {props.actionLabel && (
+              <button onClick={props.onAction} className="rounded-xl bg-white text-blue-700 px-4 py-2 text-sm font-bold hover:bg-blue-50 shadow-sm">
+                {props.actionLabel}
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function Field(props: { label: React.ReactNode; required?: boolean; children: React.ReactNode; hint?: React.ReactNode }) {
   return (
     <div>
