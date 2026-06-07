@@ -1,15 +1,30 @@
+export interface EmailAttachment {
+  filename: string;
+  content:  string; // base64-encoded content
+}
+
 export interface EmailPayload {
-  to:       string;
-  subject:  string;
-  html:     string;
-  from?:    string;
+  to:           string;
+  subject:      string;
+  html:         string;
+  from?:        string;
+  cc?:          string[];
+  attachments?: EmailAttachment[];
 }
 
 export async function sendEmail(payload: EmailPayload): Promise<{ok:boolean;error?:string}> {
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey) return {ok:false,error:"RESEND_API_KEY not configured"};
   try {
-    const res = await fetch("https://api.resend.com/emails",{method:"POST",headers:{Authorization:`Bearer ${apiKey}`,"Content-Type":"application/json"},body:JSON.stringify({from:payload.from??"PropManager <noreply@propmanager.co.il>",to:[payload.to],subject:payload.subject,html:payload.html})});
+    const body: any = {
+      from: payload.from ?? "PropManager <noreply@propmanager.co.il>",
+      to: [payload.to],
+      subject: payload.subject,
+      html: payload.html,
+    };
+    if (payload.cc && payload.cc.length > 0) body.cc = payload.cc;
+    if (payload.attachments && payload.attachments.length > 0) body.attachments = payload.attachments;
+    const res = await fetch("https://api.resend.com/emails",{method:"POST",headers:{Authorization:`Bearer ${apiKey}`,"Content-Type":"application/json"},body:JSON.stringify(body)});
     const d = await res.json();
     if (!res.ok) return {ok:false,error:d?.message??"Send failed"};
     return {ok:true};

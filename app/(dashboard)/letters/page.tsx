@@ -121,6 +121,7 @@ export default function LettersPage() {
   // Recipients editor modal state ({tenantId, tenantName, rows}).
   const [recip, setRecip] = useState<any | null>(null);
   const [recipSaving, setRecipSaving] = useState(false);
+  const [sending, setSending] = useState("");
   // CC directory: who gets a tracking copy of each send. A user qualifies ONLY
   // when BOTH conditions hold — a billing-capable role AND assignment to that
   // property. accessByProp already encodes the intersection.
@@ -223,7 +224,7 @@ export default function LettersPage() {
     finally { setSaving(false); }
   }
 
-  function handlePrint(l: any) {
+  function buildLetterHtmlDoc(l: any, withPrintScript: boolean): string {
     var title = l.title || l.subject || "מכתב";
     var cj = l.content_json ? (typeof l.content_json === "string" ? JSON.parse(l.content_json) : l.content_json) : {};
     var bodyText = cj.body || l.body || "";
@@ -394,9 +395,7 @@ export default function LettersPage() {
       }
     }
 
-    const w=window.open("","_blank","width=800,height=1000");
-    if (!w) return;
-    w.document.write('<!DOCTYPE html><html dir="rtl"><head><meta charset="UTF-8"><style>' +
+    var doc = '<!DOCTYPE html><html dir="rtl"><head><meta charset="UTF-8"><style>' +
       // Cover page stays portrait; each appendix section automatically prints
       // landscape via a named @page rule. The recipient sees a portrait cover
       // letter then a landscape page per appendix — no manual rotation needed
@@ -455,13 +454,44 @@ export default function LettersPage() {
       '</div>' +
       appendixHtml +
       '<div class="footer-bar">' + (companyAddress ? companyAddress + ' | ' : '') + (companyPhone ? 'טל: ' + companyPhone : '') + '</div>' +
-      '<script>' +
-      'function doPrint(){window.print();}' +
-      'var img = document.getElementById("company-logo");' +
-      'if (img) { if (img.complete) doPrint(); else { img.onload = doPrint; img.onerror = doPrint; setTimeout(doPrint, 3000); } } else { setTimeout(doPrint, 200); }' +
-      '<\/script>' +
-      '</body></html>');
+      (withPrintScript ?
+        ('<script>function doPrint(){window.print();}var img=document.getElementById("company-logo");if(img){if(img.complete)doPrint();else{img.onload=doPrint;img.onerror=doPrint;setTimeout(doPrint,3000);}}else{setTimeout(doPrint,200);}<\/script>')
+        : '') +
+      '</body></html>';
+    return doc;
+  }
+
+  function handlePrint(l: any) {
+    var w = window.open("", "_blank", "width=800,height=1000");
+    if (!w) return;
+    w.document.write(buildLetterHtmlDoc(l, true));
     w.document.close();
+  }
+
+  // Render a letter to PDF in the browser (correct Hebrew/RTL) and return base64.
+  async function letterToPdfBase64(l: any): Promise<string> {
+    var mod: any = await import("html2pdf.js");
+    var html2pdf = mod.default || mod;
+    var docHtml = buildLetterHtmlDoc(l, false);
+    var iframe = document.createElement("iframe");
+    iframe.style.position = "fixed"; iframe.style.left = "-10000px"; iframe.style.top = "0";
+    iframe.style.width = "794px"; iframe.style.height = "1123px"; iframe.style.border = "0";
+    document.body.appendChild(iframe);
+    try {
+      var idoc = iframe.contentDocument as Document;
+      idoc.open(); idoc.write(docHtml); idoc.close();
+      await new Promise(function(res){ setTimeout(res, 400); }); // let the logo/image load
+      var dataUri: string = await html2pdf().set({
+        margin: [10, 12, 10, 12],
+        image: { type: "jpeg", quality: 0.95 },
+        html2canvas: { scale: 2, useCORS: true, backgroundColor: "#ffffff" },
+        jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
+      }).from(idoc.body).outputPdf("datauristring");
+      var idx = dataUri.indexOf("base64,");
+      return idx >= 0 ? dataUri.slice(idx + 7) : dataUri;
+    } finally {
+      document.body.removeChild(iframe);
+    }
   }
 
   async function deleteLetter(id: string) {
@@ -633,23 +663,77 @@ export default function LettersPage() {
   }
   // Send each recipient group as a single email (local mail client) and mark
   // every letter in it as sent.
-  async function sendMergeGroup(g: any) {
-    var cc = (g.cc || []).join(",");
-    var mailto = "mailto:" + encodeURIComponent(g.email || "") + "?" +
-      (cc ? "cc=" + encodeURIComponent(cc) + "&" : "") +
-      "subject=" + encodeURIComponent(g.subject) +
-      "&body=" + encodeURIComponent(g.body);
-    window.open(mailto, "_blank");
-    var sentTo = (g.email || "") + (cc ? " (עותק: " + cc + ")" : "");
+  // Short covering email body — the letter itself rides as a PDF attachment.
+  function shortEmailHtml(tenant: string, subjectText: string, company: string): string {
+    return '<div dir="rtl" style="font-family:Arial,sans-serif;direction:rtl;font-size:14px;color:#1e293b">'
+      + 'שלום ' + (tenant || '') + ',<br><br>'
+      + 'רצ"ב מכתב בנושא <b>' + subjectText + '</b>.<br>'
+      + 'נא לעיין במסמך המצורף ולפעול בהתאם.<br><br>'
+      + 'בברכה,<br>' + (company || 'הנהלת הנכס') + '</div>';
+  }
+  function safeFilename(s: string): string {
+    return (s || "letter").replace(/[^\w֐-׿ .-]/g, "_").slice(0, 80);
+  }
+
+  // Send ONE merged letter per recipient as a PDF attachment via Resend (mailto
+  // can't attach files), CC'ing the property's authorized users.
+  async function sendMergeGroup(g: any): Promise<boolean> {
+    if (!g.email) { return false; }
+    var company = parseCj(g.letters[0]).companyName || "";
+    var pdf = await letterToPdfBase64(g.printLetter);
+    var res = await fetch("/api/send-letter", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        to: g.email, cc: g.cc || [], subject: g.subject,
+        shortHtml: shortEmailHtml(g.tenant, g.subject, company),
+        pdfBase64: pdf, filename: safeFilename(g.subject),
+      }),
+    });
+    var d = await res.json();
+    if (!res.ok || !d.ok) throw new Error(d.error || "שליחה נכשלה");
+    var sentTo = g.email + ((g.cc && g.cc.length) ? " (עותק: " + g.cc.join(",") + ")" : "");
     for (var i = 0; i < g.letters.length; i++) {
-      await supabase.from("letters").update({ status: "sent", sent_at: new Date().toISOString(), sent_to: sentTo || null }).eq("id", g.letters[i].id);
+      await supabase.from("letters").update({ status: "sent", sent_at: new Date().toISOString(), sent_to: sentTo }).eq("id", g.letters[i].id);
     }
-    await logAudit({ entity_type: "letter", entity_id: g.letters[0].id, action: "merge_sent", notes: g.letters.length + " מכתבים → " + (g.email || g.tenant) + (cc ? " +עותקים" : "") });
+    await logAudit({ entity_type: "letter", entity_id: g.letters[0].id, action: "merge_sent_pdf", notes: g.letters.length + " חיובים → " + g.email });
+    return true;
   }
   async function sendAllMergeGroups() {
     if (!mergeView) return;
-    for (var i = 0; i < mergeView.length; i++) { await sendMergeGroup(mergeView[i]); }
-    setMergeView(null); clearSelection(); await loadAll();
+    setSending("merge");
+    try {
+      var sent = 0, skipped = 0;
+      for (var i = 0; i < mergeView.length; i++) {
+        try { if (await sendMergeGroup(mergeView[i])) sent++; else skipped++; }
+        catch (e: any) { alert("שגיאה בשליחה ל" + (mergeView[i].tenant || "") + ": " + (e?.message || e)); }
+      }
+      setMergeView(null); clearSelection(); await loadAll();
+      alert("✅ נשלחו " + sent + " מיילים עם PDF מצורף" + (skipped ? " · דולגו " + skipped + " (ללא כתובת מייל)" : ""));
+    } finally { setSending(""); }
+  }
+
+  // Single-letter send with the PDF attached (primary send path).
+  async function sendLetterPdf(l: any) {
+    var email = recipientEmail(l);
+    if (!email) { alert("אין כתובת מייל לנמען — הוסף נמען דרך '✎ נמענים'."); return; }
+    var tenant = l.contracts?.tenants?.name || "";
+    var subject = l.title || l.subject || "מכתב";
+    var company = parseCj(l).companyName || "";
+    var propIds = [l.property_id || l.contracts?.properties?.id].filter(Boolean) as string[];
+    var cc = ccForProps(propIds, email);
+    setSending(l.id);
+    try {
+      var pdf = await letterToPdfBase64(l);
+      var res = await fetch("/api/send-letter", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ to: email, cc: cc, subject: subject, shortHtml: shortEmailHtml(tenant, subject, company), pdfBase64: pdf, filename: safeFilename(subject) }),
+      });
+      var d = await res.json();
+      if (!res.ok || !d.ok) throw new Error(d.error || "שליחה נכשלה");
+      await markSent(l, email + (cc.length ? " (עותק: " + cc.join(",") + ")" : ""));
+      alert("✅ נשלח עם קובץ PDF מצורף" + (cc.length ? " (+" + cc.length + " עותקים)" : ""));
+    } catch (e: any) { alert("שגיאת שליחה: " + (e?.message || e)); }
+    finally { setSending(""); }
   }
   async function bulkMarkSent() {
     var ids = selectedIds();
@@ -907,7 +991,8 @@ export default function LettersPage() {
                                       {!isSent && (isReady
                                         ? <button onClick={function(){setLetterStatus(l, "draft");}} className="text-xs border border-slate-200 rounded px-2 py-1 text-slate-500 hover:bg-slate-50" title="החזר לטיוטה">✎</button>
                                         : <button onClick={function(){setLetterStatus(l, "ready");}} className="text-xs border border-blue-200 rounded px-2 py-1 text-blue-600 hover:bg-blue-50" title="סמן כמוכן לשליחה">📤</button>)}
-                                      <button onClick={function(){handleEmail(l);}} className="text-xs border border-green-200 rounded px-2 py-1 text-green-600 hover:bg-green-50" title="שלח במייל (מסמן כנשלח)">📧</button>
+                                      <button onClick={function(){sendLetterPdf(l);}} disabled={sending===l.id} className="text-xs border border-green-300 bg-green-50 rounded px-2 py-1 text-green-700 hover:bg-green-100 disabled:opacity-50 font-semibold" title="שלח במייל עם קובץ PDF מצורף (דרך המערכת)">{sending===l.id ? "שולח…" : "📎 שלח"}</button>
+                                      <button onClick={function(){handleEmail(l);}} className="text-xs border border-slate-200 rounded px-2 py-1 text-slate-500 hover:bg-slate-50" title="פתח בתוכנת המייל המקומית (ללא קובץ מצורף)">✉️</button>
                                       {isSent
                                         ? <button onClick={function(){unmarkSent(l);}} className="text-xs border border-slate-200 rounded px-2 py-1 text-slate-500 hover:bg-slate-50" title="החזר ל'מוכן לשליחה'">↩</button>
                                         : <button onClick={function(){markSentManual(l);}} className="text-xs border border-emerald-200 rounded px-2 py-1 text-emerald-600 hover:bg-emerald-50" title="סמן כנשלח (אם נשלח בדואר/ידנית)">✓</button>}
@@ -1006,7 +1091,7 @@ export default function LettersPage() {
               })}
               <div className="flex gap-3 pt-1">
                 <button onClick={function(){setMergeView(null);}} className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm text-slate-600">ביטול</button>
-                <button onClick={sendAllMergeGroups} className="flex-1 rounded-xl bg-blue-700 py-2.5 text-sm font-bold text-white hover:bg-blue-800">📧 שלח {mergeView.length} מיילים וסמן כנשלח</button>
+                <button onClick={sendAllMergeGroups} disabled={sending==="merge"} className="flex-1 rounded-xl bg-blue-700 py-2.5 text-sm font-bold text-white hover:bg-blue-800 disabled:opacity-50">{sending==="merge" ? "שולח…" : "📎 שלח " + mergeView.length + " מיילים עם PDF מצורף"}</button>
               </div>
             </div>
           </div>
