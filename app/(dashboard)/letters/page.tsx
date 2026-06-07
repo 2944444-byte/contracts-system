@@ -122,6 +122,10 @@ export default function LettersPage() {
   const [recip, setRecip] = useState<any | null>(null);
   const [recipSaving, setRecipSaving] = useState(false);
   const [sending, setSending] = useState("");
+  // Test mode (default ON): send via the LOCAL mail client (mailto), no PDF
+  // attachment and NO CC to owners/authorized users — safe while still testing.
+  // Turn OFF once Resend is configured to send real emails (PDF + CC).
+  const [testMode, setTestMode] = useState(true);
   // CC directory: who gets a tracking copy of each send. A user qualifies ONLY
   // when BOTH conditions hold — a billing-capable role AND assignment to that
   // property. accessByProp already encodes the intersection.
@@ -145,6 +149,10 @@ export default function LettersPage() {
   const selectedIds = function() { return Object.keys(selected).filter(function(k){ return selected[k]; }); };
 
   useEffect(function() { loadAll(); }, []);
+  useEffect(function() { try { var v = localStorage.getItem("letters_test_mode"); if (v !== null) setTestMode(v === "1"); } catch (e) {} }, []);
+  function toggleTestMode() {
+    setTestMode(function(prev){ var n = !prev; try { localStorage.setItem("letters_test_mode", n ? "1" : "0"); } catch (e) {} return n; });
+  }
 
   async function loadAll() {
     const [{ data: l }, { data: c }, { data: t }] = await Promise.all([
@@ -680,6 +688,16 @@ export default function LettersPage() {
   // can't attach files), CC'ing the property's authorized users.
   async function sendMergeGroup(g: any): Promise<boolean> {
     if (!g.email) { return false; }
+    // Test mode: open the local mail client with the unified text, no CC.
+    if (testMode) {
+      var mt = "mailto:" + encodeURIComponent(g.email) + "?subject=" + encodeURIComponent(g.subject) + "&body=" + encodeURIComponent(g.body);
+      window.open(mt, "_blank");
+      for (var k = 0; k < g.letters.length; k++) {
+        await supabase.from("letters").update({ status: "sent", sent_at: new Date().toISOString(), sent_to: g.email }).eq("id", g.letters[k].id);
+      }
+      await logAudit({ entity_type: "letter", entity_id: g.letters[0].id, action: "merge_sent_local", notes: g.letters.length + " חיובים → " + g.email });
+      return true;
+    }
     var company = parseCj(g.letters[0]).companyName || "";
     var pdf = await letterToPdfBase64(g.printLetter);
     var res = await fetch("/api/send-letter", {
@@ -774,8 +792,9 @@ export default function LettersPage() {
     var email = recipientEmail(l);
     var body = letterBodyText(l).trim() ||
       ("שלום " + tenant + ",\n\nמצורף בזאת " + title + ".\nנא לעיין ולפעול בהתאם.\n\nבברכה,\nהנהלת הנכס");
+    // In test mode no CC — don't pre-fill owners/authorized users.
     var propIds = [l.property_id || l.contracts?.properties?.id].filter(Boolean);
-    var cc = ccForProps(propIds as string[], email).join(",");
+    var cc = testMode ? "" : ccForProps(propIds as string[], email).join(",");
     var mailto = "mailto:" + encodeURIComponent(email) + "?" +
       (cc ? "cc=" + encodeURIComponent(cc) + "&" : "") +
       "subject=" + encodeURIComponent(title) +
@@ -784,6 +803,11 @@ export default function LettersPage() {
     window.location.href = mailto;
     // Record the send (recipient + timestamp) so it's traceable in the list.
     markSent(l, email + (cc ? " (עותק: " + cc + ")" : ""));
+  }
+
+  // Primary single-letter send: local mail client in test mode, else PDF+CC.
+  function sendPrimary(l: any) {
+    if (testMode) handleEmail(l); else sendLetterPdf(l);
   }
 
   var statusCounts = letters.reduce(function(a: any, l: any) {
@@ -802,7 +826,14 @@ export default function LettersPage() {
             {statusCounts.sent ? <span className="text-green-600">· ✓ {statusCounts.sent} נשלח</span> : null}
           </p>
         </div>
-        <button onClick={openNew} className="rounded-lg bg-blue-700 px-5 py-2.5 font-bold text-white hover:bg-blue-800">+ מכתב חדש</button>
+        <div className="flex items-center gap-2">
+          <button onClick={toggleTestMode}
+            className={"rounded-lg border px-3 py-2 text-xs font-bold " + (testMode ? "border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100" : "border-green-300 bg-green-50 text-green-700 hover:bg-green-100")}
+            title={testMode ? "מצב בדיקה: שליחה דרך תוכנת המייל המקומית בלבד, ללא PDF וללא עותקים. לחץ למעבר לשליחה אמיתית." : "מצב שליחה אמיתית: PDF מצורף + עותקים למורשים (דורש Resend). לחץ לחזרה למצב בדיקה."}>
+            {testMode ? "🧪 מצב בדיקה (מייל מקומי)" : "🚀 שליחה אמיתית (PDF + עותקים)"}
+          </button>
+          <button onClick={openNew} className="rounded-lg bg-blue-700 px-5 py-2.5 font-bold text-white hover:bg-blue-800">+ מכתב חדש</button>
+        </div>
       </div>
 
       {loading ? <div className="text-center py-12 text-slate-400">טוען...</div> : letters.length===0 ? (
@@ -992,8 +1023,8 @@ export default function LettersPage() {
                                       {!isSent && (isReady
                                         ? <button onClick={function(){setLetterStatus(l, "draft");}} className="text-xs border border-slate-200 rounded px-2 py-1 text-slate-500 hover:bg-slate-50" title="החזר לטיוטה">✎</button>
                                         : <button onClick={function(){setLetterStatus(l, "ready");}} className="text-xs border border-blue-200 rounded px-2 py-1 text-blue-600 hover:bg-blue-50" title="סמן כמוכן לשליחה">📤</button>)}
-                                      <button onClick={function(){sendLetterPdf(l);}} disabled={sending===l.id} className="text-xs border border-green-300 bg-green-50 rounded px-2 py-1 text-green-700 hover:bg-green-100 disabled:opacity-50 font-semibold" title="שלח במייל עם קובץ PDF מצורף (דרך המערכת)">{sending===l.id ? "שולח…" : "📎 שלח"}</button>
-                                      <button onClick={function(){handleEmail(l);}} className="text-xs border border-slate-200 rounded px-2 py-1 text-slate-500 hover:bg-slate-50" title="פתח בתוכנת המייל המקומית (ללא קובץ מצורף)">✉️</button>
+                                      <button onClick={function(){sendPrimary(l);}} disabled={sending===l.id} className="text-xs border border-green-300 bg-green-50 rounded px-2 py-1 text-green-700 hover:bg-green-100 disabled:opacity-50 font-semibold" title={testMode ? "שלח דרך תוכנת המייל המקומית" : "שלח במייל עם PDF מצורף + עותקים (דרך המערכת)"}>{sending===l.id ? "שולח…" : (testMode ? "📧 שלח" : "📎 שלח")}</button>
+                                      {!testMode && <button onClick={function(){handleEmail(l);}} className="text-xs border border-slate-200 rounded px-2 py-1 text-slate-500 hover:bg-slate-50" title="פתח בתוכנת המייל המקומית (ללא קובץ מצורף)">✉️</button>}
                                       {isSent
                                         ? <button onClick={function(){unmarkSent(l);}} className="text-xs border border-slate-200 rounded px-2 py-1 text-slate-500 hover:bg-slate-50" title="החזר ל'מוכן לשליחה'">↩</button>
                                         : <button onClick={function(){markSentManual(l);}} className="text-xs border border-emerald-200 rounded px-2 py-1 text-emerald-600 hover:bg-emerald-50" title="סמן כנשלח (אם נשלח בדואר/ידנית)">✓</button>}
@@ -1084,7 +1115,7 @@ export default function LettersPage() {
                     <div className="p-3">
                       <div className="text-xs font-semibold text-slate-600 mb-1">נושא: {g.subject}</div>
                       <div className="text-xs text-slate-700 whitespace-pre-wrap bg-slate-50 rounded-lg p-3 border max-h-52 overflow-y-auto">{g.body}</div>
-                      {g.cc && g.cc.length > 0 && <div className="text-[11px] text-slate-500 mt-1">📋 עותק (CC) ל: {g.cc.join(", ")}</div>}
+                      {!testMode && g.cc && g.cc.length > 0 && <div className="text-[11px] text-slate-500 mt-1">📋 עותק (CC) ל: {g.cc.join(", ")}</div>}
                       {!g.email && <div className="text-[11px] text-amber-600 mt-1">⚠️ אין כתובת מייל לנמען — המייל ייפתח ריק ותצטרך להזין כתובת ידנית.</div>}
                     </div>
                   </div>
@@ -1092,7 +1123,7 @@ export default function LettersPage() {
               })}
               <div className="flex gap-3 pt-1">
                 <button onClick={function(){setMergeView(null);}} className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm text-slate-600">ביטול</button>
-                <button onClick={sendAllMergeGroups} disabled={sending==="merge"} className="flex-1 rounded-xl bg-blue-700 py-2.5 text-sm font-bold text-white hover:bg-blue-800 disabled:opacity-50">{sending==="merge" ? "שולח…" : "📎 שלח " + mergeView.length + " מיילים עם PDF מצורף"}</button>
+                <button onClick={sendAllMergeGroups} disabled={sending==="merge"} className="flex-1 rounded-xl bg-blue-700 py-2.5 text-sm font-bold text-white hover:bg-blue-800 disabled:opacity-50">{sending==="merge" ? "שולח…" : (testMode ? "📧 פתח " + mergeView.length + " במייל מקומי" : "📎 שלח " + mergeView.length + " מיילים עם PDF מצורף")}</button>
               </div>
             </div>
           </div>
