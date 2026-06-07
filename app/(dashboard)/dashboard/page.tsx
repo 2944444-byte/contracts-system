@@ -228,27 +228,33 @@ export default function DashboardPage() {
 
   return (
     <div dir="rtl">
-      <div className="mb-5 flex items-start justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-3xl font-bold text-slate-800">דשבורד</h1>
-          <p className="text-sm text-slate-400 mt-1">{today}</p>
+      <div className="rounded-3xl bg-gradient-to-bl from-blue-700 via-blue-600 to-indigo-600 text-white p-6 mb-5 shadow-lg">
+        <div className="flex items-start justify-between flex-wrap gap-4">
+          <div>
+            <h1 className="text-3xl font-black tracking-tight">דשבורד</h1>
+            <p className="text-blue-100 text-sm mt-1">{today}</p>
+          </div>
+          <div className="text-left">
+            <div className="text-blue-100 text-xs font-medium">הכנסה חודשית צמודה</div>
+            <div className="text-4xl font-black leading-tight">{fmtMoney(indexedRevenue)}</div>
+            <div className="text-blue-200 text-xs mt-0.5">תפוסה {occupancyPct}% · {filteredContracts.length} חוזים פעילים</div>
+          </div>
         </div>
-        {/* Filters */}
-        <div className="flex gap-2 items-center">
-          <span className="text-xs text-slate-500">סינון:</span>
+        <div className="flex gap-2 items-center mt-4 flex-wrap">
+          <span className="text-xs text-blue-100">סינון:</span>
           <select value={filterGroup} onChange={function(e){setFilterGroup(e.target.value); setFilterProp("all");}}
-            className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm">
+            className="rounded-lg bg-white/15 text-white border border-white/25 px-3 py-1.5 text-sm backdrop-blur [&>option]:text-slate-800">
             <option value="all">📁 כל הקבוצות</option>
             {propGroups.map(function(g){return <option key={g.id} value={g.id}>{g.group_name}</option>;})}
           </select>
           <select value={filterProp} onChange={function(e){setFilterProp(e.target.value);}}
-            className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm">
+            className="rounded-lg bg-white/15 text-white border border-white/25 px-3 py-1.5 text-sm backdrop-blur [&>option]:text-slate-800">
             <option value="all">🏢 כל הנכסים</option>
             {propOptions.map(function(p){return <option key={p.id} value={p.id}>{p.name}</option>;})}
           </select>
           {(filterGroup !== "all" || filterProp !== "all") && (
             <button onClick={function(){setFilterGroup("all"); setFilterProp("all");}}
-              className="rounded-lg bg-slate-100 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-200">✕ נקה</button>
+              className="rounded-lg bg-white/20 px-3 py-1.5 text-xs text-white hover:bg-white/30">✕ נקה</button>
           )}
         </div>
       </div>
@@ -285,43 +291,51 @@ export default function DashboardPage() {
           {/* Row 1 — main KPIs */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
             <button onClick={function(){router.push("/cashflow");}}
-              className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4 text-right hover:shadow-md transition-all">
-              <div className="flex items-start justify-between">
-                <span className="text-2xl">💰</span>
-                <div className="text-xl font-black text-emerald-700">{fmtMoney(indexedRevenue)}</div>
+              className="rounded-2xl border border-emerald-200 bg-gradient-to-br from-emerald-50 to-white p-4 text-right hover:shadow-lg hover:-translate-y-0.5 transition-all">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-xl bg-emerald-100 flex items-center justify-center text-2xl shrink-0">💰</div>
+                <div className="min-w-0">
+                  <div className="text-[11px] font-semibold text-slate-500">הכנסה חודשית צמודה</div>
+                  <div className="text-2xl font-black text-emerald-700 leading-tight truncate">{fmtMoney(indexedRevenue)}</div>
+                </div>
               </div>
-              <div className="text-xs font-semibold text-slate-600 mt-1">הכנסה חודשית צמודה</div>
-              <div className="text-xs text-slate-500">בסיס: {fmtMoney(baseRevenue)}</div>
+              <div className="text-xs text-slate-400 mt-2">בסיס: {fmtMoney(baseRevenue)}</div>
             </button>
 
             <button onClick={function(){router.push("/units");}}
-              className="rounded-2xl border border-blue-100 bg-blue-50 p-4 text-right hover:shadow-md transition-all">
-              <div className="flex items-start justify-between">
-                <span className="text-2xl">📐</span>
-                <div className="text-2xl font-black text-blue-700">{occupancyPct}%</div>
+              className="rounded-2xl border border-blue-200 bg-gradient-to-br from-blue-50 to-white p-4 text-right hover:shadow-lg hover:-translate-y-0.5 transition-all">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-xl bg-blue-100 flex items-center justify-center text-2xl shrink-0">📐</div>
+                <div className="min-w-0">
+                  <div className="text-[11px] font-semibold text-slate-500">תפוסה (לפי מ&quot;ר)</div>
+                  <div className="text-2xl font-black text-blue-700 leading-tight">{occupancyPct}%</div>
+                </div>
               </div>
-              <div className="text-xs font-semibold text-slate-600 mt-1">תפוסה (לפי מ&quot;ר)</div>
-              <div className="text-xs text-slate-500">{occupiedArea.toLocaleString("he-IL")}/{totalArea.toLocaleString("he-IL")} מ&quot;ר</div>
+              <div className="text-xs text-slate-400 mt-2">{occupiedArea.toLocaleString("he-IL")}/{totalArea.toLocaleString("he-IL")} מ&quot;ר</div>
             </button>
 
             <button onClick={function(){router.push("/contracts");}}
-              className="rounded-2xl border border-slate-200 bg-white p-4 text-right hover:shadow-md transition-all">
-              <div className="flex items-start justify-between">
-                <span className="text-2xl">📄</span>
-                <div className="text-2xl font-black text-slate-800">{filteredContracts.length}</div>
+              className="rounded-2xl border border-slate-200 bg-gradient-to-br from-slate-50 to-white p-4 text-right hover:shadow-lg hover:-translate-y-0.5 transition-all">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-xl bg-slate-100 flex items-center justify-center text-2xl shrink-0">📄</div>
+                <div className="min-w-0">
+                  <div className="text-[11px] font-semibold text-slate-500">חוזים פעילים</div>
+                  <div className="text-2xl font-black text-slate-800 leading-tight">{filteredContracts.length}</div>
+                </div>
               </div>
-              <div className="text-xs font-semibold text-slate-600 mt-1">חוזים פעילים</div>
-              <div className="text-xs text-slate-500">{expiring90.length} פוגים תוך 90 יום</div>
+              <div className="text-xs text-slate-400 mt-2">{expiring90.length} פוגים תוך 90 יום</div>
             </button>
 
             <button onClick={function(){router.push("/alerts");}}
-              className={"rounded-2xl border p-4 text-right hover:shadow-md transition-all " + (urgentAlerts.length>0?"bg-red-50 border-red-100":"bg-white border-slate-200")}>
-              <div className="flex items-start justify-between">
-                <span className="text-2xl">🔔</span>
-                <div className={"text-2xl font-black " + (urgentAlerts.length>0?"text-red-700":"text-slate-400")}>{alerts.length}</div>
+              className={"rounded-2xl border p-4 text-right hover:shadow-lg hover:-translate-y-0.5 transition-all " + (urgentAlerts.length>0?"bg-gradient-to-br from-red-50 to-white border-red-200":"bg-gradient-to-br from-slate-50 to-white border-slate-200")}>
+              <div className="flex items-center gap-3">
+                <div className={"w-11 h-11 rounded-xl flex items-center justify-center text-2xl shrink-0 " + (urgentAlerts.length>0?"bg-red-100":"bg-slate-100")}>🔔</div>
+                <div className="min-w-0">
+                  <div className="text-[11px] font-semibold text-slate-500">התראות פתוחות</div>
+                  <div className={"text-2xl font-black leading-tight " + (urgentAlerts.length>0?"text-red-700":"text-slate-400")}>{alerts.length}</div>
+                </div>
               </div>
-              <div className="text-xs font-semibold text-slate-600 mt-1">התראות פתוחות</div>
-              <div className="text-xs text-slate-500">{urgentAlerts.length} דחופות</div>
+              <div className="text-xs text-slate-400 mt-2">{urgentAlerts.length} דחופות</div>
             </button>
           </div>
 
