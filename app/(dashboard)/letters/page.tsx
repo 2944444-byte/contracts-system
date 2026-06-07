@@ -14,6 +14,38 @@ const LETTER_TYPES = [
 ];
 
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
+function fmtMoney(n: number) { return "₪" + (n || 0).toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+
+// Extract the meaningful core of a single charge letter so several can be merged
+// into ONE unified letter: the subject (from the "הנדון:" line), the field lines
+// (יחידות / שטח / amounts — short "label: value" pairs), and the total amount.
+function extractLetterCore(body: string): { subject: string; detail: string[]; total: number } {
+  var lines = (body || "").split("\n");
+  var subjIdx = -1, stopIdx = -1;
+  for (var i = 0; i < lines.length; i++) {
+    var t = lines[i].trim();
+    if (subjIdx === -1 && t.indexOf("הנדון:") === 0) subjIdx = i;
+    if (stopIdx === -1 && (t.indexOf("נא להסדיר") === 0 || t.indexOf("סכום הזיכוי") === 0 || t.indexOf("יש להמציא") === 0 || t.indexOf("בכבוד רב") === 0)) stopIdx = i;
+  }
+  var subject = subjIdx >= 0 ? lines[subjIdx].replace(/^.*?הנדון:\s*/, "").trim() : "חיוב";
+  var detail: string[] = [];
+  var end = stopIdx >= 0 ? stopIdx : lines.length;
+  for (var k = (subjIdx >= 0 ? subjIdx + 1 : 0); k < end; k++) {
+    var dt = lines[k].trim();
+    if (!dt) continue;
+    var ci = dt.indexOf(":");
+    if (ci > 0 && ci <= 22) detail.push(dt); // "label: value" field lines only
+  }
+  var total = 0;
+  for (var m = detail.length - 1; m >= 0; m--) {
+    if (detail[m].indexOf("סה\"כ") === 0) {
+      var mm = detail[m].match(/₪\s*([\d,]+(?:\.\d+)?)/);
+      if (mm) total = parseFloat(mm[1].replace(/,/g, ""));
+      break;
+    }
+  }
+  return { subject: subject, detail: detail, total: total };
+}
 
 // Purpose-based categories — what the letter is actually about, used for the
 // row icon and the "סוג" filter. This is more meaningful than the raw
@@ -89,6 +121,9 @@ export default function LettersPage() {
   // Recipients editor modal state ({tenantId, tenantName, rows}).
   const [recip, setRecip] = useState<any | null>(null);
   const [recipSaving, setRecipSaving] = useState(false);
+  // CC directory: who gets a tracking copy of each send (authorized users for
+  // the property + the owning company email).
+  const [ccDir, setCcDir] = useState<{ accessByProp: Record<string, string[]>; billingUsers: string[]; companyByProp: Record<string, string> }>({ accessByProp: {}, billingUsers: [], companyByProp: {} });
 
   function toggleGroup(key: string) {
     setCollapsedGroups(function(prev) { return { ...prev, [key]: !prev[key] }; });
@@ -116,6 +151,54 @@ export default function LettersPage() {
       supabase.from("document_templates").select("*").eq("is_active",true).order("name"),
     ]);
     setLetters(l??[]); setContracts(c??[]); setTemplates(t??[]); setLoading(false);
+    loadCcDirectory();
+  }
+
+  // Build the CC directory once: which authorized users get a tracking copy of
+  // letters per property, plus the owning company email. Best-effort — if the
+  // users/access tables are empty, CC falls back to the company email only.
+  async function loadCcDirectory() {
+    try {
+      var BILLING_ROLES = ["admin", "owner", "manager", "accountant", "billing"];
+      const [{ data: profs }, { data: access }, { data: props }] = await Promise.all([
+        supabase.from("user_profiles").select("id,email,role,is_active").eq("is_active", true),
+        supabase.from("user_property_access").select("user_id,property_id"),
+        supabase.from("properties").select("id,companies(email)"),
+      ]);
+      var emailById: Record<string, string> = {};
+      var billingUsers: string[] = [];
+      (profs ?? []).forEach(function(u: any) {
+        if (u.email) emailById[u.id] = u.email;
+        if (u.email && BILLING_ROLES.indexOf((u.role || "").toLowerCase()) !== -1) billingUsers.push(u.email);
+      });
+      var accessByProp: Record<string, string[]> = {};
+      (access ?? []).forEach(function(a: any) {
+        var em = emailById[a.user_id];
+        if (!em) return;
+        if (!accessByProp[a.property_id]) accessByProp[a.property_id] = [];
+        if (accessByProp[a.property_id].indexOf(em) === -1) accessByProp[a.property_id].push(em);
+      });
+      var companyByProp: Record<string, string> = {};
+      (props ?? []).forEach(function(p: any) {
+        var ce = p.companies?.email;
+        if (ce) companyByProp[p.id] = ce;
+      });
+      setCcDir({ accessByProp: accessByProp, billingUsers: billingUsers, companyByProp: companyByProp });
+    } catch (e) { /* best-effort */ }
+  }
+
+  // CC list for a set of property ids: authorized users for those properties
+  // (or all billing users if none are assigned), plus the owning company email.
+  function ccForProps(propIds: string[], excludeEmail?: string): string[] {
+    var out: string[] = [];
+    var anyAccess = false;
+    (propIds || []).forEach(function(pid) {
+      (ccDir.accessByProp[pid] || []).forEach(function(e) { anyAccess = true; if (out.indexOf(e) === -1) out.push(e); });
+      var ce = ccDir.companyByProp[pid];
+      if (ce && out.indexOf(ce) === -1) out.push(ce);
+    });
+    if (!anyAccess) ccDir.billingUsers.forEach(function(e) { if (out.indexOf(e) === -1) out.push(e); });
+    return out.filter(function(e) { return e && e !== excludeEmail; });
   }
 
   function openNew() { setEditingId("new"); setFContractId(""); setFType("notice"); setFSubject(""); setFBody(""); setFTemplateId(""); }
@@ -500,21 +583,47 @@ export default function LettersPage() {
       byRecip[key].letters.push(l);
     });
     return Object.values(byRecip).map(function(g: any) {
-      var titles = g.letters.map(function(l: any){ return l.title || "מכתב"; });
-      var subject = g.letters.length === 1
-        ? titles[0]
-        : "ריכוז דרישות תשלום — " + g.letters.length + " נושאים";
-      var parts: string[] = ["שלום " + (g.tenant || "") + ",", ""];
-      if (g.letters.length > 1) {
-        parts.push("להלן ריכוז " + g.letters.length + " דרישות/הודעות:");
-        parts.push("");
-      }
-      g.letters.forEach(function(l: any, i: number) {
-        if (g.letters.length > 1) parts.push("━━━━━ " + (i + 1) + ". " + (l.title || "מכתב") + " ━━━━━");
-        parts.push(letterBodyText(l).trim());
-        parts.push("");
+      var first = g.letters[0];
+      var cj0 = parseCj(first);
+      var cores = g.letters.map(function(l: any){ return extractLetterCore(letterBodyText(l)); });
+      var grand = cores.reduce(function(s: number, c: any){ return s + (c.total || 0); }, 0);
+      var multi = g.letters.length > 1;
+      var subject = multi ? ("ריכוז דרישות תשלום — " + g.tenant) : (first.title || "מכתב");
+
+      // ── ONE unified letter: single header, numbered charge sections, one grand
+      //    total, one payment instruction + signature (not stitched letters). ──
+      var p: string[] = [];
+      p.push("לכבוד");
+      p.push(g.tenant);
+      p.push("");
+      p.push("שלום רב,");
+      p.push("");
+      p.push("הנדון: " + (multi ? "ריכוז חיובים — " + g.letters.length + " נושאים" : cores[0].subject));
+      p.push("");
+      p.push("בהתאם להוראות הסכם השכירות, להלן " + (multi ? "ריכוז החיובים הפתוחים על שמכם:" : "פירוט החיוב:"));
+      p.push("");
+      cores.forEach(function(c: any, i: number) {
+        p.push((multi ? (i + 1) + ". " : "") + c.subject);
+        c.detail.forEach(function(d: string){ p.push("   " + d); });
+        p.push("");
       });
-      return { key: g.key, email: g.email, tenant: g.tenant, subject: subject, body: parts.join("\n"), letters: g.letters };
+      if (multi) { p.push("─────────────"); p.push("סה\"כ כללי לתשלום (כולל מע\"מ): " + fmtMoney(grand)); p.push(""); }
+      p.push("נא להסדיר את התשלום בתוך 30 יום ממועד קבלת מכתב זה.");
+      if (cj0.bankLine) p.push(cj0.bankLine);
+      p.push("");
+      p.push("בכבוד רב ובברכה,");
+      p.push("");
+      p.push(cj0.companyName || "הנהלת הנכס");
+      var body = p.join("\n");
+
+      var propIds = Array.from(new Set(g.letters.map(function(l: any){ return l.property_id || l.contracts?.properties?.id; }).filter(Boolean)));
+      // Synthetic letter object so handlePrint renders the full letterhead → PDF.
+      var printLetter = {
+        title: subject, created_at: first.created_at, contracts: first.contracts,
+        content_json: { body: body, companyName: cj0.companyName, companyAddress: cj0.companyAddress, companyPhone: cj0.companyPhone, logoUrl: cj0.logoUrl },
+      };
+      var cc = ccForProps(propIds as string[], g.email);
+      return { key: g.key, email: g.email, tenant: g.tenant, subject: subject, body: body, grand: grand, multi: multi, letters: g.letters, printLetter: printLetter, propIds: propIds, cc: cc };
     });
   }
   function openMergePreview() {
@@ -525,14 +634,17 @@ export default function LettersPage() {
   // Send each recipient group as a single email (local mail client) and mark
   // every letter in it as sent.
   async function sendMergeGroup(g: any) {
-    var mailto = "mailto:" + encodeURIComponent(g.email || "") +
-      "?subject=" + encodeURIComponent(g.subject) +
+    var cc = (g.cc || []).join(",");
+    var mailto = "mailto:" + encodeURIComponent(g.email || "") + "?" +
+      (cc ? "cc=" + encodeURIComponent(cc) + "&" : "") +
+      "subject=" + encodeURIComponent(g.subject) +
       "&body=" + encodeURIComponent(g.body);
     window.open(mailto, "_blank");
+    var sentTo = (g.email || "") + (cc ? " (עותק: " + cc + ")" : "");
     for (var i = 0; i < g.letters.length; i++) {
-      await supabase.from("letters").update({ status: "sent", sent_at: new Date().toISOString(), sent_to: g.email || null }).eq("id", g.letters[i].id);
+      await supabase.from("letters").update({ status: "sent", sent_at: new Date().toISOString(), sent_to: sentTo || null }).eq("id", g.letters[i].id);
     }
-    await logAudit({ entity_type: "letter", entity_id: g.letters[0].id, action: "merge_sent", notes: g.letters.length + " מכתבים → " + (g.email || g.tenant) });
+    await logAudit({ entity_type: "letter", entity_id: g.letters[0].id, action: "merge_sent", notes: g.letters.length + " מכתבים → " + (g.email || g.tenant) + (cc ? " +עותקים" : "") });
   }
   async function sendAllMergeGroups() {
     if (!mergeView) return;
@@ -577,13 +689,16 @@ export default function LettersPage() {
     var email = recipientEmail(l);
     var body = letterBodyText(l).trim() ||
       ("שלום " + tenant + ",\n\nמצורף בזאת " + title + ".\nנא לעיין ולפעול בהתאם.\n\nבברכה,\nהנהלת הנכס");
-    var mailto = "mailto:" + encodeURIComponent(email) +
-      "?subject=" + encodeURIComponent(title) +
+    var propIds = [l.property_id || l.contracts?.properties?.id].filter(Boolean);
+    var cc = ccForProps(propIds as string[], email).join(",");
+    var mailto = "mailto:" + encodeURIComponent(email) + "?" +
+      (cc ? "cc=" + encodeURIComponent(cc) + "&" : "") +
+      "subject=" + encodeURIComponent(title) +
       "&body=" + encodeURIComponent(body);
     // window.location triggers the OS mail handler reliably without leaving the app.
     window.location.href = mailto;
     // Record the send (recipient + timestamp) so it's traceable in the list.
-    markSent(l, email);
+    markSent(l, email + (cc ? " (עותק: " + cc + ")" : ""));
   }
 
   var statusCounts = letters.reduce(function(a: any, l: any) {
@@ -869,16 +984,21 @@ export default function LettersPage() {
               {mergeView.map(function(g: any, gi: number) {
                 return (
                   <div key={gi} className="rounded-xl border border-slate-200 overflow-hidden">
-                    <div className="bg-slate-50 px-4 py-2.5 border-b border-slate-200 flex items-center justify-between">
+                    <div className="bg-slate-50 px-4 py-2.5 border-b border-slate-200 flex items-center justify-between gap-2">
                       <div className="text-sm">
                         <span className="font-bold text-slate-800">{g.tenant || "נמען"}</span>
                         <span className="text-slate-400 text-xs mr-2">{g.email || "אין כתובת מייל"}</span>
                       </div>
-                      <span className="text-[11px] bg-blue-100 text-blue-700 rounded-full px-2 py-0.5 font-semibold">{g.letters.length} מכתבים → מייל אחד</span>
+                      <div className="flex items-center gap-2">
+                        {g.multi && <span className="text-[11px] bg-green-100 text-green-700 rounded-full px-2 py-0.5 font-semibold">סה"כ {fmtMoney(g.grand)}</span>}
+                        <span className="text-[11px] bg-blue-100 text-blue-700 rounded-full px-2 py-0.5 font-semibold">{g.letters.length} חיובים → מכתב אחד</span>
+                        <button onClick={function(){handlePrint(g.printLetter);}} className="text-[11px] border border-blue-200 rounded px-2 py-1 text-blue-600 hover:bg-blue-50 font-semibold" title="הורד / הדפס PDF של המכתב המאוחד">🖨 PDF</button>
+                      </div>
                     </div>
                     <div className="p-3">
                       <div className="text-xs font-semibold text-slate-600 mb-1">נושא: {g.subject}</div>
                       <div className="text-xs text-slate-700 whitespace-pre-wrap bg-slate-50 rounded-lg p-3 border max-h-52 overflow-y-auto">{g.body}</div>
+                      {g.cc && g.cc.length > 0 && <div className="text-[11px] text-slate-500 mt-1">📋 עותק (CC) ל: {g.cc.join(", ")}</div>}
                       {!g.email && <div className="text-[11px] text-amber-600 mt-1">⚠️ אין כתובת מייל לנמען — המייל ייפתח ריק ותצטרך להזין כתובת ידנית.</div>}
                     </div>
                   </div>
