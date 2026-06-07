@@ -2,6 +2,7 @@
 import { useState, useEffect } from "react";
 import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit-log';
+import { PageHero } from '@/components/ui';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 
@@ -97,7 +98,7 @@ export default function CompaniesPage() {
 
   return (
     <div dir="rtl">
-      <div className="mb-6 flex items-center justify-between"><div><h1 className="text-3xl font-bold text-slate-800">חברות</h1><p className="text-sm text-slate-500 mt-1">{companies.length} חברות</p></div><button onClick={openNew} className="rounded-lg bg-blue-700 px-5 py-2.5 font-bold text-white hover:bg-blue-800">+ חברה</button></div>
+      <PageHero title="חברות" subtitle={companies.length + " חברות"} icon="🏛️" tone="slate" actionLabel="+ חברה" onAction={openNew} />
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
         <div className="space-y-2">

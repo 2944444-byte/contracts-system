@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import { supabase } from '@/lib/supabase';
+import { PageHero } from '@/components/ui';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 const ROLES = [{v:"admin",l:"מנהל מערכת",icon:"👑",color:"bg-red-100 text-red-700"},{v:"manager",l:"מנהל",icon:"👤",color:"bg-blue-100 text-blue-700"},{v:"viewer",l:"צופה",icon:"👁",color:"bg-slate-100 text-slate-600"}];
@@ -97,10 +98,8 @@ export default function UsersPage() {
 
   return (
     <div dir="rtl">
-      <div className="mb-6 flex items-center justify-between">
-        <div><h1 className="text-3xl font-bold text-slate-800">משתמשים</h1><p className="text-sm text-slate-500 mt-1">{users.length} משתמשים</p></div>
-        <button onClick={function(){setEditId("new");setFEmail("");setFName("");setFRole("viewer");setFPassword("");}} className="rounded-lg bg-blue-700 px-5 py-2.5 font-bold text-white hover:bg-blue-800">+ משתמש</button>
-      </div>
+      <PageHero title="משתמשים" subtitle={users.length + " משתמשים"} icon="👥" tone="slate"
+        actionLabel="+ משתמש" onAction={function(){setEditId("new");setFEmail("");setFName("");setFRole("viewer");setFPassword("");}} />
 
       {msg && <div className={"mb-4 rounded-xl border px-4 py-3 text-sm font-semibold "+(msg.startsWith("✅")?"bg-green-50 border-green-200 text-green-700":"bg-red-50 border-red-200 text-red-700")}>{msg}</div>}
 

@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit-log';
+import { PageHero } from '@/components/ui';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 
@@ -623,13 +624,11 @@ export default function PaymentsPage() {
 
   return (
     <div dir="rtl">
-      <div className="mb-4">
-        <h1 className="text-3xl font-bold text-slate-800">חיובים</h1>
-        <p className="text-sm text-slate-500 mt-1">
+      <PageHero title="חיובים" icon="💳" tone="emerald"
+        subtitle={<>
           {rows.length} פריטים בשנת {filterYear}
-          {includeAdvances && <span className="text-xs text-blue-600 mr-2">(כולל מקדמות שכ&quot;ד שטרם שולמו)</span>}
-        </p>
-      </div>
+          {includeAdvances && <span className="text-white/70 text-xs mr-2">(כולל מקדמות שכ&quot;ד שטרם שולמו)</span>}
+        </>} />
 
       {/* KPIs — clickable to filter by status. Simplified to 3 buckets:
           לתשלום (everything not yet paid, including approved), באיחור (subset

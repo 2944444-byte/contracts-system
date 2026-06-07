@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { supabase } from '@/lib/supabase';
 import { syncContractStatuses } from '@/lib/contractSync';
 import { logAudit } from '@/lib/audit-log';
+import { PageHero } from '@/components/ui';
 import { fetchCpiAdjusted, fetchHighestChainedCpi } from '@/lib/cpi-server';
 import { calcChainingCoefficient, formatPeriod } from '@/lib/cpi-utils';
 import CalcProgress, { CalcProgressState } from '@/components/CalcProgress';
@@ -752,21 +753,19 @@ export default function ContractsPage() {
 
   return (
     <div dir="rtl">
-      <div className="mb-5 flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-3xl font-bold text-slate-800">חוזים</h1>
-          <p className="text-sm text-slate-500 mt-1">{contracts.filter(function(c){return !c.is_amendment;}).length} חוזים</p>
-        </div>
-        <div className="flex gap-2">
-          <button onClick={handleSync} disabled={syncing}
-            className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-50">
-            {syncing?"⏳ מסנכרן...":"🔄 סנכרן סטטוסים"}
-          </button>
-          <button onClick={function(){router.push("/contracts/new");}} className="rounded-lg bg-blue-700 px-5 py-2 font-bold text-white hover:bg-blue-800">
-            + חוזה חדש
-          </button>
-        </div>
-      </div>
+      <PageHero title="חוזים" icon="📄" tone="violet"
+        subtitle={contracts.filter(function(c){return !c.is_amendment;}).length + " חוזים"}
+        actions={
+          <>
+            <button onClick={handleSync} disabled={syncing}
+              className="rounded-xl bg-white/15 backdrop-blur border border-white/25 px-3 py-2 text-sm text-white hover:bg-white/25 disabled:opacity-50">
+              {syncing?"⏳ מסנכרן...":"🔄 סנכרן סטטוסים"}
+            </button>
+            <button onClick={function(){router.push("/contracts/new");}} className="rounded-xl bg-white text-violet-700 px-4 py-2 text-sm font-bold hover:bg-violet-50 shadow-sm">
+              + חוזה חדש
+            </button>
+          </>
+        } />
 
       {/* Status filter */}
       <div className="flex gap-2 mb-4 flex-wrap">
