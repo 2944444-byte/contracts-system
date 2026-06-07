@@ -1506,7 +1506,7 @@ function InsuranceTab({ properties }: { properties: any[] }) {
         if (unitsTxt) body += "יחידות: " + unitsTxt + "\n";
         body += "שטח מושכר: " + areaTxt + "\n";
         if (r.isPartialPeriod) body += "תקופת כיסוי: " + r.daysInPolicy + " מתוך " + r.policyDays + " ימים\n";
-        body += "חלקכם היחסי: " + r.pct.toFixed(2) + "%\n\n";
+        body += "\n";
         body += "חיוב לפני מע\"מ: " + fmtMoney(r.charge) + "\n";
         if (lTaxable) body += "מע\"מ (" + Math.round(vatPct * 100) + "%): " + fmtMoney(lVat) + "\n";
         body += "סה\"כ לתשלום: " + fmtMoney(lTotal) + "\n\n";
@@ -1514,22 +1514,12 @@ function InsuranceTab({ properties }: { properties: any[] }) {
         if (ci.bankLine) body += ci.bankLine + "\n";
         body += "\nבכבוד רב ובברכה,\n\n" + (ci.companyName || "הנהלת הנכס");
 
-        // ── Structured appendix (rendered as a clean table by /letters) ──
-        var appendix = "SECTION|1|פירוט חישוב — ביטוח מבנה " + year + "\n";
-        if (unitsTxt) appendix += "KV|יחידות|" + unitsTxt + "\n";
-        appendix += "KV|שטח מושכר|" + areaTxt + "\n";
-        if (r.isPartialPeriod) appendix += "KV|תקופת כיסוי|" + r.daysInPolicy + " מתוך " + r.policyDays + " ימים\n";
-        appendix += "KV|חלקכם היחסי|" + r.pct.toFixed(2) + "%\n";
-        appendix += "KV|חיוב לפני מע\"מ|" + fmtMoney(r.charge) + "\n";
-        if (lTaxable) appendix += "KV|מע\"מ (" + Math.round(vatPct * 100) + "%)|" + fmtMoney(lVat) + "\n";
-        appendix += "KV|סה\"כ לתשלום|" + fmtMoney(lTotal) + "\n";
-
         var ex = byContract[r.contractId];
         if (ex) {
           var fixedTitle = "מכתב מתוקן — חיוב ביטוח מבנה " + year;
           var { error: upErr } = await supabase.from("letters").update({
             title: fixedTitle,
-            content_json: letterContent(body, ci, { appendix: appendix, year: year, tenant: r.tenantName, corrected: true, correctedAt: today }),
+            content_json: letterContent(body, ci, { year: year, tenant: r.tenantName, corrected: true, correctedAt: today }),
             status: "ready", sent_at: null, sent_to: null,
           }).eq("id", ex.id);
           if (upErr) { alert("שגיאה בעדכון מכתב: " + upErr.message); throw upErr; }
@@ -1542,7 +1532,7 @@ function InsuranceTab({ properties }: { properties: any[] }) {
             property_id: propId,
             letter_type: "notice",
             title: origTitle,
-            content_json: letterContent(body, ci, { appendix: appendix, year: year, tenant: r.tenantName }),
+            content_json: letterContent(body, ci, { year: year, tenant: r.tenantName }),
             status: "ready",
             billing_year: year,
             billing_type: "insurance",
@@ -2282,8 +2272,7 @@ function WasteTab({ properties }: { properties: any[] }) {
         body += "הנדון: חיוב פינוי אשפה — " + periodLabel + "\n\n";
         body += "בהתאם להסכם השכירות, להלן חלקכם היחסי בעלות פינוי האשפה לתקופה " + periodLabel + ", המחושב לפי שטח היחידות שבחזקתכם:\n\n";
         if (unitsTxt) body += "יחידות: " + unitsTxt + "\n";
-        body += "שטח מושכר: " + r.wasteArea.toLocaleString("he-IL") + " מ\"ר\n";
-        body += "חלקכם היחסי: " + r.pct.toFixed(1) + "%\n\n";
+        body += "שטח מושכר: " + r.wasteArea.toLocaleString("he-IL") + " מ\"ר\n\n";
         body += "חיוב לפני מע\"מ: " + fmtMoney(r.charge) + "\n";
         if (lTaxable) body += "מע\"מ (" + Math.round(vatPct * 100) + "%): " + fmtMoney(lVat) + "\n";
         body += "סה\"כ לתשלום: " + fmtMoney(lTotal) + "\n\n";
@@ -2291,21 +2280,12 @@ function WasteTab({ properties }: { properties: any[] }) {
         if (ci.bankLine) body += ci.bankLine + "\n";
         body += "\nבכבוד רב ובברכה,\n\n" + (ci.companyName || "הנהלת הנכס");
 
-        // ── Structured appendix ──
-        var appendix = "SECTION|1|פירוט חישוב — פינוי אשפה " + periodLabel + "\n";
-        if (unitsTxt) appendix += "KV|יחידות|" + unitsTxt + "\n";
-        appendix += "KV|שטח מושכר|" + r.wasteArea.toLocaleString("he-IL") + " מ\"ר\n";
-        appendix += "KV|חלקכם היחסי|" + r.pct.toFixed(1) + "%\n";
-        appendix += "KV|חיוב לפני מע\"מ|" + fmtMoney(r.charge) + "\n";
-        if (lTaxable) appendix += "KV|מע\"מ (" + Math.round(vatPct * 100) + "%)|" + fmtMoney(lVat) + "\n";
-        appendix += "KV|סה\"כ לתשלום|" + fmtMoney(lTotal) + "\n";
-
         const exL = byContractL[r.contractId];
         if (exL) {
           const fixedTitle = "מכתב מתוקן — חיוב פינוי אשפה — " + periodLabel;
           const { error: upErr } = await supabase.from("letters").update({
             title: fixedTitle,
-            content_json: letterContent(body, ci, { appendix: appendix, year: year, tenant: r.tenantName, corrected: true, correctedAt: today }),
+            content_json: letterContent(body, ci, { year: year, tenant: r.tenantName, corrected: true, correctedAt: today }),
             status: "ready", sent_at: null, sent_to: null,
           }).eq("id", exL.id);
           if (upErr) { alert("שגיאה בעדכון מכתב: " + upErr.message); throw upErr; }
@@ -2316,7 +2296,7 @@ function WasteTab({ properties }: { properties: any[] }) {
           const { error: insErr } = await supabase.from("letters").insert({
             contract_id: r.contractId, property_id: propId, letter_type: "notice",
             title: origTitle,
-            content_json: letterContent(body, ci, { appendix: appendix, year: year, tenant: r.tenantName }),
+            content_json: letterContent(body, ci, { year: year, tenant: r.tenantName }),
             status: "ready",
             billing_year: year, billing_type: "waste",
           });
