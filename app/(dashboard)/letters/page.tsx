@@ -593,18 +593,19 @@ export default function LettersPage() {
   function recipientKeyOf(l: any): string {
     return recipientEmail(l) || (l.contracts?.tenants?.name || "ללא נמען");
   }
-  // Group the selected letters by recipient and build one merged body per
-  // recipient — so a tenant who has several charges the same day gets ONE
-  // email/letter instead of many.
+  // Group the selected letters by CONTRACT (one unified letter per contract).
+  // A tenant with two contracts therefore gets two separate merged letters —
+  // never combined across contracts — each sent on its own.
   function buildMergedGroups(ids: string[]): any[] {
     var byRecip: Record<string, any> = {};
     ids.forEach(function(id) {
       var l = letters.find(function(x){ return x.id === id; });
       if (!l) return;
-      var key = recipientKeyOf(l);
+      var key = l.contract_id || recipientKeyOf(l);
       if (!byRecip[key]) {
         byRecip[key] = {
           key: key,
+          contractId: l.contract_id,
           email: recipientEmail(l),
           tenant: l.contracts?.tenants?.name || "",
           letters: [],
@@ -1042,7 +1043,7 @@ export default function LettersPage() {
         <div className="fixed bottom-0 inset-x-0 z-40 bg-white border-t border-slate-200 shadow-[0_-4px_12px_rgba(0,0,0,0.06)] px-4 py-3" dir="rtl">
           <div className="max-w-5xl mx-auto flex items-center gap-2 flex-wrap">
             <span className="font-bold text-slate-800 text-sm">{selectedIds().length} מכתבים נבחרו</span>
-            <span className="text-xs text-slate-400">{Object.keys(buildMergedGroups(selectedIds()).reduce(function(a:any,g:any){a[g.key]=1;return a;},{})).length} נמענים</span>
+            <span className="text-xs text-slate-400">{buildMergedGroups(selectedIds()).length} מכתבים מאוחדים (לפי הסכם)</span>
             <div className="flex gap-2 mr-auto flex-wrap">
               <button onClick={openMergePreview} className="rounded-lg bg-blue-700 px-4 py-2 text-sm font-bold text-white hover:bg-blue-800">📧 מזג ושלח במייל</button>
               <button onClick={bulkSetReady} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100">📤 סמן מוכן לשליחה</button>
@@ -1061,7 +1062,7 @@ export default function LettersPage() {
             <div className="sticky top-0 bg-white border-b px-6 py-4 flex items-center justify-between">
               <div>
                 <h2 className="font-bold text-slate-800 text-lg">תצוגה מקדימה לפני שליחה</h2>
-                <p className="text-xs text-slate-500 mt-0.5">{mergeView.length} מיילים · מכתב מאוחד לכל נמען</p>
+                <p className="text-xs text-slate-500 mt-0.5">{mergeView.length} מכתבים מאוחדים · מכתב נפרד לכל הסכם</p>
               </div>
               <button onClick={function(){setMergeView(null);}} className="text-2xl text-slate-400">×</button>
             </div>
