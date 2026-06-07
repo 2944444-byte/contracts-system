@@ -3,10 +3,12 @@ import Sidebar from "../../components/Sidebar";
 import GlobalSearch from "../../components/GlobalSearch";
 import AlertsBadge from "../../components/AlertsBadge";
 import UserBadge from "../../components/UserBadge";
+import Toaster from "../../components/ui/Toaster";
 
 export default function DashboardLayout({ children }: { children: ReactNode }) {
   return (
     <div className="flex min-h-screen bg-slate-50" dir="rtl">
+      <Toaster />
       <Sidebar />
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         <header className="sticky top-0 z-20 bg-white border-b border-slate-100 px-5 py-3 flex items-center justify-between shadow-sm shrink-0">
