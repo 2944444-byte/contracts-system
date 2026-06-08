@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import { supabase } from "../../../lib/supabase";
+import { PageHero } from "@/components/ui";
 
 const MONTHS_HE = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני",
                    "יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
@@ -60,18 +61,13 @@ export default function CpiPage() {
 
   return (
     <div dir="rtl">
-      <div className="mb-6 flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold text-slate-800">מדד המחירים לצרכן</h1>
-          <p className="text-sm text-slate-500 mt-1">
-            {lastUpdated ? `מדד אחרון: ${lastUpdated}` : "טוען..."} | סדרה 120010 | בסיס 2022=100
-          </p>
-        </div>
-        <button onClick={handleRefresh} disabled={refreshing}
-          className="rounded-lg bg-blue-700 px-5 py-2.5 font-bold text-white hover:bg-blue-800 disabled:opacity-50">
-          {refreshing ? "⟳ מעדכן..." : "🔄 עדכן מ-API"}
-        </button>
-      </div>
+      <PageHero title="מדד המחירים לצרכן" icon="📈" tone="blue"
+        subtitle={(lastUpdated ? `מדד אחרון: ${lastUpdated}` : "טוען...") + " | סדרה 120010 | בסיס 2022=100"}
+        actions={
+          <button onClick={handleRefresh} disabled={refreshing} className="rounded-xl bg-white text-blue-700 px-4 py-2 text-sm font-bold hover:bg-blue-50 shadow-sm disabled:opacity-50">
+            {refreshing ? "⟳ מעדכן..." : "🔄 עדכן מ-API"}
+          </button>
+        } />
 
       {/* הסבר */}
       <div className="rounded-xl border border-blue-100 bg-blue-50 p-4 mb-5 text-sm text-blue-800">
