@@ -2,6 +2,7 @@
 import { useState, useEffect, useRef } from "react";
 import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit-log';
+import { PageHero } from '@/components/ui';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 function fmtMoney(n: number) { return (n && Math.abs(n) > 0.001) ? "₪"+n.toLocaleString("he-IL",{minimumFractionDigits:2,maximumFractionDigits:2}) : "—"; }
@@ -527,10 +528,7 @@ export default function RevenuePage() {
 
   return (
     <div dir="rtl">
-      <div className="mb-6">
-        <h1 className="text-3xl font-bold text-slate-800">שכ"ד פידיון</h1>
-        <p className="text-sm text-slate-500 mt-1">{contracts.length} חוזי פידיון פעילים</p>
-      </div>
+      <PageHero title={"שכ\"ד פידיון"} icon="📊" tone="emerald" subtitle={contracts.length + " חוזי פידיון פעילים"} />
 
       {/* Tenant + year filters */}
       <div className="mb-5 rounded-xl border border-slate-200 bg-white shadow-sm p-4 flex flex-wrap items-end gap-3">

@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import { supabase } from '@/lib/supabase';
+import { PageHero } from '@/components/ui';
 
 const TABS = [
   {id:"contracts",  label:"חוזים",       icon:"📄"},
@@ -96,23 +97,20 @@ export default function ReportsPage() {
 
   return (
     <div dir="rtl">
-      <div className="mb-6 flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-3xl font-bold text-slate-800">דוחות</h1>
-          <p className="text-sm text-slate-500 mt-1">ייצוא נתונים ל-CSV</p>
-        </div>
-        <div className="flex gap-2 items-center">
-          {tab==="payments" && (
-            <select value={filterYear} onChange={function(e){setFilterYear(Number(e.target.value));}}
-              className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">
-              {[2023,2024,2025,2026].map(function(y){return <option key={y} value={y}>{y}</option>;})}
-            </select>
-          )}
-          <button onClick={handleCSV} className="rounded-lg bg-slate-700 text-white px-4 py-2 text-sm font-semibold hover:bg-slate-800">
-            ⬇ CSV
-          </button>
-        </div>
-      </div>
+      <PageHero title="דוחות" icon="📑" tone="slate" subtitle="ייצוא נתונים ל-CSV"
+        actions={
+          <div className="flex gap-2 items-center">
+            {tab==="payments" && (
+              <select value={filterYear} onChange={function(e){setFilterYear(Number(e.target.value));}}
+                className="rounded-xl bg-white/15 backdrop-blur border border-white/25 text-white px-3 py-2 text-sm [&>option]:text-slate-800">
+                {[2023,2024,2025,2026].map(function(y){return <option key={y} value={y}>{y}</option>;})}
+              </select>
+            )}
+            <button onClick={handleCSV} className="rounded-xl bg-white text-slate-700 px-4 py-2 text-sm font-bold hover:bg-slate-100 shadow-sm">
+              ⬇ CSV
+            </button>
+          </div>
+        } />
 
       <div className="flex gap-1 mb-5 flex-wrap">
         {TABS.map(function(t) {

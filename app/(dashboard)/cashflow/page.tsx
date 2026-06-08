@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import { supabase } from '@/lib/supabase';
+import { PageHero } from '@/components/ui';
 
 function fmtMoney(n: number) { return "₪" + (n ?? 0).toLocaleString("he-IL", { minimumFractionDigits: 0, maximumFractionDigits: 0 }); }
 function fmtPct(n: number) { return (Math.round(n * 10) / 10).toFixed(1) + "%"; }
@@ -358,20 +359,16 @@ export default function CashflowPage() {
   // ─── Render ──────────────────────────────────────────────────────────
   return (
     <div dir="rtl">
-      <div className="mb-4 flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-3xl font-bold text-slate-800">תזרים שנתי</h1>
-          <p className="text-sm text-slate-500 mt-1">
-            פוטנציאל שנתי: <strong>{fmtMoney(totalPotential)}</strong> | גבייה: <strong className="text-green-600">{fmtMoney(totalPaid)}</strong> | <span title="ביחס לחודשים שכבר חויבו (עד החודש הנוכחי)">גבייה לתאריך היום: <strong className={ytdPct >= 90 ? "text-green-600" : ytdPct >= 70 ? "text-yellow-600" : "text-red-600"}>{fmtPct(ytdPct)}</strong></span>
-          </p>
-        </div>
-        <div className="flex gap-2 items-center">
-          <button onClick={function() { setYear(year - 1); }} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-slate-600 hover:bg-slate-50">←</button>
-          <span className="text-lg font-bold text-slate-700 w-16 text-center">{year}</span>
-          <button onClick={function() { setYear(year + 1); }} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-slate-600 hover:bg-slate-50">→</button>
-          <button onClick={exportCSV} className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm text-slate-600 hover:bg-slate-50">⬇ CSV</button>
-        </div>
-      </div>
+      <PageHero title="תזרים שנתי" icon="💹" tone="emerald"
+        subtitle={<>פוטנציאל שנתי: <strong>{fmtMoney(totalPotential)}</strong> | גבייה: <strong className="text-emerald-100">{fmtMoney(totalPaid)}</strong> | <span title="ביחס לחודשים שכבר חויבו (עד החודש הנוכחי)">גבייה לתאריך היום: <strong>{fmtPct(ytdPct)}</strong></span></>}
+        actions={
+          <div className="flex gap-2 items-center">
+            <button onClick={function() { setYear(year - 1); }} className="rounded-xl bg-white/15 backdrop-blur border border-white/25 px-3 py-2 text-white hover:bg-white/25">←</button>
+            <span className="text-lg font-bold w-16 text-center">{year}</span>
+            <button onClick={function() { setYear(year + 1); }} className="rounded-xl bg-white/15 backdrop-blur border border-white/25 px-3 py-2 text-white hover:bg-white/25">→</button>
+            <button onClick={exportCSV} className="rounded-xl bg-white text-emerald-700 px-4 py-2 text-sm font-bold hover:bg-emerald-50 shadow-sm">⬇ CSV</button>
+          </div>
+        } />
 
       {/* Filter bar */}
       <div className="mb-4 rounded-xl border border-slate-200 bg-white p-3 flex flex-wrap items-center gap-2">

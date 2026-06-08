@@ -2,6 +2,7 @@
 import { useState, useEffect } from "react";
 import { supabase } from '@/lib/supabase';
 import { fetchCPI, fetchHighestCPI, calcIndexedRent, calcChainingCoefficient, getKnownIndexMonth, formatPeriod } from '@/lib/cpi-utils';
+import { PageHero } from '@/components/ui';
 
 function fmtMoney(n: number) { return "₪" + (n ?? 0).toLocaleString("he-IL",{minimumFractionDigits:2,maximumFractionDigits:2}); }
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
@@ -106,27 +107,21 @@ export default function IndexationPage() {
 
   return (
     <div dir="rtl">
-      <div className="mb-6 flex items-center justify-between flex-wrap gap-3">
+      <PageHero title="הצמדה למדד" icon="📈" tone="blue"
+        subtitle={cpiLoading ? "טוען מדד..." : currentCPI ? (
+          <span>מדד נוכחי: <strong className="text-white">{currentCPI}</strong> | {cpiPeriod}</span>
+        ) : "לא ניתן לשלוף מדד"} />
+      <div className="mb-5 flex gap-2 items-end flex-wrap">
         <div>
-          <h1 className="text-3xl font-bold text-slate-800">הצמדה למדד</h1>
-          <p className="text-sm text-slate-500 mt-1">
-            {cpiLoading ? "טוען מדד..." : currentCPI ? (
-              <span>מדד נוכחי: <strong className="text-blue-700">{currentCPI}</strong> | {cpiPeriod}</span>
-            ) : "לא ניתן לשלוף מדד"}
-          </p>
+          <label className="text-xs text-slate-500 block mb-1">תאריך תשלום</label>
+          <input type="date" value={paymentDate}
+            onChange={function(e){setPaymentDate(e.target.value);setResults({});}}
+            className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm" />
         </div>
-        <div className="flex gap-2 items-center">
-          <div>
-            <label className="text-xs text-slate-500 block mb-1">תאריך תשלום</label>
-            <input type="date" value={paymentDate}
-              onChange={function(e){setPaymentDate(e.target.value);setResults({});}}
-              className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm" />
-          </div>
-          <button onClick={calcAll} disabled={!!calculating || contracts.length===0}
-            className="self-end rounded-lg bg-blue-700 px-5 py-2 font-bold text-white hover:bg-blue-800 disabled:opacity-50">
-            {calculating==="all" ? "⏳ מחשב..." : "⚡ חשב הכל"}
-          </button>
-        </div>
+        <button onClick={calcAll} disabled={!!calculating || contracts.length===0}
+          className="rounded-lg bg-blue-700 px-5 py-2 font-bold text-white hover:bg-blue-800 disabled:opacity-50">
+          {calculating==="all" ? "⏳ מחשב..." : "⚡ חשב הכל"}
+        </button>
       </div>
 
       {/* CBS Banner */}
