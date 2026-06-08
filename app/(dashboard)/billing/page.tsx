@@ -8,6 +8,7 @@ import { fetchCpiAdjusted } from '@/lib/cpi-server';
 import { getGraceDaysForProperty, dueDateFromGrace } from '@/lib/grace-days';
 import { getVatPct, getVatTypeMap, applyVat } from '@/lib/vat';
 import { loadCompanyInfo, letterContent } from '@/lib/letter-format';
+import { PageHero } from '@/components/ui';
 import AdvancesTab from '@/components/AdvancesTab';
 import CpiDiffTab from '@/components/CpiDiffTab';
 import SavedAdvancesTab from '@/components/SavedAdvancesTab';
@@ -72,10 +73,7 @@ export default function BillingPage() {
 
   return (
     <div dir="rtl">
-      <div className="mb-6">
-        <h1 className="text-3xl font-bold text-slate-800">{"חיובים תפעוליים"}</h1>
-        <p className="text-sm text-slate-500 mt-1">{"דמי ניהול, ביטוח מבנה ופינוי אשפה"}</p>
-      </div>
+      <PageHero title="חיובים תפעוליים" icon="🧾" tone="emerald" subtitle="דמי ניהול, ביטוח מבנה ופינוי אשפה" />
 
       <div className="mb-4">
         <PropertyHierarchyFilter onChange={function(f) { setFilterPropIds(f.propertyIds); }} />

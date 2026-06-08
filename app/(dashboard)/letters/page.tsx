@@ -2,6 +2,7 @@
 import { useState, useEffect } from "react";
 import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit-log';
+import { PageHero } from '@/components/ui';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 
@@ -816,25 +817,23 @@ export default function LettersPage() {
 
   return (
     <div dir="rtl" className={selectedIds().length > 0 ? "pb-24" : ""}>
-      <div className="mb-6 flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold text-slate-800">מכתבים</h1>
-          <p className="text-sm text-slate-500 mt-1 flex items-center gap-2 flex-wrap">
-            <span>{letters.length} מכתבים</span>
-            {statusCounts.draft ? <span className="text-slate-400">· ✎ {statusCounts.draft} טיוטה</span> : null}
-            {statusCounts.ready ? <span className="text-blue-600">· 📤 {statusCounts.ready} מוכן לשליחה</span> : null}
-            {statusCounts.sent ? <span className="text-green-600">· ✓ {statusCounts.sent} נשלח</span> : null}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <button onClick={toggleTestMode}
-            className={"rounded-lg border px-3 py-2 text-xs font-bold " + (testMode ? "border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100" : "border-green-300 bg-green-50 text-green-700 hover:bg-green-100")}
-            title={testMode ? "מצב בדיקה: שליחה דרך תוכנת המייל המקומית בלבד, ללא PDF וללא עותקים. לחץ למעבר לשליחה אמיתית." : "מצב שליחה אמיתית: PDF מצורף + עותקים למורשים (דורש Resend). לחץ לחזרה למצב בדיקה."}>
-            {testMode ? "🧪 מצב בדיקה (מייל מקומי)" : "🚀 שליחה אמיתית (PDF + עותקים)"}
-          </button>
-          <button onClick={openNew} className="rounded-lg bg-blue-700 px-5 py-2.5 font-bold text-white hover:bg-blue-800">+ מכתב חדש</button>
-        </div>
-      </div>
+      <PageHero title="מכתבים" icon="✉️" tone="blue"
+        subtitle={<span className="flex items-center gap-2 flex-wrap">
+          <span>{letters.length} מכתבים</span>
+          {statusCounts.draft ? <span className="text-white/70">· ✎ {statusCounts.draft} טיוטה</span> : null}
+          {statusCounts.ready ? <span className="text-white">· 📤 {statusCounts.ready} מוכן לשליחה</span> : null}
+          {statusCounts.sent ? <span className="text-emerald-200">· ✓ {statusCounts.sent} נשלח</span> : null}
+        </span>}
+        actions={
+          <>
+            <button onClick={toggleTestMode}
+              className={"rounded-xl px-3 py-2 text-xs font-bold border " + (testMode ? "bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100" : "bg-white text-green-700 border-white hover:bg-green-50")}
+              title={testMode ? "מצב בדיקה: שליחה דרך תוכנת המייל המקומית בלבד, ללא PDF וללא עותקים. לחץ למעבר לשליחה אמיתית." : "מצב שליחה אמיתית: PDF מצורף + עותקים למורשים (דורש Resend). לחץ לחזרה למצב בדיקה."}>
+              {testMode ? "🧪 מצב בדיקה (מייל מקומי)" : "🚀 שליחה אמיתית (PDF + עותקים)"}
+            </button>
+            <button onClick={openNew} className="rounded-xl bg-white text-blue-700 px-4 py-2 text-sm font-bold hover:bg-blue-50 shadow-sm">+ מכתב חדש</button>
+          </>
+        } />
 
       {loading ? <div className="flex items-center justify-center gap-2 py-12 text-slate-400 text-sm"><span className="inline-block w-4 h-4 rounded-full border-2 border-slate-200 border-t-blue-600 animate-spin" aria-label="loading"></span>טוען...</div> : letters.length===0 ? (
         <div className="rounded-xl border-2 border-dashed border-slate-200 bg-white p-12 text-center text-slate-400">
