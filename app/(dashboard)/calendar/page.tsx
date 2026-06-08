@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import { supabase } from '@/lib/supabase';
+import { PageHero } from '@/components/ui';
 
 const DAYS_HE  = ["א","ב","ג","ד","ה","ו","ש"];
 const MONTHS_HE = ["","ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
@@ -91,19 +92,16 @@ export default function CalendarPage() {
 
   return (
     <div dir="rtl">
-      <div className="mb-6 flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold text-slate-800">לוח שנה</h1>
-          <p className="text-sm text-slate-500 mt-1">{events.length} אירועים החודש</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <button onClick={prevMonth} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-slate-600 hover:bg-slate-50">←</button>
-          <span className="text-lg font-bold text-slate-700 min-w-36 text-center">{MONTHS_HE[month]} {year}</span>
-          <button onClick={nextMonth} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-slate-600 hover:bg-slate-50">→</button>
-          <button onClick={function(){setYear(today.getFullYear());setMonth(today.getMonth()+1);}}
-            className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-blue-700 text-sm font-semibold">היום</button>
-        </div>
-      </div>
+      <PageHero title="לוח שנה" icon="📅" tone="blue" subtitle={events.length + " אירועים החודש"}
+        actions={
+          <div className="flex items-center gap-2">
+            <button onClick={prevMonth} className="rounded-xl bg-white/15 backdrop-blur border border-white/25 px-3 py-2 text-white hover:bg-white/25">←</button>
+            <span className="text-lg font-bold min-w-36 text-center">{MONTHS_HE[month]} {year}</span>
+            <button onClick={nextMonth} className="rounded-xl bg-white/15 backdrop-blur border border-white/25 px-3 py-2 text-white hover:bg-white/25">→</button>
+            <button onClick={function(){setYear(today.getFullYear());setMonth(today.getMonth()+1);}}
+              className="rounded-xl bg-white text-blue-700 px-3 py-2 text-sm font-bold hover:bg-blue-50 shadow-sm">היום</button>
+          </div>
+        } />
 
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
         {/* לוח */}

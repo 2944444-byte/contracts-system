@@ -2,6 +2,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from '@/lib/supabase';
+import { PageHero } from '@/components/ui';
 
 const MONTHS_HE = ["","ינו","פבר","מרץ","אפר","מאי","יונ","יול","אוג","ספט","אוק","נוב","דצמ"];
 
@@ -76,17 +77,14 @@ export default function TimelinePage() {
 
   return (
     <div dir="rtl">
-      <div className="mb-6 flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-3xl font-bold text-slate-800">Timeline</h1>
-          <p className="text-sm text-slate-500 mt-1">{filtered.length} חוזים | {yearFrom}–{yearTo}</p>
-        </div>
-        <div className="flex gap-2 items-center">
-          <button onClick={function(){setYearFrom(yearFrom-1);}} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-slate-600 hover:bg-slate-50">←</button>
-          <span className="text-sm font-bold text-slate-600">{yearFrom}–{yearTo}</span>
-          <button onClick={function(){setYearFrom(yearFrom+1);}} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-slate-600 hover:bg-slate-50">→</button>
-        </div>
-      </div>
+      <PageHero title="Timeline" icon="📊" tone="violet" subtitle={filtered.length + " חוזים | " + yearFrom + "–" + yearTo}
+        actions={
+          <div className="flex gap-2 items-center">
+            <button onClick={function(){setYearFrom(yearFrom-1);}} className="rounded-xl bg-white/15 backdrop-blur border border-white/25 px-3 py-2 text-white hover:bg-white/25">←</button>
+            <span className="text-sm font-bold">{yearFrom}–{yearTo}</span>
+            <button onClick={function(){setYearFrom(yearFrom+1);}} className="rounded-xl bg-white/15 backdrop-blur border border-white/25 px-3 py-2 text-white hover:bg-white/25">→</button>
+          </div>
+        } />
 
       {/* פילטר סטטוס */}
       <div className="flex gap-2 mb-4 flex-wrap">
