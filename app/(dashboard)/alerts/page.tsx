@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import { supabase } from '@/lib/supabase';
+import { PageHero } from '@/components/ui';
 
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
 function daysLeft(d: string) { return Math.ceil((new Date(d).getTime()-Date.now())/86400000); }
@@ -73,27 +74,24 @@ export default function AlertsPage() {
 
   return (
     <div dir="rtl">
-      <div className="mb-6 flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-3xl font-bold text-slate-800">התראות</h1>
-          <p className="text-sm text-slate-500 mt-1">
-            {totalOpen} פתוחות
-            {urgentOpen>0&&<span className="text-red-600 font-semibold"> | {urgentOpen} דחופות!</span>}
-            {warningOpen>0&&<span className="text-yellow-600 font-semibold"> | {warningOpen} אזהרות</span>}
-          </p>
-        </div>
-        <div className="flex gap-2">
-          {selected.size>0&&(
-            <button onClick={bulkClose} className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100">
-              ✓ סגור {selected.size} נבחרות
+      <PageHero title="התראות" icon="🔔" tone="amber"
+        subtitle={<>
+          {totalOpen} פתוחות
+          {urgentOpen>0&&<span className="text-rose-100 font-semibold"> | {urgentOpen} דחופות!</span>}
+          {warningOpen>0&&<span className="text-amber-100 font-semibold"> | {warningOpen} אזהרות</span>}
+        </>}
+        actions={
+          <>
+            {selected.size>0&&(
+              <button onClick={bulkClose} className="rounded-xl bg-white/15 backdrop-blur border border-white/25 px-3 py-2 text-sm font-semibold text-white hover:bg-white/25">
+                ✓ סגור {selected.size} נבחרות
+              </button>
+            )}
+            <button onClick={handleSync} disabled={syncing} className="rounded-xl bg-white text-amber-700 px-4 py-2 text-sm font-bold hover:bg-amber-50 shadow-sm disabled:opacity-50">
+              {syncing?"⏳ מסנכרן...":"🔄 סנכרן"}
             </button>
-          )}
-          <button onClick={handleSync} disabled={syncing}
-            className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-50">
-            {syncing?"⏳ מסנכרן...":"🔄 סנכרן"}
-          </button>
-        </div>
-      </div>
+          </>
+        } />
 
       {/* KPI */}
       <div className="grid grid-cols-3 gap-3 mb-5">

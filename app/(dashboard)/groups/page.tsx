@@ -2,6 +2,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from '@/lib/supabase';
+import { PageHero } from '@/components/ui';
 import { logAudit } from '@/lib/audit-log';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
@@ -113,13 +114,8 @@ export default function GroupsPage() {
 
   return (
     <div dir="rtl">
-      <div className="mb-6 flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold text-slate-800">קבוצות נכסים</h1>
-          <p className="text-sm text-slate-500 mt-1">{groups.length} קבוצות | {properties.filter(function(p){return p.group_id;}).length}/{properties.length} נכסים משויכים</p>
-        </div>
-        <button onClick={openNew} className="rounded-lg bg-blue-700 px-5 py-2.5 font-bold text-white hover:bg-blue-800">+ קבוצה</button>
-      </div>
+      <PageHero title="קבוצות נכסים" icon="🗂️" tone="violet" actionLabel="+ קבוצה" onAction={openNew}
+        subtitle={groups.length + " קבוצות | " + properties.filter(function(p){return p.group_id;}).length + "/" + properties.length + " נכסים משויכים"} />
 
       {loading ? <div className="flex items-center justify-center gap-2 py-12 text-slate-400 text-sm"><span className="inline-block w-4 h-4 rounded-full border-2 border-slate-200 border-t-blue-600 animate-spin" aria-label="loading"></span>טוען...</div> : groups.length===0 ? (
         <div className="rounded-xl border-2 border-dashed border-slate-200 bg-white p-12 text-center text-slate-400">

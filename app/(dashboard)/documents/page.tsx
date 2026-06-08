@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
 import { supabase } from '@/lib/supabase';
+import { PageHero } from '@/components/ui';
 import { logAudit } from '@/lib/audit-log';
 
 const FILE_ICONS: Record<string,string> = {
@@ -112,12 +113,7 @@ export default function DocumentsPage() {
 
   return (
     <div dir="rtl">
-      <div className="mb-6 flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold text-slate-800">מסמכים</h1>
-          <p className="text-sm text-slate-500 mt-1">{docs.length} קבצים | {fmtSize(totalSize)}</p>
-        </div>
-      </div>
+      <PageHero title="מסמכים" icon="📁" tone="slate" subtitle={docs.length + " קבצים | " + fmtSize(totalSize)} />
 
       {/* Upload Area */}
       <div className="rounded-xl border-2 border-dashed border-blue-200 bg-blue-50 p-5 mb-5">

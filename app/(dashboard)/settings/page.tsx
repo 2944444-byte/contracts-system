@@ -2,6 +2,7 @@
 import { useState, useEffect } from "react";
 import { supabase } from '@/lib/supabase';
 import { syncContractStatuses } from '@/lib/contractSync';
+import { PageHero } from '@/components/ui';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 const TABS = [{id:"general",l:"כללי",icon:"⚙️"},{id:"sync",l:"סנכרון",icon:"🔄"},{id:"vat",l:'מע"מ',icon:"📊"},{id:"templates",l:"תבניות",icon:"📝"}];
@@ -94,7 +95,7 @@ export default function SettingsPage() {
 
   return (
     <div dir="rtl">
-      <div className="mb-6"><h1 className="text-3xl font-bold text-slate-800">הגדרות</h1></div>
+      <PageHero title="הגדרות" icon="⚙️" tone="slate" />
 
       {msg&&<div className={"mb-4 rounded-xl border px-4 py-3 text-sm font-semibold "+(msg.startsWith("✅")?"bg-green-50 border-green-200 text-green-700":"bg-red-50 border-red-200 text-red-700")}>{msg}</div>}
 

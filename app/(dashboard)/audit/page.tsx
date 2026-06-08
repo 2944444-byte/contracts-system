@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import { supabase } from '@/lib/supabase';
+import { PageHero } from '@/components/ui';
 
 function fmtDate(d: string) {
   if (!d) return "—";
@@ -51,16 +52,8 @@ export default function AuditPage() {
 
   return (
     <div dir="rtl">
-      <div className="mb-6 flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold text-slate-800">יומן פעולות</h1>
-          <p className="text-sm text-slate-500 mt-1">מעקב אחרי כל הפעולות במערכת</p>
-        </div>
-        <button onClick={function(){setPage(0);loadLogs();}}
-          className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm text-slate-600 hover:bg-slate-50">
-          🔄 רענן
-        </button>
-      </div>
+      <PageHero title="יומן פעולות" icon="📜" tone="slate" subtitle="מעקב אחרי כל הפעולות במערכת"
+        actions={<button onClick={function(){setPage(0);loadLogs();}} className="rounded-xl bg-white/15 backdrop-blur border border-white/25 px-3 py-2 text-sm text-white hover:bg-white/25">🔄 רענן</button>} />
 
       {/* פילטר */}
       <div className="flex gap-2 mb-4 flex-wrap">

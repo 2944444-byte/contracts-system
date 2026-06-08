@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import { supabase } from '@/lib/supabase';
+import { PageHero } from '@/components/ui';
 import { logAudit } from '@/lib/audit-log';
 import PropertyHierarchyFilter from '@/components/PropertyHierarchyFilter';
 
@@ -126,13 +127,8 @@ export default function ParkingPage() {
 
   return (
     <div dir="rtl">
-      <div className="mb-6 flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold text-slate-800">חניות</h1>
-          <p className="text-sm text-slate-500 mt-1">{totalAllocated} מקומות | {rentedQty} מושכרים | {totalAllocated - rentedQty} פנויים</p>
-        </div>
-        <button onClick={openNew} className="rounded-lg bg-blue-700 px-5 py-2.5 font-bold text-white hover:bg-blue-800">+ הקצאת חניות</button>
-      </div>
+      <PageHero title="חניות" icon="🅿️" tone="blue" actionLabel="+ הקצאת חניות" onAction={openNew}
+        subtitle={totalAllocated + " מקומות | " + rentedQty + " מושכרים | " + (totalAllocated - rentedQty) + " פנויים"} />
 
       {/* Stats */}
       <div className="grid grid-cols-4 gap-3 mb-5">
