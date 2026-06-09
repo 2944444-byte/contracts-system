@@ -692,20 +692,50 @@ export default function ContractsPage() {
     });
     if (originalBaseRent === 0) originalBaseRent = (Number(selContract.rent_per_sqm) || 0) * (Number(selContract.charged_area) || 0);
   }
-  // Step-rent multiplier: ratio of current year rent vs base rent
+  // Step-rent multiplier: ratio of current year rent vs base rent.
+  // NOTE: this is a contract-level, per-sqm, MULTIPLICATIVE ratio. It is kept
+  // ONLY for coarse labels (e.g. the "year N" badge). It CANNOT represent
+  // per-space additive (fixed_total) tiers, so it must NEVER be used to compute
+  // actual money — use unitSteppedMonthly() for that. (Bug: floor 1/2 had a
+  // per-space +₪1,000/yr fixed_total tier the multiplier silently dropped,
+  // indexing ₪38,000 instead of the stepped ₪42,000.)
   var stepRentMultiplier = 1;
   if (originalRentPerSqm > 0 && currentRentPerSqm > 0 && currentRentPerSqm !== originalRentPerSqm) {
     stepRentMultiplier = currentRentPerSqm / originalRentPerSqm;
   }
 
-  // Compute adjusted baseRent: apply step-rent to per-unit amounts
+  // SINGLE SOURCE OF TRUTH for a unit's current (stepped, pre-CPI) monthly rent.
+  // Uses the documented per-space rent schedule — the SAME function billing
+  // (AdvancesTab/CpiDiffTab) uses — so per-space additive (fixed_total) and
+  // recurring tiers, plus exercised options, are applied for EVERY contract,
+  // not just simple per-sqm ones. Every "current rent" computation on this page
+  // routes through here so the contract total, the per-unit breakdown and
+  // billing can never silently disagree again.
+  function unitSteppedMonthly(cs: any): number {
+    var isFx = cs.charge_method === "fixed";
+    var area = cs.spaces?.area || 0;
+    var raw = isFx
+      ? (Number(cs.fixed_rent) || 0)
+      : (Number(cs.price_per_sqm) || Number(effectiveRentPerSqm) || 0) * area;
+    if (!selContract) return raw;
+    var sched = buildSpaceRentSchedule({
+      contractStartDate: selContract.start_date,
+      spaceArea: area,
+      isFixed: isFx,
+      spaceBaseRent: raw,
+      spaceTiers: rawTiersWithSpace.filter(function(t: any){ return t.space_id === cs.space_id; }),
+      contractTiers: rawTiersWithSpace.filter(function(t: any){ return !t.space_id; }),
+      exercisedOptions: selContract.contract_options || [],
+    });
+    return rentAtDate(sched, new Date());
+  }
+
+  // Contract-level stepped total — summed from the canonical per-unit schedule
+  // (NOT the multiplier) so per-space steps are reflected in the headline total.
   var adjustedBaseRent = 0;
   if (selContract && effectiveSpaces.length > 0) {
     effectiveSpaces.forEach(function(cs: any) {
-      var raw = cs.charge_method === "fixed" && cs.fixed_rent
-        ? Number(cs.fixed_rent)
-        : (Number(cs.price_per_sqm) || Number(effectiveRentPerSqm) || 0) * (cs.spaces?.area || 0);
-      adjustedBaseRent += raw * stepRentMultiplier;
+      adjustedBaseRent += unitSteppedMonthly(cs);
     });
   }
   if (adjustedBaseRent === 0) adjustedBaseRent = baseRent;
@@ -714,10 +744,7 @@ export default function ContractsPage() {
   var cpiAdjustedRent = 0;
   if (Object.keys(perUnitCpi).length > 0 && effectiveSpaces.length > 0) {
     effectiveSpaces.forEach(function(cs: any) {
-      var raw = cs.charge_method === "fixed" && cs.fixed_rent
-        ? Number(cs.fixed_rent)
-        : (Number(cs.price_per_sqm) || Number(effectiveRentPerSqm) || 0) * (cs.spaces?.area || 0);
-      var stepped = raw * stepRentMultiplier;
+      var stepped = unitSteppedMonthly(cs);
       var cpiRatio = perUnitCpi[cs.space_id]?.ratio || 1;
       cpiAdjustedRent += stepped * cpiRatio;
     });
@@ -1346,6 +1373,24 @@ export default function ContractsPage() {
                       {latestAmendment && <span className="text-xs font-normal text-yellow-600">(אחרי תוספת {latestAmendment.amendment_number})</span>}
                       {stepRentMultiplier > 1 && <span className="text-xs font-normal text-blue-600">({currentInOption ? currentOptionLabel : "שנה " + currentContractYear})</span>}
                     </div>
+                    {/* Consistency tripwire (runs for EVERY contract): the sum of
+                        per-unit current rents MUST equal the contract-level total.
+                        Both now route through unitSteppedMonthly(), so a non-zero
+                        gap means a calculation path regressed — surface it loudly
+                        instead of silently showing a wrong number (the failure mode
+                        of the old per-unit multiplier bug). */}
+                    {(function() {
+                      var puTotal = 0;
+                      effectiveSpaces.forEach(function(cs: any){ puTotal += unitSteppedMonthly(cs); });
+                      var gap = Math.abs(puTotal - adjustedBaseRent);
+                      var tol = Math.max(1, adjustedBaseRent * 0.005);
+                      if (gap <= tol) return null;
+                      return (
+                        <div className="mb-2 rounded-lg border border-rose-300 bg-rose-50 px-3 py-2 text-xs text-rose-700 font-semibold">
+                          ⚠ אי-התאמה בחישוב שכ&quot;ד: סכום היחידות {fmtMoney(puTotal)} ≠ סך החוזה {fmtMoney(adjustedBaseRent)} (פער {fmtMoney(gap)}). ייתכן שמדרגת מחיר/אופציה לא נלקחה — בדוק את הגדרות החוזה.
+                        </div>
+                      );
+                    })()}
                     <div className="space-y-1.5">
                       {effectiveSpaces.map(function(cs: any) {
                         var spName = cs.spaces?.space_name || "—";
@@ -1355,22 +1400,10 @@ export default function ContractsPage() {
                         var rawMonthly = isFixed
                           ? Number(cs.fixed_rent) || 0
                           : (Number(cs.price_per_sqm) || Number(effectiveRentPerSqm) || 0) * spArea;
-                        // Step-rent adjusted — use the documented per-space rent
-                        // schedule (the SAME function billing uses) so per-space
-                        // additive (fixed_total) and recurring tiers are applied
-                        // correctly. The previous single contract-level multiplier
-                        // silently dropped per-space fixed_total steps (e.g. floor
-                        // 1/2: +₪1,000/yr → ₪42,000 by year 5, not ₪38,000).
-                        var spSched = buildSpaceRentSchedule({
-                          contractStartDate: selContract.start_date,
-                          spaceArea: spArea,
-                          isFixed: isFixed,
-                          spaceBaseRent: rawMonthly,
-                          spaceTiers: rawTiersWithSpace.filter(function(t: any){ return t.space_id === cs.space_id; }),
-                          contractTiers: rawTiersWithSpace.filter(function(t: any){ return !t.space_id; }),
-                          exercisedOptions: selContract.contract_options || [],
-                        });
-                        var steppedMonthly = rentAtDate(spSched, new Date());
+                        // Step-rent adjusted — via the canonical per-unit
+                        // schedule helper (same source billing + the contract
+                        // total use), so this ALWAYS matches them.
+                        var steppedMonthly = unitSteppedMonthly(cs);
                         // CPI adjusted
                         var cpiRatio = perUnitCpi[cs.space_id]?.ratio || (cpiResult && cpiResult.baseRentPerSqm > 0 ? cpiResult.adjustedRentPerSqm / cpiResult.baseRentPerSqm : 1);
                         var cpiMonthly = steppedMonthly * cpiRatio;
