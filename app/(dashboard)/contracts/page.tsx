@@ -12,6 +12,27 @@ import { buildPriceTimeline, calculateTierPreviews, type PriceTier } from '@/lib
 // CPI + price timeline
 
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
+// Auto-computed lease/option END dates are stored as EXCLUSIVE boundaries
+// (start + N months/years = the day AFTER the last lease day) — required for
+// option chaining and "start ≤ now < end" checks. For DISPLAY we show the
+// inclusive last day (boundary − 1): a 1-year lease from 1.7.2025 ends 30.6.2026.
+// BUT only when the end really is a "start + N" boundary — detected by it sharing
+// the start's day-of-month (addMonths/addYears preserve the day; every link in
+// the chain keeps the contract-start day). An explicitly-typed end (e.g. 31.12)
+// whose day differs is left as-is, so we never mis-shift a genuine end date.
+function inclusiveEnd(end: string | Date, start?: string | Date | null): Date | null {
+  if (!end) return null;
+  var e = new Date(end);
+  if (isNaN(e.getTime())) return null;
+  if (!start) return e;
+  var s = new Date(start);
+  if (isNaN(s.getTime())) return e;
+  if (e.getDate() !== s.getDate()) return e; // explicit end date, not a start+N boundary
+  var x = new Date(e);
+  x.setDate(x.getDate() - 1);
+  return x;
+}
+function fmtEndDate(end: string, start?: string | null) { var x = inclusiveEnd(end, start); return x ? x.toLocaleDateString("he-IL") : "—"; }
 function fmtMoney(n: number) { return "₪"+(n??0).toLocaleString("he-IL",{minimumFractionDigits:2,maximumFractionDigits:2}); }
 
 function yearsMonthsLeft(endDate: string) {
@@ -962,7 +983,7 @@ export default function ContractsPage() {
                         var spaceName = (effectiveSpaces || []).find(function(cs: any){return cs.space_id === o.space_id;})?.spaces?.space_name
                           || (selContract.contract_spaces || []).find(function(cs: any){return cs.space_id === o.space_id;})?.spaces?.space_name
                           || o.space_id;
-                        return <div key={idx}>{spaceName} — גם בחוזה: {o.contracts.tenants?.name || "—"} (עד {fmtDate(o.contracts.end_date)})</div>;
+                        return <div key={idx}>{spaceName} — גם בחוזה: {o.contracts.tenants?.name || "—"} (עד {fmtEndDate(o.contracts.end_date, o.contracts.start_date)})</div>;
                       })}
                     </div>
                   </div>
@@ -986,7 +1007,7 @@ export default function ContractsPage() {
                     <div className={"text-sm font-bold " + (remaining?.isExpired ? "text-red-600" : remaining && remaining.years < 1 ? "text-orange-600" : "text-green-700")}>
                       {remaining?.text ?? "—"}
                     </div>
-                    <div className="text-xs text-slate-400">עד {fmtDate(effectiveEndDate)}</div>
+                    <div className="text-xs text-slate-400">עד {fmtEndDate(effectiveEndDate, selContract.start_date)}</div>
                   </div>
                 </div>
 
@@ -1203,7 +1224,7 @@ export default function ContractsPage() {
                 <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 text-sm text-slate-700">
                   {[
                     {l:"תחילה",   v:fmtDate(selContract.start_date)},
-                    {l:"סיום",    v:fmtDate(effectiveEndDate)},
+                    {l:"סיום",    v:fmtEndDate(effectiveEndDate, selContract.start_date)},
                     {l:"שטח",    v:selContract.charged_area?selContract.charged_area+' מ"ר':"—"},
                     {l:"הצמדה",  v:selContract.indexation_method==="highest_in_period"?"מדד גבוה":selContract.indexation_method==="none"?"ללא":"t-2"},
                     {l:"מדד בסיס",v:selContract.index_base_value ? ("📊 מדד " + (selContract.index_base_date ? formatPeriod(new Date(selContract.index_base_date).getFullYear(), new Date(selContract.index_base_date).getMonth()+1) + " = " : "= ") + selContract.index_base_value) : "—"},
@@ -1540,7 +1561,7 @@ export default function ContractsPage() {
                             {am.end_date && am.end_date !== selContract.end_date && (
                               <div className="rounded-lg bg-blue-50 border border-blue-200 px-3 py-2 flex justify-between text-sm">
                                 <span className="text-blue-700 font-bold">📅 הארכת תקופה</span>
-                                <span className="text-blue-800">עד {fmtDate(am.end_date)}</span>
+                                <span className="text-blue-800">עד {fmtEndDate(am.end_date, am.start_date || selContract.start_date)}</span>
                               </div>
                             )}
 
@@ -1563,8 +1584,11 @@ export default function ContractsPage() {
                   <div className="space-y-2">
                     {(selContract.contract_options??[]).sort((a:any,b:any) => a.option_number - b.option_number).map(function(opt:any) {
                       const optYears = opt.duration_years || (opt.duration_months ? Math.round(opt.duration_months / 12) : 0);
-                      const noticeDate = opt.end_date && opt.notice_days_before_end
-                        ? new Date(new Date(opt.end_date).getTime() - opt.notice_days_before_end * 86400000)
+                      // Notice is "X days before the end of the option term". The term's
+                      // last day is the inclusive end (stored boundary − 1 day).
+                      const optEndIncl = inclusiveEnd(opt.end_date, opt.start_date);
+                      const noticeDate = optEndIncl && opt.notice_days_before_end
+                        ? new Date(optEndIncl.getTime() - opt.notice_days_before_end * 86400000)
                         : null;
                       const noticePassed = noticeDate ? new Date() > noticeDate : false;
                       const isExercised = opt.is_exercised || opt.status === "exercised";
@@ -1694,7 +1718,7 @@ export default function ContractsPage() {
                 <button onClick={function(){setShowAmendModal(false);}} className="text-slate-400 hover:text-slate-600 text-xl">✕</button>
               </div>
               <div className="text-xs text-slate-500 mb-4">
-                {selContract.tenants?.name} | {selContract.properties?.name} | {fmtDate(selContract.start_date)} — {fmtDate(selContract.end_date)}
+                {selContract.tenants?.name} | {selContract.properties?.name} | {fmtDate(selContract.start_date)} — {fmtEndDate(selContract.end_date, selContract.start_date)}
               </div>
 
               {/* Step 1: Choose amendment type */}
@@ -1854,7 +1878,7 @@ export default function ContractsPage() {
                   {amendType === "extend" && (
                     <div>
                       <label className="block text-xs font-bold text-slate-700 mb-1">תאריך סיום חדש</label>
-                      <div className="text-xs text-slate-400 mb-2">סיום נוכחי: {fmtDate(selContract.end_date)}</div>
+                      <div className="text-xs text-slate-400 mb-2">סיום נוכחי: {fmtEndDate(selContract.end_date, selContract.start_date)}</div>
                       <input type="date" value={amendNewEndDate} onChange={function(e){setAmendNewEndDate(e.target.value);}}
                         className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
                     </div>
@@ -2087,7 +2111,7 @@ export default function ContractsPage() {
                       } else if (overlapHits.length > 0) {
                         // No swap possible (not removing anything) — just block
                         var conflictNames2 = overlapHits.map(function(o: any) {
-                          return (o.contracts.tenants?.name || "—") + " (עד " + fmtDate(o.contracts.end_date) + ")";
+                          return (o.contracts.tenants?.name || "—") + " (עד " + fmtEndDate(o.contracts.end_date, o.contracts.start_date) + ")";
                         });
                         alert("שגיאה: יחידות כבר משויכות לחוזה פעיל חופף:\n" + Array.from(new Set(conflictNames2)).join("\n"));
                         return;
