@@ -1611,11 +1611,17 @@ export default function ContractsPage() {
                   <div className="space-y-2">
                     {(selContract.contract_options??[]).sort((a:any,b:any) => a.option_number - b.option_number).map(function(opt:any) {
                       const optYears = opt.duration_years || (opt.duration_months ? Math.round(opt.duration_months / 12) : 0);
-                      // Notice is "X days before the end of the option term". The term's
-                      // last day is the inclusive end (stored boundary − 1 day).
-                      const optEndIncl = inclusiveEnd(opt.end_date, opt.start_date);
-                      const noticeDate = optEndIncl && opt.notice_days_before_end
-                        ? new Date(optEndIncl.getTime() - opt.notice_days_before_end * 86400000)
+                      // Notice to exercise/decline an option is due before the CURRENT
+                      // term ends — i.e. before the option COMMENCES (opt.start_date),
+                      // NOT before the option's own end. (Counting back from the option
+                      // END produced a notice date years too late: an option starting
+                      // 1.9.2027 showed 'notice by 31.8.2029'. It should count back from
+                      // 1.9.2027.) opt.start_date = the term-end boundary the notice
+                      // precedes; fall back to the contract end for a first option.
+                      const noticeRef = opt.start_date ? new Date(opt.start_date)
+                        : (selContract.end_date ? new Date(selContract.end_date) : null);
+                      const noticeDate = noticeRef && opt.notice_days_before_end
+                        ? new Date(noticeRef.getTime() - opt.notice_days_before_end * 86400000)
                         : null;
                       const noticePassed = noticeDate ? new Date() > noticeDate : false;
                       const isExercised = opt.is_exercised || opt.status === "exercised";
