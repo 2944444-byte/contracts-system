@@ -265,6 +265,10 @@ export default function ContractsPage() {
   // Uses CURRENT rent per sqm (after step-rent) as the base for CPI.
   // Depends on priceTimeline to determine current-year rent.
   useEffect(function() {
+    // Guard against out-of-order async results: when the contract/timeline
+    // changes mid-fetch, the superseded run is cancelled so it can't overwrite
+    // cpiResult with a stale rent base (which caused the calc/timeline mismatch).
+    var cancelled = false;
     if (!selContract) { setCpiResult(null); return; }
     if (selContract.indexation_method === "none") { setCpiResult(null); return; }
     const origRent = Number(selContract.rent_per_sqm);
@@ -330,6 +334,7 @@ export default function ContractsPage() {
           var highestDate = `${String(publishMonth).padStart(2, "0")}-16-${publishYear}`;
           var data = await fetchCpiAdjusted({ value: totalRentPerSqm, fromDate: baseDate, toDate: highestDate });
           if (data.success) {
+            if (cancelled) return;
             setCpiResult({
               success: true, source: "cbs",
               baseRentPerSqm: data.baseRentPerSqm,
@@ -354,6 +359,7 @@ export default function ContractsPage() {
       // Standard t-2: use today
       var stdData = await fetchCpiAdjusted({ value: totalRentPerSqm, fromDate: baseDate, toDate: todayForCbs });
       if (stdData.success) {
+        if (cancelled) return;
         setCpiResult({
           success: true, source: "cbs",
           baseRentPerSqm: stdData.baseRentPerSqm,
@@ -387,6 +393,7 @@ export default function ContractsPage() {
             .eq("year", knownTo.year).eq("month", knownTo.month).single(),
           supabase.from("cpi_link_coefficients").select("from_base_year,to_base_year,coefficient")
         ]).then(function(results) {
+          if (cancelled) return;
           var baseRec = results[0].data;
           var currentRec = results[1].data;
           var coefficients = results[2].data;
@@ -413,12 +420,14 @@ export default function ContractsPage() {
             verificationUrl: null,
           });
           setCpiLoading(false); setCpiProgress(null);
-        }).catch(function() { setCpiResult(null); setCpiLoading(false); setCpiProgress(null); });
+        }).catch(function() { if (!cancelled) { setCpiResult(null); setCpiLoading(false); setCpiProgress(null); } });
       });
-  }, [selected, priceTimeline.length]);
+    return function() { cancelled = true; };
+  }, [selected, priceTimeline]);
 
   // Per-unit CPI: compute CPI ratio per space (handles different CPI bases + indexation method)
   useEffect(function() {
+    var cancelled = false;
     (async function() {
       try {
         if (!selContract) { setPerUnitCpi({}); return; }
@@ -496,13 +505,14 @@ export default function ContractsPage() {
             map[sid] = { ratio: r.ratio, source: r.source };
           });
         });
-        setPerUnitCpi(map);
+        if (!cancelled) setPerUnitCpi(map);
       } catch (e) {
         console.error("perUnitCpi error:", e);
-        setPerUnitCpi({});
+        if (!cancelled) setPerUnitCpi({});
       }
     })();
-  }, [selected, amendments.length]);
+    return function() { cancelled = true; };
+  }, [selected, amendments]);
 
   async function handleSync() {
     setSyncing(true);
