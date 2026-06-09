@@ -8,7 +8,7 @@ import { PageHero } from '@/components/ui';
 import { fetchCpiAdjusted, fetchHighestChainedCpi } from '@/lib/cpi-server';
 import { calcChainingCoefficient, formatPeriod } from '@/lib/cpi-utils';
 import CalcProgress, { CalcProgressState } from '@/components/CalcProgress';
-import { buildPriceTimeline, calculateTierPreviews, type PriceTier } from '@/lib/contract-utils';
+import { buildPriceTimeline, calculateTierPreviews, buildSpaceRentSchedule, rentAtDate, type PriceTier } from '@/lib/contract-utils';
 // CPI + price timeline
 
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
@@ -1355,22 +1355,37 @@ export default function ContractsPage() {
                         var rawMonthly = isFixed
                           ? Number(cs.fixed_rent) || 0
                           : (Number(cs.price_per_sqm) || Number(effectiveRentPerSqm) || 0) * spArea;
-                        // Step-rent adjusted
-                        var steppedMonthly = rawMonthly * stepRentMultiplier;
+                        // Step-rent adjusted — use the documented per-space rent
+                        // schedule (the SAME function billing uses) so per-space
+                        // additive (fixed_total) and recurring tiers are applied
+                        // correctly. The previous single contract-level multiplier
+                        // silently dropped per-space fixed_total steps (e.g. floor
+                        // 1/2: +₪1,000/yr → ₪42,000 by year 5, not ₪38,000).
+                        var spSched = buildSpaceRentSchedule({
+                          contractStartDate: selContract.start_date,
+                          spaceArea: spArea,
+                          isFixed: isFixed,
+                          spaceBaseRent: rawMonthly,
+                          spaceTiers: rawTiersWithSpace.filter(function(t: any){ return t.space_id === cs.space_id; }),
+                          contractTiers: rawTiersWithSpace.filter(function(t: any){ return !t.space_id; }),
+                          exercisedOptions: selContract.contract_options || [],
+                        });
+                        var steppedMonthly = rentAtDate(spSched, new Date());
                         // CPI adjusted
                         var cpiRatio = perUnitCpi[cs.space_id]?.ratio || (cpiResult && cpiResult.baseRentPerSqm > 0 ? cpiResult.adjustedRentPerSqm / cpiResult.baseRentPerSqm : 1);
                         var cpiMonthly = steppedMonthly * cpiRatio;
                         var hasCustomCpi = cs.use_original_index === false;
                         var hasCpiData = cpiRatio > 1;
-                        var hasStepped = stepRentMultiplier > 1.001;
+                        var hasStepped = Math.abs(steppedMonthly - rawMonthly) > 0.5;
 
                         var rentLabel = isFixed
                           ? fmtMoney(Number(cs.fixed_rent) || 0) + " בסיס"
                           : fmtMoney(Number(cs.price_per_sqm) || Number(effectiveRentPerSqm) || 0) + '/מ"ר';
 
-                        // Per-sqm prices (base and adjusted)
+                        // Per-sqm prices (base and adjusted) — derived from the
+                        // schedule-based monthly so they match the per-space steps.
                         var basePsqm = isFixed ? 0 : (Number(cs.price_per_sqm) || Number(effectiveRentPerSqm) || 0);
-                        var steppedPsqm = basePsqm * stepRentMultiplier;
+                        var steppedPsqm = isFixed ? 0 : (spArea > 0 ? steppedMonthly / spArea : 0);
                         var cpiPsqm = steppedPsqm * cpiRatio;
 
                         return (
