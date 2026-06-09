@@ -295,14 +295,22 @@ export default function ContractsPage() {
     const origRent = Number(selContract.rent_per_sqm);
     if (!origRent) { setCpiResult(null); return; }
 
-    // Determine current rent from step-rent timeline (search backwards for option priority)
+    // Rent rate in effect TODAY. The timeline can have GAPS (a tier's period
+    // ends before the next change/option begins — e.g. step rent stops at year 5
+    // = ₪47 while the next option only starts years later). Requiring an exact
+    // start≤now<end match returned no row in the gap and fell back to the YEAR-1
+    // base (₪43) → the box showed 43×ratio instead of 47×ratio. Fix: carry
+    // forward the LATEST period that has already started (the rate truly in
+    // effect now), matching how the rent timeline reads.
     var currentRent = origRent;
     if (priceTimeline.length > 0) {
-      var now = new Date();
-      for (var i = priceTimeline.length - 1; i >= 0; i--) {
-        if (new Date(priceTimeline[i].startDate) <= now && new Date(priceTimeline[i].endDate) > now) {
-          currentRent = priceTimeline[i].rentPerSqm ?? origRent;
-          break;
+      var nowT = new Date().getTime();
+      var bestStart = -Infinity;
+      for (var i = 0; i < priceTimeline.length; i++) {
+        var st = new Date(priceTimeline[i].startDate).getTime();
+        if (st <= nowT && st >= bestStart && priceTimeline[i].rentPerSqm != null) {
+          bestStart = st;
+          currentRent = Number(priceTimeline[i].rentPerSqm);
         }
       }
     }
@@ -359,6 +367,7 @@ export default function ContractsPage() {
             setCpiResult({
               success: true, source: "cbs",
               baseRentPerSqm: data.baseRentPerSqm,
+              currentRent: currentRent,
               adjustedRentPerSqm: data.adjustedRentPerSqm,
               changePct: data.changePct,
               fromDate: data.fromDate,
@@ -384,6 +393,7 @@ export default function ContractsPage() {
         setCpiResult({
           success: true, source: "cbs",
           baseRentPerSqm: stdData.baseRentPerSqm,
+          currentRent: currentRent,
           adjustedRentPerSqm: stdData.adjustedRentPerSqm,
           changePct: stdData.changePct,
           fromDate: stdData.fromDate,
@@ -431,6 +441,7 @@ export default function ContractsPage() {
           setCpiResult({
             success: true, source: "local",
             baseRentPerSqm: Math.round(totalRentPerSqm * 100) / 100,
+            currentRent: currentRent,
             adjustedRentPerSqm: Math.round(adjustedRent * 100) / 100,
             changePct: Math.round(changePct * 100) / 100,
             fromDate: `${knownFrom.month}/${knownFrom.year}`,
@@ -1113,6 +1124,22 @@ export default function ContractsPage() {
                       <div className="flex justify-between"><span>שנת בסיס מדד:</span><span className="font-semibold">{cpiResult.baseYear}</span></div>
                       <div className="flex justify-between"><span>שטח מחויב:</span><span className="font-semibold">{selContract.charged_area} מ&quot;ר</span></div>
                     </div>
+
+                    {/* Self cross-check: the rent the calculator used must equal
+                        the rate the price-timeline shows in effect today. If they
+                        diverge, surface it instead of silently showing a wrong number. */}
+                    {(function(){
+                      if (cpiResult.currentRent == null || !priceTimeline.length) return null;
+                      var nowT = Date.now();
+                      var best = -Infinity, tlRent: number | null = null;
+                      for (var i = 0; i < priceTimeline.length; i++) {
+                        var st = new Date(priceTimeline[i].startDate).getTime();
+                        if (st <= nowT && st >= best && priceTimeline[i].rentPerSqm != null) { best = st; tlRent = Number(priceTimeline[i].rentPerSqm); }
+                      }
+                      if (tlRent == null) return null;
+                      if (Math.abs(tlRent - cpiResult.currentRent) <= 0.5) return null;
+                      return <div className="rounded bg-red-100 border border-red-200 px-2 py-1.5 text-[10px] text-red-700 font-semibold">⚠️ אי-התאמה: המחשבון השתמש בבסיס ₪{cpiResult.currentRent.toFixed(2)} בעוד שציר הזמן מראה ₪{tlRent.toFixed(2)} לתקופה הנוכחית — בדוק שלבי המחיר.</div>;
+                    })()}
 
                     {cpiResult.verificationUrl && (
                       <a href={cpiResult.verificationUrl} target="_blank" rel="noopener noreferrer"
