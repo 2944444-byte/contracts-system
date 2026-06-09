@@ -63,6 +63,17 @@ function getKnownIndexMonth(date: Date): { year: number; month: number } {
   return { year: d.getFullYear(), month: d.getMonth() + 1 };
 }
 
+// Label for a contract's BASE index. index_base_date is the REFERENCE date the
+// user enters; the actual base index is the "known" index published by then —
+// e.g. on 1.11.2019 the known index is SEPTEMBER 2019 (published 15.10.2019),
+// NOT November. Keeps the details label in sync with the CPI calculator box,
+// which already resolves to the known month.
+function baseIndexLabel(dateStr: string): string {
+  if (!dateStr) return "";
+  const k = getKnownIndexMonth(new Date(dateStr));
+  return formatPeriod(k.year, k.month);
+}
+
 // Format date as MM-DD-YYYY for CBS calculator.
 // CBS publishes CPI on the 15th but considers it "known" from the 16th.
 // Users always enter 15 as the day for index dates, so we bump to 16 automatically.
@@ -1254,7 +1265,7 @@ export default function ContractsPage() {
                     {l:"סיום",    v:fmtEndDate(effectiveEndDate, selContract.start_date)},
                     {l:"שטח",    v:selContract.charged_area?selContract.charged_area+' מ"ר':"—"},
                     {l:"הצמדה",  v:selContract.indexation_method==="highest_in_period"?"מדד גבוה":selContract.indexation_method==="none"?"ללא":"t-2"},
-                    {l:"מדד בסיס",v:selContract.index_base_value ? ("📊 מדד " + (selContract.index_base_date ? formatPeriod(new Date(selContract.index_base_date).getFullYear(), new Date(selContract.index_base_date).getMonth()+1) + " = " : "= ") + selContract.index_base_value) : "—"},
+                    {l:"מדד בסיס",v:selContract.index_base_value ? ("📊 מדד " + (selContract.index_base_date ? baseIndexLabel(selContract.index_base_date) + " = " : "= ") + selContract.index_base_value) : "—"},
                     {l:'מע"מ',  v:selContract.vat_type==="taxable"?"18%":"פטור"},
                     {l:"סוג שכ\"ד", v: selContract.rent_type==="revenue_pct" ? selContract.revenue_pct+"% ממחזור" : "קבוע"},
                     {l:"שיטת תשלום", v: selContract.payment_method==="checks_advance"?"שיקים מראש":selContract.payment_method==="bank_transfer"?"העברה בנקאית":selContract.payment_method==="cash"?"מזומן":selContract.payment_method==="credit_card"?"כרטיס אשראי":"הוראת קבע"},
@@ -1923,7 +1934,7 @@ export default function ContractsPage() {
                       <label className="block text-sm font-bold text-slate-700">עדכון מחירים והצמדה</label>
                       {selContract.index_base_value && (
                         <div className="text-xs text-slate-500 bg-slate-50 rounded-lg px-3 py-2 border border-slate-200">
-                          מדד בסיס מקורי: <span className="font-bold">📊 מדד {selContract.index_base_date ? formatPeriod(new Date(selContract.index_base_date).getFullYear(), new Date(selContract.index_base_date).getMonth()+1) + " = " : "= "}{selContract.index_base_value}</span>
+                          מדד בסיס מקורי: <span className="font-bold">📊 מדד {selContract.index_base_date ? baseIndexLabel(selContract.index_base_date) + " = " : "= "}{selContract.index_base_value}</span>
                         </div>
                       )}
                       <div className="space-y-3">
