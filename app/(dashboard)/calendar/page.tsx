@@ -38,7 +38,7 @@ export default function CalendarPage() {
 
     const ev: CalEvent[] = [];
     // חוזים פוגים
-    (c ?? []).forEach(function(x) {
+    (c ?? []).forEach(function(x: any) {
       if (x.end_date >= from && x.end_date <= to) {
         ev.push({ date: x.end_date.split("T")[0], label: "סיום: " + (x.tenants?.name ?? ""), type:"contract_end", color:"bg-red-100 text-red-700 border-red-200" });
       }
@@ -53,7 +53,7 @@ export default function CalendarPage() {
       }
     });
     // ערבויות
-    (g ?? []).forEach(function(x) {
+    (g ?? []).forEach(function(x: any) {
       if (x.end_date) {
         ev.push({ date: x.end_date.split("T")[0], label: "ערבות פגה: " + (x.contracts?.tenants?.name ?? ""), type:"guarantee", color:"bg-orange-100 text-orange-700 border-orange-200" });
       }

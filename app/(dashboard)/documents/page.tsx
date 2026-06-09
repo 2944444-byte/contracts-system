@@ -80,8 +80,6 @@ export default function DocumentsPage() {
         title:     fName.trim() || file.name,
         file_url:      urlData.publicUrl,
         file_size:     file.size,
-        file_type:     file.type,
-        file_url:  path,
       }).select().single();
       await logAudit({ entity_type:"document", entity_id:doc.id, action:"upload" });
       setFName(""); setFContractId(""); setFDocType("contract");
