@@ -48,6 +48,72 @@ function extractLetterCore(body: string): { subject: string; detail: string[]; t
   return { subject: subject, detail: detail, total: total };
 }
 
+// ── Unified-letter wording (GENERAL: applies to ANY merge of ANY charge types).
+// Each charge type maps to (a) a short noun-phrase for the SUBJECT line and (b) a
+// fuller clause for the BODY sentence. Anything unmapped falls back to the
+// letter's own "הנדון" subject, so a brand-new charge type still merges sensibly.
+const CHARGE_SHORT: Record<string, string> = {
+  management: "השלמת דמי ניהול",
+  waste: "פינוי אשפה",
+  insurance: "ביטוח המבנה",
+  cpi: "הפרשי הצמדה",
+  cpi_diff: "הפרשי הצמדה",
+  advance: 'מקדמות שכ"ד',
+};
+const CHARGE_CLAUSE: Record<string, string> = {
+  management: "השלמת תשלום דמי ניהול בהתאם להוצאות הניהול בפועל",
+  waste: "תשלום בגין פינוי אשפה מחדר האשפה המשותף במתחם",
+  insurance: "תשלום בגין ביטוח המבנה",
+  cpi: "תשלום בגין הפרשי הצמדה למדד",
+  cpi_diff: "תשלום בגין הפרשי הצמדה למדד",
+  advance: 'תשלום מקדמות שכ"ד',
+};
+function billingYearOf(l: any, subject: string): string {
+  if (l && l.billing_year) return String(l.billing_year);
+  var m = (subject || "").match(/20\d{2}/);
+  return m ? m[0] : "";
+}
+function chargeShort(l: any, subject: string): string {
+  return (l && CHARGE_SHORT[l.billing_type]) || subject || "חיוב";
+}
+function chargeClause(l: any, subject: string): string {
+  return (l && CHARGE_CLAUSE[l.billing_type]) || ("תשלום בגין " + (subject || "חיוב"));
+}
+// Hebrew list joins. Plain (subject, no Oxford comma): "A וB" / "A, B וC".
+// Comma (body clauses, comma before the final ו): "A, וB" / "A, B, וC".
+function heJoinPlain(items: string[]): string {
+  if (items.length <= 1) return items[0] || "";
+  return items.slice(0, -1).join(", ") + " ו" + items[items.length - 1];
+}
+function heJoinComma(items: string[]): string {
+  if (items.length <= 1) return items[0] || "";
+  return items.slice(0, -1).join(", ") + ", ו" + items[items.length - 1];
+}
+// Detailed subject for a merge: group charges by year, list each year's charges.
+// e.g. "תשלום השלמת דמי ניהול ופינוי אשפה לשנת 2025 ותשלום ביטוח המבנה לשנת 2026".
+function composeMergedSubject(letters: any[], cores: any[]): string {
+  var byYear: Record<string, string[]> = {};
+  var order: string[] = [];
+  letters.forEach(function(l: any, i: number) {
+    var y = billingYearOf(l, cores[i].subject) || "—";
+    if (!byYear[y]) { byYear[y] = []; order.push(y); }
+    var ph = chargeShort(l, cores[i].subject);
+    if (byYear[y].indexOf(ph) === -1) byYear[y].push(ph);
+  });
+  order.sort();
+  return order.map(function(y: string, idx: number) {
+    var lead = idx === 0 ? "תשלום " : "ותשלום ";
+    return lead + heJoinPlain(byYear[y]) + (y !== "—" ? " לשנת " + y : "");
+  }).join(" ");
+}
+// Split a "label: value" detail line into a [label, value] pair, sanitized so
+// the "|"-delimited appendix encoding can't be broken by stray pipes.
+function splitKv(s: string): string[] {
+  var clean = String(s || "").replace(/\|/g, "/");
+  var i = clean.indexOf(":");
+  return i >= 0 ? [clean.slice(0, i).trim(), clean.slice(i + 1).trim()] : [clean.trim(), ""];
+}
+
 // Purpose-based categories — what the letter is actually about, used for the
 // row icon and the "סוג" filter. This is more meaningful than the raw
 // letter_type, because e.g. a payment demand and an insurance-certificate
@@ -301,10 +367,13 @@ export default function LettersPage() {
     var appendixHtml = "";
     function esc(s: string) { return String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
     if (appendixRaw) {
-      var hasStructured = /^\s*SECTION\|/m.test(appendixRaw);
+      var hasStructured = /^\s*SECTIONP?\|/m.test(appendixRaw);
       if (hasStructured) {
         // ─── NEW format ───
-        appendixHtml = '<div class="appendix">';
+        // Portrait-only appendices (merged summary: SECTIONP, no landscape
+        // SECTION) render on a normal portrait page; otherwise keep landscape.
+        var portraitOnly = /^\s*SECTIONP\|/m.test(appendixRaw) && !/^\s*SECTION\|/m.test(appendixRaw);
+        appendixHtml = '<div class="' + (portraitOnly ? "appendix appendix-p" : "appendix") + '">';
         var lines = appendixRaw.split("\n");
         var inSection = false;
         var inTable = false;
@@ -321,12 +390,18 @@ export default function LettersPage() {
           if (!raw.trim()) continue;
           var parts = raw.split("|");
           var tag = parts[0];
-          if (tag === "SECTION") {
+          if (tag === "SECTION" || tag === "SECTIONP") {
             closeTable(); closeKv();
             if (inSection) appendixHtml += '</div>'; // close prior section
             inSection = true;
             var sectionTitle = esc(parts[2] || "נספח");
-            appendixHtml += '<div class="apx-section"><h3 class="apx-title">' + sectionTitle + '</h3>';
+            var secClass = tag === "SECTIONP" ? "apx-section-p" : "apx-section";
+            appendixHtml += '<div class="' + secClass + '"><h3 class="apx-title">' + sectionTitle + '</h3>';
+            continue;
+          }
+          if (tag === "SUBHEAD") {
+            closeTable(); closeKv();
+            appendixHtml += '<div class="apx-subhead">' + esc(parts[1]) + '</div>';
             continue;
           }
           if (tag === "KV") {
@@ -411,6 +486,7 @@ export default function LettersPage() {
       // when they hit Print, and the wide calc tables fit without truncation.
       '@page{size:A4 portrait;margin:12mm 18mm}' +
       '@page apxLandscape{size:A4 landscape;margin:10mm 12mm}' +
+      '@page apxPortrait{size:A4 portrait;margin:12mm 18mm}' +
       'body{font-family:"David","Arial";padding:0;direction:rtl;font-size:11.5px;line-height:1.4;color:#1e293b;margin:0}' +
       '.page{padding:0 30px}' +
       '.header{text-align:center;margin-bottom:3px;display:flex;align-items:center;justify-content:center;gap:12px}' +
@@ -428,6 +504,11 @@ export default function LettersPage() {
       '.checks .total{font-size:12px;color:#059669;border-top:2px solid #059669}' +
       '.checks tfoot td{background:#f0fdf4;padding:5px 10px}' +
       '.appendix{page:apxLandscape;page-break-before:always;padding:10px 20px 0}' +
+      // Merged-summary appendix: portrait page, flowing (not one page per charge).
+      '.appendix-p{page:apxPortrait}' +
+      '.apx-section-p{margin-bottom:14px}' +
+      '.apx-subhead{font-weight:bold;color:#1e3a5f;font-size:12.5px;margin:12px 0 4px;border-right:3px solid #1e3a5f;padding-right:8px}' +
+      '.apx-section-p .apx-kv{flex-direction:column;gap:3px 14px}' +
       '.appendix h3,.apx-title{color:#1e3a5f;font-size:15px;border-bottom:2px solid #1e3a5f;padding-bottom:5px;margin:0 0 10px 0}' +
       // Each appendix section starts on its own landscape page so wide tables
       // (10–12 columns) never get cut off.
@@ -628,39 +709,83 @@ export default function LettersPage() {
       var cores = g.letters.map(function(l: any){ return extractLetterCore(letterBodyText(l)); });
       var grand = cores.reduce(function(s: number, c: any){ return s + (c.total || 0); }, 0);
       var multi = g.letters.length > 1;
-      var subject = multi ? ("ריכוז דרישות תשלום — " + g.tenant) : (first.title || "מכתב");
+      var detailedSubject = composeMergedSubject(g.letters, cores);
+      var subject = multi ? detailedSubject : (first.title || "מכתב");
 
-      // ── ONE unified letter: single header, numbered charge sections, one grand
-      //    total, one payment instruction + signature (not stitched letters). ──
+      // Payee line — reuse the company's bank details but phrased for a cheque
+      // ("את ההמחאה יש לרשום לפקודת ...") to match the standard demand wording.
+      var payeeLine = cj0.bankLine
+        ? String(cj0.bankLine).replace("את התשלום ניתן להעביר", "את ההמחאה יש לרשום")
+        : "";
+
+      // ── ONE unified letter. The BODY is a single flowing request paragraph
+      //    (one cheque, one total, the charge clauses inline) + "רצ"ב פירוט
+      //    תחשיב" → the numbers live in the APPENDIX, not the body. This is the
+      //    general principle for EVERY merge, regardless of which charges. ──
+      var grandStr = (grand || 0).toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      var clauses = g.letters.map(function(l: any, i: number) {
+        var y = billingYearOf(l, cores[i].subject);
+        return chargeClause(l, cores[i].subject) + (y ? " בשנת " + y : "");
+      });
       var p: string[] = [];
       p.push("לכבוד");
       p.push(g.tenant);
       p.push("");
       p.push("שלום רב,");
       p.push("");
-      p.push("הנדון: " + (multi ? "ריכוז חיובים — " + g.letters.length + " נושאים" : cores[0].subject));
+      p.push("הנדון: " + (multi ? detailedSubject : cores[0].subject));
       p.push("");
-      p.push("בהתאם להוראות הסכם השכירות, להלן " + (multi ? "ריכוז החיובים הפתוחים על שמכם:" : "פירוט החיוב:"));
+      if (multi) {
+        p.push('בהתאם להסכם השכירות ביננו נבקשך להעביר אלינו המחאה בסך ' + grandStr + ' ש"ח, בגין ' + heJoinComma(clauses) + '. רצ"ב פירוט תחשיב.');
+      } else {
+        p.push('בהתאם להסכם השכירות ביננו נבקשך להעביר אלינו המחאה בסך ' + grandStr + ' ש"ח, בגין ' + clauses[0] + '. רצ"ב פירוט תחשיב.');
+      }
       p.push("");
-      cores.forEach(function(c: any, i: number) {
-        p.push((multi ? (i + 1) + ". " : "") + c.subject);
-        c.detail.forEach(function(d: string){ p.push("   " + d); });
-        p.push("");
-      });
-      if (multi) { p.push("─────────────"); p.push("סה\"כ כללי לתשלום (כולל מע\"מ): " + fmtMoney(grand)); p.push(""); }
-      p.push("נא להסדיר את התשלום בתוך 30 יום ממועד קבלת מכתב זה.");
-      if (cj0.bankLine) p.push(cj0.bankLine);
-      p.push("");
+      if (payeeLine) { p.push(payeeLine); p.push(""); }
       p.push("בכבוד רב ובברכה,");
       p.push("");
       p.push(cj0.companyName || "הנהלת הנכס");
       var body = p.join("\n");
 
+      // ── APPENDIX (נספח – פירוט תחשיב): identifiers that repeat in EVERY charge
+      //    are factored to a shared block at the top; each charge then lists only
+      //    its own (non-shared) lines + its total, then one grand total. Portrait
+      //    & compact (SECTIONP); big single-charge calcs can still be attached as
+      //    landscape pages in the future. ──
+      var detailsPer = cores.map(function(c: any) {
+        return (c.detail || []).filter(function(d: string){ return d.indexOf('סה"כ') !== 0; });
+      });
+      var shared = detailsPer.length
+        ? detailsPer[0].filter(function(d: string){ return detailsPer.every(function(arr: string[]){ return arr.indexOf(d) !== -1; }); })
+        : [];
+      var sharedSet: Record<string, boolean> = {};
+      shared.forEach(function(d: string){ sharedSet[d] = true; });
+      var apx: string[] = ["SECTIONP||נספח – פירוט תחשיב"];
+      if (shared.length) {
+        apx.push("SUBHEAD|פרטים משותפים לכל החיובים");
+        shared.forEach(function(d: string){ var kv = splitKv(d); apx.push("KV|" + kv[0] + "|" + kv[1]); });
+      }
+      g.letters.forEach(function(l: any, i: number) {
+        var y = billingYearOf(l, cores[i].subject);
+        apx.push("SUBHEAD|" + (i + 1) + ". " + cores[i].subject + (y ? " — " + y : ""));
+        detailsPer[i].forEach(function(d: string){
+          if (sharedSet[d]) return;
+          var kv = splitKv(d);
+          apx.push("KV|" + kv[0] + "|" + kv[1]);
+        });
+        apx.push('KV|סה"כ (כולל מע"מ)|' + fmtMoney(cores[i].total));
+      });
+      if (multi) {
+        apx.push('SUBHEAD|סה"כ כללי לתשלום');
+        apx.push('KV|סה"כ כולל מע"מ|' + fmtMoney(grand));
+      }
+      var appendix = apx.join("\n");
+
       var propIds = Array.from(new Set(g.letters.map(function(l: any){ return l.property_id || l.contracts?.properties?.id; }).filter(Boolean)));
       // Synthetic letter object so handlePrint renders the full letterhead → PDF.
       var printLetter = {
         title: subject, created_at: first.created_at, contracts: first.contracts,
-        content_json: { body: body, companyName: cj0.companyName, companyAddress: cj0.companyAddress, companyPhone: cj0.companyPhone, logoUrl: cj0.logoUrl },
+        content_json: { body: body, appendix: appendix, companyName: cj0.companyName, companyAddress: cj0.companyAddress, companyPhone: cj0.companyPhone, logoUrl: cj0.logoUrl },
       };
       var cc = ccForProps(propIds as string[], g.email);
       return { key: g.key, email: g.email, tenant: g.tenant, subject: subject, body: body, grand: grand, multi: multi, letters: g.letters, printLetter: printLetter, propIds: propIds, cc: cc };
