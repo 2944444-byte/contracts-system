@@ -149,6 +149,22 @@ export default function PaymentsPage() {
   const [includeAdvances, setIncludeAdvances] = useState<boolean>(true);
   // Collapsed month sections
   const [collapsedMonths, setCollapsedMonths] = useState<Record<string, boolean>>({});
+  // On entering the screen, jump to the CURRENT month (the user works on "now";
+  // older months are above, scroll up to reach them). Only on the first load of
+  // a year — re-filtering / marking paid must not yank the scroll back.
+  const currentMonthRef = useRef<HTMLDivElement | null>(null);
+  const didScrollRef = useRef(false);
+  const nowDate = new Date();
+  const currentMonthKey = nowDate.getFullYear() + "-" + String(nowDate.getMonth() + 1).padStart(2, "0");
+  useEffect(function(){ didScrollRef.current = false; }, [filterYear]);
+  useEffect(function() {
+    if (loading || didScrollRef.current) return;
+    if (filterYear !== nowDate.getFullYear()) { didScrollRef.current = true; return; }
+    if (currentMonthRef.current) {
+      currentMonthRef.current.scrollIntoView({ behavior: "auto", block: "start" });
+    }
+    didScrollRef.current = true;
+  }, [loading, filterYear]);
   // Selection for bulk operations (e.g., one tenant pays one check that covers
   // their rent + CPI diff + insurance — select all three and mark paid together)
   const [selected, setSelected] = useState<Record<string, boolean>>({});
@@ -787,7 +803,7 @@ export default function PaymentsPage() {
             var monthOverdueCount = monthRows.filter(isOverdueRow).length;
             var isCollapsed = !!collapsedMonths[mk];
             return (
-              <div key={mk} className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+              <div key={mk} ref={mk === currentMonthKey ? currentMonthRef : undefined} className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden scroll-mt-4">
                 <button
                   onClick={function() { toggleMonth(mk); }}
                   className="w-full flex items-center justify-between px-4 py-3 bg-slate-50 hover:bg-slate-100"
