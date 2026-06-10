@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
+import { getVatPct } from "@/lib/vat";
 
 function fmtMoney(n: number) { return "₪" + (n ?? 0).toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
@@ -14,6 +15,9 @@ export default function SavedAdvancesTab({ properties }: Props) {
   const [year, setYear] = useState(new Date().getFullYear());
   const [advances, setAdvances] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  // Configured VAT rate (vat_rates) for labels; default 18% until loaded.
+  const [vatPctLabel, setVatPctLabel] = useState(0.18);
+  useEffect(function(){ getVatPct().then(setVatPctLabel); }, []);
   const [filterTenant, setFilterTenant] = useState("all");
   const [filterStatus, setFilterStatus] = useState("all");
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -144,7 +148,8 @@ export default function SavedAdvancesTab({ properties }: Props) {
     try {
       var contract = addContracts.find(function (c: any) { return c.id === addContractId; });
       var space = (contract?.contract_spaces || []).find(function (cs: any) { return cs.space_id === addSpaceId; });
-      var vatPct = addVatType === "taxable" ? 0.18 : 0;
+      // VAT rate from the configured source of truth (vat_rates), not a literal.
+      var vatPct = addVatType === "taxable" ? await getVatPct() : 0;
       var rent = Number(addRent) || 0;
       var mgmt = Number(addMgmt) || 0;
       var startM = Number(addPeriodStart) || 1;
@@ -640,7 +645,7 @@ export default function SavedAdvancesTab({ properties }: Props) {
             <div>
               <label className="mb-1 block text-xs font-semibold text-slate-700">מע&quot;מ</label>
               <select value={addVatType} onChange={function (e) { setAddVatType(e.target.value); }} className={ic}>
-                <option value="taxable">חייב (18%)</option>
+                <option value="taxable">חייב ({Math.round(vatPctLabel*100)}%)</option>
                 <option value="exempt">פטור</option>
               </select>
             </div>

@@ -1,5 +1,6 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { getVatPct } from "@/lib/vat";
 
 const UNIT_TYPES = ["משרדים", "מסחר", "חנות", "מחסן", "תעשיה", "חצר פתוחה", "אחר"];
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
@@ -8,6 +9,9 @@ interface Props { unit?: any; properties: any[]; onSubmit: (data: any) => void; 
 
 export default function UnitForm({ unit, properties, onSubmit, onCancel }: Props) {
   const [saving, setSaving] = useState(false);
+  // Configured VAT rate (vat_rates); default 18% until loaded.
+  const [vatPct, setVatPct] = useState(0.18);
+  useEffect(function(){ getVatPct().then(setVatPct); }, []);
   const [form, setForm] = useState({
     property_id: unit?.property_id ?? "",
     unit_name: unit?.unit_name ?? "",
@@ -84,8 +88,8 @@ export default function UnitForm({ unit, properties, onSubmit, onCancel }: Props
             <span className="font-bold text-green-700">₪{askingMonthly.toLocaleString()}</span>
           </div>
           <div className="flex justify-between text-xs text-slate-400 mt-1">
-            <span>כולל מע&quot;מ 18%</span>
-            <span>₪{Math.round(askingMonthly * 1.18).toLocaleString()}</span>
+            <span>כולל מע&quot;מ {Math.round(vatPct*100)}%</span>
+            <span>₪{Math.round(askingMonthly * (1 + vatPct)).toLocaleString()}</span>
           </div>
         </div>
       )}

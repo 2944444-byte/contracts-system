@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import { supabase } from '@/lib/supabase';
+import { getVatPct } from '@/lib/vat';
 import { PageHero } from '@/components/ui';
 
 function fmtMoney(n: number) { return "₪" + (n ?? 0).toLocaleString("he-IL", { minimumFractionDigits: 0, maximumFractionDigits: 0 }); }
@@ -58,11 +59,15 @@ export default function CashflowPage() {
   const [chargesPrev,  setChargesPrev]  = useState<any[]>([]);
   const [revenuesPrev, setRevenuesPrev] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  // Configured VAT rate (vat_rates); default 18% until loaded.
+  const [vatPct, setVatPct] = useState(0.18);
 
   useEffect(function() { loadAll(); }, [year, compareYoY]);
 
   async function loadAll() {
     setLoading(true);
+    // VAT rate from the configured source (vat_rates), not a literal multiplier.
+    setVatPct(await getVatPct());
     var yearStart = year + "-01-01";
     var yearEnd   = (year + 1) + "-01-01";
     var prevStart = (year - 1) + "-01-01";
@@ -205,10 +210,10 @@ export default function CashflowPage() {
       var m = d.getMonth();
       var amt = Number(r.final_rent) || 0;
       var vatType = (r.contracts as any)?.vat_type;
-      var withVat = vatType === "taxable" ? amt * 1.18 : amt;
+      var withVat = vatType === "taxable" ? amt * (1 + vatPct) : amt;
       months[m].potRent += withVat;
       var paid = Number(r.actual_paid) || 0;
-      if (paid > 0) months[m].paidRent += paid * (vatType === "taxable" ? 1.18 : 1);
+      if (paid > 0) months[m].paidRent += paid * (vatType === "taxable" ? (1 + vatPct) : 1);
     });
 
     // 4) Occupancy + contract events

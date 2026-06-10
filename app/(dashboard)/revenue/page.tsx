@@ -2,6 +2,7 @@
 import { useState, useEffect, useRef } from "react";
 import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit-log';
+import { getVatPct } from '@/lib/vat';
 import { PageHero } from '@/components/ui';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
@@ -25,6 +26,9 @@ export default function RevenuePage() {
   const [loading,    setLoading]    = useState(true);
   const [editingId,  setEditingId]  = useState("");
   const [saving,     setSaving]     = useState(false);
+  // Configured VAT rate (vat_rates) — fetched once; default 18% until loaded.
+  const [vatPct,     setVatPct]     = useState(0.18);
+  useEffect(function(){ getVatPct().then(setVatPct); }, []);
 
   // Primary filters: tenant (contract) + year — drives a 12-month breakdown table.
   const [selContractId, setSelContractId] = useState<string>("");
@@ -268,7 +272,7 @@ export default function RevenuePage() {
     const rentFromRev   = consideration - mgmtMonthly;                    // שכ"ד מפדיון (before min)
     const minRent       = (c.min_rent_per_sqm??0)*(c.charged_area??0)+(c.investment_addition??0);
     const finalRent     = Math.max(rentFromRev, minRent);
-    const vat           = c.vat_type==="taxable" ? finalRent*0.18 : 0;
+    const vat           = c.vat_type==="taxable" ? finalRent*vatPct : 0;
     return {
       pct, mgmtMonthly, netGross,
       consideration,                  // 12% × gross

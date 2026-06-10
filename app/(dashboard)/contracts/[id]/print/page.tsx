@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import { getVatPct } from "@/lib/vat";
 
 function fmt(d: string) { return d ? new Date(d).toLocaleDateString("he-IL",{day:"numeric",month:"long",year:"numeric"}) : "—"; }
 function money(n: number) { return n ? "₪"+Math.round(n).toLocaleString() : "—"; }
@@ -10,6 +11,9 @@ export default function PrintPage() {
   const params = useParams();
   const id = params?.id as string;
   const [c, setC] = useState<any>(null);
+  // Configured VAT rate (vat_rates) — fetched once; default 18% until loaded.
+  const [vatPct, setVatPct] = useState(0.18);
+  useEffect(function(){ getVatPct().then(setVatPct); }, []);
 
   useEffect(function() {
     if (!id) return;
@@ -22,7 +26,7 @@ export default function PrintPage() {
   if (!c) return <div className="text-center py-20 text-slate-400">טוען...</div>;
 
   const base  = (c.rent_per_sqm??0)*(c.charged_area??0)+(c.investment_addition??0);
-  const vat   = c.vat_type==="taxable" ? base*0.18 : 0;
+  const vat   = c.vat_type==="taxable" ? base*vatPct : 0;
 
   return (
     <div dir="rtl" className="max-w-3xl mx-auto p-4">
@@ -69,7 +73,7 @@ export default function PrintPage() {
           <div className="text-sm font-bold text-slate-700 mb-3">תשלום חודשי</div>
           <div className="space-y-1.5 text-sm">
             <div className="flex justify-between"><span className="text-slate-500">בסיס</span><span className="font-semibold">{money(base)}</span></div>
-            {vat>0 && <div className="flex justify-between"><span className="text-slate-500">מע"מ 18%</span><span>{money(vat)}</span></div>}
+            {vat>0 && <div className="flex justify-between"><span className="text-slate-500">מע"מ {Math.round(vatPct*100)}%</span><span>{money(vat)}</span></div>}
             <div className="flex justify-between font-black text-base border-t border-slate-200 pt-2 mt-2">
               <span>סה"כ</span><span className="text-blue-700">{money(base+vat)}</span>
             </div>

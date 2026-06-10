@@ -7,6 +7,7 @@ import { logAudit } from '@/lib/audit-log';
 import { PageHero } from '@/components/ui';
 import { fetchCpiAdjusted, fetchHighestChainedCpi } from '@/lib/cpi-server';
 import { calcChainingCoefficient, formatPeriod } from '@/lib/cpi-utils';
+import { getVatPct } from '@/lib/vat';
 import CalcProgress, { CalcProgressState } from '@/components/CalcProgress';
 import { buildPriceTimeline, calculateTierPreviews, buildSpaceRentSchedule, rentAtDate, type PriceTier } from '@/lib/contract-utils';
 // CPI + price timeline
@@ -99,6 +100,9 @@ export default function ContractsPage() {
   const [contracts, setContracts] = useState<any[]>([]);
   const [loading,   setLoading]   = useState(true);
   const [syncing,   setSyncing]   = useState(false);
+  // Configured VAT rate (vat_rates) — fetched once; default 18% until loaded.
+  const [vatPct,    setVatPct]    = useState(0.18);
+  useEffect(function(){ getVatPct().then(setVatPct); }, []);
   const [selected,  setSelected]  = useState<string|null>(null);
   const [filterSt,  setFilterSt]  = useState("active");
   const [filterProp, setFilterProp] = useState("all");
@@ -760,7 +764,7 @@ export default function ContractsPage() {
   });
   var rentBeforeParking = cpiAdjustedRent > 0 ? cpiAdjustedRent : adjustedBaseRent > 0 ? adjustedBaseRent : baseRent;
   var displayRent = rentBeforeParking + parkingMonthlyTotal;
-  const vat         = selContract?.vat_type==="taxable" ? displayRent*0.18 : 0;
+  const vat         = selContract?.vat_type==="taxable" ? displayRent*vatPct : 0;
   const remaining   = effectiveEndDate ? yearsMonthsLeft(effectiveEndDate) : null;
 
   const counts: Record<string,number> = { active: 0, upcoming: 0, ended: 0 };
@@ -1293,7 +1297,7 @@ export default function ContractsPage() {
                     {l:"שטח",    v:selContract.charged_area?selContract.charged_area+' מ"ר':"—"},
                     {l:"הצמדה",  v:selContract.indexation_method==="highest_in_period"?"מדד גבוה":selContract.indexation_method==="none"?"ללא":"t-2"},
                     {l:"מדד בסיס",v:selContract.index_base_value ? ("📊 מדד " + (selContract.index_base_date ? baseIndexLabel(selContract.index_base_date) + " = " : "= ") + selContract.index_base_value) : "—"},
-                    {l:'מע"מ',  v:selContract.vat_type==="taxable"?"18%":"פטור"},
+                    {l:'מע"מ',  v:selContract.vat_type==="taxable"?(Math.round(vatPct*100)+"%"):"פטור"},
                     {l:"סוג שכ\"ד", v: selContract.rent_type==="revenue_pct" ? selContract.revenue_pct+"% ממחזור" : "קבוע"},
                     {l:"שיטת תשלום", v: selContract.payment_method==="checks_advance"?"שיקים מראש":selContract.payment_method==="bank_transfer"?"העברה בנקאית":selContract.payment_method==="cash"?"מזומן":selContract.payment_method==="credit_card"?"כרטיס אשראי":"הוראת קבע"},
                   ].map(function(r){return <div key={r.l} className="flex justify-between border-b border-slate-50 py-1"><span className="text-slate-400">{r.l}</span><span className="font-medium">{r.v}</span></div>;})}

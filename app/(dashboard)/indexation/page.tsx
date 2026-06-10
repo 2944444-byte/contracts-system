@@ -2,6 +2,7 @@
 import { useState, useEffect } from "react";
 import { supabase } from '@/lib/supabase';
 import { fetchCPI, fetchHighestCPI, calcIndexedRent, calcChainingCoefficient, getKnownIndexMonth, formatPeriod } from '@/lib/cpi-utils';
+import { getVatPct } from '@/lib/vat';
 import { PageHero } from '@/components/ui';
 
 function fmtMoney(n: number) { return "₪" + (n ?? 0).toLocaleString("he-IL",{minimumFractionDigits:2,maximumFractionDigits:2}); }
@@ -80,7 +81,8 @@ export default function IndexationPage() {
       const baseRent    = (c.rent_per_sqm??0)*(c.charged_area??0)+(c.investment_addition??0);
       const indexedRent = calcIndexedRent(baseRent, c.index_base_value, currentIdx, chainingCoeff);
       const change      = ((currentIdx * chainingCoeff / c.index_base_value) - 1) * 100;
-      const vat         = c.vat_type==="taxable" ? indexedRent*0.18 : 0;
+      const vatRate     = await getVatPct();
+      const vat         = c.vat_type==="taxable" ? indexedRent*vatRate : 0;
 
       setResults(function(prev) {
         return {
