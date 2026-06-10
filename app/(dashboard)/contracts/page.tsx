@@ -114,6 +114,8 @@ export default function ContractsPage() {
   const [priceTiers, setPriceTiers] = useState<PriceTier[]>([]);
   const [rawTiersWithSpace, setRawTiersWithSpace] = useState<any[]>([]);
   const [priceTimeline, setPriceTimeline] = useState<any[]>([]);
+  // For revenue-% contracts: rent-per-sqm derived from reported turnover (no CPI).
+  const [revStats, setRevStats] = useState<any>(null);
   const [amendments, setAmendments] = useState<any[]>([]);
   const [parkingSubs, setParkingSubs] = useState<any[]>([]);
   const [spaceOverlaps, setSpaceOverlaps] = useState<any[]>([]);
@@ -295,6 +297,42 @@ export default function ContractsPage() {
           setPriceTimeline(tl);
         }
       });
+  }, [selected]);
+
+  // Revenue-% contracts: derive rent-per-sqm from reported turnover — the LATEST
+  // month and the AVERAGE — using the stored final_rent (already net of the mgmt
+  // fee and the minimum, exactly as the revenue screen computes it). No CPI
+  // applies to revenue rent, so this is the equivalent of the CPI box for these
+  // contracts. Mirrors the revenue page's principle, sourced from its data.
+  useEffect(function() {
+    var cancelled = false;
+    if (!selContract || selContract.rent_type !== "revenue_pct") { setRevStats(null); return; }
+    supabase.from("revenue_reports")
+      .select("report_month, gross_revenue, final_rent")
+      .eq("contract_id", selContract.id)
+      .order("report_month", { ascending: true })
+      .then(function({ data }: any) {
+        if (cancelled) return;
+        var rows = (data ?? []).filter(function(r: any){ return r.final_rent != null; });
+        if (rows.length === 0) { setRevStats(null); return; }
+        var area = Number(selContract.charged_area)
+          || (selContract.contract_spaces || []).reduce(function(s: number, cs: any){ return s + (Number(cs.spaces?.area) || 0); }, 0)
+          || 0;
+        var sumFinal = rows.reduce(function(s: number, r: any){ return s + (Number(r.final_rent) || 0); }, 0);
+        var avgFinal = sumFinal / rows.length;
+        var latest = rows[rows.length - 1];
+        var latestFinal = Number(latest.final_rent) || 0;
+        setRevStats({
+          area: area,
+          count: rows.length,
+          latestMonth: latest.report_month,
+          latestFinal: latestFinal,
+          latestPerSqm: area > 0 ? latestFinal / area : 0,
+          avgFinal: avgFinal,
+          avgPerSqm: area > 0 ? avgFinal / area : 0,
+        });
+      });
+    return function(){ cancelled = true; };
   }, [selected]);
 
   // Load CPI-adjusted price via CBS calculator (server action — no CORS/auth issues).
@@ -1078,6 +1116,31 @@ export default function ContractsPage() {
                     </div>
                     {selContract.revenue_report_day && (
                       <div className="text-xs text-purple-500 mt-1">דו&quot;ח פדיון עד ה-{selContract.revenue_report_day} לכל חודש</div>
+                    )}
+
+                    {/* Rent-per-sqm from turnover (net of mgmt) — the revenue
+                        equivalent of the CPI box: latest month + running average. */}
+                    {revStats ? (
+                      <div className="mt-2 pt-2 border-t border-purple-200">
+                        <div className="grid grid-cols-2 gap-2">
+                          <div className="rounded-lg bg-white border border-purple-200 p-2.5 text-center">
+                            <div className="text-lg font-black text-purple-900">{fmtMoney(revStats.latestPerSqm)}/מ&quot;ר</div>
+                            <div className="text-[10px] text-purple-600">לפי פדיון אחרון{revStats.latestMonth ? " (" + new Date(revStats.latestMonth).toLocaleDateString("he-IL", {month: "short", year: "numeric"}) + ")" : ""}</div>
+                          </div>
+                          <div className="rounded-lg bg-white border border-purple-200 p-2.5 text-center">
+                            <div className="text-lg font-black text-purple-900">{fmtMoney(revStats.avgPerSqm)}/מ&quot;ר</div>
+                            <div className="text-[10px] text-purple-600">ממוצע ({revStats.count} דו&quot;חות)</div>
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-[10px] text-purple-600 mt-1.5">
+                          <div className="flex justify-between"><span>שכ&quot;ד נטו אחרון/חודש:</span><span className="font-semibold">{fmtMoney(revStats.latestFinal)}</span></div>
+                          <div className="flex justify-between"><span>שכ&quot;ד נטו ממוצע/חודש:</span><span className="font-semibold">{fmtMoney(revStats.avgFinal)}</span></div>
+                          <div className="flex justify-between"><span>שטח מחויב:</span><span className="font-semibold">{revStats.area} מ&quot;ר</span></div>
+                          <div className="flex justify-between"><span className="text-purple-400">בניקוי דמי ניהול · ללא הצמדה</span><span></span></div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="mt-2 pt-2 border-t border-purple-200 text-[11px] text-purple-400">אין עדיין דו&quot;חות פדיון — שכ&quot;ד למ&quot;ר יוצג לאחר דיווח ראשון.</div>
                     )}
                   </div>
                 )}
