@@ -136,6 +136,16 @@ const RECIPIENT_DOMAINS = [
   { key: "general",     icon: "📄", label: "כללי (ברירת מחדל)" },
 ];
 
+// Unit/contract label for a letter — the space names on its contract, joined.
+// Lets two letters with the SAME title for the SAME tenant be told apart at a
+// glance (e.g. יהונתן בכור: "מחסן" vs "משרדים, מסחר") without opening them.
+function unitsLabel(l: any): string {
+  var cs = l && l.contracts && l.contracts.contract_spaces;
+  if (!Array.isArray(cs) || cs.length === 0) return (l && l.contracts && l.contracts.properties && l.contracts.properties.name) || "";
+  var names = cs.map(function(x: any){ return x && x.spaces && x.spaces.space_name; }).filter(Boolean);
+  return Array.from(new Set(names)).join(", ");
+}
+
 function parseCj(l: any): any {
   var cj = l.content_json;
   if (typeof cj === "string") { try { cj = JSON.parse(cj); } catch (e) { cj = {}; } }
@@ -223,7 +233,7 @@ export default function LettersPage() {
 
   async function loadAll() {
     const [{ data: l }, { data: c }, { data: t }] = await Promise.all([
-      supabase.from("letters").select("*, contracts(tenant_id, tenants(id,name,primary_email,contact_email,email,contact_name,contacts),properties(id,name))").order("created_at",{ascending:false}),
+      supabase.from("letters").select("*, contracts(tenant_id, tenants(id,name,primary_email,contact_email,email,contact_name,contacts),properties(id,name),contract_spaces(spaces(space_name)))").order("created_at",{ascending:false}),
       supabase.from("contracts").select("id,tenants(name,contact_name),properties(name,address)").in("status",["active","expiring","extended"]),
       supabase.from("document_templates").select("*").eq("is_active",true).order("name"),
     ]);
@@ -614,6 +624,22 @@ export default function LettersPage() {
   function recipientEmail(l: any): string {
     return resolveRecipient(l).email;
   }
+  // ALL recipient emails for a letter's routed domain (not just the first), so a
+  // tenant with several finance/money contacts has each one addressed. Same
+  // fallback chain as resolveRecipient: domain contacts → general → any → tenant.
+  function resolveRecipientEmails(l: any): string[] {
+    var t = l.contracts?.tenants || {};
+    var contacts = Array.isArray(t.contacts) ? t.contacts : [];
+    var dom = routeDomain(l);
+    function emailsFor(d: string): string[] {
+      return contacts.filter(function(c: any){ return c && c.email && Array.isArray(c.domains) && c.domains.indexOf(d) !== -1; }).map(function(c: any){ return c.email; });
+    }
+    var list = emailsFor(dom);
+    if (!list.length) list = emailsFor("general");
+    if (!list.length) list = contacts.filter(function(c: any){ return c && c.email; }).map(function(c: any){ return c.email; });
+    if (!list.length) { var te = t.primary_email || t.contact_email || t.email || ""; if (te) list = [te]; }
+    return Array.from(new Set(list));
+  }
 
   // ─── Recipients editor (per-tenant, per-domain contacts) ───
   function openRecipients(l: any) {
@@ -787,8 +813,17 @@ export default function LettersPage() {
         title: subject, created_at: first.created_at, contracts: first.contracts,
         content_json: { body: body, appendix: appendix, companyName: cj0.companyName, companyAddress: cj0.companyAddress, companyPhone: cj0.companyPhone, logoUrl: cj0.logoUrl },
       };
-      var cc = ccForProps(propIds as string[], g.email);
-      return { key: g.key, email: g.email, tenant: g.tenant, subject: subject, body: body, grand: grand, multi: multi, letters: g.letters, printLetter: printLetter, propIds: propIds, cc: cc };
+      // Address EVERY recipient of the routed domain across the group's letters
+      // (deduped), not just the first — bug fix for multi-contact tenants.
+      var emails: string[] = [];
+      var emailSeen: Record<string, boolean> = {};
+      g.letters.forEach(function(l: any){
+        resolveRecipientEmails(l).forEach(function(e: string){ if (e && !emailSeen[e]) { emailSeen[e] = true; emails.push(e); } });
+      });
+      var primaryEmail = emails[0] || g.email;
+      var cc = ccForProps(propIds as string[], primaryEmail);
+      var units = unitsLabel(first);
+      return { key: g.key, email: primaryEmail, emails: emails, tenant: g.tenant, units: units, subject: subject, body: body, grand: grand, multi: multi, letters: g.letters, printLetter: printLetter, propIds: propIds, cc: cc };
     });
   }
   function openMergePreview() {
@@ -813,34 +848,41 @@ export default function LettersPage() {
   // Send ONE merged letter per recipient as a PDF attachment via Resend (mailto
   // can't attach files), CC'ing the property's authorized users.
   async function sendMergeGroup(g: any): Promise<boolean> {
-    if (!g.email) { return false; }
-    // Test mode: open the local mail client with the unified text, no CC.
+    // All domain recipients (deduped); first is "to", the rest go to Cc.
+    var toList: string[] = (g.emails && g.emails.length) ? g.emails : (g.email ? [g.email] : []);
+    if (!toList.length) { return false; }
+    // PDF filename = subject + tenant, so each attachment is self-identifying.
+    var fileBase = g.subject + " - " + (g.tenant || "");
+    // Test mode: open the local mail client with the unified text, addressing
+    // ALL domain recipients (mailto can't attach the PDF — use the 🖨 button).
     if (testMode) {
-      var mt = "mailto:" + encodeURIComponent(g.email) + "?subject=" + encodeURIComponent(g.subject) + "&body=" + encodeURIComponent(g.body);
+      var mt = "mailto:" + encodeURIComponent(toList.join(",")) + "?subject=" + encodeURIComponent(g.subject) + "&body=" + encodeURIComponent(g.body);
       window.open(mt, "_blank");
       for (var k = 0; k < g.letters.length; k++) {
-        await supabase.from("letters").update({ status: "sent", sent_at: new Date().toISOString(), sent_to: g.email }).eq("id", g.letters[k].id);
+        await supabase.from("letters").update({ status: "sent", sent_at: new Date().toISOString(), sent_to: toList.join(", ") }).eq("id", g.letters[k].id);
       }
-      await logAudit({ entity_type: "letter", entity_id: g.letters[0].id, action: "merge_sent_local", notes: g.letters.length + " חיובים → " + g.email });
+      await logAudit({ entity_type: "letter", entity_id: g.letters[0].id, action: "merge_sent_local", notes: g.letters.length + " חיובים → " + toList.join(", ") });
       return true;
     }
     var company = parseCj(g.letters[0]).companyName || "";
     var pdf = await letterToPdfBase64(g.printLetter);
+    // Cc = the remaining domain recipients + the property's authorized users.
+    var ccList = Array.from(new Set((toList.slice(1)).concat(g.cc || [])));
     var res = await fetch("/api/send-letter", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        to: g.email, cc: g.cc || [], subject: g.subject,
+        to: toList[0], cc: ccList, subject: g.subject,
         shortHtml: shortEmailHtml(g.tenant, g.subject, company),
-        pdfBase64: pdf, filename: safeFilename(g.subject),
+        pdfBase64: pdf, filename: safeFilename(fileBase),
       }),
     });
     var d = await res.json();
     if (!res.ok || !d.ok) throw new Error(d.error || "שליחה נכשלה");
-    var sentTo = g.email + ((g.cc && g.cc.length) ? " (עותק: " + g.cc.join(",") + ")" : "");
+    var sentTo = toList.join(", ") + (ccList.length ? " (עותק: " + ccList.join(", ") + ")" : "");
     for (var i = 0; i < g.letters.length; i++) {
       await supabase.from("letters").update({ status: "sent", sent_at: new Date().toISOString(), sent_to: sentTo }).eq("id", g.letters[i].id);
     }
-    await logAudit({ entity_type: "letter", entity_id: g.letters[0].id, action: "merge_sent_pdf", notes: g.letters.length + " חיובים → " + g.email });
+    await logAudit({ entity_type: "letter", entity_id: g.letters[0].id, action: "merge_sent_pdf", notes: g.letters.length + " חיובים → " + toList.join(", ") });
     return true;
   }
   async function sendAllMergeGroups() {
@@ -859,23 +901,26 @@ export default function LettersPage() {
 
   // Single-letter send with the PDF attached (primary send path).
   async function sendLetterPdf(l: any) {
-    var email = recipientEmail(l);
-    if (!email) { alert("אין כתובת מייל לנמען — הוסף נמען דרך '✎ נמענים'."); return; }
+    // Address EVERY recipient of the letter's domain, not just the first.
+    var toList = resolveRecipientEmails(l);
+    if (!toList.length) { alert("אין כתובת מייל לנמען — הוסף נמען דרך '✎ נמענים'."); return; }
     var tenant = l.contracts?.tenants?.name || "";
     var subject = l.title || l.subject || "מכתב";
     var company = parseCj(l).companyName || "";
     var propIds = [l.property_id || l.contracts?.properties?.id].filter(Boolean) as string[];
-    var cc = ccForProps(propIds, email);
+    // Filename = subject + tenant; Cc = remaining domain emails + authorized users.
+    var fileBase = subject + " - " + tenant;
+    var cc = Array.from(new Set(toList.slice(1).concat(ccForProps(propIds, toList[0]))));
     setSending(l.id);
     try {
       var pdf = await letterToPdfBase64(l);
       var res = await fetch("/api/send-letter", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ to: email, cc: cc, subject: subject, shortHtml: shortEmailHtml(tenant, subject, company), pdfBase64: pdf, filename: safeFilename(subject) }),
+        body: JSON.stringify({ to: toList[0], cc: cc, subject: subject, shortHtml: shortEmailHtml(tenant, subject, company), pdfBase64: pdf, filename: safeFilename(fileBase) }),
       });
       var d = await res.json();
       if (!res.ok || !d.ok) throw new Error(d.error || "שליחה נכשלה");
-      await markSent(l, email + (cc.length ? " (עותק: " + cc.join(",") + ")" : ""));
+      await markSent(l, toList.join(", ") + (cc.length ? " (עותק: " + cc.join(",") + ")" : ""));
       alert("✅ נשלח עם קובץ PDF מצורף" + (cc.length ? " (+" + cc.length + " עותקים)" : ""));
     } catch (e: any) { alert("שגיאת שליחה: " + (e?.message || e)); }
     finally { setSending(""); }
@@ -1103,8 +1148,9 @@ export default function LettersPage() {
                                   </td>
                                   <td className="px-1 py-2.5 w-8 text-base" title={cat.label}>{cat.icon}</td>
                                   <td className="px-2 py-2.5">
-                                    <div className="font-semibold text-slate-800 flex items-center gap-1.5">
+                                    <div className="font-semibold text-slate-800 flex items-center gap-1.5 flex-wrap">
                                       {l.title || "—"}
+                                      {unitsLabel(l) && <span className="text-[10px] bg-indigo-50 text-indigo-700 border border-indigo-100 rounded-full px-1.5 py-0.5 font-semibold" title="הסכם / יחידות">🏠 {unitsLabel(l)}</span>}
                                       {(function(){
                                         var cj = l.content_json; if (typeof cj === "string") { try { cj = JSON.parse(cj); } catch(e){ cj = null; } }
                                         var corrected = (cj && cj.corrected) || (l.title || "").indexOf("מתוקן") !== -1;
@@ -1228,7 +1274,8 @@ export default function LettersPage() {
                     <div className="bg-slate-50 px-4 py-2.5 border-b border-slate-200 flex items-center justify-between gap-2">
                       <div className="text-sm">
                         <span className="font-bold text-slate-800">{g.tenant || "נמען"}</span>
-                        <span className="text-slate-400 text-xs mr-2">{g.email || "אין כתובת מייל"}</span>
+                        {g.units && <span className="text-[11px] bg-indigo-50 text-indigo-700 border border-indigo-100 rounded-full px-1.5 py-0.5 font-semibold mr-2" title="הסכם / יחידות">🏠 {g.units}</span>}
+                        <span className="text-slate-400 text-xs mr-2">{(g.emails && g.emails.length) ? "אל: " + g.emails.join(", ") : "אין כתובת מייל"}</span>
                       </div>
                       <div className="flex items-center gap-2">
                         {g.multi && <span className="text-[11px] bg-green-100 text-green-700 rounded-full px-2 py-0.5 font-semibold">סה"כ {fmtMoney(g.grand)}</span>}
