@@ -8,6 +8,7 @@ import { formatPeriod } from "@/lib/cpi-utils";
 import CalcProgress, { CalcProgressState } from "./CalcProgress";
 import CalcBreakdown from "./CalcBreakdown";
 import { tierAppliesAtYear, buildSpaceRentSchedule, rentAtDate } from "@/lib/contract-utils";
+import { getVatPctForDate } from "@/lib/vat";
 import { fetchHighestChainedCpi } from "@/lib/cpi-server";
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
@@ -275,9 +276,9 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
         for (var sid of sids) spaceMgmtRate[sid] = rate;
       }
 
-      // VAT
-      var { data: vatData } = await supabase.from("vat_rates").select("rate_pct").order("effective_from", { ascending: false }).limit(1);
-      var vatPct = (vatData && vatData.length > 0 ? Number(vatData[0].rate_pct) : 18) / 100;
+      // VAT rate that applied in the billed year (year-end), from the single
+      // configured source — so re-running a past year uses the historical rate.
+      var vatPct = await getVatPctForDate(year + "-12-31");
 
       // CPI date: use user-specified date (not today)
       var toCbs = formatDateForCbs(cpiCalcDate);

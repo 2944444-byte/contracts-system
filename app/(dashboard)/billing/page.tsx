@@ -6,7 +6,7 @@ import PropertyHierarchyFilter from '@/components/PropertyHierarchyFilter';
 import BillingGroupsManager from '@/components/BillingGroupsManager';
 import { fetchCpiAdjusted } from '@/lib/cpi-server';
 import { getGraceDaysForProperty, dueDateFromGrace } from '@/lib/grace-days';
-import { getVatPct, getVatTypeMap, applyVat } from '@/lib/vat';
+import { getVatPct, getVatPctForDate, getVatTypeMap, applyVat } from '@/lib/vat';
 import { loadCompanyInfo, letterContent } from '@/lib/letter-format';
 import { PageHero } from '@/components/ui';
 import AdvancesTab from '@/components/AdvancesTab';
@@ -433,7 +433,10 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
       var graceDays = await getGraceDaysForProperty(propId);
       var dueDateStr = dueDateFromGrace(graceDays);
       var today = new Date().toLocaleDateString("he-IL");
-      var vatPct = await getVatPct();
+      // Management diff is a reconciliation for `year` → use the VAT rate that
+      // applied in that period (year-end), so re-running for a past year keeps
+      // the historically-correct rate instead of today's.
+      var vatPct = await getVatPctForDate(year + "-12-31");
       var vatMap = await getVatTypeMap(billable.map(function(r:any){ return r.contractId; }));
       var mIdx = 0;
       for (const r of mgmtResults) {
@@ -1464,7 +1467,8 @@ function InsuranceTab({ properties }: { properties: any[] }) {
       var graceDays = await getGraceDaysForProperty(propId);
       var dueDateStr = dueDateFromGrace(graceDays);
       var today = new Date().toLocaleDateString("he-IL");
-      var vatPct = await getVatPct();
+      // Insurance billing for `year` → VAT rate that applied in that period.
+      var vatPct = await getVatPctForDate(year + "-12-31");
       var vatMap = await getVatTypeMap(effective.map(function(r:any){ return r.contractId; }));
       var updated = 0, created = 0;
       var idx = 0;
@@ -2267,7 +2271,8 @@ function WasteTab({ properties }: { properties: any[] }) {
       var graceDays = await getGraceDaysForProperty(propId);
       var dueDateStr = dueDateFromGrace(graceDays);
       var today = new Date().toLocaleDateString("he-IL");
-      var vatPct = await getVatPct();
+      // Waste billing for the selected period → VAT rate that applied then.
+      var vatPct = await getVatPctForDate(dates.start);
       var vatMap = await getVatTypeMap(billable.map(function(r:any){ return r.contractId; }));
       var wIdx = 0;
       for (const r of results) {

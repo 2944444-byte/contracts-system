@@ -1,6 +1,6 @@
 "use client";
 import React, { useState, useEffect, useRef } from "react";
-import { getVatPct } from "@/lib/vat";
+import { getVatRates, vatPctAt, getVatPctForDate, type VatRate } from "@/lib/vat";
 import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit-log';
 import { PageHero } from '@/components/ui';
@@ -135,8 +135,9 @@ export default function PaymentsPage() {
   const [loading,   setLoading]   = useState(true);
   const [editingId, setEditingId] = useState("");
   const [saving,    setSaving]    = useState(false);
-  // Configured VAT rate (vat_rates) — fetched once; default 18% until loaded.
-  const [vatPct,    setVatPct]    = useState(0.18);
+  // Full VAT-rate history — each charge uses the rate in effect for ITS period
+  // (revenue row → its month; manual charge → its billing-period start).
+  const [vatRates,  setVatRates]  = useState<VatRate[]>([]);
 
   // Filters. Default to "all" so the user sees full history (paid + unpaid)
   // out of the box — they can still click any KPI card to drill in.
@@ -163,13 +164,15 @@ export default function PaymentsPage() {
   const [fPeriodTo,    setFPeriodTo]    = useState("");
   const [fDueDate,     setFDueDate]     = useState("");
   const [fNotes,       setFNotes]       = useState("");
+  // VAT rate previewed in the new-charge form — for the entered billing period.
+  const formVatPct = vatPctAt(vatRates, fPeriodFrom || new Date());
 
   useEffect(function() { loadAll(); }, [filterYear, includeAdvances]);
 
   async function loadAll() {
     setLoading(true);
-    var vatRate = await getVatPct();
-    setVatPct(vatRate);
+    var rates = await getVatRates();
+    setVatRates(rates);
     var yearStart = filterYear + "-01-01";
     var yearEnd   = (filterYear + 1) + "-01-01";
 
@@ -331,7 +334,7 @@ export default function PaymentsPage() {
       var tenant = (contract?.tenants as any)?.name || "—";
       var property = (contract?.properties as any)?.name || "";
       var vatType = (contract?.vat_type) || "exempt";
-      var vat = vatType === "taxable" ? finalRent * vatRate : 0;
+      var vat = vatType === "taxable" ? finalRent * vatPctAt(rates, rev.report_month) : 0;
       var monthDate = new Date(rev.report_month);
       var monthLabel = HEB_MONTHS[monthDate.getMonth() + 1] + " " + monthDate.getFullYear();
       var paid = Number(rev.actual_paid) || 0;
@@ -427,7 +430,9 @@ export default function PaymentsPage() {
     setSaving(true);
     try {
       const base = Number(fBaseAmount);
-      const vatRate = await getVatPct();
+      // Rate for the period this charge covers (its billing-period start), so a
+      // back-dated charge gets the rate that applied then — not today's.
+      const vatRate = await getVatPctForDate(fPeriodFrom || new Date());
       const vat = fVatType === "taxable" ? base * vatRate : 0;
       const { data, error: _ie } = await supabase.from("charges").insert({
         contract_id: fContractId, charge_type: fType,
@@ -977,7 +982,7 @@ export default function PaymentsPage() {
                 <div>
                   <label className="mb-1 block text-xs font-semibold text-slate-700">מע&quot;מ</label>
                   <select value={fVatType} onChange={function(e) { setFVatType(e.target.value); }} className={ic}>
-                    <option value="taxable">חייב ({Math.round(vatPct*100)}%)</option>
+                    <option value="taxable">חייב ({Math.round(formVatPct*100)}%)</option>
                     <option value="exempt">פטור</option>
                   </select>
                 </div>
@@ -985,8 +990,8 @@ export default function PaymentsPage() {
               {fBaseAmount && (
                 <div className="rounded-xl bg-blue-50 border border-blue-200 p-3 text-sm">
                   <div className="flex justify-between"><span className="text-slate-600">בסיס</span><span className="font-semibold">{fmtMoney(Number(fBaseAmount))}</span></div>
-                  {fVatType === "taxable" && <div className="flex justify-between"><span className="text-slate-600">מע&quot;מ {Math.round(vatPct*100)}%</span><span>{fmtMoney(Number(fBaseAmount) * vatPct)}</span></div>}
-                  <div className="flex justify-between font-black text-blue-800 pt-1 border-t border-blue-200 mt-1"><span>סה&quot;כ</span><span>{fmtMoney(Number(fBaseAmount) * (fVatType === "taxable" ? (1 + vatPct) : 1))}</span></div>
+                  {fVatType === "taxable" && <div className="flex justify-between"><span className="text-slate-600">מע&quot;מ {Math.round(formVatPct*100)}%</span><span>{fmtMoney(Number(fBaseAmount) * formVatPct)}</span></div>}
+                  <div className="flex justify-between font-black text-blue-800 pt-1 border-t border-blue-200 mt-1"><span>סה&quot;כ</span><span>{fmtMoney(Number(fBaseAmount) * (fVatType === "taxable" ? (1 + formVatPct) : 1))}</span></div>
                 </div>
               )}
               <div className="grid grid-cols-2 gap-3">

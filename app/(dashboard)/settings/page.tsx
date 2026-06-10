@@ -19,7 +19,10 @@ export default function SettingsPage() {
 
   // general
   const [sysName, setSysName] = useState("PropManager v4");
-  const [vatPct,  setVatPct]  = useState("18");
+
+  // VAT period in effect today (rates are newest-first by effective_from).
+  const todayStr = new Date().toISOString().split("T")[0];
+  const currentVat = vatRates.find(function(v){ return v.effective_from <= todayStr && (!v.effective_to || v.effective_to >= todayStr); }) || vatRates[0];
 
   useEffect(function() { loadAll(); }, []);
 
@@ -74,9 +77,21 @@ export default function SettingsPage() {
     const rate = prompt("שיעור מע\"מ חדש (%):", "18");
     const from = prompt("תאריך תחילת תוקף (YYYY-MM-DD):", new Date().toISOString().split("T")[0]);
     if (!rate||!from) return;
-    await supabase.from("vat_rates").insert({rate_pct:Number(rate),effective_from:from});
+    if (isNaN(Number(rate)) || !/^\d{4}-\d{2}-\d{2}$/.test(from)) { showMsg("❌ שיעור או תאריך לא תקין"); return; }
+    const note = prompt("הערה (אופציונלי):", "עדכון שיעור מע\"מ") || null;
+    // Close the previously-open period the day before the new rate takes effect,
+    // so history stays non-overlapping and a retroactive calc can pick the rate
+    // that applied on any given date. created_at records WHEN the change was made.
+    const prevDay = new Date(from + "T00:00:00");
+    prevDay.setDate(prevDay.getDate() - 1);
+    const prevDayStr = prevDay.toISOString().split("T")[0];
+    const openRows = (vatRates || []).filter(function(v){ return !v.effective_to && v.effective_from < from; });
+    for (const r of openRows) {
+      await supabase.from("vat_rates").update({ effective_to: prevDayStr }).eq("id", r.id);
+    }
+    await supabase.from("vat_rates").insert({ rate_pct: Number(rate), effective_from: from, effective_to: null, notes: note });
     await loadAll();
-    showMsg("✅ שיעור מע\"מ נוסף");
+    showMsg("✅ שיעור מע\"מ נוסף — התקופה הקודמת נסגרה ל-" + prevDayStr);
   }
 
   async function addTemplate() {
@@ -113,7 +128,14 @@ export default function SettingsPage() {
           <div className="space-y-4 max-w-md">
             <h3 className="font-bold text-slate-700 mb-4">הגדרות מערכת</h3>
             <div><label className="mb-1 block text-xs font-semibold text-slate-700">שם המערכת</label><input type="text" value={sysName} onChange={function(e){setSysName(e.target.value);}} className={ic}/></div>
-            <div><label className="mb-1 block text-xs font-semibold text-slate-700">שיעור מע"מ ברירת מחדל (%)</label><input type="number" value={vatPct} onChange={function(e){setVatPct(e.target.value);}} className={ic}/></div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-slate-700">שיעור מע"מ נוכחי</label>
+              <div className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                <span className="font-bold text-blue-700">{currentVat ? currentVat.rate_pct + "%" : "—"}{currentVat ? " (מ-" + currentVat.effective_from + ")" : ""}</span>
+                <button onClick={function(){setTab("vat");}} className="text-xs text-blue-600 hover:underline font-semibold">נהל שיעורי מע"מ →</button>
+              </div>
+              <p className="text-xs text-slate-400 mt-1">המע"מ מתקבל מההגדרות לפי תאריך התחולה. חישוב רטרואקטיבי משתמש בשיעור שהיה בתוקף באותו מועד.</p>
+            </div>
             <div className="pt-2">
               <div className="rounded-xl bg-slate-50 border p-3 text-xs text-slate-500 space-y-1">
                 <div>גרסה: PropManager v4</div>
@@ -158,13 +180,15 @@ export default function SettingsPage() {
             {vatRates.length===0 ? <div className="text-center py-8 text-slate-400">אין שיעורי מע"מ</div> : (
               <div className="rounded-xl border border-slate-200 overflow-hidden">
                 <table className="w-full text-right text-sm">
-                  <thead className="bg-slate-50 border-b"><tr><th className="px-4 py-2.5 font-semibold text-slate-600">שיעור</th><th className="px-4 py-2.5 font-semibold text-slate-600">תחילה</th><th className="px-4 py-2.5 font-semibold text-slate-600">סיום</th></tr></thead>
+                  <thead className="bg-slate-50 border-b"><tr><th className="px-4 py-2.5 font-semibold text-slate-600">שיעור</th><th className="px-4 py-2.5 font-semibold text-slate-600">תחילה</th><th className="px-4 py-2.5 font-semibold text-slate-600">סיום</th><th className="px-4 py-2.5 font-semibold text-slate-600">הערה</th><th className="px-4 py-2.5 font-semibold text-slate-600">עודכן</th></tr></thead>
                   <tbody>
                     {vatRates.map(function(v){return (
                       <tr key={v.id} className="border-t border-slate-100">
                         <td className="px-4 py-2.5 font-bold text-blue-700">{v.rate_pct}%</td>
                         <td className="px-4 py-2.5 text-slate-600">{v.effective_from}</td>
                         <td className="px-4 py-2.5 text-slate-400">{v.effective_to??<span className="bg-green-100 text-green-700 px-1.5 rounded-full text-xs font-semibold">פעיל</span>}</td>
+                        <td className="px-4 py-2.5 text-slate-500 text-xs">{v.notes||"—"}</td>
+                        <td className="px-4 py-2.5 text-slate-400 text-xs">{v.created_at ? new Date(v.created_at).toLocaleDateString("he-IL") : "—"}</td>
                       </tr>
                     );})}
                   </tbody>

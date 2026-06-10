@@ -2,7 +2,7 @@
 import { useState, useEffect, useRef } from "react";
 import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit-log';
-import { getVatPct } from '@/lib/vat';
+import { getVatRates, vatPctAt, type VatRate } from '@/lib/vat';
 import { PageHero } from '@/components/ui';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
@@ -26,9 +26,10 @@ export default function RevenuePage() {
   const [loading,    setLoading]    = useState(true);
   const [editingId,  setEditingId]  = useState("");
   const [saving,     setSaving]     = useState(false);
-  // Configured VAT rate (vat_rates) — fetched once; default 18% until loaded.
-  const [vatPct,     setVatPct]     = useState(0.18);
-  useEffect(function(){ getVatPct().then(setVatPct); }, []);
+  // VAT-rate history — a revenue report is grossed-up at the rate in effect for
+  // its month, so a back-dated report uses the historically-correct rate.
+  const [vatRates,   setVatRates]   = useState<VatRate[]>([]);
+  useEffect(function(){ getVatRates().then(setVatRates); }, []);
 
   // Primary filters: tenant (contract) + year — drives a 12-month breakdown table.
   const [selContractId, setSelContractId] = useState<string>("");
@@ -254,7 +255,7 @@ export default function RevenuePage() {
   //      that would yield rent_from_revenue if you applied pct% to it.
   //
   // Mgmt sources (priority): manual override → contract per-sqm × area → 0.
-  function calcRent(contractId: string, grossRevenue: number, manualMgmt?: number) {
+  function calcRent(contractId: string, grossRevenue: number, manualMgmt?: number, periodDate?: string) {
     const c = contracts.find(function(x){return x.id===contractId;});
     if (!c) return null;
     const pct = c.revenue_pct ?? 0;
@@ -272,7 +273,7 @@ export default function RevenuePage() {
     const rentFromRev   = consideration - mgmtMonthly;                    // שכ"ד מפדיון (before min)
     const minRent       = (c.min_rent_per_sqm??0)*(c.charged_area??0)+(c.investment_addition??0);
     const finalRent     = Math.max(rentFromRev, minRent);
-    const vat           = c.vat_type==="taxable" ? finalRent*vatPct : 0;
+    const vat           = c.vat_type==="taxable" ? finalRent*vatPctAt(vatRates, periodDate || new Date()) : 0;
     return {
       pct, mgmtMonthly, netGross,
       consideration,                  // 12% × gross
@@ -285,13 +286,13 @@ export default function RevenuePage() {
   }
 
   const previewCalc = fContractId && fGrossRevenue
-    ? calcRent(fContractId, Number(fGrossRevenue), fMgmtInGross ? Number(fMgmtInGross) : undefined)
+    ? calcRent(fContractId, Number(fGrossRevenue), fMgmtInGross ? Number(fMgmtInGross) : undefined, fMonth ? fMonth + "-01" : undefined)
     : null;
 
   async function handleSave() {
     if (!fContractId||!fGrossRevenue||!fMonth) { alert("חובה: חוזה + חודש + הכנסה ברוטו"); return; }
     var manualMgmt = fMgmtInGross ? Number(fMgmtInGross) : undefined;
-    const calc = calcRent(fContractId, Number(fGrossRevenue), manualMgmt);
+    const calc = calcRent(fContractId, Number(fGrossRevenue), manualMgmt, fMonth ? fMonth + "-01" : undefined);
     if (!calc) return;
     setSaving(true);
     try {

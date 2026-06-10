@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
-import { getVatPct } from "@/lib/vat";
+import { getVatPct, getVatRates, vatPctAt } from "@/lib/vat";
 
 function fmtMoney(n: number) { return "₪" + (n ?? 0).toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
@@ -148,8 +148,10 @@ export default function SavedAdvancesTab({ properties }: Props) {
     try {
       var contract = addContracts.find(function (c: any) { return c.id === addContractId; });
       var space = (contract?.contract_spaces || []).find(function (cs: any) { return cs.space_id === addSpaceId; });
-      // VAT rate from the configured source of truth (vat_rates), not a literal.
-      var vatPct = addVatType === "taxable" ? await getVatPct() : 0;
+      // VAT history from the configured source — each month gets the rate that
+      // applied in THAT month (a year may straddle a rate change), so a back-
+      // dated entry stays historically correct.
+      var vatHist = addVatType === "taxable" ? await getVatRates() : [];
       var rent = Number(addRent) || 0;
       var mgmt = Number(addMgmt) || 0;
       var startM = Number(addPeriodStart) || 1;
@@ -158,7 +160,8 @@ export default function SavedAdvancesTab({ properties }: Props) {
       var inserts = [];
       for (var m = startM; m <= endM; m++) {
         var totalBV = rent + mgmt;
-        var vat = totalBV * vatPct;
+        var monthDate = year + "-" + String(m).padStart(2, "0") + "-01";
+        var vat = addVatType === "taxable" ? totalBV * vatPctAt(vatHist, monthDate) : 0;
         inserts.push({
           contract_id: addContractId,
           space_id: addSpaceId,
