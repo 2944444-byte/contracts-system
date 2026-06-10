@@ -152,25 +152,61 @@ export async function runAlertSync(supabase: SupabaseClient): Promise<{ created:
     }
   }
 
-  // 2. Guarantees
-  const { data: guarantees } = await supabase.from("guarantees").select("id,end_date,contracts(tenants(name))").eq("status", "active");
+  // 2. Guarantees — expiring soon AND already expired-but-not-renewed (the
+  //    old `days < 0 → skip` silently dropped exactly the case that matters
+  //    most: a guarantee that lapsed and was never renewed).
+  const { data: guarantees } = await supabase.from("guarantees").select("id,end_date,contract_id,contracts(property_id,tenants(name))").eq("status", "active");
   for (const g of (guarantees ?? []) as any[]) {
     if (!g.end_date) continue;
     const days = daysUntil(g.end_date);
-    if (days > 60 || days < 0) continue;
+    if (days > 60) continue;
     if (await hasOpen(g.id, "guarantee")) continue;
-    await add({ title: `ערבות פגה ב-${days} ימים: ${g.contracts?.tenants?.name ?? ""}`, severity: days <= 30 ? "urgent" : "warning", entity_type: "guarantee", entity_id: g.id, due_date: g.end_date, status: "open" });
+    const gName = g.contracts?.tenants?.name ?? "";
+    const title = days < 0
+      ? `ערבות פגה ולא חודשה (${Math.abs(days)} ימים): ${gName}`
+      : `ערבות פגה בעוד ${days} ימים: ${gName}`;
+    await add({ title, severity: days <= 30 ? "urgent" : "warning", entity_type: "guarantee", entity_id: g.id, contract_id: g.contract_id ?? null, property_id: g.contracts?.property_id ?? null, due_date: g.end_date });
   }
 
-  // 3. Insurances
+  // 3. Insurances — expiring soon AND already expired-but-not-renewed.
   for (const table of ["insurances_building", "insurances_tenant"]) {
-    const { data: ins } = await supabase.from(table).select("id,property_id,end_date").eq("status", "active");
+    const { data: ins } = await supabase.from(table).select("id,property_id,end_date" + (table === "insurances_tenant" ? ",contract_id" : "")).eq("status", "active");
     for (const x of (ins ?? []) as any[]) {
       if (!x.end_date) continue;
       const days = daysUntil(x.end_date);
-      if (days > 60 || days < 0) continue;
+      if (days > 60) continue;
       if (await hasOpen(x.id, "insurance")) continue;
-      await add({ title: `ביטוח פג ב-${days} ימים`, severity: days <= 30 ? "urgent" : "warning", entity_type: "insurance", entity_id: x.id, property_id: x.property_id ?? null, due_date: x.end_date, status: "open" });
+      const kind = table === "insurances_tenant" ? "אישור ביטוח שוכר" : "ביטוח מבנה";
+      const title = days < 0
+        ? `${kind} פג ולא חודש (${Math.abs(days)} ימים)`
+        : `${kind} פג בעוד ${days} ימים`;
+      await add({ title, severity: days <= 30 ? "urgent" : "warning", entity_type: "insurance", entity_id: x.id, contract_id: x.contract_id ?? null, property_id: x.property_id ?? null, due_date: x.end_date });
+    }
+  }
+
+  // 3b. Active contracts with NO in-force tenant-insurance certificate AT ALL —
+  //     different from an expiring one: the tenant never delivered (or it lapsed
+  //     long ago). One alert per contract; contracts that are amendments are in
+  //     `contracts` too and get covered via their own insurances if linked.
+  const todayStr = new Date().toISOString().split("T")[0];
+  {
+    const { data: tenantIns } = await supabase.from("insurances_tenant").select("contract_id,end_date,status");
+    const coveredContracts = new Set(
+      (tenantIns ?? [])
+        .filter(function (x: any) { return x.contract_id && x.status === "active" && x.end_date && x.end_date >= todayStr; })
+        .map(function (x: any) { return x.contract_id; })
+    );
+    for (const c of (contracts ?? []) as any[]) {
+      if (coveredContracts.has(c.id)) continue;
+      if (await hasOpen(c.id, "insurance")) continue;
+      const cName = (c.tenants?.name ?? "") + (c.properties?.name ? " — " + c.properties.name : "");
+      await add({
+        title: `אין אישור ביטוח בתוקף: ${cName}`,
+        message: "לחוזה פעיל זה לא רשומה אף תעודת ביטוח שוכר בתוקף. יש לדרוש מהשוכר אישור ביטוח (ראה מסך ביטוחים — מנוע התאימות).",
+        alert_type: "insurance_missing", severity: "urgent",
+        entity_type: "insurance", entity_id: c.id, contract_id: c.id,
+        property_id: c.property_id ?? null, due_date: todayStr,
+      });
     }
   }
 
@@ -193,7 +229,6 @@ export async function runAlertSync(supabase: SupabaseClient): Promise<{ created:
   // 5. Charges in arrears — any unpaid charge past its due date (rent, CPI diff,
   //    mgmt, insurance, waste…). ONE alert per contract (count + total), so the
   //    screen shows "שכ\"ד בפיגור" per tenant without flooding a row per charge.
-  const todayStr = new Date().toISOString().split("T")[0];
   const { data: overdue } = await supabase.from("charges")
     .select("id,contract_id,total_amount,due_date,charge_type,contracts(property_id,tenants(name))")
     .neq("status", "paid")

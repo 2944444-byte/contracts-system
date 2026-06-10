@@ -1,5 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { supabase } from '@/lib/supabase';
 import { PageHero } from '@/components/ui';
 import { loadCompanyInfo, letterContent } from '@/lib/letter-format';
@@ -41,9 +42,24 @@ function categoryOf(a: any): string {
 }
 const catInfo = function(key: string) { return CATEGORIES.find(function(c){ return c.key === key; }) || CATEGORIES[5]; };
 
+// Deep link: where clicking the alert takes you — the screen where the thing
+// gets handled. Contract/option alerts open the contract itself (?select=).
+function alertHref(a: any): string | null {
+  var cat = categoryOf(a);
+  if (cat === "arrears") return "/payments";
+  if (cat === "guarantee") return "/guarantees";
+  if (cat === "insurance") return "/insurances";
+  if (cat === "safety") return "/safety";
+  if (a.contract_id) return "/contracts?select=" + a.contract_id;
+  return null;
+}
+
 export default function AlertsPage() {
+  const router = useRouter();
   const [alerts,    setAlerts]    = useState<any[]>([]);
   const [loading,   setLoading]   = useState(true);
+  // Aging summary: total unpaid money past due (from charges, not alert text).
+  const [arrears,   setArrears]   = useState<{sum:number;count:number}|null>(null);
   const [filterSev, setFilterSev] = useState("all");
   const [filterSt,  setFilterSt]  = useState("open");
   const [filterCat, setFilterCat] = useState("all");
@@ -72,8 +88,15 @@ export default function AlertsPage() {
   }, []);
 
   async function loadAlerts() {
+    // due_date ascending = AGING order: most-overdue first, then nearest deadlines.
     const { data } = await supabase.from("alerts").select("*, contracts(property_id, tenants(name), properties(id,name))").order("due_date", {ascending: true, nullsFirst: false}).order("created_at",{ascending:false});
     setAlerts(data??[]); setLoading(false);
+    // Total money in arrears — computed live from charges (the source), not
+    // from alert titles.
+    var todayStr = new Date().toISOString().split("T")[0];
+    const { data: od } = await supabase.from("charges").select("total_amount").neq("status","paid").not("due_date","is",null).lt("due_date", todayStr);
+    var rows = od ?? [];
+    setArrears({ count: rows.length, sum: rows.reduce(function(s: number, r: any){ return s + (Number(r.total_amount) || 0); }, 0) });
   }
 
   async function closeAlert(id: string) {
@@ -285,6 +308,15 @@ export default function AlertsPage() {
 
       {syncNote && <div className="mb-3 rounded-xl border border-blue-200 bg-blue-50 px-4 py-2.5 text-sm font-semibold text-blue-700">{syncNote}</div>}
 
+      {/* Aging summary — total money past due, straight from charges */}
+      {arrears && arrears.count > 0 && (
+        <button onClick={function(){router.push("/payments");}}
+          className="w-full mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 flex items-center justify-between hover:bg-red-100 transition-colors text-right">
+          <span className="text-sm font-bold text-red-700">💰 סה&quot;כ בפיגור: ₪{Math.round(arrears.sum).toLocaleString("he-IL")} · {arrears.count} חיובים שעברו את מועד התשלום</span>
+          <span className="text-xs text-red-500 font-semibold">למסך חייבים ↗</span>
+        </button>
+      )}
+
       {/* KPI */}
       <div className="grid grid-cols-3 gap-3 mb-4">
         {[
@@ -361,7 +393,18 @@ export default function AlertsPage() {
                     {isUnread&&<span className="mt-1.5 w-2 h-2 rounded-full bg-blue-600 shrink-0" title="לא נקראה"></span>}
                     <span className={"text-xs px-2 py-0.5 rounded-full font-semibold shrink-0 "+si.color+" "+si.bg}>{si.label}</span>
                     {isUnread&&<span className="text-[10px] bg-blue-600 text-white rounded-full px-1.5 py-0.5 font-bold shrink-0">חדש</span>}
-                    <span className={(isUnread?"font-black ":"font-semibold ")+"text-sm "+(isOpen?"text-slate-800":"text-slate-500")}>{a.title}</span>
+                    {(function(){
+                      var href = alertHref(a);
+                      return href ? (
+                        <button onClick={function(){router.push(href);}}
+                          className={(isUnread?"font-black ":"font-semibold ")+"text-sm text-right hover:underline hover:text-blue-700 "+(isOpen?"text-slate-800":"text-slate-500")}
+                          title="פתח את המסך הרלוונטי">
+                          {a.title} <span className="text-blue-400 text-xs">↗</span>
+                        </button>
+                      ) : (
+                        <span className={(isUnread?"font-black ":"font-semibold ")+"text-sm "+(isOpen?"text-slate-800":"text-slate-500")}>{a.title}</span>
+                      );
+                    })()}
                   </div>
                   {a.message && isOpen && <div className="text-xs text-slate-500 mb-0.5">{a.message}</div>}
                   <div className="flex items-center gap-3 text-xs text-slate-400 flex-wrap">
