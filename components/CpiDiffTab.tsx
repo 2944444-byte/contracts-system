@@ -4,7 +4,7 @@ import { supabase } from "@/lib/supabase";
 import { logAudit } from "@/lib/audit-log";
 import { fetchCpiAdjusted, fetchHighestChainedCpi, fetchCpiAdjustedWithRetry, fetchHighestChainedCpiWithRetry } from "@/lib/cpi-server";
 import { getGraceDaysForProperty, dueDateFromGrace } from "@/lib/grace-days";
-import { getVatPct, getVatTypeMap, applyVat } from "@/lib/vat";
+import { getVatPct, getVatRates, vatPctAt, getVatTypeMap, applyVat } from "@/lib/vat";
 import CalcProgress, { CalcProgressState } from "./CalcProgress";
 import { tierAppliesAtYear, buildSpaceRentSchedule, rentAtDate } from "@/lib/contract-utils";
 
@@ -202,10 +202,11 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
         for (var sid of sids) spaceMgmtRate[sid] = rate;
       }
 
-      // A CPI-diff charge is issued/sent NOW → its VAT uses the rate in effect
-      // on the send date (today). (The diff itself reconciles against the amount
-      // actually paid, which already carried its own period's VAT.)
-      var vatPct = await getVatPct();
+      // Full VAT history → each period's "correct" amount is taxed at the rate
+      // in effect on that period's actual REDEMPTION date (see periodVat in the
+      // loop). The reconciliation against the amount actually paid then captures
+      // any VAT-rate gap; the diff charge isn't re-taxed (it's already inclusive).
+      var vatRates = await getVatRates();
 
       // Load existing advance payment records (for pre-filling actual paid)
       var { data: existingAdvances } = await supabase.from("advance_payments")
@@ -398,7 +399,6 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
         var periodsCount = isQuarterly ? 4 : 12;
         var monthsPerPeriod = isQuarterly ? 3 : 1;
         var mgmtPeriod = mgmtMonthly * monthsPerPeriod;
-        var mgmtPeriodWithVat = mgmtPeriod * (isVat ? 1 + vatPct : 1);
 
         // Grace period: compute end-date from contract start
         var graceEndDate: Date | null = null;
@@ -431,6 +431,21 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
           var payMonth = isQuarterly ? pi * 3 + 1 : pi + 1;
           var paymentDate = year + "-" + String(payMonth).padStart(2, "0") + "-01";
           var label = isQuarterly ? "רבעון " + (pi + 1) : "חודש " + payMonth;
+
+          // VAT tax-point: rent is taxed at the rate in effect when the cheque is
+          // actually REDEEMED. Use the matching advance's redemption/clearing date
+          // if known, else the scheduled payment date. So the "correct" amount
+          // (shouldPay) carries the redemption-date rate, while actualPaid keeps
+          // the rate it was paid at — the difference therefore captures any VAT
+          // gap (e.g. base 100 paid 117 at 17%, redeemed when 18% → 1 owed).
+          // No rate change in the window ⇒ periodVat == today's rate (a no-op).
+          var periodAdvForVat = (savedAdvances ?? []).filter(function(a: any){ return a.contract_id === c.id && a.period === label; });
+          var redemptionDates = periodAdvForVat
+            .map(function(a: any){ return a.clearing_date || a.actual_paid_date || a.deposited_date || a.received_date; })
+            .filter(Boolean)
+            .sort();
+          var vatDateForPeriod = redemptionDates.length ? redemptionDates[redemptionDates.length - 1] : paymentDate;
+          var periodVat = vatPctAt(vatRates, vatDateForPeriod);
 
           // Period boundaries
           var periodStart = new Date(year, isQuarterly ? pi * 3 : pi, 1);
@@ -491,7 +506,7 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
             snapshotMgmtPeriod = snapMonthly.mgmt * monthsPerPeriod;
           }
 
-          var baseRentPeriodWithVat = periodBaseRent * (isVat ? 1 + vatPct : 1);
+          var baseRentPeriodWithVat = periodBaseRent * (isVat ? 1 + periodVat : 1);
 
           // Get CPI at payment date (t-2 known index)
           var toCbs = formatDateForCbs(paymentDate);
@@ -559,7 +574,7 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
                   }
                 }
 
-                indexedRent = periodBaseRent * ratio * (isVat ? 1 + vatPct : 1);
+                indexedRent = periodBaseRent * ratio * (isVat ? 1 + periodVat : 1);
               }
             } catch (e) { /* keep base */ }
           }
@@ -610,9 +625,9 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
             var savedRentBaseSum = savedRentIndexedSum / savedRatio;
 
             // Override fresh indexedRent with delta-based value
-            indexedRent = savedRentBaseSum * ratio * (isVat ? 1 + vatPct : 1);
+            indexedRent = savedRentBaseSum * ratio * (isVat ? 1 + periodVat : 1);
             // Non-rent (mgmt + parking + whatever) = saved_total minus saved rent
-            var savedRentWithVat = savedRentIndexedSum * (isVat ? 1 + vatPct : 1);
+            var savedRentWithVat = savedRentIndexedSum * (isVat ? 1 + periodVat : 1);
             mgmtAfterGrace = savedTotalSum - savedRentWithVat;
             // actualPaid: user input > saved actual_paid > saved total_with_vat
             var savedActualPaid = matchingAdvances.reduce(function(s: number, a: any) {
@@ -627,8 +642,8 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
             var gf = graceFactors(periodStart, periodEnd);
             indexedRent = indexedRent * gf.rentFactor;
             var basePeriodMgmt = snapshotMgmtPeriod !== null
-              ? snapshotMgmtPeriod * (isVat ? 1 + vatPct : 1)
-              : mgmtPeriodWithVat;
+              ? snapshotMgmtPeriod * (isVat ? 1 + periodVat : 1)
+              : mgmtPeriod * (isVat ? 1 + periodVat : 1);
             mgmtAfterGrace = basePeriodMgmt * gf.mgmtFactor;
             var savedTotalForPeriod = matchingAdvances.reduce(function(s: number, a: any) {
               return s + (Number(a.actual_paid) || Number(a.total_with_vat) || 0);
@@ -638,7 +653,7 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
 
           var shouldPay = indexedRent + mgmtAfterGrace;
           var baseRentDisplay = hasSavedRent
-            ? (matchingAdvances.reduce(function(s: number, a: any) { return s + (Number(a.indexed_rent) || 0) / Number(a.cpi_ratio); }, 0)) * (isVat ? 1 + vatPct : 1)
+            ? (matchingAdvances.reduce(function(s: number, a: any) { return s + (Number(a.indexed_rent) || 0) / Number(a.cpi_ratio); }, 0)) * (isVat ? 1 + periodVat : 1)
             : baseRentPeriodWithVat * graceFactors(periodStart, periodEnd).rentFactor;
 
           periods.push({

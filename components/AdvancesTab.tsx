@@ -8,7 +8,7 @@ import { formatPeriod } from "@/lib/cpi-utils";
 import CalcProgress, { CalcProgressState } from "./CalcProgress";
 import CalcBreakdown from "./CalcBreakdown";
 import { tierAppliesAtYear, buildSpaceRentSchedule, rentAtDate } from "@/lib/contract-utils";
-import { getVatPctForDate } from "@/lib/vat";
+import { getVatRates, vatPctAt } from "@/lib/vat";
 import { fetchHighestChainedCpi } from "@/lib/cpi-server";
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
@@ -276,12 +276,12 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
         for (var sid of sids) spaceMgmtRate[sid] = rate;
       }
 
-      // Rent advances → VAT by the rate that applied in the billed year (using
-      // year-end as a single-rate proxy for the year). A year that straddles a
-      // rate change should resolve per-quarter by each cheque's clearing date —
-      // tracked as a follow-up; this keeps the correct rate for non-straddling
-      // years (and is what re-running a past year should use).
-      var vatPct = await getVatPctForDate(year + "-12-31");
+      // Rent advances → VAT per cheque, by the rate in effect on that cheque's
+      // own period date. A year that straddles a rate change therefore splits
+      // correctly (cheques before the change at the old rate, after at the new).
+      // displayVatPct is just the year's representative rate for the row badge.
+      var vatRates = await getVatRates();
+      var displayVatPct = vatPctAt(vatRates, year + "-12-31");
 
       // CPI date: use user-specified date (not today)
       var toCbs = formatDateForCbs(cpiCalcDate);
@@ -628,7 +628,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
               var mgmtBV = mgmtMonthly * 3 * ratio * gf.mgmtFactor;
               var parkingBV = thisParkingMonthly * 3 * ratio;
               var totalBV = rentBV + mgmtBV + parkingBV;
-              var vat = isVat ? totalBV * vatPct : 0;
+              var vat = isVat ? totalBV * vatPctAt(vatRates, periodStart) : 0;
 
               var checkDate = year + "-" + String(q * 3 + 1).padStart(2, "0") + "-01";
               var partialLabel = ratio < 0.99 ? " (חלקי — " + actualDays + " ימים)" : "";
@@ -690,7 +690,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
               var mgmtBVM = mgmtMonthly * ratioM * gfM.mgmtFactor;
               var parkingBVM = thisParkingMonthly * ratioM;
               var totalBVM = rentBVM + mgmtBVM + parkingBVM;
-              var vatM = isVat ? totalBVM * vatPct : 0;
+              var vatM = isVat ? totalBVM * vatPctAt(vatRates, periodStartM) : 0;
 
               var checkDateM = year + "-" + String(m + 1).padStart(2, "0") + "-01";
               var partialLabelM = ratioM < 0.99 ? " (חלקי — " + actualDaysM + " ימים)" : "";
@@ -736,7 +736,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
               rentSchedule: schedule.map(function(e) { return { date: e.date.toISOString().split("T")[0], rentMonthly: e.rentMonthly, source: e.source }; }),
               cpiPeakMonth: cpiPeakMonth,
               cpiError: cpiErrorMsg,
-              vatPct: vatPct,
+              vatPct: displayVatPct,
               isQuarterly: isQuarterly,
               mgmtAdvanceMonthly: mgmtMonthly,
               parkingMonthly: thisParkingMonthly,
