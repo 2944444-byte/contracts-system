@@ -42,12 +42,16 @@ export async function runAlertSync(supabase: SupabaseClient): Promise<{ created:
   let created = 0;
   const newAlerts: NewAlert[] = [];
 
+  // Dedupe against UNRESOLVED alerts via is_resolved — the column that actually
+  // exists (there is no `status` column on alerts; the old check silently
+  // errored → always false → every sync re-created everything = duplicates).
   async function hasOpen(entityId: string, entityType: string): Promise<boolean> {
-    const { data } = await supabase.from("alerts").select("id").eq("entity_id", entityId).eq("entity_type", entityType).eq("status", "open").limit(1);
+    const { data } = await supabase.from("alerts").select("id").eq("entity_id", entityId).eq("entity_type", entityType).eq("is_resolved", false).limit(1);
     return !!(data && data.length);
   }
   async function add(a: any) {
-    await supabase.from("alerts").insert(a);
+    const { error } = await supabase.from("alerts").insert({ ...a, status: undefined, is_resolved: false });
+    if (error) return; // don't count failed inserts
     created++;
     newAlerts.push({ title: a.title, severity: a.severity, entity_type: a.entity_type, due_date: a.due_date });
   }
@@ -113,6 +117,34 @@ export async function runAlertSync(supabase: SupabaseClient): Promise<{ created:
       ? `בדיקת בטיחות באיחור (${Math.abs(days)} ימים): ${label} [${who}]`
       : `בדיקת בטיחות נדרשת בעוד ${days} ימים: ${label} [${who}]`;
     await add({ title, severity: days <= 30 ? "urgent" : "warning", entity_type: "safety", entity_id: s.id, property_id: s.property_id ?? null, due_date: s.next_inspection_date, status: "open" });
+  }
+
+  // 5. Charges in arrears — any unpaid charge past its due date (rent, CPI diff,
+  //    mgmt, insurance, waste…). ONE alert per contract (count + total), so the
+  //    screen shows "שכ\"ד בפיגור" per tenant without flooding a row per charge.
+  const todayStr = new Date().toISOString().split("T")[0];
+  const { data: overdue } = await supabase.from("charges")
+    .select("id,contract_id,total_amount,due_date,charge_type,contracts(property_id,tenants(name))")
+    .neq("status", "paid")
+    .not("due_date", "is", null)
+    .lt("due_date", todayStr);
+  const byContractArrears: Record<string, { tenant: string; propertyId: string | null; count: number; sum: number; oldest: string }> = {};
+  for (const ch of (overdue ?? []) as any[]) {
+    if (!ch.contract_id) continue;
+    const cur = byContractArrears[ch.contract_id] || { tenant: ch.contracts?.tenants?.name ?? "", propertyId: ch.contracts?.property_id ?? null, count: 0, sum: 0, oldest: ch.due_date };
+    cur.count++;
+    cur.sum += Number(ch.total_amount) || 0;
+    if (ch.due_date < cur.oldest) cur.oldest = ch.due_date;
+    byContractArrears[ch.contract_id] = cur;
+  }
+  for (const cid of Object.keys(byContractArrears)) {
+    const ar = byContractArrears[cid];
+    if (await hasOpen(cid, "arrears")) continue;
+    await add({
+      title: `חיובים בפיגור: ${ar.tenant} — ${ar.count} חיובים בסך ₪${Math.round(ar.sum).toLocaleString("he-IL")}`,
+      severity: "urgent", entity_type: "arrears", entity_id: cid,
+      contract_id: cid, property_id: ar.propertyId, due_date: ar.oldest,
+    });
   }
 
   return { created, newAlerts };

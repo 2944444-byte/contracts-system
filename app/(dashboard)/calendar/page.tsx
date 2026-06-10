@@ -30,7 +30,7 @@ export default function CalendarPage() {
         .or(`end_date.lte.${to},start_date.lte.${to}`),
       supabase.from("alerts")
         .select("id, title, due_date, severity")
-        .gte("due_date", from).lte("due_date", to).eq("status", "open"),
+        .gte("due_date", from).lte("due_date", to).eq("is_resolved", false),
       supabase.from("guarantees")
         .select("id, end_date, contracts(tenants(name))")
         .gte("end_date", from).lte("end_date", to).eq("status", "active"),
