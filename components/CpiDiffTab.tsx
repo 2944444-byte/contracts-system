@@ -4,7 +4,7 @@ import { supabase } from "@/lib/supabase";
 import { logAudit } from "@/lib/audit-log";
 import { fetchCpiAdjusted, fetchHighestChainedCpi, fetchCpiAdjustedWithRetry, fetchHighestChainedCpiWithRetry } from "@/lib/cpi-server";
 import { getGraceDaysForProperty, dueDateFromGrace } from "@/lib/grace-days";
-import { getVatPct, getVatPctForDate, getVatTypeMap, applyVat } from "@/lib/vat";
+import { getVatPct, getVatTypeMap, applyVat } from "@/lib/vat";
 import CalcProgress, { CalcProgressState } from "./CalcProgress";
 import { tierAppliesAtYear, buildSpaceRentSchedule, rentAtDate } from "@/lib/contract-utils";
 
@@ -202,9 +202,10 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
         for (var sid of sids) spaceMgmtRate[sid] = rate;
       }
 
-      // VAT rate that applied in the billed year (year-end), from the single
-      // configured source — so re-running a past year uses the historical rate.
-      var vatPct = await getVatPctForDate(year + "-12-31");
+      // A CPI-diff charge is issued/sent NOW → its VAT uses the rate in effect
+      // on the send date (today). (The diff itself reconciles against the amount
+      // actually paid, which already carried its own period's VAT.)
+      var vatPct = await getVatPct();
 
       // Load existing advance payment records (for pre-filling actual paid)
       var { data: existingAdvances } = await supabase.from("advance_payments")

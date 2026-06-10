@@ -6,7 +6,7 @@ import PropertyHierarchyFilter from '@/components/PropertyHierarchyFilter';
 import BillingGroupsManager from '@/components/BillingGroupsManager';
 import { fetchCpiAdjusted } from '@/lib/cpi-server';
 import { getGraceDaysForProperty, dueDateFromGrace } from '@/lib/grace-days';
-import { getVatPct, getVatPctForDate, getVatTypeMap, applyVat } from '@/lib/vat';
+import { getVatPct, getVatTypeMap, applyVat } from '@/lib/vat';
 import { loadCompanyInfo, letterContent } from '@/lib/letter-format';
 import { PageHero } from '@/components/ui';
 import AdvancesTab from '@/components/AdvancesTab';
@@ -430,13 +430,14 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
     try {
       let updated = 0, created = 0;
       let skippedRevenue = 0;
+      let skippedPaid = 0;
       var graceDays = await getGraceDaysForProperty(propId);
       var dueDateStr = dueDateFromGrace(graceDays);
       var today = new Date().toLocaleDateString("he-IL");
-      // Management diff is a reconciliation for `year` → use the VAT rate that
-      // applied in that period (year-end), so re-running for a past year keeps
-      // the historically-correct rate instead of today's.
-      var vatPct = await getVatPctForDate(year + "-12-31");
+      // A management-diff charge is issued/sent NOW → its VAT uses the rate in
+      // effect on the send date (today). Already-paid charges are frozen below,
+      // so this rate only ever lands on new / not-yet-paid charges.
+      var vatPct = await getVatPct();
       var vatMap = await getVatTypeMap(billable.map(function(r:any){ return r.contractId; }));
       var mIdx = 0;
       for (const r of mgmtResults) {
@@ -451,6 +452,9 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
         const v = applyVat(signed, vatMap[r.contractId] === "taxable", vatPct);
         const baseNotes = "התחשבנות דמי ניהול " + year + (r.difference > 0 ? " — לחיוב" : " — לזיכוי");
         const ex = byContract[r.contractId];
+        // Locked: a charge that was already paid keeps the VAT it was settled
+        // at — never recompute it. Only new / unpaid charges are (re)calculated.
+        if (ex && ex.status === "paid") { skippedPaid++; continue; }
         if (ex) {
           await supabase.from("charges").update({
             base_amount: v.base, vat_amount: v.vat, total_amount: v.total, vat_type: v.vatType,
@@ -472,6 +476,7 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
       await logAudit({ entity_type: "billing", entity_id: propId, action: willFix ? "fix_mgmt_charges" : "create_mgmt_charges", notes: "עודכנו " + updated + ", נוצרו " + created + (skippedRevenue ? " (דולג " + skippedRevenue + " % פידיון)" : "") });
       var msg = willFix ? ("✅ תוקנו " + updated + " חיובים" + (created ? ", נוצרו " + created + " חדשים" : "")) : ("✅ נוצרו " + created + " חיובים");
       if (skippedRevenue > 0) msg += "\nדולגו " + skippedRevenue + " שוכרי % פידיון (דמי הניהול כלולים בשכ\"ד המחזור)";
+      if (skippedPaid > 0) msg += "\nנשמרו ללא שינוי " + skippedPaid + " חיובים ששולמו (מע\"מ נעול לפי מועד הפרעון)";
       await saveActualInputs();
       await loadExistingMgmtCharges();
       alert(msg);
@@ -1467,10 +1472,11 @@ function InsuranceTab({ properties }: { properties: any[] }) {
       var graceDays = await getGraceDaysForProperty(propId);
       var dueDateStr = dueDateFromGrace(graceDays);
       var today = new Date().toLocaleDateString("he-IL");
-      // Insurance billing for `year` → VAT rate that applied in that period.
-      var vatPct = await getVatPctForDate(year + "-12-31");
+      // Charge is issued/sent NOW → VAT at the send-date (today) rate. Paid
+      // charges are frozen below, so this only lands on new / unpaid charges.
+      var vatPct = await getVatPct();
       var vatMap = await getVatTypeMap(effective.map(function(r:any){ return r.contractId; }));
-      var updated = 0, created = 0;
+      var updated = 0, created = 0, skippedPaid = 0;
       var idx = 0;
       for (const r of effective) {
         idx++;
@@ -1478,6 +1484,8 @@ function InsuranceTab({ properties }: { properties: any[] }) {
         var baseNotes = "חיוב ביטוח מבנה " + year + (r.isPartialPeriod ? " (תקופה חלקית: " + r.daysInPolicy + "/" + r.policyDays + " ימים)" : "");
         var v = applyVat(r.charge, vatMap[r.contractId] === "taxable", vatPct);
         var ex = byContract[r.contractId];
+        // Locked: a paid charge keeps the VAT it was settled at.
+        if (ex && ex.status === "paid") { skippedPaid++; continue; }
         if (ex) {
           await supabase.from("charges").update({
             base_amount: v.base, vat_amount: v.vat, total_amount: v.total, vat_type: v.vatType,
@@ -1499,9 +1507,10 @@ function InsuranceTab({ properties }: { properties: any[] }) {
       await logAudit({ entity_type: "billing", entity_id: propId, action: willFix ? "fix_ins_charges" : "create_ins_charges", notes: "עודכנו " + updated + ", נוצרו " + created });
       await saveDispositions();
       await loadExistingCharges();
-      alert(willFix
+      alert((willFix
         ? ("✅ תוקנו " + updated + " חיובים" + (created ? ", נוצרו " + created + " חדשים" : ""))
-        : ("✅ נוצרו " + created + " חיובים"));
+        : ("✅ נוצרו " + created + " חיובים"))
+        + (skippedPaid > 0 ? "\nנשמרו ללא שינוי " + skippedPaid + " חיובים ששולמו (מע\"מ נעול)" : ""));
     } catch (e: any) { alert("שגיאה: " + e?.message); }
     finally { setCreatingCharges(false); setProgress(null); }
   }
@@ -2267,12 +2276,13 @@ function WasteTab({ properties }: { properties: any[] }) {
     setProgress({ current: 0, total: results.length, label: willFix ? "מתקן חיובי פינוי אשפה..." : "יוצר חיובי פינוי אשפה...", startedAt: Date.now() });
     try {
       const dates = getPeriodDates();
-      let updated = 0, created = 0;
+      let updated = 0, created = 0, skippedPaid = 0;
       var graceDays = await getGraceDaysForProperty(propId);
       var dueDateStr = dueDateFromGrace(graceDays);
       var today = new Date().toLocaleDateString("he-IL");
-      // Waste billing for the selected period → VAT rate that applied then.
-      var vatPct = await getVatPctForDate(dates.start);
+      // Charge is issued/sent NOW → VAT at the send-date (today) rate. Paid
+      // charges are frozen below, so this only lands on new / unpaid charges.
+      var vatPct = await getVatPct();
       var vatMap = await getVatTypeMap(billable.map(function(r:any){ return r.contractId; }));
       var wIdx = 0;
       for (const r of results) {
@@ -2282,6 +2292,8 @@ function WasteTab({ properties }: { properties: any[] }) {
         const baseNotes = "חיוב פינוי אשפה " + (period === "annual" ? year : period + " " + year);
         const v = applyVat(r.charge, vatMap[r.contractId] === "taxable", vatPct);
         const ex = byContract[r.contractId];
+        // Locked: a paid charge keeps the VAT it was settled at.
+        if (ex && ex.status === "paid") { skippedPaid++; continue; }
         if (ex) {
           await supabase.from("charges").update({
             base_amount: v.base, vat_amount: v.vat, total_amount: v.total, vat_type: v.vatType,
@@ -2303,7 +2315,8 @@ function WasteTab({ properties }: { properties: any[] }) {
       await logAudit({ entity_type: "billing", entity_id: propId, action: willFix ? "fix_waste_charges" : "create_waste_charges", notes: "עודכנו " + updated + ", נוצרו " + created });
       await saveWasteCost();
       await loadExistingWaste();
-      alert(willFix ? ("✅ תוקנו " + updated + " חיובים" + (created ? ", נוצרו " + created + " חדשים" : "")) : ("✅ נוצרו " + created + " חיובים"));
+      alert((willFix ? ("✅ תוקנו " + updated + " חיובים" + (created ? ", נוצרו " + created + " חדשים" : "")) : ("✅ נוצרו " + created + " חיובים"))
+        + (skippedPaid > 0 ? "\nנשמרו ללא שינוי " + skippedPaid + " חיובים ששולמו (מע\"מ נעול)" : ""));
     } catch (e: any) { alert("שגיאה: " + e?.message); }
     finally { setCreatingCharges(false); setProgress(null); }
   }

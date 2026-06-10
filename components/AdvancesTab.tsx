@@ -276,8 +276,11 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
         for (var sid of sids) spaceMgmtRate[sid] = rate;
       }
 
-      // VAT rate that applied in the billed year (year-end), from the single
-      // configured source — so re-running a past year uses the historical rate.
+      // Rent advances → VAT by the rate that applied in the billed year (using
+      // year-end as a single-rate proxy for the year). A year that straddles a
+      // rate change should resolve per-quarter by each cheque's clearing date —
+      // tracked as a follow-up; this keeps the correct rate for non-straddling
+      // years (and is what re-running a past year should use).
       var vatPct = await getVatPctForDate(year + "-12-31");
 
       // CPI date: use user-specified date (not today)
