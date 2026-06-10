@@ -16,8 +16,10 @@ export default function AlertsBadge() {
   }, []);
 
   async function loadCount() {
+    // Count UNREAD open alerts — marked-read alerts stop inflating the badge;
+    // an escalation resets read_at so the alert counts (and pops) again.
     const { data } = await supabase.from("alerts")
-      .select("id,severity").eq("is_resolved",false);
+      .select("id,severity").eq("is_resolved",false).is("read_at", null);
     const all = data ?? [];
     setCount(all.length);
     setUrgent(all.filter(function(a){return a.severity==="urgent";}).length);

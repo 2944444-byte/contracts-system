@@ -77,8 +77,25 @@ export default function AlertsPage() {
   }
 
   async function closeAlert(id: string) {
-    await supabase.from("alerts").update({is_resolved:true, handled_at: new Date().toISOString()}).eq("id",id);
-    setAlerts(function(prev){return prev.map(function(a){return a.id===id?{...a,is_resolved:true}:a;});});
+    // Closing implies read.
+    var now = new Date().toISOString();
+    await supabase.from("alerts").update({is_resolved:true, handled_at: now, read_at: now}).eq("id",id);
+    setAlerts(function(prev){return prev.map(function(a){return a.id===id?{...a,is_resolved:true,read_at:now}:a;});});
+  }
+  // "Read" is separate from "closed": the item stays open (still needs handling)
+  // but stops shouting. An escalation (e.g. option countdown crossing 30 days)
+  // resets read_at in the sync, so the same alert pops as unread again.
+  async function markRead(id: string) {
+    var now = new Date().toISOString();
+    await supabase.from("alerts").update({read_at: now}).eq("id",id);
+    setAlerts(function(prev){return prev.map(function(a){return a.id===id?{...a,read_at:now}:a;});});
+  }
+  async function markAllRead() {
+    var ids = filtered.filter(function(a){return !a.is_resolved && !a.read_at;}).map(function(a){return a.id;});
+    if (!ids.length) return;
+    var now = new Date().toISOString();
+    await supabase.from("alerts").update({read_at: now}).in("id", ids);
+    setAlerts(function(prev){return prev.map(function(a){return ids.indexOf(a.id)!==-1?{...a,read_at:now}:a;});});
   }
   async function reopen(id: string) {
     await supabase.from("alerts").update({is_resolved:false, handled_at: null}).eq("id",id);
@@ -236,12 +253,14 @@ export default function AlertsPage() {
   const open = alerts.filter(function(a){return !a.is_resolved;});
   const urgentOpen  = open.filter(function(a){return sevOf(a) === SEV_MAP.urgent;}).length;
   const warningOpen = open.filter(function(a){return sevOf(a) === SEV_MAP.warning;}).length;
+  const unreadOpen  = open.filter(function(a){return !a.read_at;}).length;
 
   return (
     <div dir="rtl">
       <PageHero title="התראות" icon="🔔" tone="amber"
         subtitle={<>
           {open.length} פתוחות
+          {unreadOpen>0&&<span className="text-white font-bold"> | {unreadOpen} לא נקראו</span>}
           {urgentOpen>0&&<span className="text-rose-100 font-semibold"> | {urgentOpen} דחופות!</span>}
           {warningOpen>0&&<span className="text-amber-100 font-semibold"> | {warningOpen} אזהרות</span>}
           <span className="text-amber-100/80 text-xs mr-2">· מסונכרן אוטומטית בכניסה</span>
@@ -258,7 +277,11 @@ export default function AlertsPage() {
               🗑 מחק {selected.size}
             </button>
           </div>
-        ) : undefined} />
+        ) : (unreadOpen > 0 ? (
+          <button onClick={markAllRead} className="rounded-xl bg-white/15 backdrop-blur border border-white/25 px-3 py-2 text-sm font-semibold text-white hover:bg-white/25">
+            👁 סמן הכל כנקראו ({unreadOpen})
+          </button>
+        ) : undefined)} />
 
       {syncNote && <div className="mb-3 rounded-xl border border-blue-200 bg-blue-50 px-4 py-2.5 text-sm font-semibold text-blue-700">{syncNote}</div>}
 
@@ -327,15 +350,18 @@ export default function AlertsPage() {
             const d      = a.due_date ? daysLeft(a.due_date) : null;
             const isOpen = !a.is_resolved;
             const isSel  = selected.has(a.id);
+            const isUnread = isOpen && !a.read_at;
             const tenant = a.contracts?.tenants?.name || "";
             return (
-              <div key={a.id} className={"rounded-xl border p-4 flex items-start gap-3 transition-all "+(isOpen?si.bg+" "+si.border:"bg-white border-slate-200 opacity-60")+(isSel?" ring-2 ring-blue-400":"")}>
+              <div key={a.id} className={"rounded-xl border p-4 flex items-start gap-3 transition-all "+(isOpen?si.bg+" "+si.border:"bg-white border-slate-200 opacity-60")+(isSel?" ring-2 ring-blue-400":"")+(isUnread?" shadow-md":"")}>
                 {isOpen&&<input type="checkbox" checked={isSel} onChange={function(){toggleSel(a.id);}} className="mt-1 w-4 h-4 shrink-0"/>}
                 <span className="text-xl shrink-0" title={cat.label}>{cat.icon}</span>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-start gap-2 mb-0.5 flex-wrap">
+                    {isUnread&&<span className="mt-1.5 w-2 h-2 rounded-full bg-blue-600 shrink-0" title="לא נקראה"></span>}
                     <span className={"text-xs px-2 py-0.5 rounded-full font-semibold shrink-0 "+si.color+" "+si.bg}>{si.label}</span>
-                    <span className={"font-semibold text-sm "+(isOpen?"text-slate-800":"text-slate-500")}>{a.title}</span>
+                    {isUnread&&<span className="text-[10px] bg-blue-600 text-white rounded-full px-1.5 py-0.5 font-bold shrink-0">חדש</span>}
+                    <span className={(isUnread?"font-black ":"font-semibold ")+"text-sm "+(isOpen?"text-slate-800":"text-slate-500")}>{a.title}</span>
                   </div>
                   {a.message && isOpen && <div className="text-xs text-slate-500 mb-0.5">{a.message}</div>}
                   <div className="flex items-center gap-3 text-xs text-slate-400 flex-wrap">
@@ -355,6 +381,9 @@ export default function AlertsPage() {
                         {a.alert_type === "option_nonexercise_notice" ? "✗ התקבלה הודעת אי-מימוש" : "✗ אי-מימוש"}
                       </button>
                     </>
+                  )}
+                  {isUnread && (
+                    <button onClick={function(){markRead(a.id);}} className="rounded-lg border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100" title="סמן כנקראה — נשארת פתוחה, תקפוץ שוב כ'חדש' אם תסלים (למשל 30 יום לפני מועד)">👁 נקראה</button>
                   )}
                   {isOpen ? (
                     <button onClick={function(){closeAlert(a.id);}} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">✓ סגור</button>

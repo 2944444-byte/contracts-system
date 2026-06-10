@@ -135,10 +135,17 @@ export async function runAlertSync(supabase: SupabaseClient): Promise<{ created:
       const alertType = isType2 ? "option_nonexercise_notice" : "option_exercise_notice";
 
       // Update-in-place when an open alert exists for this option (refreshes
-      // the countdown + severity); insert only the first time.
-      const { data: existing } = await supabase.from("alerts").select("id").eq("entity_id", opt.id).eq("entity_type", "option").eq("is_resolved", false).limit(1);
+      // the countdown + severity); insert only the first time. When the STAGE
+      // escalates (warning→urgent at 30 days, or →overdue), read_at resets to
+      // NULL so the alert pops as UNREAD again — instead of a duplicate alert.
+      const newStage = dd < 0 ? "overdue" : dd <= 30 ? "urgent" : "warning";
+      const { data: existing } = await supabase.from("alerts").select("id,severity,title").eq("entity_id", opt.id).eq("entity_type", "option").eq("is_resolved", false).limit(1);
       if (existing && existing.length) {
-        await supabase.from("alerts").update({ title, message, severity, due_date: deadlineStr, alert_type: alertType }).eq("id", existing[0].id);
+        const prev = existing[0] as any;
+        const prevStage = (prev.title || "").indexOf("לא התקבלה") === 0 ? "overdue" : (prev.severity === "urgent" ? "urgent" : "warning");
+        const patch: any = { title, message, severity, due_date: deadlineStr, alert_type: alertType };
+        if (prevStage !== newStage) patch.read_at = null; // escalated → unread again
+        await supabase.from("alerts").update(patch).eq("id", prev.id);
       } else {
         await add({ title, message, severity, alert_type: alertType, entity_type: "option", entity_id: opt.id, contract_id: c.id, property_id: c.property_id ?? null, due_date: deadlineStr });
       }

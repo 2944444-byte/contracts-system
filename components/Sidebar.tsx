@@ -51,7 +51,8 @@ export default function Sidebar() {
     async function loadBadges() {
       const [{ count: p }, { count: a }] = await Promise.all([
         supabase.from("charges").select("id",{count:"exact",head:true}).eq("status","pending"),
-        supabase.from("alerts").select("id",{count:"exact",head:true}).eq("is_resolved",false),
+        // Unread open alerts only — read-but-open alerts stop inflating the badge.
+        supabase.from("alerts").select("id",{count:"exact",head:true}).eq("is_resolved",false).is("read_at", null),
       ]);
       setPendingPay(p??0);
       setOpenAlerts(a??0);
