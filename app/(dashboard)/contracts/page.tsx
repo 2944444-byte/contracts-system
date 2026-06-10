@@ -614,6 +614,13 @@ export default function ContractsPage() {
       status: exercised ? "exercised" : "pending",
     }).eq("id", optionId);
 
+    // Close the option's open notice alerts — the question is settled (alerts
+    // re-appear via sync if the option is reverted to pending).
+    if (exercised) {
+      await supabase.from("alerts").update({ is_resolved: true, handled_at: new Date().toISOString() })
+        .eq("entity_id", optionId).eq("is_resolved", false);
+    }
+
     // Update contract end_date and status based on exercised options
     if (selContract) {
       const { data: opts } = await supabase.from("contract_options")

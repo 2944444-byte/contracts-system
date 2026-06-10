@@ -177,6 +177,53 @@ export default function AlertsPage() {
     setSelected(function(prev){const n=new Set(prev); n.has(id)?n.delete(id):n.add(id); return n;});
   }
 
+  // ─── Mark an option exercised / not exercised straight from its alert ───
+  // Type 1 (exercise notice): ✓ = the tenant's exercise notice was received →
+  // exercise + extend; ✗ = no notice / declined → the option lapses, contract
+  // keeps its end date. Type 2 (non-exercise notice): ✗ = the tenant's
+  // non-exercise notice was received → option will NOT auto-exercise; ✓ = early
+  // confirmation of exercise. All paths close the option's open alerts, so the
+  // reminders stop the moment the manager marks the outcome.
+  async function setOptionExercised(a: any, exercised: boolean) {
+    var optId = a.entity_id;
+    if (!optId) return;
+    var isType2 = a.alert_type === "option_nonexercise_notice";
+    var what = exercised
+      ? "לסמן שהאופציה ממומשת ולהאריך את החוזה עד סוף תקופת האופציה?"
+      : (isType2
+        ? "לסמן שהתקבלה הודעת אי-מימוש מהדייר? (האופציה לא תמומש והחוזה יסתיים במועדו)"
+        : "לסמן אי-מימוש? (לא התקבלה הודעת מימוש — האופציה פוקעת והחוזה יסתיים במועדו)");
+    if (!confirm(what)) return;
+    setWorking("option");
+    try {
+      var { error } = await supabase.from("contract_options").update({
+        is_exercised: exercised,
+        status: exercised ? "exercised" : "declined",
+      }).eq("id", optId);
+      if (error) throw error;
+      if (exercised && a.contract_id) {
+        // Extend the contract to the latest exercised option's end (same rule
+        // as the contracts screen).
+        var { data: opts } = await supabase.from("contract_options")
+          .select("id,end_date,is_exercised,option_number")
+          .eq("contract_id", a.contract_id)
+          .order("option_number");
+        var lastEx = (opts ?? []).filter(function(o: any){ return o.is_exercised; })
+          .sort(function(x: any, y: any){ return y.option_number - x.option_number; })[0];
+        if (lastEx?.end_date) {
+          var newStatus = new Date() > new Date(lastEx.end_date) ? "ended" : "active";
+          await supabase.from("contracts").update({ end_date: lastEx.end_date, status: newStatus }).eq("id", a.contract_id);
+        }
+      }
+      // Close ALL of this option's open alerts (not just the clicked one) —
+      // the moment the outcome is marked, the reminders stop.
+      await supabase.from("alerts").update({ is_resolved: true, handled_at: new Date().toISOString() }).eq("entity_id", optId).eq("is_resolved", false);
+      await logAudit({ entity_type: "contract_option", entity_id: optId, action: exercised ? "exercise_from_alert" : "decline_from_alert", notes: a.title });
+      await loadAlerts();
+    } catch (e: any) { alert("שגיאה: " + (e?.message || e)); }
+    finally { setWorking(""); }
+  }
+
   // Status filter uses is_resolved — the real column (the old `a.status` field
   // doesn't exist, which made פתוחות/סגורות show nothing).
   const filtered = alerts.filter(function(a){
@@ -298,7 +345,17 @@ export default function AlertsPage() {
                     {d!==null&&isOpen&&<span className={"font-semibold "+(d<=0?"text-red-600":d<=30?"text-red-500":"text-yellow-600")}>{d<=0?"באיחור "+Math.abs(d)+" ימים!":d+" יום"}</span>}
                   </div>
                 </div>
-                <div className="shrink-0 flex gap-1">
+                <div className="shrink-0 flex gap-1 flex-wrap justify-end">
+                  {isOpen && (a.entity_type === "option" || a.entity_type === "contract_option") && a.entity_id && a.alert_type !== "option_auto_exercised" && (
+                    <>
+                      <button onClick={function(){setOptionExercised(a, true);}} disabled={!!working} className="rounded-lg border border-green-200 bg-green-50 px-2.5 py-1.5 text-xs font-semibold text-green-700 hover:bg-green-100 disabled:opacity-50" title="האופציה ממומשת — החוזה יוארך עד סוף תקופת האופציה וההתראות ייפסקו">
+                        {a.alert_type === "option_nonexercise_notice" ? "✓ מומשה" : "✓ התקבלה הודעת מימוש"}
+                      </button>
+                      <button onClick={function(){setOptionExercised(a, false);}} disabled={!!working} className="rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-50" title="האופציה לא תמומש — החוזה יסתיים במועדו וההתראות ייפסקו">
+                        {a.alert_type === "option_nonexercise_notice" ? "✗ התקבלה הודעת אי-מימוש" : "✗ אי-מימוש"}
+                      </button>
+                    </>
+                  )}
                   {isOpen ? (
                     <button onClick={function(){closeAlert(a.id);}} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">✓ סגור</button>
                   ) : (

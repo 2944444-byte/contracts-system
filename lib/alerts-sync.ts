@@ -58,8 +58,8 @@ export async function runAlertSync(supabase: SupabaseClient): Promise<{ created:
 
   // 1. Contracts expiring + options
   const { data: contracts } = await supabase.from("contracts")
-    .select("id,property_id,end_date,tenants(name),properties(name),contract_options(id,status,end_date,notice_days_before_end)")
-    .in("status", ["active", "expiring"]);
+    .select("id,property_id,end_date,tenants(name),properties(name),contract_options(id,status,is_exercised,start_date,end_date,notice_days_before_end,notice_type,option_number)")
+    .in("status", ["active", "expiring", "extended"]);
   for (const c of (contracts ?? []) as any[]) {
     if (c.end_date) {
       const days = daysUntil(c.end_date);
@@ -70,14 +70,78 @@ export async function runAlertSync(supabase: SupabaseClient): Promise<{ created:
         }
       }
     }
+    // ── Option notice alerts — TWO mechanisms (per the owner's spec) ──
+    // Type 1 `exercise`:    the tenant must give an EXERCISE notice; the manager
+    //                       marks it when received. No notice by the deadline →
+    //                       an alert says so and the manager marks non-exercise.
+    //                       Nothing happens automatically.
+    // Type 2 `non_renewal`/`auto`: the tenant must give a NON-exercise notice;
+    //                       if none is marked by the deadline → the option
+    //                       AUTO-exercises (contract extends) and alerts close.
+    // One alert per option, UPDATED IN PLACE on each sync (countdown "בעוד XX
+    // ימים" refreshes; severity escalates warning→urgent at 30 days) — not a
+    // new alert per stage. Deadline = option START (= current contract end)
+    // minus notice_days (e.g. מעודה: 1.9.2027 − 365 → 1.9.2026).
     for (const opt of (c.contract_options ?? []) as any[]) {
-      if (opt.status !== "pending" || !opt.end_date) continue;
+      if (opt.status !== "pending" || opt.is_exercised) continue;
       const nd = opt.notice_days_before_end ?? 90;
-      const od = daysUntil(opt.end_date);
-      if (od > nd || od < 0) continue;
-      if (await hasOpen(opt.id, "option")) continue;
+      const baseDate = opt.start_date || c.end_date;
+      if (!baseDate) continue;
+      const deadline = new Date(baseDate);
+      deadline.setDate(deadline.getDate() - nd);
+      const deadlineStr = deadline.toISOString().split("T")[0];
+      const dd = daysUntil(deadlineStr);
+      if (dd > 90) continue; // start alerting ~90 days before the notice deadline
       const label = (c.tenants?.name ?? "") + " — " + (c.properties?.name ?? "");
-      await add({ title: `מועד הודעת אופציה: ${label}`, severity: od <= 30 ? "urgent" : "warning", entity_type: "option", entity_id: opt.id, property_id: c.property_id ?? null, due_date: opt.end_date, status: "open" });
+      const deadlineHe = deadline.toLocaleDateString("he-IL");
+      const optNo = opt.option_number ?? "";
+      const isType2 = opt.notice_type === "non_renewal" || opt.notice_type === "auto";
+
+      // Deadline PASSED, Type 2 → auto-exercise: extend the contract to the
+      // option end, close the option's alerts, leave an info alert. Idempotent
+      // (status flips to exercised, so the next run skips it).
+      if (dd < 0 && isType2) {
+        if (opt.end_date) {
+          await supabase.from("contract_options").update({ is_exercised: true, status: "exercised" }).eq("id", opt.id);
+          await supabase.from("contracts").update({ end_date: opt.end_date, status: "extended" }).eq("id", c.id);
+          await supabase.from("alerts").update({ is_resolved: true, handled_at: new Date().toISOString() }).eq("entity_id", opt.id).eq("is_resolved", false);
+          await add({
+            title: `אופציה ${optNo} מומשה אוטומטית: ${label}`,
+            message: `לא סומנה הודעת אי-מימוש עד ${deadlineHe} — האופציה מומשה אוטומטית והחוזה הוארך עד ${new Date(opt.end_date).toLocaleDateString("he-IL")}.`,
+            alert_type: "option_auto_exercised", severity: "info",
+            entity_type: "option", entity_id: opt.id, contract_id: c.id,
+            property_id: c.property_id ?? null, due_date: opt.end_date,
+          });
+        }
+        continue;
+      }
+
+      let title: string, message: string, severity: string;
+      if (dd < 0) {
+        // Deadline passed, Type 1 → no exercise notice received; the manager
+        // must mark non-exercise (or a late exercise) from the alert.
+        severity = "urgent";
+        title = `לא התקבלה הודעת מימוש — אופציה ${optNo}: ${label}`;
+        message = `המועד האחרון להודעת מימוש (${deadlineHe}) חלף ללא הודעה מהדייר. יש לסמן אי-מימוש (✗), או מימוש (✓) אם התקבלה הודעה באיחור.`;
+      } else if (isType2) {
+        severity = dd <= 30 ? "urgent" : "warning";
+        title = `בעוד ${dd} ימים — מועד אחרון להודעת אי-מימוש אופציה ${optNo}: ${label}`;
+        message = `הדייר רשאי למסור הודעת אי-מימוש עד ${deadlineHe}. אם לא תסומן הודעת אי-מימוש — האופציה תמומש אוטומטית והחוזה יוארך עד ${opt.end_date ? new Date(opt.end_date).toLocaleDateString("he-IL") : ""}.`;
+      } else {
+        severity = dd <= 30 ? "urgent" : "warning";
+        title = `בעוד ${dd} ימים — מועד אחרון להודעת מימוש אופציה ${optNo}: ${label}`;
+        message = `על הדייר למסור הודעת מימוש עד ${deadlineHe}. ניתן לסמן מימוש (✓) בכל עת — וההתראות ייפסקו.`;
+      }
+      const alertType = isType2 ? "option_nonexercise_notice" : "option_exercise_notice";
+
+      // Update-in-place when an open alert exists for this option (refreshes
+      // the countdown + severity); insert only the first time.
+      const { data: existing } = await supabase.from("alerts").select("id").eq("entity_id", opt.id).eq("entity_type", "option").eq("is_resolved", false).limit(1);
+      if (existing && existing.length) {
+        await supabase.from("alerts").update({ title, message, severity, due_date: deadlineStr, alert_type: alertType }).eq("id", existing[0].id);
+      } else {
+        await add({ title, message, severity, alert_type: alertType, entity_type: "option", entity_id: opt.id, contract_id: c.id, property_id: c.property_id ?? null, due_date: deadlineStr });
+      }
     }
   }
 

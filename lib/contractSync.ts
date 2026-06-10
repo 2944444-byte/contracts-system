@@ -13,6 +13,9 @@ export async function syncContractStatuses(): Promise<number> {
     .select("id,contract_id,option_number,duration_months,duration_years,end_date,notice_days_before_end,notice_type,status,is_exercised,start_date")
     .eq("is_exercised", false)
     .neq("status", "expired")
+    // "declined" = the tenant DID give a non-exercise notice — must never
+    // auto-exercise (set from the alerts screen's ✗ action or manually).
+    .neq("status", "declined")
     .in("notice_type", ["auto", "non_renewal"]);
 
   for (const opt of pendingOpts ?? []) {
@@ -45,6 +48,10 @@ export async function syncContractStatuses(): Promise<number> {
         end_date: newEndStr,
         status: "extended",
       }).eq("id", opt.contract_id);
+
+      // Close the option's open notice alerts — the question is settled.
+      await supabase.from("alerts").update({ is_resolved: true, handled_at: new Date().toISOString() })
+        .eq("entity_id", opt.id).eq("is_resolved", false);
 
       // Create alert
       await supabase.from("alerts").insert({
