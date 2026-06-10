@@ -960,20 +960,22 @@ export default function LettersPage() {
   function handleEmail(l: any) {
     var title = l.title || l.subject || "מכתב";
     var tenant = l.contracts?.tenants?.name || "";
-    var email = recipientEmail(l);
+    // Every address marked for this letter's domain, not just the first.
+    var toList = resolveRecipientEmails(l);
+    var toStr = toList.join(",");
     var body = letterBodyText(l).trim() ||
       ("שלום " + tenant + ",\n\nמצורף בזאת " + title + ".\nנא לעיין ולפעול בהתאם.\n\nבברכה,\nהנהלת הנכס");
     // In test mode no CC — don't pre-fill owners/authorized users.
     var propIds = [l.property_id || l.contracts?.properties?.id].filter(Boolean);
-    var cc = testMode ? "" : ccForProps(propIds as string[], email).join(",");
-    var mailto = "mailto:" + encodeURIComponent(email) + "?" +
+    var cc = testMode ? "" : ccForProps(propIds as string[], toList[0] || "").join(",");
+    var mailto = "mailto:" + encodeURIComponent(toStr) + "?" +
       (cc ? "cc=" + encodeURIComponent(cc) + "&" : "") +
       "subject=" + encodeURIComponent(title) +
       "&body=" + encodeURIComponent(body);
     // window.location triggers the OS mail handler reliably without leaving the app.
     window.location.href = mailto;
     // Record the send (recipient + timestamp) so it's traceable in the list.
-    markSent(l, email + (cc ? " (עותק: " + cc + ")" : ""));
+    markSent(l, toStr + (cc ? " (עותק: " + cc + ")" : ""));
   }
 
   // Primary single-letter send: local mail client in test mode, else PDF+CC.
@@ -1160,13 +1162,13 @@ export default function LettersPage() {
                                     <div className="text-xs text-slate-500 flex items-center gap-1 flex-wrap">
                                       <span>אל: {l.contracts?.tenants?.name || "—"}</span>
                                       {(function(){
-                                        var rec = resolveRecipient(l);
+                                        var emails = resolveRecipientEmails(l);
                                         var dom = RECIPIENT_DOMAINS.find(function(d){ return d.key === routeDomain(l); });
                                         return (
                                           <>
-                                            {rec.email
-                                              ? <span className="text-slate-600">· {dom ? dom.icon : ""} {rec.email}{rec.name ? " (" + rec.name + ")" : ""}</span>
-                                              : <span className="text-amber-600">· ⚠ אין נמען</span>}
+                                            {emails.length
+                                              ? <span className="text-slate-600" title={emails.join(", ")}>· {dom ? dom.icon : ""} {emails.join(", ")}</span>
+                                              : <span className="text-amber-600">· ⚠ אין נמען לנושא {dom ? dom.label : ""}</span>}
                                             <button onClick={function(){openRecipients(l);}} className="text-blue-500 hover:text-blue-700 border border-slate-200 rounded px-1 leading-none" title="עריכת נמענים לפי תחום">✎ נמענים</button>
                                           </>
                                         );
