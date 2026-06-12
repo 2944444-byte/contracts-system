@@ -7,7 +7,7 @@ export async function POST(req: NextRequest) {
     const { userId } = await req.json();
     if (!userId) return NextResponse.json({ error: "Missing userId" }, { status: 400 });
     const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    if (!serviceKey) return NextResponse.json({ error: "Service role key not configured" }, { status: 500 });
+    if (!serviceKey) return NextResponse.json({ error: "חסר מפתח SUPABASE_SERVICE_ROLE_KEY בהגדרות Vercel. היכנס ל-Supabase → Settings → API → העתק את ה-service_role key, הוסף אותו כ-Environment Variable בפרויקט ב-Vercel (Production+Preview) ובצע Redeploy." }, { status: 500 });
     const admin = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       serviceKey,
