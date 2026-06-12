@@ -1,23 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { adminClient, callerRole, SERVICE_KEY_MSG, FORBIDDEN_MSG } from "@/lib/admin-api-auth";
 
-// Set a new password for an existing auth user (service key). Used by the
-// users screen so an admin can re-issue login credentials and send them.
+// Set a new password for an existing auth user (service key). Caller must be a
+// logged-in ADMIN — this route runs with the service key, so without the check
+// anyone could take over any account by resetting its password.
 export async function POST(req: NextRequest) {
   try {
     const { userId, password } = await req.json();
     if (!userId || !password) {
       return NextResponse.json({ error: "Missing userId or password" }, { status: 400 });
     }
-    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    if (!serviceKey) {
-      return NextResponse.json({ error: "חסר מפתח SUPABASE_SERVICE_ROLE_KEY בהגדרות Vercel. היכנס ל-Supabase → Settings → API → העתק את ה-service_role key, הוסף אותו כ-Environment Variable בפרויקט ב-Vercel (Production+Preview) ובצע Redeploy." }, { status: 500 });
-    }
-    const admin = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      serviceKey,
-      { auth: { autoRefreshToken: false, persistSession: false } }
-    );
+    const admin = adminClient();
+    if (!admin) return NextResponse.json({ error: SERVICE_KEY_MSG }, { status: 500 });
+    const caller = await callerRole(req, admin);
+    if (caller !== "admin") return NextResponse.json({ error: FORBIDDEN_MSG }, { status: 403 });
     const { error } = await admin.auth.admin.updateUserById(userId, { password });
     if (error) return NextResponse.json({ error: error.message }, { status: 400 });
     return NextResponse.json({ ok: true });

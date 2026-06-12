@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { adminClient, callerRole, SERVICE_KEY_MSG, FORBIDDEN_MSG } from "@/lib/admin-api-auth";
 
 export async function POST(req: NextRequest) {
   try {
@@ -8,16 +8,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Missing email or password" }, { status: 400 });
     }
 
-    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    if (!serviceKey) {
-      return NextResponse.json({ error: "חסר מפתח SUPABASE_SERVICE_ROLE_KEY בהגדרות Vercel. היכנס ל-Supabase → Settings → API → העתק את ה-service_role key, הוסף אותו כ-Environment Variable בפרויקט ב-Vercel (Production+Preview) ובצע Redeploy." }, { status: 500 });
-    }
+    const admin = adminClient();
+    if (!admin) return NextResponse.json({ error: SERVICE_KEY_MSG }, { status: 500 });
 
-    const admin = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      serviceKey,
-      { auth: { autoRefreshToken: false, persistSession: false } }
-    );
+    // Caller verification (this route runs with the service key — without this
+    // check anyone could create admins): admins create any role; managers may
+    // create VIEWERS only.
+    const caller = await callerRole(req, admin);
+    const newRole = role ?? "viewer";
+    const allowed = caller === "admin" || (caller === "manager" && newRole === "viewer");
+    if (!allowed) return NextResponse.json({ error: FORBIDDEN_MSG }, { status: 403 });
 
     const { data, error } = await admin.auth.admin.createUser({
       email,
@@ -34,7 +34,7 @@ export async function POST(req: NextRequest) {
         id:        data.user.id,
         email:     data.user.email,
         full_name: fullName ?? email,
-        role:      role ?? "viewer",
+        role:      newRole,
         is_active: true,
       });
     }

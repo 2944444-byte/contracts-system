@@ -1,18 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { adminClient, callerRole, SERVICE_KEY_MSG, FORBIDDEN_MSG } from "@/lib/admin-api-auth";
 
-// Permanently delete a user: auth record + profile + access rows.
+// Permanently delete a user: auth record + profile + access rows. Caller must
+// be a logged-in ADMIN (service-key route — see lib/admin-api-auth).
 export async function POST(req: NextRequest) {
   try {
     const { userId } = await req.json();
     if (!userId) return NextResponse.json({ error: "Missing userId" }, { status: 400 });
-    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    if (!serviceKey) return NextResponse.json({ error: "חסר מפתח SUPABASE_SERVICE_ROLE_KEY בהגדרות Vercel. היכנס ל-Supabase → Settings → API → העתק את ה-service_role key, הוסף אותו כ-Environment Variable בפרויקט ב-Vercel (Production+Preview) ובצע Redeploy." }, { status: 500 });
-    const admin = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      serviceKey,
-      { auth: { autoRefreshToken: false, persistSession: false } }
-    );
+    const admin = adminClient();
+    if (!admin) return NextResponse.json({ error: SERVICE_KEY_MSG }, { status: 500 });
+    const caller = await callerRole(req, admin);
+    if (caller !== "admin") return NextResponse.json({ error: FORBIDDEN_MSG }, { status: 403 });
     // The protected master user can never be deleted — enforced server-side so
     // no client (or future bug) can bypass it.
     const { data: prof } = await admin.from("user_profiles").select("is_master").eq("id", userId).maybeSingle();

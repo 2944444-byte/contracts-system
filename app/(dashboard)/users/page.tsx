@@ -77,6 +77,18 @@ export default function UsersPage() {
     setLoading(false);
   }
 
+
+  // The admin API routes verify the CALLER (they run with the service key) —
+  // attach the logged-in session token to every call.
+  async function authHeaders(): Promise<Record<string, string>> {
+    var h: Record<string, string> = { "Content-Type": "application/json" };
+    try {
+      const { data } = await supabase.auth.getSession();
+      if (data?.session?.access_token) h["Authorization"] = "Bearer " + data.session.access_token;
+    } catch (e) { /* no session (local/dev) */ }
+    return h;
+  }
+
   function showMsg(m: string) { setMsg(m); setTimeout(function(){ setMsg(""); }, 4000); }
 
   // ── Who may do what on THIS screen ──
@@ -134,7 +146,7 @@ export default function UsersPage() {
     if (fRole === "manager" && !canCreateManagers) { alert("רק מנהל מערכת יכול להקים מנהלים"); return; }
     setSaving(true);
     try {
-      const res = await fetch("/api/admin/create-user", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: fEmail.trim(), password: fPassword, fullName: fName.trim(), role: fRole }) });
+      const res = await fetch("/api/admin/create-user", { method: "POST", headers: await authHeaders(), body: JSON.stringify({ email: fEmail.trim(), password: fPassword, fullName: fName.trim(), role: fRole }) });
       const d = await res.json();
       if (!res.ok || d.error) throw new Error(d.error || "יצירה נכשלה");
       var newId = d.userId;
@@ -157,7 +169,7 @@ export default function UsersPage() {
     if (!confirm("לאפס את הסיסמה של " + (u.full_name || u.email) + "?\nתיווצר סיסמה חדשה ויוצג חלון לשליחתה.")) return;
     setSaving(true);
     try {
-      const res = await fetch("/api/admin/reset-password", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userId: u.id, password: pw }) });
+      const res = await fetch("/api/admin/reset-password", { method: "POST", headers: await authHeaders(), body: JSON.stringify({ userId: u.id, password: pw }) });
       const d = await res.json();
       if (!res.ok || d.error) throw new Error(d.error || "איפוס נכשל");
       await logAudit({ entity_type: "user", entity_id: u.id, action: "reset_password" });
@@ -201,7 +213,7 @@ export default function UsersPage() {
     if (!confirm("למחוק לצמיתות את " + (u.full_name || u.email) + "? פעולה זו אינה הפיכה.")) return;
     setSaving(true);
     try {
-      const res = await fetch("/api/admin/delete-user", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userId: u.id }) });
+      const res = await fetch("/api/admin/delete-user", { method: "POST", headers: await authHeaders(), body: JSON.stringify({ userId: u.id }) });
       const d = await res.json();
       if (!res.ok || d.error) throw new Error(d.error || "מחיקה נכשלה");
       await logAudit({ entity_type: "user", entity_id: u.id, action: "delete", notes: u.email });
