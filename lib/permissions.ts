@@ -91,6 +91,47 @@ export function hasPerm(access: CurrentAccess, key: string): boolean {
   return !!access.permissions[key];
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Section-level enforcement: which routes a user may open. Admin sees all.
+// A route with no rule is open to every logged-in user (dashboard, documents,
+// alerts, calendar). anyOf = at least one of the capability flags.
+// ─────────────────────────────────────────────────────────────────────────────
+const FIN = ["view_finance", "manage_charges", "update_payments"];
+interface RouteRule { prefix: string; adminOnly?: boolean; roles?: string[]; anyOf?: string[]; }
+export const ROUTE_RULES: RouteRule[] = [
+  { prefix: "/companies",  adminOnly: true },
+  { prefix: "/settings",   adminOnly: true },
+  { prefix: "/audit",      adminOnly: true },
+  { prefix: "/users",      roles: ["admin", "manager"] },
+  { prefix: "/guarantees", anyOf: ["manage_guarantees"] },
+  { prefix: "/insurances", anyOf: ["manage_insurance"] },
+  { prefix: "/safety",     anyOf: ["manage_safety"] },
+  { prefix: "/letters",    anyOf: ["manage_letters"] },
+  { prefix: "/billing",    anyOf: FIN },
+  { prefix: "/payments",   anyOf: FIN },
+  { prefix: "/indexation", anyOf: FIN },
+  { prefix: "/revenue",    anyOf: FIN },
+  { prefix: "/cashflow",   anyOf: FIN },
+  { prefix: "/reports",    anyOf: FIN },
+  { prefix: "/timeline",   anyOf: FIN },
+  { prefix: "/tenants",    anyOf: ["manage_contracts", "view_finance", "manage_letters"] },
+  { prefix: "/contracts",  anyOf: ["manage_contracts", "view_finance", "manage_letters"] },
+  { prefix: "/properties", anyOf: ["manage_properties", "manage_contracts", "view_finance"] },
+  { prefix: "/groups",     anyOf: ["manage_properties", "manage_contracts", "view_finance"] },
+  { prefix: "/units",      anyOf: ["manage_properties", "manage_contracts", "view_finance"] },
+  { prefix: "/parking",    anyOf: ["manage_properties", "manage_contracts", "view_finance"] },
+];
+
+export function canAccessRoute(access: CurrentAccess, pathname: string): boolean {
+  if (access.role === "admin") return true;
+  const rule = ROUTE_RULES.find(function (r) { return pathname.indexOf(r.prefix) === 0; });
+  if (!rule) return true;
+  if (rule.adminOnly) return false;
+  if (rule.roles) return rule.roles.indexOf(access.role) !== -1;
+  if (rule.anyOf) return rule.anyOf.some(function (k) { return hasPerm(access, k); });
+  return true;
+}
+
 // The property ids this user may see. null = unrestricted (admin).
 // Effective scope = directly-granted properties ∪ all properties of granted
 // companies (so granting a company covers its future properties too).

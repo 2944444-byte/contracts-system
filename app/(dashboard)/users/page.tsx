@@ -186,6 +186,7 @@ export default function UsersPage() {
     return u.role === "admin" && users.filter(function(x){ return x.role === "admin" && x.is_active; }).length <= 1;
   }
   async function toggleActive(u: any) {
+    if (u.is_master) { alert("משתמש המאסטר מוגן — לא ניתן להשבית אותו"); return; }
     if (u.is_active && isSelf(u)) { alert("לא ניתן להשבית את המשתמש שאיתו אתה מחובר"); return; }
     if (u.is_active && isLastAdmin(u)) { alert("לא ניתן להשבית את מנהל המערכת האחרון"); return; }
     await supabase.from("user_profiles").update({ is_active: !u.is_active }).eq("id", u.id);
@@ -193,6 +194,7 @@ export default function UsersPage() {
     await loadAll();
   }
   async function deleteUser(u: any) {
+    if (u.is_master) { alert("משתמש המאסטר מוגן — לא ניתן למחוק אותו"); return; }
     if (myRole !== "admin") { alert("רק מנהל מערכת יכול למחוק משתמשים"); return; }
     if (isSelf(u)) { alert("לא ניתן למחוק את המשתמש שאיתו אתה מחובר"); return; }
     if (isLastAdmin(u)) { alert("לא ניתן למחוק את מנהל המערכת האחרון"); return; }
@@ -365,6 +367,7 @@ export default function UsersPage() {
                     </td>
                     <td className="px-4 py-3">
                       <span className={"text-xs px-2 py-1 rounded-full font-semibold " + ri.color} title={ri.desc}>{ri.icon} {ri.l}</span>
+                      {u.is_master && <span className="text-[10px] bg-amber-100 text-amber-700 border border-amber-200 rounded-full px-1.5 py-0.5 font-bold mr-1" title="משתמש מוגן — לא ניתן למחוק או להשבית">🛡 מאסטר</span>}
                     </td>
                     <td className="px-4 py-3 text-xs text-slate-600">
                       {isAdmin ? <span className="text-red-600 font-semibold">הכל</span> : (
@@ -397,7 +400,7 @@ export default function UsersPage() {
                       <div className="flex gap-1 flex-wrap">
                         {!isAdmin && <button onClick={function(){ openAccess(u); }} className="text-xs border border-blue-200 rounded px-2 py-1 text-blue-600 hover:bg-blue-50" title="עריכת היקף גישה והרשאות">🔐 הרשאות</button>}
                         {myRole === "admin" && <button onClick={function(){ resetPassword(u); }} className="text-xs border border-slate-200 rounded px-2 py-1 text-slate-600 hover:bg-slate-50" title="איפוס סיסמה + שליחת פרטי התחברות">🔑</button>}
-                        {myRole === "admin" && <button onClick={function(){ deleteUser(u); }} className="text-xs border border-red-100 rounded px-2 py-1 text-red-400 hover:bg-red-50" title="מחיקה לצמיתות">🗑</button>}
+                        {myRole === "admin" && !u.is_master && <button onClick={function(){ deleteUser(u); }} className="text-xs border border-red-100 rounded px-2 py-1 text-red-400 hover:bg-red-50" title="מחיקה לצמיתות">🗑</button>}
                       </div>
                     </td>
                   </tr>

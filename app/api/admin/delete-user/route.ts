@@ -13,6 +13,12 @@ export async function POST(req: NextRequest) {
       serviceKey,
       { auth: { autoRefreshToken: false, persistSession: false } }
     );
+    // The protected master user can never be deleted — enforced server-side so
+    // no client (or future bug) can bypass it.
+    const { data: prof } = await admin.from("user_profiles").select("is_master").eq("id", userId).maybeSingle();
+    if (prof?.is_master) {
+      return NextResponse.json({ error: "לא ניתן למחוק את משתמש המאסטר" }, { status: 403 });
+    }
     await admin.from("user_property_access").delete().eq("user_id", userId);
     await admin.from("user_company_access").delete().eq("user_id", userId);
     await admin.from("user_profiles").delete().eq("id", userId);

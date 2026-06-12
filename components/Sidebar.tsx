@@ -3,6 +3,8 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState, useEffect } from "react";
 import { supabase } from '@/lib/supabase';
+import { canAccessRoute } from '@/lib/permissions';
+import { useAccess } from '@/components/AccessProvider';
 
 type NavItem = {href:string;label:string;icon:string} | {section:string};
 
@@ -44,8 +46,32 @@ const NAV: NavItem[] = [
 export default function Sidebar() {
   const pathname = usePathname();
   const router   = useRouter();
+  const { access } = useAccess();
   const [pendingPay, setPendingPay] = useState(0);
   const [openAlerts, setOpenAlerts] = useState(0);
+
+  // Menu filtered by the user's permissions (admin sees all; while access is
+  // still loading we show everything — RouteGate blocks navigation anyway).
+  // Section headers with no visible items underneath are dropped too.
+  const visibleNav: NavItem[] = (function() {
+    var items = NAV.filter(function(item) {
+      if ("section" in item) return true;
+      return !access || canAccessRoute(access, item.href);
+    });
+    var out: NavItem[] = [];
+    for (var i = 0; i < items.length; i++) {
+      var it = items[i];
+      if ("section" in it) {
+        var hasChild = false;
+        for (var j = i + 1; j < items.length; j++) {
+          if ("section" in items[j]) break;
+          hasChild = true; break;
+        }
+        if (hasChild) out.push(it);
+      } else out.push(it);
+    }
+    return out;
+  })();
 
   useEffect(function() {
     async function loadBadges() {
@@ -87,7 +113,7 @@ export default function Sidebar() {
 
       {/* Nav */}
       <nav className="flex-1 overflow-y-auto py-2 px-2">
-        {NAV.map(function(item, idx) {
+        {visibleNav.map(function(item, idx) {
           if ("section" in item) {
             return <div key={idx} className="px-2 pt-3 pb-1"><div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">{item.section}</div></div>;
           }
