@@ -93,21 +93,53 @@ export default function UsersPage() {
 
   // ── Who may do what on THIS screen ──
   const myRole = me?.role || "viewer";
-  const canCreateAdmins   = myRole === "admin";
+  // Unrestricted = the master, or an admin with no scope rows. A SCOPED admin
+  // (admin assigned to part of the companies/properties) keeps admin powers but
+  // only over his slice — he can't grant or see beyond it.
+  const iAmUnrestricted = myRole === "admin" && (!!me?.profile?.is_master || ((me?.companyIds || []).length === 0 && (me?.propertyIds || []).length === 0));
+  // Only an UNRESTRICTED admin may create admins (a scoped admin creating an
+  // unrestricted admin would be privilege escalation).
+  const canCreateAdmins   = iAmUnrestricted;
   const canCreateManagers = myRole === "admin";
   const canCreateViewers  = myRole === "admin" || myRole === "manager";
   const canUseScreen      = canCreateViewers;
 
-  // A manager may only grant within their OWN scope.
+  // Granting is capped at the granter's OWN scope (manager AND scoped admin).
   function grantableCompanies(): any[] {
-    if (myRole === "admin") return companies;
+    if (iAmUnrestricted) return companies;
     return companies.filter(function(c){ return (me?.companyIds || []).indexOf(c.id) !== -1; });
   }
   function grantableProperties(): any[] {
-    if (myRole === "admin") return properties;
+    if (iAmUnrestricted) return properties;
     var myComps = me?.companyIds || [];
     var myProps = me?.propertyIds || [];
     return properties.filter(function(p){ return myProps.indexOf(p.id) !== -1 || myComps.indexOf(p.company_id) !== -1; });
+  }
+  // Permission ceiling: an admin (incl. scoped) may grant any capability; a
+  // manager may grant ONLY capabilities he himself holds.
+  function grantablePerms(): typeof PERMISSIONS {
+    if (myRole === "admin") return PERMISSIONS;
+    return PERMISSIONS.filter(function(p){ return !!me?.permissions?.[p.key]; });
+  }
+  // Whose access may I edit? Never the master; never MYSELF unless I'm an
+  // unrestricted admin (a manager must not raise his own permissions); admin
+  // rows only by the master.
+  function canEditAccess(u: any): boolean {
+    if (u.is_master) return false;
+    if (me?.profile?.id && u.id === me.profile.id) return iAmUnrestricted;
+    if (u.role === "admin") return !!me?.profile?.is_master;
+    return true;
+  }
+  // Defense in depth: clamp whatever the UI submits to what I may grant.
+  function clampGrant(comps: Record<string, boolean>, props: Record<string, boolean>, perms: Record<string, boolean>) {
+    if (iAmUnrestricted) return { comps: comps, props: props, perms: perms };
+    var gc: Record<string, boolean> = {}; grantableCompanies().forEach(function(c){ gc[c.id] = true; });
+    var gp: Record<string, boolean> = {}; grantableProperties().forEach(function(p){ gp[p.id] = true; });
+    var allowedPermKeys: Record<string, boolean> = {}; grantablePerms().forEach(function(p){ allowedPermKeys[p.key] = true; });
+    var cc: Record<string, boolean> = {}; Object.keys(comps).forEach(function(k){ if (comps[k] && gc[k]) cc[k] = true; });
+    var pp: Record<string, boolean> = {}; Object.keys(props).forEach(function(k){ if (props[k] && gp[k]) pp[k] = true; });
+    var pm: Record<string, boolean> = {}; Object.keys(perms).forEach(function(k){ if (perms[k] && allowedPermKeys[k]) pm[k] = true; });
+    return { comps: cc, props: pp, perms: pm };
   }
 
   // ── Which users THIS user may see ──
@@ -122,16 +154,22 @@ export default function UsersPage() {
     return ok;
   }
   const visibleUsers = (function() {
-    if (myRole === "admin") return users;
+    if (iAmUnrestricted) return users;
     var propOk = myEffectivePropIds();
     var compOk: Record<string, boolean> = {};
     (me?.companyIds || []).forEach(function(c){ compOk[c] = true; });
     return users.filter(function(u){
       if (me?.profile?.id && u.id === me.profile.id) return true;          // self
-      if (u.role === "admin") return false;                                 // above my level
+      // Level rule: a manager never sees admins; a scoped admin may see
+      // equal-level admins — but only if their scope is inside his.
+      if (u.role === "admin" && myRole !== "admin") return false;
+      if (u.is_master) return false;                                        // unrestricted by definition
       var sc = scopes[u.id] || { companyIds: [], propertyIds: [] };
       if (sc.companyIds.length === 0 && sc.propertyIds.length === 0) {
-        return u.created_by === me?.profile?.id;                            // unassigned: only mine
+        // No scope rows: an admin like this is UNRESTRICTED → never visible to
+        // a scoped user; others are visible only to their creator.
+        if (u.role === "admin") return false;
+        return u.created_by === me?.profile?.id;
       }
       var compsOk = sc.companyIds.every(function(cid){ return !!compOk[cid]; });
       var propsOk = sc.propertyIds.every(function(pid){ return !!propOk[pid]; });
@@ -181,7 +219,11 @@ export default function UsersPage() {
       var newId = d.userId;
       if (newId) {
         await supabase.from("user_profiles").update({ created_by: me?.profile?.id ?? null }).eq("id", newId);
-        if (fRole !== "admin") await saveScopeAndPerms(newId, fRole, fComps, fProps, fPerms);
+        // Clamp to MY grantable scope/permissions (defense in depth), then save.
+        // An admin WITH a scope selection becomes a scoped admin; without — an
+        // unrestricted admin (perms are irrelevant for admins — role bypasses).
+        var g = clampGrant(fComps, fProps, fRole === "admin" ? {} : fPerms);
+        await saveScopeAndPerms(newId, fRole, g.comps, g.props, g.perms);
         await logAudit({ entity_type: "user", entity_id: newId, action: "create", notes: fRole + " — " + fEmail.trim() });
       }
       setShowCreate(false);
@@ -263,9 +305,13 @@ export default function UsersPage() {
   }
   async function saveAccess() {
     if (!accessUser) return;
+    if (!canEditAccess(accessUser)) { alert("אין לך הרשאה לערוך משתמש זה"); return; }
     setSaving(true);
     try {
-      await saveScopeAndPerms(accessUser.id, accessUser.role || "viewer", fComps, fProps, fPerms);
+      // Clamp to MY grantable scope/permissions — a manager can never hand out
+      // more than he holds, even if the UI is tampered with.
+      var g = clampGrant(fComps, fProps, accessUser.role === "admin" ? {} : fPerms);
+      await saveScopeAndPerms(accessUser.id, accessUser.role || "viewer", g.comps, g.props, g.perms);
       await logAudit({ entity_type: "user", entity_id: accessUser.id, action: "update_access" });
       setAccessUser(null); await loadAll(); showMsg("✅ ההרשאות נשמרו");
     } catch (e: any) { alert("שגיאה: " + (e?.message || e)); }
@@ -276,8 +322,14 @@ export default function UsersPage() {
   function renderScopeAndPerms(role: string) {
     var gComps = grantableCompanies();
     var gProps = grantableProperties();
+    var gPerms = grantablePerms();
     return (
       <>
+        {role === "admin" && (
+          <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-[11px] text-amber-700">
+            👑 מנהל מערכת עם <b>בחירת חברות/נכסים</b> = מנהל מערכת <b>מוגבל להיקף שנבחר</b> (כל המסכים והפעולות, רק על הנתח שלו). ללא בחירה — גישה לכל המערכת.
+          </div>
+        )}
         <div>
           <div className="text-xs font-bold text-slate-700 mb-1.5">🏛 גישה לחברות <span className="font-normal text-slate-400">(חברה = כל הנכסים שלה, כולל עתידיים)</span></div>
           <div className="flex flex-wrap gap-1.5">
@@ -306,13 +358,14 @@ export default function UsersPage() {
             })}
           </div>
         </div>
+        {role !== "admin" && (
         <div>
           <div className="flex items-center justify-between mb-1.5 flex-wrap gap-1">
-            <div className="text-xs font-bold text-slate-700">🔑 הרשאות פעולה</div>
+            <div className="text-xs font-bold text-slate-700">🔑 הרשאות פעולה{myRole !== "admin" && <span className="font-normal text-slate-400"> (ניתן להעניק רק הרשאות שיש לך)</span>}</div>
             {role === "viewer" && (
               <div className="flex gap-1 flex-wrap">
                 {VIEWER_PRESETS.map(function(pr){
-                  return <button key={pr.label} type="button" onClick={function(){ setFPerms({ ...pr.perms }); }}
+                  return <button key={pr.label} type="button" onClick={function(){ var allowed: Record<string, boolean> = {}; gPerms.forEach(function(g){ if (pr.perms[g.key]) allowed[g.key] = true; }); setFPerms(allowed); }}
                     className="rounded-lg border border-slate-200 px-2 py-0.5 text-[11px] text-slate-500 hover:bg-slate-50" title="קיצור — ניתן לעריכה אחר-כך">
                     {pr.icon} {pr.label}
                   </button>;
@@ -321,7 +374,7 @@ export default function UsersPage() {
             )}
           </div>
           <div className="grid grid-cols-2 gap-1.5">
-            {PERMISSIONS.map(function(perm){
+            {gPerms.map(function(perm){
               if (perm.key === "manage_viewers" && role === "viewer") return null;
               var on = !!fPerms[perm.key];
               return <label key={perm.key} className={"flex items-start gap-2 rounded-lg border px-2.5 py-1.5 cursor-pointer " + (on ? "border-blue-300 bg-blue-50" : "border-slate-200 hover:bg-slate-50")} title={perm.desc}>
@@ -329,8 +382,10 @@ export default function UsersPage() {
                 <span className="text-xs text-slate-700">{perm.icon} {perm.label}</span>
               </label>;
             })}
+            {gPerms.length === 0 && <span className="text-xs text-slate-400">אין לך הרשאות פעולה להענקה</span>}
           </div>
         </div>
+        )}
       </>
     );
   }
@@ -439,7 +494,7 @@ export default function UsersPage() {
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex gap-1 flex-wrap">
-                        {!isAdmin && <button onClick={function(){ openAccess(u); }} className="text-xs border border-blue-200 rounded px-2 py-1 text-blue-600 hover:bg-blue-50" title="עריכת היקף גישה והרשאות">🔐 הרשאות</button>}
+                        {canEditAccess(u) && <button onClick={function(){ openAccess(u); }} className="text-xs border border-blue-200 rounded px-2 py-1 text-blue-600 hover:bg-blue-50" title="עריכת היקף גישה והרשאות">🔐 הרשאות</button>}
                         {myRole === "admin" && <button onClick={function(){ resetPassword(u); }} className="text-xs border border-slate-200 rounded px-2 py-1 text-slate-600 hover:bg-slate-50" title="איפוס סיסמה + שליחת פרטי התחברות">🔑</button>}
                         {myRole === "admin" && !u.is_master && <button onClick={function(){ deleteUser(u); }} className="text-xs border border-red-100 rounded px-2 py-1 text-red-400 hover:bg-red-50" title="מחיקה לצמיתות">🗑</button>}
                       </div>
@@ -502,7 +557,7 @@ export default function UsersPage() {
                 <p className="text-[11px] text-slate-400 mt-1.5">{roleInfo(fRole).desc}</p>
               </div>
 
-              {fRole !== "admin" && renderScopeAndPerms(fRole)}
+              {renderScopeAndPerms(fRole)}
 
               <div className="flex gap-3 pt-2">
                 <button onClick={handleCreate} disabled={saving} className="flex-1 rounded-xl bg-blue-700 py-2.5 text-sm font-bold text-white hover:bg-blue-800 disabled:opacity-50">{saving ? "יוצר..." : "צור משתמש"}</button>

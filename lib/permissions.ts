@@ -132,11 +132,18 @@ export function canAccessRoute(access: CurrentAccess, pathname: string): boolean
   return true;
 }
 
-// The property ids this user may see. null = unrestricted (admin).
+// The property ids this user may see. null = unrestricted.
+// Unrestricted = the master, or an admin with NO scope rows at all. An admin
+// WITH companies/properties assigned is a SCOPED admin — full capabilities,
+// but only over his slice of the portfolio.
 // Effective scope = directly-granted properties ∪ all properties of granted
 // companies (so granting a company covers its future properties too).
 export async function allowedPropertyIds(access: CurrentAccess): Promise<string[] | null> {
-  if (access.role === "admin") return null;
+  if (access.role === "admin") {
+    const isMaster = !!access.profile?.is_master;
+    const unscoped = access.companyIds.length === 0 && access.propertyIds.length === 0;
+    if (isMaster || unscoped) return null;
+  }
   let ids = access.propertyIds.slice();
   if (access.companyIds.length) {
     const { data } = await supabase.from("properties").select("id").in("company_id", access.companyIds);
