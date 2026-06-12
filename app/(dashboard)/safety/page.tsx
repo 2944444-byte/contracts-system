@@ -4,6 +4,7 @@ import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit-log';
 import PropertyHierarchyFilter from '@/components/PropertyHierarchyFilter';
 import { PageHero } from '@/components/ui';
+import { getScopeIds, scopeRows } from '@/lib/permissions';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 
@@ -131,9 +132,10 @@ export default function SafetyPage() {
         .in("status", ["active","expiring","extended","upcoming"])
         .order("start_date", { ascending: false }),
     ]);
-    setInspections(ins ?? []);
-    setProperties(pr ?? []);
-    setContracts(c ?? []);
+    var scope = await getScopeIds();
+    setInspections(scopeRows(ins ?? [], scope, function(x: any){ return x.property_id; }));
+    setProperties(scopeRows(pr ?? [], scope, function(x: any){ return x.id; }));
+    setContracts(scopeRows(c ?? [], scope, function(x: any){ return x.property_id; }));
     setLoading(false);
   }
 

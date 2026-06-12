@@ -3,6 +3,7 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from '@/lib/supabase';
 import { PageHero } from '@/components/ui';
+import { getScopeIds, scopeRows } from '@/lib/permissions';
 import { logAudit } from '@/lib/audit-log';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
@@ -48,7 +49,15 @@ export default function GroupsPage() {
       supabase.from("spaces").select("id, property_id, status, space_name, area").order("space_name"),
       supabase.from("guarantees").select("id,contract_id,guarantee_type,amount_required,end_date,status").eq("status","active"),
     ]);
-    setGroups(g??[]); setProperties(p??[]); setContracts(c??[]); setSpaces(sp??[]); setGuarantees(gu??[]);
+    var scope = await getScopeIds();
+    var scC = scopeRows(c??[], scope, function(x: any){ return x.property_id; });
+    var cidOk: Record<string, boolean> = {};
+    scC.forEach(function(x: any){ cidOk[x.id] = true; });
+    setGroups(g??[]);
+    setProperties(scopeRows(p??[], scope, function(x: any){ return x.id; }));
+    setContracts(scC);
+    setSpaces(scopeRows(sp??[], scope, function(x: any){ return x.property_id; }));
+    setGuarantees((gu??[]).filter(function(x: any){ return scope === null || !!cidOk[x.contract_id]; }));
     setLoading(false);
     if (!selected && (g??[]).length > 0) setSelected((g??[])[0].id);
   }

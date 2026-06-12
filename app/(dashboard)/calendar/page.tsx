@@ -2,6 +2,7 @@
 import { useState, useEffect } from "react";
 import { supabase } from '@/lib/supabase';
 import { PageHero } from '@/components/ui';
+import { getScopeIds, scopeRows } from '@/lib/permissions';
 
 const DAYS_HE  = ["א","ב","ג","ד","ה","ו","ש"];
 const MONTHS_HE = ["","ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
@@ -25,20 +26,26 @@ export default function CalendarPage() {
 
     const [{ data: c }, { data: a }, { data: g }] = await Promise.all([
       supabase.from("contracts")
-        .select("id, end_date, start_date, tenants(name)")
+        .select("id, property_id, end_date, start_date, tenants(name)")
         .or(`end_date.gte.${from},start_date.gte.${from}`)
         .or(`end_date.lte.${to},start_date.lte.${to}`),
       supabase.from("alerts")
-        .select("id, title, due_date, severity")
+        .select("id, title, due_date, severity, property_id, contracts(property_id)")
         .gte("due_date", from).lte("due_date", to).eq("is_resolved", false),
       supabase.from("guarantees")
-        .select("id, end_date, contracts(tenants(name))")
+        .select("id, end_date, contracts(property_id, tenants(name))")
         .gte("end_date", from).lte("end_date", to).eq("status", "active"),
     ]);
 
+    // Data-level scoping: only events of allowed properties appear.
+    var scope = await getScopeIds();
+    var cS = scopeRows(c ?? [], scope, function(x: any){ return x.property_id; });
+    var aS = scopeRows(a ?? [], scope, function(x: any){ return x.property_id || x.contracts?.property_id; });
+    var gS = scopeRows(g ?? [], scope, function(x: any){ return x.contracts?.property_id; });
+
     const ev: CalEvent[] = [];
     // חוזים פוגים
-    (c ?? []).forEach(function(x: any) {
+    cS.forEach(function(x: any) {
       if (x.end_date >= from && x.end_date <= to) {
         ev.push({ date: x.end_date.split("T")[0], label: "סיום: " + (x.tenants?.name ?? ""), type:"contract_end", color:"bg-red-100 text-red-700 border-red-200" });
       }
@@ -47,13 +54,13 @@ export default function CalendarPage() {
       }
     });
     // התראות
-    (a ?? []).forEach(function(x) {
+    aS.forEach(function(x: any) {
       if (x.due_date) {
         ev.push({ date: x.due_date.split("T")[0], label: x.title, type:"alert", color: x.severity==="urgent" ? "bg-red-100 text-red-700 border-red-200" : "bg-yellow-100 text-yellow-700 border-yellow-200" });
       }
     });
     // ערבויות
-    (g ?? []).forEach(function(x: any) {
+    gS.forEach(function(x: any) {
       if (x.end_date) {
         ev.push({ date: x.end_date.split("T")[0], label: "ערבות פגה: " + (x.contracts?.tenants?.name ?? ""), type:"guarantee", color:"bg-orange-100 text-orange-700 border-orange-200" });
       }

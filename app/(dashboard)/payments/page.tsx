@@ -4,6 +4,7 @@ import { getVatRates, vatPctAt, getVatPctForDate, type VatRate } from "@/lib/vat
 import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit-log';
 import { PageHero } from '@/components/ui';
+import { getScopeIds, scopeRows } from '@/lib/permissions';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 
@@ -196,11 +197,11 @@ export default function PaymentsPage() {
       // Load all charges with a due_date in the selected year. Falls back to
       // billing_period_start when due_date is null (older data).
       supabase.from("charges")
-        .select("*, contracts(tenants(name),properties(name),vat_type)")
+        .select("*, contracts(property_id,tenants(name),properties(name),vat_type)")
         .or("due_date.gte." + yearStart + ",billing_period_start.gte." + yearStart)
         .or("due_date.lt." + yearEnd + ",billing_period_start.lt." + yearEnd)
         .order("due_date", { ascending: true }),
-      supabase.from("contracts").select("id,vat_type,rent_type,revenue_pct,revenue_report_day,start_date,end_date,rent_per_sqm,charged_area,investment_addition,is_amendment,tenants(name),properties(name)").in("status", ["active", "expiring", "extended"]),
+      supabase.from("contracts").select("id,property_id,vat_type,rent_type,revenue_pct,revenue_report_day,start_date,end_date,rent_per_sqm,charged_area,investment_addition,is_amendment,tenants(name),properties(name)").in("status", ["active", "expiring", "extended"]),
       // Rent advances for the year (both paid + unpaid — paid ones still need
       // to show on this screen so שולמו KPI is honest)
       includeAdvances ? supabase.from("advance_payments")
@@ -219,15 +220,23 @@ export default function PaymentsPage() {
         .order("report_month", { ascending: true }),
     ]);
 
-    var ch = chargesRes.data || [];
+    // Data-level scoping: every row resolves to a contract → property; rows
+    // outside the user's allowed properties are dropped (admin scope = null).
+    var scope = await getScopeIds();
+    var scopedContracts = scopeRows(contractsRes.data || [], scope, function(c: any){ return c.property_id; });
+    var scopedContractIds: Record<string, boolean> = {};
+    scopedContracts.forEach(function(c: any){ scopedContractIds[c.id] = true; });
+    var inScope = function(contractId: any){ return scope === null || (contractId != null && !!scopedContractIds[contractId]); };
+
+    var ch = scopeRows(chargesRes.data || [], scope, function(c: any){ return c.contracts?.property_id; });
     // Keep BOTH paid and unpaid advances — paid ones still need to appear
     // on this screen so the שולמו KPI reflects collected rent. Only waived
     // advances are dropped entirely (they're explicitly cancelled).
-    var adv = (advRes.data || []).filter(function(a: any) { return !a.waived; });
+    var adv = (advRes.data || []).filter(function(a: any) { return !a.waived && inScope(a.contract_id); });
 
     // Property lookup for advance rows (advance_payments doesn't join properties cleanly)
     var contractMap: Record<string, any> = {};
-    (contractsRes.data || []).forEach(function(c: any) { contractMap[c.id] = c; });
+    scopedContracts.forEach(function(c: any) { contractMap[c.id] = c; });
 
     var allRows: Row[] = [];
 
@@ -278,7 +287,7 @@ export default function PaymentsPage() {
     });
     // Build a lookup of reported months per contract so we can detect gaps.
     var reportedMonths: Record<string, Record<string, boolean>> = {};
-    var revenueRows = (revRes.data || []);
+    var revenueRows = (revRes.data || []).filter(function(r: any){ return inScope(r.contract_id); });
     revenueRows.forEach(function(rev: any) {
       var monthKey = rev.report_month ? rev.report_month.slice(0, 7) : ""; // YYYY-MM
       if (!reportedMonths[rev.contract_id]) reportedMonths[rev.contract_id] = {};
@@ -295,7 +304,7 @@ export default function PaymentsPage() {
     var monthKeyForDate = function(d: Date) {
       return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0");
     };
-    (contractsRes.data || []).forEach(function(c: any) {
+    scopedContracts.forEach(function(c: any) {
       if (c.is_amendment) return;
       var isRev = c.rent_type === "revenue_pct" || c.rent_type === "revenue_based" || Number(c.revenue_pct) > 0;
       if (!isRev) return;
@@ -416,7 +425,7 @@ export default function PaymentsPage() {
     });
 
     setRows(allRows);
-    setContracts(contractsRes.data || []);
+    setContracts(scopedContracts);
     setLoading(false);
   }
 

@@ -144,3 +144,33 @@ export async function allowedPropertyIds(access: CurrentAccess): Promise<string[
   }
   return ids;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Data-level scoping helpers — used inside every screen's loader.
+//   const scope = await getScopeIds();              // null = unrestricted
+//   rows = scopeRows(rows, scope, r => r.property_id);
+// Cached per logged-in user for the session (re-resolves after user switch).
+// ─────────────────────────────────────────────────────────────────────────────
+let _scopeCache: { uid: string | null; promise: Promise<string[] | null> } | null = null;
+
+export async function getScopeIds(): Promise<string[] | null> {
+  let uid: string | null = null;
+  try {
+    const { data } = await supabase.auth.getSession();
+    uid = data?.session?.user?.id ?? null;
+  } catch (e) { /* no session — treated as unrestricted (local/dev) */ }
+  if (!_scopeCache || _scopeCache.uid !== uid) {
+    _scopeCache = { uid: uid, promise: getCurrentAccess().then(function (a) { return allowedPropertyIds(a); }) };
+  }
+  return _scopeCache.promise;
+}
+
+// Filter rows to the allowed scope by each row's property id. Rows whose
+// property id can't be resolved (null/undefined) are HIDDEN for scoped users —
+// fail closed, so unlinked data never leaks across scopes.
+export function scopeRows<T>(rows: T[], scope: string[] | null, getPid: (r: T) => any): T[] {
+  if (scope === null) return rows;
+  const set: Record<string, boolean> = {};
+  scope.forEach(function (id) { set[id] = true; });
+  return rows.filter(function (r) { const pid = getPid(r); return pid != null && !!set[pid]; });
+}

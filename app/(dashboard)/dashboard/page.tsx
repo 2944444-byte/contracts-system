@@ -2,6 +2,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from '@/lib/supabase';
+import { getScopeIds, scopeRows } from '@/lib/permissions';
 import { fetchCpiAdjusted, fetchHighestChainedCpi } from '@/lib/cpi-server';
 import { getKnownIndexMonth } from '@/lib/cpi-utils';
 import CalcProgress, { CalcProgressState } from '@/components/CalcProgress';
@@ -55,18 +56,24 @@ export default function DashboardPage() {
       supabase.from("alerts").select("id,title,severity,due_date,entity_type,contract_id").eq("is_resolved",false).order("severity").order("due_date").limit(20),
     ]);
 
+    // Data-level scoping: KPIs/sums must only include allowed properties.
+    var scope = await getScopeIds();
+    var scC = scopeRows(c ?? [], scope, function(x: any){ return x.property_id; });
+    var cidOk: Record<string, boolean> = {};
+    scC.forEach(function(x: any){ cidOk[x.id] = true; });
+    var byCid = function(r: any){ return scope === null || !!cidOk[r.contract_id]; };
     setPropGroups(pg ?? []);
-    setProperties(p ?? []);
-    setContracts((c ?? []).filter(function(c:any){return !c.is_amendment;}));
-    setSpaces(sp ?? []);
-    setGuarantees(gu ?? []);
-    setAlerts(al ?? []);
+    setProperties(scopeRows(p ?? [], scope, function(x: any){ return x.id; }));
+    setContracts(scC.filter(function(c:any){return !c.is_amendment;}));
+    setSpaces(scopeRows(sp ?? [], scope, function(x: any){ return x.property_id; }));
+    setGuarantees((gu ?? []).filter(byCid));
+    setAlerts((al ?? []).filter(byCid));
 
     // Letters waiting to be sent (draft + ready) — surfaced as a banner.
     const { data: ul } = await supabase.from("letters")
-      .select("id,title,status,billing_type,contracts(tenants(name))")
+      .select("id,title,status,billing_type,property_id,contracts(property_id,tenants(name))")
       .in("status", ["draft", "ready"]).order("created_at", { ascending: false });
-    setUnsentLetters(ul ?? []);
+    setUnsentLetters(scopeRows(ul ?? [], scope, function(l: any){ return l.property_id || l.contracts?.property_id; }));
 
     // Compute per-contract CPI ratios.
     // Group contracts by (base date + mechanism) to dedupe CBS calls — but

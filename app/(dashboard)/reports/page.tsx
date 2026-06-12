@@ -2,6 +2,7 @@
 import { useState, useEffect } from "react";
 import { supabase } from '@/lib/supabase';
 import { PageHero } from '@/components/ui';
+import { getScopeIds, scopeRows } from '@/lib/permissions';
 
 const TABS = [
   {id:"contracts",  label:"חוזים",       icon:"📄"},
@@ -34,26 +35,26 @@ export default function ReportsPage() {
     setLoading(true);
     if (t==="contracts" || t==="expiring") {
       const { data: c } = await supabase.from("contracts")
-        .select("id,status,start_date,end_date,rent_per_sqm,charged_area,investment_addition,vat_type,tenants(name),properties(name)")
+        .select("id,property_id,status,start_date,end_date,rent_per_sqm,charged_area,investment_addition,vat_type,tenants(name),properties(name)")
         .order("end_date");
-      setData(c ?? []);
+      setData(scopeRows(c ?? [], await getScopeIds(), function(x: any){ return x.property_id; }));
     } else if (t==="payments") {
       const { data: p } = await supabase.from("charges")
-        .select("id,charge_type,billing_period_start,base_amount,vat_amount,total_amount,status,contracts(tenants(name),properties(name))")
+        .select("id,charge_type,billing_period_start,base_amount,vat_amount,total_amount,status,contracts(property_id,tenants(name),properties(name))")
         .gte("billing_period_start", filterYear+"-01-01").lte("billing_period_start", filterYear+"-12-31")
         .order("billing_period_start",{ascending:false});
-      setData(p ?? []);
+      setData(scopeRows(p ?? [], await getScopeIds(), function(x: any){ return x.contracts?.property_id; }));
     } else if (t==="tenants") {
       const { data: ten } = await supabase.from("tenants").select("*").order("name");
       setData(ten ?? []);
     } else if (t==="properties") {
       const { data: pr } = await supabase.from("properties").select("id,name,property_type,city,total_area,companies(company_name)").order("name");
-      setData(pr ?? []);
+      setData(scopeRows(pr ?? [], await getScopeIds(), function(x: any){ return x.id; }));
     } else if (t==="guarantees") {
       const { data: g } = await supabase.from("guarantees")
-        .select("id,guarantee_type,amount_required,amount_actual,status,end_date,contracts(tenants(name),properties(name))")
+        .select("id,guarantee_type,amount_required,amount_actual,status,end_date,contracts(property_id,tenants(name),properties(name))")
         .order("end_date");
-      setData(g ?? []);
+      setData(scopeRows(g ?? [], await getScopeIds(), function(x: any){ return x.contracts?.property_id; }));
     }
     setLoading(false);
   }

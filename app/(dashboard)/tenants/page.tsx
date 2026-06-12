@@ -5,6 +5,7 @@ import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit-log';
 import { fetchCpiAdjusted, fetchHighestChainedCpi } from '@/lib/cpi-server';
 import { PageHero } from '@/components/ui';
+import { getScopeIds, scopeRows } from '@/lib/permissions';
 import { getKnownIndexMonth } from '@/lib/cpi-utils';
 import CalcProgress, { CalcProgressState } from '@/components/CalcProgress';
 
@@ -43,13 +44,20 @@ export default function TenantsPage() {
     const [{ data: t }, { data: c }] = await Promise.all([
       supabase.from("tenants").select("*").order("name"),
       supabase.from("contracts")
-        .select("id, status, start_date, end_date, rent_per_sqm, charged_area, investment_addition, tenant_id, index_base_date, indexation_method, index_mechanism, properties(name)")
+        .select("id, property_id, status, start_date, end_date, rent_per_sqm, charged_area, investment_addition, tenant_id, index_base_date, indexation_method, index_mechanism, properties(name)")
         .in("status", ["active","expiring","extended","upcoming"]).order("end_date"),
     ]);
-    setTenants(t ?? []);
-    setContracts(c ?? []);
+    // Data-level scoping: a scoped user sees only tenants that hold at least
+    // one contract in an allowed property.
+    var scope = await getScopeIds();
+    var scC = scopeRows(c ?? [], scope, function(x: any){ return x.property_id; });
+    var tidOk: Record<string, boolean> = {};
+    scC.forEach(function(x: any){ if (x.tenant_id) tidOk[x.tenant_id] = true; });
+    var scT = scope === null ? (t ?? []) : (t ?? []).filter(function(x: any){ return !!tidOk[x.id]; });
+    setTenants(scT);
+    setContracts(scC);
     setLoading(false);
-    if (!selected && (t ?? []).length > 0) setSelected((t ?? [])[0].id);
+    if (!selected && scT.length > 0) setSelected(scT[0].id);
     // Per-contract CPI ratios. Group by (base date + mechanism) to dedupe
     // CBS calls; each contract still gets its own ratio.
     try {

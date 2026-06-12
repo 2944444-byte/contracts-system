@@ -5,6 +5,7 @@ import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit-log';
 import PropertyHierarchyFilter from '@/components/PropertyHierarchyFilter';
 import { PageHero } from '@/components/ui';
+import { getScopeIds, scopeRows } from '@/lib/permissions';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 const SPACE_TYPES = [{v:"office",l:"משרדים",icon:"💼"},{v:"retail",l:"מסחר",icon:"🏪"},{v:"store",l:"חנות",icon:"🏬"},{v:"warehouse",l:"מחסן",icon:"📦"},{v:"industrial",l:"תעשיה",icon:"🏭"},{v:"yard",l:"חצר פתוחה",icon:"🌳"},{v:"other",l:"אחר",icon:"🚪"}];
@@ -42,9 +43,13 @@ export default function UnitsPage() {
     const [{ data: sp }, { data: pr }, { data: c }] = await Promise.all([
       supabase.from("spaces").select("*, properties(name, total_area)").order("space_name"),
       supabase.from("properties").select("id,name,total_area").order("name"),
-      supabase.from("contracts").select("id,tenant_id,status,is_amendment,parent_contract_id,amendment_number,amendment_date,start_date,tenants(name),contract_spaces(space_id)").in("status",["active","expiring","extended"]),
+      supabase.from("contracts").select("id,property_id,tenant_id,status,is_amendment,parent_contract_id,amendment_number,amendment_date,start_date,tenants(name),contract_spaces(space_id)").in("status",["active","expiring","extended"]),
     ]);
-    setSpaces(sp??[]); setProperties(pr??[]); setContracts(c??[]); setLoading(false);
+    var scope = await getScopeIds();
+    setSpaces(scopeRows(sp??[], scope, function(x: any){ return x.property_id; }));
+    setProperties(scopeRows(pr??[], scope, function(x: any){ return x.id; }));
+    setContracts(scopeRows(c??[], scope, function(x: any){ return x.property_id; }));
+    setLoading(false);
   }
 
   function openNew() { setIsNew(true); setEditingId("new"); setFPropertyId(""); setFName(""); setFType("office"); setFArea(""); setFFloor(""); setFStatus("vacant"); setFNotes(""); }

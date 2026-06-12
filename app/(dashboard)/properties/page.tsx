@@ -5,6 +5,7 @@ import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit-log';
 import { fetchCpiAdjusted, fetchHighestChainedCpi } from '@/lib/cpi-server';
 import { PageHero } from '@/components/ui';
+import { getScopeIds, scopeRows } from '@/lib/permissions';
 import { getKnownIndexMonth } from '@/lib/cpi-utils';
 import CalcProgress, { CalcProgressState } from '@/components/CalcProgress';
 import PropertyBudgetManager from '@/components/PropertyBudgetManager';
@@ -167,15 +168,18 @@ export default function PropertiesPage() {
       supabase.from("spaces").select("id, property_id, status, space_name, area").order("space_name"),
       supabase.from("companies").select("id,company_name").order("company_name"),
     ]);
-    setProperties(p ?? []);
-    setContracts(c ?? []);
-    setSpaces(sp ?? []);
+    // Data-level scoping
+    var scope = await getScopeIds();
+    var scP = scopeRows(p ?? [], scope, function(x: any){ return x.id; });
+    setProperties(scP);
+    setContracts(scopeRows(c ?? [], scope, function(x: any){ return x.property_id; }));
+    setSpaces(scopeRows(sp ?? [], scope, function(x: any){ return x.property_id; }));
     setCompanies(co ?? []);
     // Load property groups separately
     var { data: g } = await supabase.from("property_groups").select("id,group_name").order("group_name");
     setPropertyGroups(g ?? []);
     setLoading(false);
-    if (!selected && (p??[]).length > 0) setSelected((p??[])[0].id);
+    if (!selected && scP.length > 0) setSelected(scP[0].id);
   }
 
   // Calculate base monthly rent for a contract (handles per-unit pricing)

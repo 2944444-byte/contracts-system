@@ -3,6 +3,7 @@ import { useState, useEffect } from "react";
 import { supabase } from '@/lib/supabase';
 import { getVatRates, vatPctAt, type VatRate } from '@/lib/vat';
 import { PageHero } from '@/components/ui';
+import { getScopeIds, scopeRows } from '@/lib/permissions';
 
 function fmtMoney(n: number) { return "₪" + (n ?? 0).toLocaleString("he-IL", { minimumFractionDigits: 0, maximumFractionDigits: 0 }); }
 function fmtPct(n: number) { return (Math.round(n * 10) / 10).toFixed(1) + "%"; }
@@ -117,12 +118,18 @@ export default function CashflowPage() {
     }
 
     const results = await Promise.all(promises);
-    setProperties(results[0].data || []);
-    setSpaces(results[1].data || []);
-    setContracts(results[2].data || []);
-    setAdvances(results[3].data || []);
-    setCharges(results[4].data || []);
-    setRevenues(results[5].data || []);
+    // Data-level scoping: totals must only include allowed properties.
+    var scope = await getScopeIds();
+    var scContracts = scopeRows(results[2].data || [], scope, function(c: any){ return c.property_id; });
+    var cidOk: Record<string, boolean> = {};
+    scContracts.forEach(function(c: any){ cidOk[c.id] = true; });
+    var byCid = function(r: any){ return scope === null || !!cidOk[r.contract_id]; };
+    setProperties(scopeRows(results[0].data || [], scope, function(p: any){ return p.id; }));
+    setSpaces(scopeRows(results[1].data || [], scope, function(s: any){ return s.property_id; }));
+    setContracts(scContracts);
+    setAdvances((results[3].data || []).filter(byCid));
+    setCharges((results[4].data || []).filter(byCid));
+    setRevenues((results[5].data || []).filter(byCid));
     if (compareYoY) {
       setAdvancesPrev(results[6]?.data || []);
       setChargesPrev(results[7]?.data || []);

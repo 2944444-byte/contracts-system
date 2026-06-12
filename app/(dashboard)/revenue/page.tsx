@@ -4,6 +4,7 @@ import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit-log';
 import { getVatRates, vatPctAt, type VatRate } from '@/lib/vat';
 import { PageHero } from '@/components/ui';
+import { getScopeIds, scopeRows } from '@/lib/permissions';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 function fmtMoney(n: number) { return (n && Math.abs(n) > 0.001) ? "₪"+n.toLocaleString("he-IL",{minimumFractionDigits:2,maximumFractionDigits:2}) : "—"; }
@@ -231,12 +232,14 @@ export default function RevenuePage() {
     var yearStart = selYear + "-01-01";
     var yearEnd   = (selYear + 1) + "-01-01"; // exclusive — avoids the Feb-31 bug entirely
     const [{ data: c }, { data: r }] = await Promise.all([
-      supabase.from("contracts").select("id,status,rent_type,revenue_pct,min_rent_per_sqm,charged_area,rent_per_sqm,investment_addition,vat_type,mgmt_fee_per_sqm,mgmt_included_in_revenue,tenants(name),properties(name)").in("status",["active","expiring","extended"]),
-      supabase.from("revenue_reports").select("*,contracts(tenants(name),properties(name))").gte("report_month",yearStart).lt("report_month",yearEnd).order("report_month",{ascending:true}),
+      supabase.from("contracts").select("id,property_id,status,rent_type,revenue_pct,min_rent_per_sqm,charged_area,rent_per_sqm,investment_addition,vat_type,mgmt_fee_per_sqm,mgmt_included_in_revenue,tenants(name),properties(name)").in("status",["active","expiring","extended"]),
+      supabase.from("revenue_reports").select("*,contracts(property_id,tenants(name),properties(name))").gte("report_month",yearStart).lt("report_month",yearEnd).order("report_month",{ascending:true}),
     ]);
-    var revenueContracts = (c??[]).filter(function(x){return x.rent_type==="revenue_based"||x.revenue_pct;});
+    var scope = await getScopeIds();
+    var scopedC = scopeRows(c??[], scope, function(x: any){ return x.property_id; });
+    var revenueContracts = scopedC.filter(function(x){return x.rent_type==="revenue_based"||x.revenue_pct;});
     setContracts(revenueContracts);
-    setReports(r??[]);
+    setReports(scopeRows(r??[], scope, function(x: any){ return x.contracts?.property_id; }));
     // Default-select the first revenue contract on first load
     if (!selContractId && revenueContracts.length > 0) setSelContractId(revenueContracts[0].id);
     setLoading(false);

@@ -8,6 +8,7 @@ import { PageHero } from '@/components/ui';
 import { fetchCpiAdjusted, fetchHighestChainedCpi } from '@/lib/cpi-server';
 import { calcChainingCoefficient, formatPeriod } from '@/lib/cpi-utils';
 import { getVatPct } from '@/lib/vat';
+import { getScopeIds, scopeRows } from '@/lib/permissions';
 import CalcProgress, { CalcProgressState } from '@/components/CalcProgress';
 import { buildPriceTimeline, calculateTierPreviews, buildSpaceRentSchedule, rentAtDate, type PriceTier } from '@/lib/contract-utils';
 // CPI + price timeline
@@ -167,7 +168,11 @@ export default function ContractsPage() {
     const { data } = await supabase.from("contracts")
       .select("*, tenants(name,phone,primary_email,company_name), properties(name,city), contract_options(id,option_number,duration_months,duration_years,start_date,end_date,notice_days_before_end,notice_type,status,is_exercised,rent_mechanism,rent_increase_pct,new_rent_value,option_group,exit_points,price_schedule_type,price_tiers), guarantees(id,guarantee_type,status,amount_required,amount_actual,end_date,bank,document_url), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,index_base_value,index_base_date,use_original_index,spaces(space_name,area))")
       .order("end_date");
-    setContracts(data??[]);
+    // Data-level scoping: managers/viewers see only contracts of their
+    // allowed properties (admin scope is null = everything).
+    var scope = await getScopeIds();
+    var scoped = scopeRows(data ?? [], scope, function(c: any){ return c.property_id; });
+    setContracts(scoped);
     setLoading(false);
     // Don't override a deep-linked selection (?select=) with the default pick —
     // this async callback closes over a stale `selected` (null on mount).

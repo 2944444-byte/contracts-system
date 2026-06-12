@@ -2,6 +2,7 @@
 import { useState, useEffect, useRef } from "react";
 import { supabase } from '@/lib/supabase';
 import { PageHero } from '@/components/ui';
+import { getScopeIds, scopeRows } from '@/lib/permissions';
 import { logAudit } from '@/lib/audit-log';
 
 const FILE_ICONS: Record<string,string> = {
@@ -53,14 +54,21 @@ export default function DocumentsPage() {
   async function loadAll() {
     const [{ data: d }, { data: c }] = await Promise.all([
       supabase.from("documents")
-        .select("*, contracts(tenants(name), properties(name))")
+        .select("*, contracts(property_id, tenants(name), properties(name))")
         .order("created_at", { ascending: false }),
       supabase.from("contracts")
-        .select("id, tenants(name), properties(name)")
+        .select("id, property_id, tenants(name), properties(name)")
         .in("status",["active","expiring","extended","upcoming"]),
     ]);
-    setDocs(d ?? []);
-    setContracts(c ?? []);
+    // Data-level scoping: contract-linked docs follow the contract's property;
+    // general docs (no contract) stay visible to everyone.
+    var scope = await getScopeIds();
+    var scopedDocs = scope === null ? (d ?? []) : (d ?? []).filter(function(x: any){
+      if (!x.contract_id) return true;
+      return scopeRows([x], scope, function(r: any){ return r.contracts?.property_id; }).length > 0;
+    });
+    setDocs(scopedDocs);
+    setContracts(scopeRows(c ?? [], scope, function(x: any){ return x.property_id; }));
     setLoading(false);
   }
 

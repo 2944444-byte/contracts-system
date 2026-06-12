@@ -3,6 +3,7 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from '@/lib/supabase';
 import { PageHero } from '@/components/ui';
+import { getScopeIds, scopeRows } from '@/lib/permissions';
 import { loadCompanyInfo, letterContent } from '@/lib/letter-format';
 import { logAudit } from '@/lib/audit-log';
 
@@ -90,12 +91,14 @@ export default function AlertsPage() {
   async function loadAlerts() {
     // due_date ascending = AGING order: most-overdue first, then nearest deadlines.
     const { data } = await supabase.from("alerts").select("*, contracts(property_id, tenants(name), properties(id,name))").order("due_date", {ascending: true, nullsFirst: false}).order("created_at",{ascending:false});
-    setAlerts(data??[]); setLoading(false);
+    var scope = await getScopeIds();
+    setAlerts(scopeRows(data??[], scope, function(a: any){ return a.property_id || a.contracts?.property_id; }));
+    setLoading(false);
     // Total money in arrears — computed live from charges (the source), not
     // from alert titles.
     var todayStr = new Date().toISOString().split("T")[0];
-    const { data: od } = await supabase.from("charges").select("total_amount").neq("status","paid").not("due_date","is",null).lt("due_date", todayStr);
-    var rows = od ?? [];
+    const { data: od } = await supabase.from("charges").select("total_amount, contracts(property_id)").neq("status","paid").not("due_date","is",null).lt("due_date", todayStr);
+    var rows = scopeRows(od ?? [], scope, function(x: any){ return x.contracts?.property_id; });
     setArrears({ count: rows.length, sum: rows.reduce(function(s: number, r: any){ return s + (Number(r.total_amount) || 0); }, 0) });
   }
 

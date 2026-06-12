@@ -4,6 +4,7 @@ import { supabase } from '@/lib/supabase';
 import { fetchCPI, fetchHighestCPI, calcIndexedRent, calcChainingCoefficient, getKnownIndexMonth, formatPeriod } from '@/lib/cpi-utils';
 import { getVatPctForDate } from '@/lib/vat';
 import { PageHero } from '@/components/ui';
+import { getScopeIds, scopeRows } from '@/lib/permissions';
 
 function fmtMoney(n: number) { return "₪" + (n ?? 0).toLocaleString("he-IL",{minimumFractionDigits:2,maximumFractionDigits:2}); }
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
@@ -22,10 +23,11 @@ export default function IndexationPage() {
 
   async function loadContracts() {
     const { data } = await supabase.from("contracts")
-      .select("id, index_base_value, index_base_date, rent_per_sqm, charged_area, investment_addition, index_mechanism, vat_type, tenants(name), properties(name)")
+      .select("id, property_id, index_base_value, index_base_date, rent_per_sqm, charged_area, investment_addition, index_mechanism, vat_type, tenants(name), properties(name)")
       .in("status", ["active","expiring","extended"])
       .not("index_base_value", "is", null);
-    setContracts(data ?? []);
+    var scope = await getScopeIds();
+    setContracts(scopeRows(data ?? [], scope, function(c: any){ return c.property_id; }));
     setLoading(false);
   }
 

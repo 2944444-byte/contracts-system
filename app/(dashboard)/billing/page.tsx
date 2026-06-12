@@ -9,6 +9,7 @@ import { getGraceDaysForProperty, dueDateFromGrace } from '@/lib/grace-days';
 import { getVatPct, getVatTypeMap, applyVat } from '@/lib/vat';
 import { loadCompanyInfo, letterContent } from '@/lib/letter-format';
 import { PageHero } from '@/components/ui';
+import { getScopeIds, scopeRows } from '@/lib/permissions';
 import AdvancesTab from '@/components/AdvancesTab';
 import CpiDiffTab from '@/components/CpiDiffTab';
 import SavedAdvancesTab from '@/components/SavedAdvancesTab';
@@ -55,7 +56,10 @@ export default function BillingPage() {
       .from("properties")
       .select("id, name, property_type, total_area, management_type")
       .order("name");
-    setProperties(data ?? []);
+    // Data-level scoping: only allowed properties appear; all tabs flow from
+    // the selected property, so this single filter scopes the whole screen.
+    var scope = await getScopeIds();
+    setProperties(scopeRows(data ?? [], scope, function(p: any){ return p.id; }));
     setLoading(false);
   }
 

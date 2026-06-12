@@ -3,6 +3,7 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from '@/lib/supabase';
 import { PageHero } from '@/components/ui';
+import { getScopeIds, scopeRows } from '@/lib/permissions';
 
 const MONTHS_HE = ["","ינו","פבר","מרץ","אפר","מאי","יונ","יול","אוג","ספט","אוק","נוב","דצמ"];
 
@@ -32,9 +33,10 @@ export default function TimelinePage() {
 
   async function loadContracts() {
     const { data } = await supabase.from("contracts")
-      .select("id, status, start_date, end_date, tenants(name), properties(name), contract_options(*)")
+      .select("id, property_id, status, start_date, end_date, tenants(name), properties(name), contract_options(*)")
       .order("start_date");
-    setContracts(data ?? []);
+    var scope = await getScopeIds();
+    setContracts(scopeRows(data ?? [], scope, function(c: any){ return c.property_id; }));
     setLoading(false);
   }
 

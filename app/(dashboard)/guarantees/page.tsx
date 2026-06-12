@@ -6,6 +6,7 @@ import PropertyHierarchyFilter from '@/components/PropertyHierarchyFilter';
 import { loadCompanyInfo, letterContent } from '@/lib/letter-format';
 import { computeGuaranteeRenewal, buildGuaranteeRenewalBody } from '@/lib/guarantee-letters';
 import { PageHero } from '@/components/ui';
+import { getScopeIds, scopeRows } from '@/lib/permissions';
 
 // Minimum months of rent that a guarantee should cover. Below this, the
 // row is flagged "underinsured". Industry norm in Israel is ~3 months.
@@ -113,7 +114,10 @@ export default function GuaranteesPage() {
         .in("status", ["active", "expiring", "extended", "upcoming"])
         .order("start_date", { ascending: false }),
     ]);
-    setGuarantees(g ?? []); setContracts(c ?? []); setLoading(false);
+    var scope = await getScopeIds();
+    setGuarantees(scopeRows(g ?? [], scope, function(x: any){ return x.contracts?.property_id; }));
+    setContracts(scopeRows(c ?? [], scope, function(x: any){ return x.property_id; }));
+    setLoading(false);
   }
 
   // Estimated monthly rent for a contract — sum of contract_spaces rent.
