@@ -83,15 +83,26 @@ export default function DocumentsPage() {
   const [fContractId, setFContractId] = useState("");
   const [fDocType,    setFDocType]    = useState("contract");
   const [fName,       setFName]       = useState("");
+  // Missing-docs tripwire: active contracts without a scan, guarantees without a doc.
+  const [missing, setMissing] = useState<Array<{ kind: string; label: string; contractId?: string; docType: string }>>([]);
+  const [dragOver, setDragOver] = useState(false);
+  const uploadRef = useRef<HTMLDivElement>(null);
 
-  useEffect(function() { loadAll(); }, []);
+  useEffect(function() {
+    loadAll();
+    // Deep link: /documents?contract=<id> opens the hub filtered to that contract.
+    try {
+      var c = new URLSearchParams(window.location.search).get("contract");
+      if (c) setFilterContract(c);
+    } catch (e) { /* noop */ }
+  }, []);
 
   async function loadAll() {
     const scope = await getScopeIds();
     const [docRes, conRes, guarRes, insTRes, insBRes, safRes, revRes] = await Promise.all([
       supabase.from("documents").select("*, contracts(property_id, tenants(name), properties(name))").order("created_at", { ascending: false }),
       supabase.from("contracts").select("id, document_url, property_id, status, start_date, tenants(name), properties(name), contract_spaces(spaces(space_name))").in("status", ["active","expiring","extended","upcoming","ended"]),
-      supabase.from("guarantees").select("id, document_url, documents, created_at, contract_id, contracts(property_id, tenants(name), properties(name))"),
+      supabase.from("guarantees").select("id, status, document_url, documents, created_at, contract_id, contracts(property_id, tenants(name), properties(name))"),
       supabase.from("insurances_tenant").select("id, certificate_url, documents, created_at, end_date, contract_id, contracts(property_id, tenants(name), properties(name))"),
       supabase.from("insurances_building").select("id, document_url, documents, created_at, end_date, property_id, properties(name)"),
       supabase.from("safety_inspections").select("id, document_url, documents, created_at, property_id, inspection_type, properties(name)"),
@@ -182,6 +193,24 @@ export default function DocumentsPage() {
       });
     });
 
+    // ── Missing-docs tripwire ──
+    // Active contracts without a scanned contract (no document_url and no
+    // 'contract' upload linked) + active guarantees without any document.
+    var hasContractUpload: Record<string, boolean> = {};
+    uploads.forEach(function(d: any){ if (d.contract_id && (d.doc_type === "contract")) hasContractUpload[d.contract_id] = true; });
+    var miss: Array<{ kind: string; label: string; contractId?: string; docType: string }> = [];
+    scopedContracts.forEach(function(c: any){
+      if (["active","expiring","extended"].indexOf(c.status) === -1) return;
+      if (c.document_url || hasContractUpload[c.id]) return;
+      miss.push({ kind: "חוזה ללא סריקה", label: (c.tenants?.name || "") + " — " + (c.properties?.name || ""), contractId: c.id, docType: "contract" });
+    });
+    scopeRows(guarRes.data ?? [], scope, function(g: any){ return g.contracts?.property_id; }).forEach(function(g: any){
+      if (g.status !== "active") return;
+      if (g.document_url || jsonbDocs(g.documents).length > 0) return;
+      miss.push({ kind: "ערבות ללא מסמך", label: (g.contracts?.tenants?.name || "") + " — " + (g.contracts?.properties?.name || ""), contractId: g.contract_id, docType: "guarantee" });
+    });
+    setMissing(miss);
+
     // Newest first; undated last.
     out.sort(function(a, b){
       if (!a.date && !b.date) return 0;
@@ -193,29 +222,44 @@ export default function DocumentsPage() {
     setLoading(false);
   }
 
-  async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  // Upload one or more files (file picker AND drag&drop share this). The
+  // descriptive name applies to a single file; multi-file uploads use each
+  // file's own name.
+  async function uploadFiles(files: FileList | File[]) {
+    var arr = Array.from(files);
+    if (!arr.length) return;
     setUploading(true);
     try {
-      const path = `docs/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
-      const { error: upErr } = await supabase.storage.from("documents").upload(path, file);
-      if (upErr) throw upErr;
-      const { data: urlData } = supabase.storage.from("documents").getPublicUrl(path);
-      const { data: doc, error: insErr } = await supabase.from("documents").insert({
-        contract_id: fContractId || null,
-        doc_type: fDocType,
-        title: fName.trim() || file.name,
-        file_url: urlData.publicUrl,
-        file_size: file.size,
-      }).select().single();
-      if (insErr) throw insErr;
-      await logAudit({ entity_type: "document", entity_id: doc.id, action: "upload" });
-      setFName(""); setFContractId(""); setFDocType("contract");
+      for (var i = 0; i < arr.length; i++) {
+        var file = arr[i];
+        const path = `docs/${Date.now()}_${i}_${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+        const { error: upErr } = await supabase.storage.from("documents").upload(path, file);
+        if (upErr) throw upErr;
+        const { data: urlData } = supabase.storage.from("documents").getPublicUrl(path);
+        const { data: doc, error: insErr } = await supabase.from("documents").insert({
+          contract_id: fContractId || null,
+          doc_type: fDocType,
+          title: (arr.length === 1 && fName.trim()) ? fName.trim() : file.name,
+          file_url: urlData.publicUrl,
+          file_size: file.size,
+        }).select().single();
+        if (insErr) throw insErr;
+        await logAudit({ entity_type: "document", entity_id: doc.id, action: "upload" });
+      }
+      setFName("");
       if (fileRef.current) fileRef.current.value = "";
       await loadAll();
     } catch (e: any) { alert("שגיאה: " + (e?.message || e)); }
     finally { setUploading(false); }
+  }
+  async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    if (e.target.files) await uploadFiles(e.target.files);
+  }
+  // Click on a missing-doc chip: pre-fill the upload form and scroll to it.
+  function fillUploadFor(m: { contractId?: string; docType: string }) {
+    setFContractId(m.contractId || "");
+    setFDocType(m.docType);
+    uploadRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
   }
 
   async function handleDelete(d: VDoc) {
@@ -250,11 +294,34 @@ export default function DocumentsPage() {
       <PageHero title="מסמכים" icon="📁" tone="slate"
         subtitle={docs.length + " מסמכים מכל המקורות" + (totalSize ? " | " + fmtSize(totalSize) + " הועלו" : "")} />
 
-      {/* Upload Area */}
-      <div className="rounded-xl border-2 border-dashed border-blue-200 bg-blue-50 p-5 mb-5">
+      {/* Missing-docs tripwire */}
+      {missing.length > 0 && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 mb-4">
+          <div className="text-sm font-bold text-amber-800 mb-2">⚠ {missing.length} מסמכים חסרים</div>
+          <div className="flex flex-wrap gap-1.5">
+            {missing.slice(0, 12).map(function(m, i){
+              return (
+                <button key={i} onClick={function(){ fillUploadFor(m); }}
+                  className="rounded-lg border border-amber-300 bg-white px-2.5 py-1 text-xs text-amber-800 hover:bg-amber-100"
+                  title="לחץ למילוי טופס ההעלאה עבור פריט זה">
+                  {m.kind === "חוזה ללא סריקה" ? "📄" : "🏦"} {m.kind}: {m.label}
+                </button>
+              );
+            })}
+            {missing.length > 12 && <span className="text-xs text-amber-600 self-center">+{missing.length - 12} נוספים</span>}
+          </div>
+        </div>
+      )}
+
+      {/* Upload Area — also a drag&drop target */}
+      <div ref={uploadRef}
+        onDragOver={function(e){ e.preventDefault(); setDragOver(true); }}
+        onDragLeave={function(){ setDragOver(false); }}
+        onDrop={function(e){ e.preventDefault(); setDragOver(false); if (e.dataTransfer?.files?.length) uploadFiles(e.dataTransfer.files); }}
+        className={"rounded-xl border-2 border-dashed p-5 mb-5 transition-colors " + (dragOver ? "border-blue-500 bg-blue-100" : "border-blue-200 bg-blue-50")}>
         <div className="flex items-center gap-3 mb-3">
           <span className="text-2xl">⬆️</span>
-          <h2 className="font-bold text-slate-800 text-sm">העלאת מסמך חדש</h2>
+          <h2 className="font-bold text-slate-800 text-sm">העלאת מסמכים <span className="font-normal text-slate-400">— בחר קבצים או גרור לכאן</span></h2>
         </div>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
           <div>
@@ -280,8 +347,8 @@ export default function DocumentsPage() {
           </div>
           <div className="flex flex-col justify-end">
             <label className={"w-full rounded-lg bg-blue-700 px-4 py-1.5 text-center text-xs font-bold text-white cursor-pointer hover:bg-blue-800 " + (uploading ? "opacity-50 pointer-events-none" : "")}>
-              {uploading ? "⏳ מעלה..." : "📎 בחר קובץ"}
-              <input ref={fileRef} type="file" className="hidden" onChange={handleUpload} disabled={uploading}
+              {uploading ? "⏳ מעלה..." : "📎 בחר קבצים"}
+              <input ref={fileRef} type="file" multiple className="hidden" onChange={handleUpload} disabled={uploading}
                 accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.gif,.zip,.rar" />
             </label>
           </div>

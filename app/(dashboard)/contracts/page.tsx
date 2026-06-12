@@ -1014,6 +1014,7 @@ export default function ContractsPage() {
                   <div className="flex gap-2 flex-wrap">
                     <button onClick={function(){router.push("/contracts/"+selContract.id+"/edit");}} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">✏️ עריכה</button>
                     <button onClick={function(){router.push("/contracts/"+selContract.id+"/print");}} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">🖨 הדפס</button>
+                    <button onClick={function(){router.push("/documents?contract="+selContract.id);}} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50" title="כל המסמכים של החוזה — סריקה, ערבויות, ביטוחים, העלאות">📁 מסמכים</button>
                     {selContract.document_url && (
                       <a href={selContract.document_url} target="_blank" rel="noopener noreferrer"
                         className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-600 hover:bg-blue-100">📄 צפה בחוזה</a>
