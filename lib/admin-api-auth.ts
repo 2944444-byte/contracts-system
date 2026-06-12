@@ -15,7 +15,7 @@ export function adminClient(): SupabaseClient | null {
   );
 }
 
-export async function callerRole(req: Request, admin: SupabaseClient): Promise<"admin" | "manager" | "viewer" | null> {
+export async function callerProfile(req: Request, admin: SupabaseClient): Promise<{ uid: string; role: "admin" | "manager" | "viewer"; isMaster: boolean } | null> {
   try {
     const auth = req.headers.get("authorization") || "";
     const token = auth.toLowerCase().startsWith("bearer ") ? auth.slice(7) : "";
@@ -23,12 +23,30 @@ export async function callerRole(req: Request, admin: SupabaseClient): Promise<"
     const { data } = await admin.auth.getUser(token);
     const uid = data?.user?.id;
     if (!uid) return null;
-    const { data: prof } = await admin.from("user_profiles").select("role,is_active").eq("id", uid).maybeSingle();
+    const { data: prof } = await admin.from("user_profiles").select("role,is_active,is_master").eq("id", uid).maybeSingle();
     if (!prof || prof.is_active === false) return null;
-    return prof.role === "admin" ? "admin" : prof.role === "manager" ? "manager" : "viewer";
+    const role = prof.role === "admin" ? "admin" : prof.role === "manager" ? "manager" : "viewer";
+    return { uid: uid, role: role, isMaster: !!prof.is_master };
   } catch (e) {
     return null;
   }
+}
+
+export async function callerRole(req: Request, admin: SupabaseClient): Promise<"admin" | "manager" | "viewer" | null> {
+  const p = await callerProfile(req, admin);
+  return p ? p.role : null;
+}
+
+// Is this admin UNRESTRICTED (master, or no scope rows)? A SCOPED admin must
+// not be able to create admins — that would let him mint an unrestricted one.
+export async function isUnrestrictedAdmin(p: { uid: string; role: string; isMaster: boolean }, admin: SupabaseClient): Promise<boolean> {
+  if (p.role !== "admin") return false;
+  if (p.isMaster) return true;
+  const [{ count: c1 }, { count: c2 }] = await Promise.all([
+    admin.from("user_company_access").select("id", { count: "exact", head: true }).eq("user_id", p.uid),
+    admin.from("user_property_access").select("id", { count: "exact", head: true }).eq("user_id", p.uid),
+  ]);
+  return ((c1 ?? 0) + (c2 ?? 0)) === 0;
 }
 
 export const SERVICE_KEY_MSG = "חסר מפתח SUPABASE_SERVICE_ROLE_KEY בהגדרות Vercel. היכנס ל-Supabase → Settings → API → העתק את ה-service_role key, הוסף אותו כ-Environment Variable בפרויקט ב-Vercel (Production+Preview) ובצע Redeploy.";

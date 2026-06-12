@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { adminClient, callerRole, SERVICE_KEY_MSG, FORBIDDEN_MSG } from "@/lib/admin-api-auth";
+import { adminClient, callerProfile, isUnrestrictedAdmin, SERVICE_KEY_MSG, FORBIDDEN_MSG } from "@/lib/admin-api-auth";
 
 export async function POST(req: NextRequest) {
   try {
@@ -12,12 +12,18 @@ export async function POST(req: NextRequest) {
     if (!admin) return NextResponse.json({ error: SERVICE_KEY_MSG }, { status: 500 });
 
     // Caller verification (this route runs with the service key — without this
-    // check anyone could create admins): admins create any role; managers may
-    // create VIEWERS only.
-    const caller = await callerRole(req, admin);
+    // check anyone could create admins): managers may create VIEWERS only;
+    // admins create managers/viewers; creating an ADMIN requires an
+    // UNRESTRICTED admin (master / no scope) — otherwise a scoped admin could
+    // mint an unrestricted admin and escape his scope.
+    const prof = await callerProfile(req, admin);
+    const caller = prof?.role ?? null;
     const newRole = role ?? "viewer";
     const allowed = caller === "admin" || (caller === "manager" && newRole === "viewer");
     if (!allowed) return NextResponse.json({ error: FORBIDDEN_MSG }, { status: 403 });
+    if (newRole === "admin" && !(prof && await isUnrestrictedAdmin(prof, admin))) {
+      return NextResponse.json({ error: "רק מנהל מערכת בלתי-מוגבל יכול להקים מנהלי מערכת" }, { status: 403 });
+    }
 
     const { data, error } = await admin.auth.admin.createUser({
       email,
