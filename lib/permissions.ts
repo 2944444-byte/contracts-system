@@ -181,3 +181,65 @@ export function scopeRows<T>(rows: T[], scope: string[] | null, getPid: (r: T) =
   scope.forEach(function (id) { set[id] = true; });
   return rows.filter(function (r) { const pid = getPid(r); return pid != null && !!set[pid]; });
 }
+
+// The COMPANY ids this user may see in dropdowns/filters: companies granted
+// directly ∪ companies that own a granted property. null = unrestricted.
+let _companyScopeCache: { uid: string | null; promise: Promise<string[] | null> } | null = null;
+export async function getCompanyScopeIds(): Promise<string[] | null> {
+  let uid: string | null = null;
+  try { const { data } = await supabase.auth.getSession(); uid = data?.session?.user?.id ?? null; } catch (e) { /* noop */ }
+  if (!_companyScopeCache || _companyScopeCache.uid !== uid) {
+    _companyScopeCache = {
+      uid: uid,
+      promise: (async function (): Promise<string[] | null> {
+        const access = await getCurrentAccess();
+        if (access.role === "admin") {
+          const unscoped = access.companyIds.length === 0 && access.propertyIds.length === 0;
+          if (!!access.profile?.is_master || unscoped) return null;
+        }
+        let ids = access.companyIds.slice();
+        if (access.propertyIds.length) {
+          const { data } = await supabase.from("properties").select("company_id").in("id", access.propertyIds);
+          (data ?? []).forEach(function (p: any) { if (p.company_id && ids.indexOf(p.company_id) === -1) ids.push(p.company_id); });
+        }
+        return ids;
+      })(),
+    };
+  }
+  return _companyScopeCache.promise;
+}
+
+// The TENANT ids this user may see in dropdowns/lists: tenants holding at
+// least one contract in an allowed property. null = unrestricted.
+let _tenantScopeCache: { uid: string | null; promise: Promise<string[] | null> } | null = null;
+export async function getTenantScopeIds(): Promise<string[] | null> {
+  let uid: string | null = null;
+  try { const { data } = await supabase.auth.getSession(); uid = data?.session?.user?.id ?? null; } catch (e) { /* noop */ }
+  if (!_tenantScopeCache || _tenantScopeCache.uid !== uid) {
+    _tenantScopeCache = {
+      uid: uid,
+      promise: (async function (): Promise<string[] | null> {
+        const scope = await getScopeIds();
+        if (scope === null) return null;
+        const set: Record<string, boolean> = {};
+        scope.forEach(function (id) { set[id] = true; });
+        const { data } = await supabase.from("contracts").select("tenant_id, property_id");
+        const ids: string[] = [];
+        (data ?? []).forEach(function (c: any) {
+          if (c.tenant_id && c.property_id && set[c.property_id] && ids.indexOf(c.tenant_id) === -1) ids.push(c.tenant_id);
+        });
+        return ids;
+      })(),
+    };
+  }
+  return _tenantScopeCache.promise;
+}
+
+// Groups that contain at least one allowed property (for group dropdowns).
+// Pass the FULL groups list + the ALREADY-SCOPED properties (with group_id).
+export function scopeGroups<T extends { id: any }>(groups: T[], scope: string[] | null, scopedProperties: Array<{ group_id?: any }>): T[] {
+  if (scope === null) return groups;
+  const used: Record<string, boolean> = {};
+  scopedProperties.forEach(function (p) { if (p.group_id) used[p.group_id] = true; });
+  return groups.filter(function (g) { return !!used[g.id]; });
+}

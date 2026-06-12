@@ -2,6 +2,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from '@/lib/supabase';
+import { getScopeIds, getTenantScopeIds, scopeRows } from '@/lib/permissions';
 
 type Result = {type:string;id:string;title:string;subtitle?:string;href:string;icon:string};
 
@@ -43,16 +44,22 @@ export default function GlobalSearch() {
   async function doSearch(q: string) {
     setLoading(true);
     const like="%"+q+"%";
-    const [{ data: t }, { data: p }, { data: c }, { data: g }] = await Promise.all([
-      supabase.from("tenants").select("id,name,company_name").ilike("name",like).limit(4),
-      supabase.from("properties").select("id,name,city").ilike("name",like).limit(3),
-      supabase.from("contracts").select("id,status,tenants(name),properties(name)").in("status",["active","expiring"]).limit(3),
-      supabase.from("guarantees").select("id,guarantee_type,contracts(tenants(name))").eq("status","active").limit(2),
+    // SCOPED search: results never reveal tenants/properties/contracts outside
+    // the user's allowed properties.
+    const [{ data: t }, { data: p }, { data: c }, scope, tScope] = await Promise.all([
+      supabase.from("tenants").select("id,name,company_name").ilike("name",like).limit(8),
+      supabase.from("properties").select("id,name,city").ilike("name",like).limit(8),
+      supabase.from("contracts").select("id,status,property_id,tenants(name),properties(name)").in("status",["active","expiring"]).limit(8),
+      getScopeIds(),
+      getTenantScopeIds(),
     ]);
+    const ts = (tScope === null) ? (t ?? []) : (t ?? []).filter(function(x: any){ return (tScope as any).indexOf(x.id) !== -1; });
+    const ps = scopeRows(p ?? [], scope as any, function(x: any){ return x.id; });
+    const cs = scopeRows(c ?? [], scope as any, function(x: any){ return x.property_id; });
     const res: Result[] = [];
-    (t??[]).forEach(function(x:any){res.push({type:"tenant",   id:x.id,title:x.name,subtitle:x.company_name,href:"/tenants",    icon:"👤"});});
-    (p??[]).forEach(function(x:any){res.push({type:"property", id:x.id,title:x.name,subtitle:x.city,         href:"/properties", icon:"🏢"});});
-    (c??[]).forEach(function(x:any){res.push({type:"contract", id:x.id,title:x.tenants?.name??"חוזה",subtitle:x.properties?.name,href:"/contracts",icon:"📄"});});
+    ts.slice(0,4).forEach(function(x:any){res.push({type:"tenant",   id:x.id,title:x.name,subtitle:x.company_name,href:"/tenants",    icon:"👤"});});
+    ps.slice(0,3).forEach(function(x:any){res.push({type:"property", id:x.id,title:x.name,subtitle:x.city,         href:"/properties", icon:"🏢"});});
+    cs.slice(0,3).forEach(function(x:any){res.push({type:"contract", id:x.id,title:x.tenants?.name??"חוזה",subtitle:x.properties?.name,href:"/contracts?select="+x.id,icon:"📄"});});
     setResults(res); setSel(0); setLoading(false);
   }
 

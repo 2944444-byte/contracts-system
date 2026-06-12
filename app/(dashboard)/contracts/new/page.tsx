@@ -2,6 +2,7 @@
 import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import { getScopeIds, getCompanyScopeIds, getTenantScopeIds, scopeRows, scopeGroups } from '@/lib/permissions';
 import { logAudit } from "@/lib/audit-log";
 import {
   calculateEndDate,
@@ -417,8 +418,11 @@ export default function ContractsNewPage() {
       supabase.from("cpi_records").select("year,month,value").order("year", { ascending: false }).order("month", { ascending: false }),
       supabase.from("vat_rates").select("rate_pct,effective_from,effective_to").order("effective_from", { ascending: false }).limit(1),
     ]);
-    setTenants(t ?? []);
-    setProperties(p ?? []);
+    // SCOPED dropdowns: only tenants/properties within the user's allowed scope.
+    var scope = await getScopeIds();
+    var tScope = await getTenantScopeIds();
+    setTenants(tScope === null ? (t ?? []) : (t ?? []).filter(function(x: any){ return tScope!.indexOf(x.id) !== -1; }));
+    setProperties(scopeRows(p ?? [], scope, function(x: any){ return x.id; }));
     setCpiRecords(cpi ?? []);
     if (vat && vat.length > 0) setCurrentVatPct(Number(vat[0].rate_pct));
   }
@@ -436,6 +440,7 @@ export default function ContractsNewPage() {
     if (error) { alert("שגיאה ביצירת שוכר: " + error.message); return; }
     setShowNewTenant(false);
     const { data: list } = await supabase.from("tenants").select("id,name,company_name").order("name");
+    // A tenant just created here is intentionally included even for scoped users.
     setTenants(list ?? []);
     if (inserted) setTenantId(inserted.id);
   }
@@ -453,7 +458,7 @@ export default function ContractsNewPage() {
     if (error) { alert("שגיאה ביצירת נכס: " + error.message); return; }
     setShowNewProperty(false);
     const { data: list } = await supabase.from("properties").select("id,name,city").order("name");
-    setProperties(list ?? []);
+    setProperties(scopeRows(list ?? [], await getScopeIds(), function(x: any){ return x.id; }).concat(inserted ? [inserted] : []).filter(function(x: any, i: number, arr: any[]){ return arr.findIndex(function(y: any){ return y.id === x.id; }) === i; }));
     if (inserted) setPropertyId(inserted.id);
   }
 

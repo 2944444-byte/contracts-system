@@ -2,7 +2,7 @@
 import { useState, useEffect } from "react";
 import { supabase } from '@/lib/supabase';
 import { PageHero } from '@/components/ui';
-import { getScopeIds, scopeRows } from '@/lib/permissions';
+import { getScopeIds, getCompanyScopeIds, getTenantScopeIds, scopeRows, scopeGroups } from '@/lib/permissions';
 import { logAudit } from '@/lib/audit-log';
 import PropertyHierarchyFilter from '@/components/PropertyHierarchyFilter';
 
@@ -43,9 +43,11 @@ export default function ParkingPage() {
       supabase.from("tenants").select("id,name").order("name"),
     ]);
     var scope = await getScopeIds();
+    var tScope = await getTenantScopeIds();
     setSubs(scopeRows(s ?? [], scope, function(x: any){ return x.property_id; }));
     setProperties(scopeRows(p ?? [], scope, function(x: any){ return x.id; }));
-    setTenants(t ?? []); setLoading(false);
+    setTenants(tScope === null ? (t ?? []) : (t ?? []).filter(function(x: any){ return tScope!.indexOf(x.id) !== -1; }));
+    setLoading(false);
   }
 
   function openNew() {

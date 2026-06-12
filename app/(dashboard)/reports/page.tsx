@@ -2,7 +2,7 @@
 import { useState, useEffect } from "react";
 import { supabase } from '@/lib/supabase';
 import { PageHero } from '@/components/ui';
-import { getScopeIds, scopeRows } from '@/lib/permissions';
+import { getScopeIds, getCompanyScopeIds, getTenantScopeIds, scopeRows, scopeGroups } from '@/lib/permissions';
 
 const TABS = [
   {id:"contracts",  label:"חוזים",       icon:"📄"},
@@ -46,7 +46,8 @@ export default function ReportsPage() {
       setData(scopeRows(p ?? [], await getScopeIds(), function(x: any){ return x.contracts?.property_id; }));
     } else if (t==="tenants") {
       const { data: ten } = await supabase.from("tenants").select("*").order("name");
-      setData(ten ?? []);
+      var tScope = await getTenantScopeIds();
+      setData(tScope === null ? (ten ?? []) : (ten ?? []).filter(function(x: any){ return tScope!.indexOf(x.id) !== -1; }));
     } else if (t==="properties") {
       const { data: pr } = await supabase.from("properties").select("id,name,property_type,city,total_area,companies(company_name)").order("name");
       setData(scopeRows(pr ?? [], await getScopeIds(), function(x: any){ return x.id; }));

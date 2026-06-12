@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import { getScopeIds, getCompanyScopeIds, getTenantScopeIds, scopeRows, scopeGroups } from '@/lib/permissions';
 import { logAudit } from "@/lib/audit-log";
 import {
   calculateEndDate,
@@ -250,8 +251,11 @@ export default function ContractEditPage() {
       supabase.from("cpi_records").select("year,month,value").order("year", { ascending: false }).order("month", { ascending: false }),
       supabase.from("vat_rates").select("rate_pct,effective_from,effective_to").order("effective_from", { ascending: false }).limit(1),
     ]);
-    setTenants(t ?? []);
-    setProperties(p ?? []);
+    // SCOPED dropdowns: only tenants/properties within the user's allowed scope.
+    var scope = await getScopeIds();
+    var tScope = await getTenantScopeIds();
+    setTenants(tScope === null ? (t ?? []) : (t ?? []).filter(function(x: any){ return tScope!.indexOf(x.id) !== -1; }));
+    setProperties(scopeRows(p ?? [], scope, function(x: any){ return x.id; }));
     setCpiRecords(cpi ?? []);
     if (vatData && vatData.length > 0) setCurrentVatPct(Number(vatData[0].rate_pct));
 
@@ -591,7 +595,7 @@ export default function ContractEditPage() {
     if (error) { alert("שגיאה ביצירת נכס: " + error.message); return; }
     setShowNewProperty(false);
     const { data: list } = await supabase.from("properties").select("id,name,city").order("name");
-    setProperties(list ?? []);
+    setProperties(scopeRows(list ?? [], await getScopeIds(), function(x: any){ return x.id; }).concat(inserted ? [inserted] : []).filter(function(x: any, i: number, arr: any[]){ return arr.findIndex(function(y: any){ return y.id === x.id; }) === i; }));
     if (inserted) setPropertyId(inserted.id);
   }
 

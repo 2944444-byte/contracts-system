@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
+import { getScopeIds, getCompanyScopeIds, scopeRows, scopeGroups } from "@/lib/permissions";
 
 /**
  * Shared hierarchy filter component: קבוצה → חברה → נכס
@@ -43,13 +44,19 @@ export default function PropertyHierarchyFilter({ onChange, showGroupFilter }: P
       supabase.from("property_groups").select("id,group_name,company_id").order("group_name"),
       supabase.from("companies").select("id,company_name").order("company_name"),
       supabase.from("properties").select("id,name,company_id,group_id").order("name"),
-    ]).then(function([g, c, p]) {
-      setGroups(g.data ?? []);
-      setCompanies(c.data ?? []);
-      setProperties(p.data ?? []);
+      getScopeIds(),
+      getCompanyScopeIds(),
+    ]).then(function([g, c, p, scope, companyScope]) {
+      // SCOPED: this shared filter feeds every screen's dropdowns — a limited
+      // user must only ever see his own groups/companies/properties here.
+      var scopedProps = scopeRows(p.data ?? [], scope as any, function(prop: any){ return prop.id; });
+      var scopedComps = (companyScope === null) ? (c.data ?? []) : (c.data ?? []).filter(function(comp: any){ return (companyScope as any).indexOf(comp.id) !== -1; });
+      setGroups(scopeGroups(g.data ?? [], scope as any, scopedProps));
+      setCompanies(scopedComps);
+      setProperties(scopedProps);
       setLoaded(true);
-      // Initial callback with all properties
-      var allIds = (p.data ?? []).map(function(prop: any) { return prop.id; });
+      // Initial callback with all (scoped) properties
+      var allIds = scopedProps.map(function(prop: any) { return prop.id; });
       onChange({ groupId: "all", companyId: "all", propertyId: "all", propertyIds: allIds });
     });
   }, []);

@@ -2,7 +2,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from '@/lib/supabase';
-import { getScopeIds, scopeRows } from '@/lib/permissions';
+import { getScopeIds, getCompanyScopeIds, getTenantScopeIds, scopeRows, scopeGroups } from '@/lib/permissions';
 import { fetchCpiAdjusted, fetchHighestChainedCpi } from '@/lib/cpi-server';
 import { getKnownIndexMonth } from '@/lib/cpi-utils';
 import CalcProgress, { CalcProgressState } from '@/components/CalcProgress';
@@ -62,8 +62,9 @@ export default function DashboardPage() {
     var cidOk: Record<string, boolean> = {};
     scC.forEach(function(x: any){ cidOk[x.id] = true; });
     var byCid = function(r: any){ return scope === null || !!cidOk[r.contract_id]; };
-    setPropGroups(pg ?? []);
-    setProperties(scopeRows(p ?? [], scope, function(x: any){ return x.id; }));
+    var scP = scopeRows(p ?? [], scope, function(x: any){ return x.id; });
+    setPropGroups(scopeGroups(pg ?? [], scope, scP));
+    setProperties(scP);
     setContracts(scC.filter(function(c:any){return !c.is_amendment;}));
     setSpaces(scopeRows(sp ?? [], scope, function(x: any){ return x.property_id; }));
     setGuarantees((gu ?? []).filter(byCid));

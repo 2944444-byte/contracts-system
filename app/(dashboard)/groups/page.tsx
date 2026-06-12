@@ -3,7 +3,7 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from '@/lib/supabase';
 import { PageHero } from '@/components/ui';
-import { getScopeIds, scopeRows } from '@/lib/permissions';
+import { getScopeIds, getCompanyScopeIds, getTenantScopeIds, scopeRows, scopeGroups } from '@/lib/permissions';
 import { logAudit } from '@/lib/audit-log';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
@@ -53,8 +53,9 @@ export default function GroupsPage() {
     var scC = scopeRows(c??[], scope, function(x: any){ return x.property_id; });
     var cidOk: Record<string, boolean> = {};
     scC.forEach(function(x: any){ cidOk[x.id] = true; });
-    setGroups(g??[]);
-    setProperties(scopeRows(p??[], scope, function(x: any){ return x.id; }));
+    var scP = scopeRows(p??[], scope, function(x: any){ return x.id; });
+    setGroups(scopeGroups(g??[], scope, scP));
+    setProperties(scP);
     setContracts(scC);
     setSpaces(scopeRows(sp??[], scope, function(x: any){ return x.property_id; }));
     setGuarantees((gu??[]).filter(function(x: any){ return scope === null || !!cidOk[x.contract_id]; }));
