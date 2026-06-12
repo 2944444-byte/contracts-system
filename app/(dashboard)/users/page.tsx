@@ -179,13 +179,23 @@ export default function UsersPage() {
     window.location.href = "mailto:" + encodeURIComponent(c.email) + "?subject=" + encodeURIComponent("פרטי גישה למערכת PropManager") + "&body=" + encodeURIComponent(body);
   }
 
+  // The master can do everything — except locking the system out of itself:
+  // you can't deactivate/delete YOURSELF, nor remove the last remaining admin.
+  function isSelf(u: any): boolean { return !!me?.profile?.id && u.id === me.profile.id; }
+  function isLastAdmin(u: any): boolean {
+    return u.role === "admin" && users.filter(function(x){ return x.role === "admin" && x.is_active; }).length <= 1;
+  }
   async function toggleActive(u: any) {
+    if (u.is_active && isSelf(u)) { alert("לא ניתן להשבית את המשתמש שאיתו אתה מחובר"); return; }
+    if (u.is_active && isLastAdmin(u)) { alert("לא ניתן להשבית את מנהל המערכת האחרון"); return; }
     await supabase.from("user_profiles").update({ is_active: !u.is_active }).eq("id", u.id);
     await logAudit({ entity_type: "user", entity_id: u.id, action: u.is_active ? "deactivate" : "activate" });
     await loadAll();
   }
   async function deleteUser(u: any) {
     if (myRole !== "admin") { alert("רק מנהל מערכת יכול למחוק משתמשים"); return; }
+    if (isSelf(u)) { alert("לא ניתן למחוק את המשתמש שאיתו אתה מחובר"); return; }
+    if (isLastAdmin(u)) { alert("לא ניתן למחוק את מנהל המערכת האחרון"); return; }
     if (!confirm("למחוק לצמיתות את " + (u.full_name || u.email) + "? פעולה זו אינה הפיכה.")) return;
     setSaving(true);
     try {

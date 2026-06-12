@@ -53,11 +53,25 @@ export async function getCurrentAccess(): Promise<CurrentAccess> {
     const { data: au } = await supabase.auth.getUser();
     const uid = au?.user?.id;
     if (!uid) return { profile: null, role: "admin", permissions: {}, companyIds: [], propertyIds: [] };
-    const [{ data: prof }, { data: comps }, { data: props }] = await Promise.all([
+    let [{ data: prof }, { data: comps }, { data: props }] = await Promise.all([
       supabase.from("user_profiles").select("*").eq("id", uid).maybeSingle(),
       supabase.from("user_company_access").select("company_id").eq("user_id", uid),
       supabase.from("user_property_access").select("property_id").eq("user_id", uid),
     ]);
+    // Bootstrap guard: a logged-in user with NO profile row would be locked out
+    // as a viewer. If the system has no admin at all, this user IS the master —
+    // self-heal by creating an admin profile (prevents the master-lockout that
+    // happened when user_profiles was empty). When admins exist, a missing
+    // profile stays restricted (safe default).
+    if (!prof) {
+      const { data: admins } = await supabase.from("user_profiles").select("id").eq("role", "admin").limit(1);
+      if (!admins || admins.length === 0) {
+        const { data: created } = await supabase.from("user_profiles")
+          .upsert({ id: uid, email: au?.user?.email ?? "", full_name: au?.user?.user_metadata?.full_name ?? au?.user?.email ?? "", role: "admin", is_active: true })
+          .select().maybeSingle();
+        prof = created ?? { id: uid, role: "admin", permissions: {} };
+      }
+    }
     const role = (prof?.role === "admin" || prof?.role === "manager" || prof?.role === "viewer") ? prof.role : "viewer";
     return {
       profile: prof ?? null,
