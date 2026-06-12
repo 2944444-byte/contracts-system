@@ -3,7 +3,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState, useEffect } from "react";
 import { supabase } from '@/lib/supabase';
-import { canAccessRoute } from '@/lib/permissions';
+import { canAccessRoute, getScopeIds, scopeRows } from '@/lib/permissions';
 import { useAccess } from '@/components/AccessProvider';
 
 type NavItem = {href:string;label:string;icon:string} | {section:string};
@@ -75,13 +75,16 @@ export default function Sidebar() {
 
   useEffect(function() {
     async function loadBadges() {
-      const [{ count: p }, { count: a }] = await Promise.all([
-        supabase.from("charges").select("id",{count:"exact",head:true}).eq("status","pending"),
+      // Badge counts are SCOPED — a user limited to one property must not see
+      // counts that include other properties' charges/alerts.
+      const scope = await getScopeIds();
+      const [{ data: ch }, { data: al }] = await Promise.all([
+        supabase.from("charges").select("id,contracts(property_id)").eq("status","pending"),
         // Unread open alerts only — read-but-open alerts stop inflating the badge.
-        supabase.from("alerts").select("id",{count:"exact",head:true}).eq("is_resolved",false).is("read_at", null),
+        supabase.from("alerts").select("id,property_id,contracts(property_id)").eq("is_resolved",false).is("read_at", null),
       ]);
-      setPendingPay(p??0);
-      setOpenAlerts(a??0);
+      setPendingPay(scopeRows(ch ?? [], scope, function(r: any){ return r.contracts?.property_id; }).length);
+      setOpenAlerts(scopeRows(al ?? [], scope, function(a: any){ return a.property_id || a.contracts?.property_id; }).length);
     }
     loadBadges();
     const interval = setInterval(loadBadges, 120000);

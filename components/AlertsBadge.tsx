@@ -2,6 +2,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from '@/lib/supabase';
+import { getScopeIds, scopeRows } from '@/lib/permissions';
 
 export default function AlertsBadge() {
   const router = useRouter();
@@ -18,9 +19,11 @@ export default function AlertsBadge() {
   async function loadCount() {
     // Count UNREAD open alerts — marked-read alerts stop inflating the badge;
     // an escalation resets read_at so the alert counts (and pops) again.
+    // SCOPED: only alerts of the user's allowed properties are counted.
+    const scope = await getScopeIds();
     const { data } = await supabase.from("alerts")
-      .select("id,severity").eq("is_resolved",false).is("read_at", null);
-    const all = data ?? [];
+      .select("id,severity,property_id,contracts(property_id)").eq("is_resolved",false).is("read_at", null);
+    const all = scopeRows(data ?? [], scope, function(a: any){ return a.property_id || a.contracts?.property_id; });
     setCount(all.length);
     setUrgent(all.filter(function(a){return a.severity==="urgent";}).length);
   }

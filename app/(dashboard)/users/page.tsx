@@ -110,6 +110,35 @@ export default function UsersPage() {
     return properties.filter(function(p){ return myProps.indexOf(p.id) !== -1 || myComps.indexOf(p.company_id) !== -1; });
   }
 
+  // ── Which users THIS user may see ──
+  // Admin: everyone. Manager: himself + users at his level or BELOW (managers/
+  // viewers, never admins) whose entire scope is within his own allowed
+  // companies/properties; unassigned users are visible only if he created them.
+  function myEffectivePropIds(): Record<string, boolean> {
+    var ok: Record<string, boolean> = {};
+    (me?.propertyIds || []).forEach(function(id){ ok[id] = true; });
+    var myComps = me?.companyIds || [];
+    properties.forEach(function(p){ if (myComps.indexOf(p.company_id) !== -1) ok[p.id] = true; });
+    return ok;
+  }
+  const visibleUsers = (function() {
+    if (myRole === "admin") return users;
+    var propOk = myEffectivePropIds();
+    var compOk: Record<string, boolean> = {};
+    (me?.companyIds || []).forEach(function(c){ compOk[c] = true; });
+    return users.filter(function(u){
+      if (me?.profile?.id && u.id === me.profile.id) return true;          // self
+      if (u.role === "admin") return false;                                 // above my level
+      var sc = scopes[u.id] || { companyIds: [], propertyIds: [] };
+      if (sc.companyIds.length === 0 && sc.propertyIds.length === 0) {
+        return u.created_by === me?.profile?.id;                            // unassigned: only mine
+      }
+      var compsOk = sc.companyIds.every(function(cid){ return !!compOk[cid]; });
+      var propsOk = sc.propertyIds.every(function(pid){ return !!propOk[pid]; });
+      return compsOk && propsOk;
+    });
+  })();
+
   // ── Scope persistence (shared by create + edit) ──
   async function saveScopeAndPerms(userId: string, role: string, comps: Record<string, boolean>, props: Record<string, boolean>, perms: Record<string, boolean>) {
     // permissions live on the profile
@@ -322,7 +351,7 @@ export default function UsersPage() {
 
   return (
     <div dir="rtl">
-      <PageHero title="משתמשים" icon="👥" tone="slate" subtitle={users.length + " משתמשים"}
+      <PageHero title="משתמשים" icon="👥" tone="slate" subtitle={visibleUsers.length + " משתמשים"}
         actions={<button onClick={openCreate} className="rounded-xl bg-white text-slate-700 px-4 py-2 text-sm font-bold hover:bg-slate-100 shadow-sm">+ משתמש</button>} />
 
       {msg && <div className="mb-4 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm font-semibold text-green-700">{msg}</div>}
@@ -330,7 +359,7 @@ export default function UsersPage() {
       {/* KPI per role */}
       <div className="grid grid-cols-3 gap-3 mb-5">
         {ROLES.map(function(r){
-          var cnt = users.filter(function(u){ return u.role === r.v; }).length;
+          var cnt = visibleUsers.filter(function(u){ return u.role === r.v; }).length;
           return <div key={r.v} className="rounded-xl border border-slate-200 bg-white p-3 text-center" title={r.desc}>
             <div className="text-2xl">{r.icon}</div>
             <div className="text-2xl font-black text-slate-700">{cnt}</div>
@@ -342,7 +371,7 @@ export default function UsersPage() {
       {/* Users table */}
       {loading ? (
         <div className="flex items-center justify-center gap-2 py-12 text-slate-400 text-sm"><span className="inline-block w-4 h-4 rounded-full border-2 border-slate-200 border-t-blue-600 animate-spin" aria-label="loading"></span>טוען...</div>
-      ) : users.length === 0 ? (
+      ) : visibleUsers.length === 0 ? (
         <div className="rounded-xl border-2 border-dashed border-slate-200 bg-white p-12 text-center text-slate-400">
           <div className="text-5xl mb-3">👥</div><div>אין משתמשים — צור את הראשון</div>
         </div>
@@ -360,7 +389,7 @@ export default function UsersPage() {
               </tr>
             </thead>
             <tbody>
-              {users.map(function(u){
+              {visibleUsers.map(function(u){
                 var ri = roleInfo(u.role);
                 var sc = scopes[u.id] || { companyIds: [], propertyIds: [] };
                 var perms = (u.permissions && typeof u.permissions === "object") ? u.permissions : {};
