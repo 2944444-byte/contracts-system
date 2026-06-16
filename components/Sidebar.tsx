@@ -5,6 +5,7 @@ import { useState, useEffect } from "react";
 import { supabase } from '@/lib/supabase';
 import { canAccessRoute, getScopeIds, scopeRows } from '@/lib/permissions';
 import { useAccess } from '@/components/AccessProvider';
+import { useMobileNav } from '@/components/MobileNav';
 
 type NavItem = {href:string;label:string;icon:string} | {section:string};
 
@@ -47,6 +48,7 @@ export default function Sidebar() {
   const pathname = usePathname();
   const router   = useRouter();
   const { access } = useAccess();
+  const { open, setOpen } = useMobileNav();
   const [pendingPay, setPendingPay] = useState(0);
   const [openAlerts, setOpenAlerts] = useState(0);
 
@@ -102,9 +104,21 @@ export default function Sidebar() {
   };
 
   return (
-    <aside className="w-56 shrink-0 bg-white border-l border-slate-100 flex flex-col h-screen sticky top-0 shadow-sm" dir="rtl">
+    <>
+      {/* Mobile overlay — tap to close. Never shown on desktop. */}
+      {open && <div className="fixed inset-0 z-40 bg-slate-900/40 lg:hidden" onClick={function(){ setOpen(false); }} aria-hidden="true" />}
+      <aside
+        dir="rtl"
+        className={
+          // Mobile: fixed off-canvas drawer (slides from the right in RTL).
+          "fixed inset-y-0 right-0 z-50 w-64 max-w-[82vw] shadow-xl transition-transform duration-200 " +
+          // Desktop (lg+): IDENTICAL to before — static w-56 sticky sidebar.
+          "lg:static lg:inset-auto lg:z-auto lg:w-56 lg:max-w-none lg:shadow-sm lg:transition-none lg:translate-x-0 lg:sticky lg:top-0 " +
+          "shrink-0 bg-white border-l border-slate-100 flex flex-col h-screen " +
+          (open ? "translate-x-0" : "translate-x-full lg:translate-x-0")
+        }>
       {/* Logo */}
-      <div className="px-4 py-4 border-b border-slate-100">
+      <div className="px-4 py-4 border-b border-slate-100 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-lg shrink-0">🏙️</div>
           <div>
@@ -112,6 +126,8 @@ export default function Sidebar() {
             <div className="text-xs text-slate-400 leading-tight">v4.0</div>
           </div>
         </div>
+        {/* Close button — mobile only */}
+        <button onClick={function(){ setOpen(false); }} className="lg:hidden text-slate-400 hover:text-slate-600 text-xl px-1" aria-label="סגור תפריט">✕</button>
       </div>
 
       {/* Nav */}
@@ -146,6 +162,7 @@ export default function Sidebar() {
           <span>🚪</span><span>יציאה</span>
         </button>
       </div>
-    </aside>
+      </aside>
+    </>
   );
 }
