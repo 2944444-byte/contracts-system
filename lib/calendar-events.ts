@@ -9,6 +9,7 @@ export type CalEvent = {
   date: string;          // YYYY-MM-DD (all-day)
   label: string;
   type: keyof typeof EVENT_TYPES;
+  propertyId?: string;   // for per-property filtering (always set when known)
   refId?: string;        // source record id (for dedup + deep links)
   contractId?: string;
   targetDate?: string;   // for "pre" reminders: the actual end/expiry date
@@ -58,55 +59,58 @@ export type RawCalData = {
 // alert row was generated.
 export function deriveEvents(data: RawCalData, from: string, to: string): CalEvent[] {
   var ev: CalEvent[] = [];
-  var push = function(date: string, label: string, type: CalEventType, refId?: string, contractId?: string, targetDate?: string) {
-    if (inRange(date, from, to)) ev.push({ date: date, label: label, type: type, refId: refId, contractId: contractId, targetDate: targetDate });
+  var push = function(date: string, label: string, type: CalEventType, propertyId?: string, refId?: string, contractId?: string, targetDate?: string) {
+    if (inRange(date, from, to)) ev.push({ date: date, label: label, type: type, propertyId: propertyId, refId: refId, contractId: contractId, targetDate: targetDate });
   };
 
   (data.contracts || []).forEach(function(c: any) {
     var name = c.tenants?.name || "";
+    var pid = c.property_id;
     if (c.end_date) {
-      push(dOnly(c.end_date), "סיום: " + name, "contract_end", c.id, c.id);
-      push(shift(c.end_date, 0, -6), "מסתיים בעוד ~6 ח': " + name, "contract_pre6", c.id, c.id, dOnly(c.end_date));
+      push(dOnly(c.end_date), "סיום: " + name, "contract_end", pid, c.id, c.id);
+      push(shift(c.end_date, 0, -6), "מסתיים בעוד ~6 ח': " + name, "contract_pre6", pid, c.id, c.id, dOnly(c.end_date));
     }
-    if (c.start_date) push(dOnly(c.start_date), "תחילה: " + name, "contract_start", c.id, c.id);
+    if (c.start_date) push(dOnly(c.start_date), "תחילה: " + name, "contract_start", pid, c.id, c.id);
   });
 
   (data.guarantees || []).forEach(function(g: any) {
     if (!g.end_date) return;
     var name = g.contracts?.tenants?.name || "";
-    push(dOnly(g.end_date), "ערבות פגה: " + name, "guarantee_end", g.id, g.contract_id);
-    push(shift(g.end_date, -30, 0), "ערבות פגה בעוד 30 יום: " + name, "guarantee_pre30", g.id, g.contract_id, dOnly(g.end_date));
+    var pid = g.contracts?.property_id;
+    push(dOnly(g.end_date), "ערבות פגה: " + name, "guarantee_end", pid, g.id, g.contract_id);
+    push(shift(g.end_date, -30, 0), "ערבות פגה בעוד 30 יום: " + name, "guarantee_pre30", pid, g.id, g.contract_id, dOnly(g.end_date));
   });
 
   (data.insT || []).forEach(function(i: any) {
     if (!i.end_date) return;
     var name = i.contracts?.tenants?.name || "";
-    push(dOnly(i.end_date), "ביטוח שוכר פג: " + name, "insurance_end", i.id, i.contract_id);
-    push(shift(i.end_date, -30, 0), "ביטוח שוכר פג בעוד 30 יום: " + name, "insurance_pre30", i.id, i.contract_id, dOnly(i.end_date));
+    var pid = i.contracts?.property_id;
+    push(dOnly(i.end_date), "ביטוח שוכר פג: " + name, "insurance_end", pid, i.id, i.contract_id);
+    push(shift(i.end_date, -30, 0), "ביטוח שוכר פג בעוד 30 יום: " + name, "insurance_pre30", pid, i.id, i.contract_id, dOnly(i.end_date));
   });
 
   (data.insB || []).forEach(function(i: any) {
     if (!i.end_date) return;
     var name = i.properties?.name || "";
-    push(dOnly(i.end_date), "ביטוח מבנה פג: " + name, "insurance_end", i.id);
-    push(shift(i.end_date, -30, 0), "ביטוח מבנה פג בעוד 30 יום: " + name, "insurance_pre30", i.id, undefined, dOnly(i.end_date));
+    push(dOnly(i.end_date), "ביטוח מבנה פג: " + name, "insurance_end", i.property_id, i.id);
+    push(shift(i.end_date, -30, 0), "ביטוח מבנה פג בעוד 30 יום: " + name, "insurance_pre30", i.property_id, i.id, undefined, dOnly(i.end_date));
   });
 
   (data.safety || []).forEach(function(s: any) {
     if (!s.next_inspection_date) return;
     var name = s.properties?.name || s.inspection_type || "";
-    push(dOnly(s.next_inspection_date), "בדיקת בטיחות: " + name, "safety_due", s.id);
+    push(dOnly(s.next_inspection_date), "בדיקת בטיחות: " + name, "safety_due", s.property_id, s.id);
   });
 
   (data.options || []).forEach(function(o: any) {
     if (!o.notice_deadline) return;
     var name = o.contracts?.tenants?.name || "";
-    push(dOnly(o.notice_deadline), "מועד הודעת אופציה: " + name, "option_notice", o.id, o.contract_id);
+    push(dOnly(o.notice_deadline), "מועד הודעת אופציה: " + name, "option_notice", o.contracts?.property_id, o.id, o.contract_id);
   });
 
   (data.alerts || []).forEach(function(a: any) {
     if (!a.due_date) return;
-    push(dOnly(a.due_date), a.title || "התראה", "alert", a.id);
+    push(dOnly(a.due_date), a.title || "התראה", "alert", a.property_id || a.contracts?.property_id, a.id);
   });
 
   // Dedup identical (date+type+label) — alerts can echo a derived reminder.

@@ -40,6 +40,14 @@ export async function GET(req: NextRequest) {
     }
     scope = ids;
   }
+
+  // Optional per-property feed (?property=<id>). Only narrow if the property is
+  // within the caller's allowed scope — otherwise ignore it (never widen access).
+  const propertyParam = req.nextUrl.searchParams.get("property");
+  if (propertyParam && (scope === null || scope.indexOf(propertyParam) !== -1)) {
+    scope = [propertyParam];
+  }
+
   const keep = function (rows: any[], getPid: (r: any) => any) {
     if (scope === null) return rows;
     return rows.filter(function (r: any) { return (scope as string[]).indexOf(getPid(r)) !== -1; });

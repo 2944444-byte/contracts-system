@@ -25,6 +25,8 @@ export default function CalendarPage() {
   const [month, setMonth] = useState(today.getMonth() + 1);
   const [view,  setView]  = useState<"month" | "year">("month");
   const [events,  setEvents]  = useState<CalEvent[]>([]);
+  const [properties, setProperties] = useState<any[]>([]);
+  const [propFilter, setPropFilter] = useState("");   // "" = all properties (within scope)
   const [loading, setLoading] = useState(true);
   const [sel, setSel] = useState<string | null>(null);
   // Which event types are visible (all on by default).
@@ -33,7 +35,6 @@ export default function CalendarPage() {
   });
   const [feedUrl, setFeedUrl] = useState("");
   const [showSub, setShowSub] = useState(false);
-  const [copied, setCopied] = useState(false);
 
   useEffect(function () { loadEvents(); }, [year]);
   useEffect(function () { loadFeed(); }, []);
@@ -62,7 +63,7 @@ export default function CalendarPage() {
     const from = yStart < todayISO ? yStart : todayISO;
     const to   = yEnd > horizonEnd ? yEnd : horizonEnd;
 
-    const [c, g, it, ib, sf, op, al] = await Promise.all([
+    const [c, g, it, ib, sf, op, al, pr] = await Promise.all([
       supabase.from("contracts").select("id, end_date, start_date, status, property_id, tenants(name)").in("status", ["active","expiring","extended","upcoming","ended"]),
       supabase.from("guarantees").select("id, end_date, contract_id, contracts(property_id, tenants(name))").eq("status","active").not("end_date","is",null),
       supabase.from("insurances_tenant").select("id, end_date, contract_id, contracts(property_id, tenants(name))").eq("status","active").not("end_date","is",null),
@@ -70,9 +71,11 @@ export default function CalendarPage() {
       supabase.from("safety_inspections").select("id, next_inspection_date, inspection_type, property_id, properties(name)").not("next_inspection_date","is",null),
       supabase.from("contract_options").select("id, notice_deadline, status, contract_id, contracts(property_id, tenants(name))").not("notice_deadline","is",null).not("status","in","(exercised,declined,expired)"),
       supabase.from("alerts").select("id, title, due_date, severity, property_id, contracts(property_id)").eq("is_resolved",false).not("due_date","is",null),
+      supabase.from("properties").select("id, name").order("name"),
     ]);
 
     const scope = await getScopeIds();
+    setProperties(scopeRows(pr.data ?? [], scope, function (r: any) { return r.id; }));
     const pid = function (r: any) { return r.property_id || r.contracts?.property_id; };
     const data = {
       contracts:  scopeRows(c.data ?? [],  scope, function (r: any) { return r.property_id; }),
@@ -88,7 +91,11 @@ export default function CalendarPage() {
     setLoading(false);
   }
 
-  const visible = events.filter(function (e) { return enabled[e.type]; });
+  const visible = events.filter(function (e) {
+    if (!enabled[e.type]) return false;
+    if (propFilter && e.propertyId !== propFilter) return false;
+    return true;
+  });
 
   function prevMonth() { if (month === 1) { setYear(year - 1); setMonth(12); } else setMonth(month - 1); }
   function nextMonth() { if (month === 12) { setYear(year + 1); setMonth(1); } else setMonth(month + 1); }
@@ -139,6 +146,19 @@ export default function CalendarPage() {
             <button onClick={function () { setShowSub(true); }} className="rounded-xl bg-white/15 backdrop-blur border border-white/25 px-3 py-2 text-sm font-bold text-white hover:bg-white/25">🔗 סנכרון</button>
           </div>
         } />
+
+      {/* Property filter — only properties the user is allowed to see appear. */}
+      {properties.length > 0 && (
+        <div className="mb-3 flex items-center gap-2 flex-wrap">
+          <span className="text-sm font-semibold text-slate-600 shrink-0">🏢 נכס:</span>
+          <select value={propFilter} onChange={function (e) { setPropFilter(e.target.value); }}
+            className="w-full sm:w-72 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-right text-slate-800">
+            <option value="">כל הנכסים ({properties.length})</option>
+            {properties.map(function (p: any) { return <option key={p.id} value={p.id}>{p.name}</option>; })}
+          </select>
+          {propFilter && <button onClick={function () { setPropFilter(""); }} className="text-xs text-blue-600 font-semibold shrink-0">✕ נקה</button>}
+        </div>
+      )}
 
       {/* Legend + type filter */}
       <div className="mb-4 flex flex-wrap gap-1.5">
@@ -222,8 +242,8 @@ export default function CalendarPage() {
         </div>
       </div>
 
-      {showSub && <SubscribeModal feedUrl={feedUrl} copied={copied}
-        onCopy={function () { if (feedUrl) { navigator.clipboard.writeText(feedUrl); setCopied(true); setTimeout(function () { setCopied(false); }, 2000); } }}
+      {showSub && <SubscribeModal feedUrl={feedUrl} propFilter={propFilter}
+        propName={(properties.find(function (p: any) { return p.id === propFilter; }) || {}).name}
         onClose={function () { setShowSub(false); }} />}
     </div>
   );
@@ -353,8 +373,14 @@ function EventRow(props: { e: CalEvent; todayISO: string; withDate: boolean }) {
 }
 
 // ── Subscribe (ICS feed) modal ───────────────────────────────────────────────
-function SubscribeModal(props: { feedUrl: string; copied: boolean; onCopy: () => void; onClose: () => void }) {
-  const webcal = props.feedUrl.replace(/^https?:\/\//, "webcal://");
+function SubscribeModal(props: { feedUrl: string; propFilter: string; propName?: string; onClose: () => void }) {
+  const [scopeChoice, setScopeChoice] = useState<"all" | "prop">(props.propFilter ? "prop" : "all");
+  const [copied, setCopied] = useState(false);
+  // When a property is selected, offer either the full feed or a property-only
+  // feed (?property=<id>) — validated server-side against the user's scope.
+  const url = (scopeChoice === "prop" && props.propFilter) ? (props.feedUrl + "&property=" + props.propFilter) : props.feedUrl;
+  const webcal = url.replace(/^https?:\/\//, "webcal://");
+  function copy() { if (url) { navigator.clipboard.writeText(url); setCopied(true); setTimeout(function () { setCopied(false); }, 2000); } }
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/40 flex items-center justify-center p-4" onClick={props.onClose}>
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-6" dir="rtl" onClick={function (e) { e.stopPropagation(); }}>
@@ -363,15 +389,21 @@ function SubscribeModal(props: { feedUrl: string; copied: boolean; onCopy: () =>
           <button onClick={props.onClose} className="text-slate-400 hover:text-slate-600 text-xl">✕</button>
         </div>
         <p className="text-sm text-slate-500 mb-4 leading-relaxed">
-          הירשם לכתובת הזו ביומן שלך — כל האירועים (סיומי חוזה, ערבויות, ביטוחים, בדיקות בטיחות, אופציות והתראות) יופיעו אוטומטית, וההתראות ינוהלו ע"י היומן האישי שלך. הקישור אישי וסודי — אל תשתף אותו.
+          הירשם לכתובת הזו ביומן שלך — האירועים (סיומי חוזה, ערבויות, ביטוחים, בדיקות בטיחות, אופציות והתראות) יופיעו אוטומטית, וההתראות ינוהלו ע"י היומן האישי שלך. הקישור אישי וסודי, ומציג רק נכסים שמורשים לך — אל תשתף אותו.
         </p>
+        {props.propFilter && props.propName && (
+          <div className="flex gap-1.5 mb-3">
+            <button onClick={function () { setScopeChoice("all"); }} className={"rounded-lg border px-3 py-1.5 text-xs font-semibold " + (scopeChoice === "all" ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-200 text-slate-600")}>כל הנכסים שלי</button>
+            <button onClick={function () { setScopeChoice("prop"); }} className={"rounded-lg border px-3 py-1.5 text-xs font-semibold " + (scopeChoice === "prop" ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-200 text-slate-600")}>רק: {props.propName}</button>
+          </div>
+        )}
         {!props.feedUrl ? (
           <div className="text-sm text-slate-400">טוען קישור...</div>
         ) : (
           <>
             <div className="flex gap-2 mb-4">
-              <input readOnly value={props.feedUrl} className="flex-1 min-w-0 rounded-lg border border-slate-300 px-3 py-2 text-xs text-slate-600 bg-slate-50" />
-              <button onClick={props.onCopy} className="rounded-lg bg-blue-600 text-white px-4 py-2 text-sm font-bold hover:bg-blue-700 shrink-0">{props.copied ? "✓ הועתק" : "העתק"}</button>
+              <input readOnly value={url} className="flex-1 min-w-0 rounded-lg border border-slate-300 px-3 py-2 text-xs text-slate-600 bg-slate-50" />
+              <button onClick={copy} className="rounded-lg bg-blue-600 text-white px-4 py-2 text-sm font-bold hover:bg-blue-700 shrink-0">{copied ? "✓ הועתק" : "העתק"}</button>
             </div>
             <div className="space-y-2 text-sm">
               <a href={webcal} className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2.5 hover:bg-slate-50">📅 <span className="font-semibold text-slate-700">הוסף ל-Apple / Outlook</span><span className="text-xs text-slate-400">(webcal)</span></a>
