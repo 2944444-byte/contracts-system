@@ -2446,7 +2446,7 @@ function WasteTab({ properties }: { properties: any[] }) {
     <div className="space-y-6">
       <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
         <h2 className="text-lg font-bold text-slate-800 mb-4">{"פינוי אשפה"}</h2>
-        <div className="grid grid-cols-3 gap-4 mb-4">
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-4">
           <div>
             <label className="mb-1 block text-xs font-semibold text-slate-700">{"נכס"}</label>
             <select value={propId} onChange={function (e) { setPropId(e.target.value); }} className={ic}>

@@ -671,7 +671,7 @@ export default function PaymentsPage() {
           past due_date), שולמו. The "approved" intermediate state was confusing
           to the user — they expected ✓ to mean "paid". We now drive ✓ directly
           to paid, and treat "approved" rows the same as "pending" in the KPIs. */}
-      <div className="grid grid-cols-3 gap-3 mb-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-4">
         {[
           { f: "pending",  label: "לתשלום", amount: totalPending + totalApproved,  count: pendingCount + rows.filter(function(r){return r.status==="approved";}).length, color: "text-slate-700", bg: "bg-white" },
           { f: "overdue",  label: "באיחור (מעל ימי החסד)",  amount: totalOverdue,  count: overdueCount, color: "text-red-700",   bg: "bg-red-50" },

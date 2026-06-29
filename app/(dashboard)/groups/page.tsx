@@ -192,7 +192,7 @@ export default function GroupsPage() {
                   </div>
 
                   {/* KPIs */}
-                  <div className="grid grid-cols-5 gap-2">
+                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
                     <div className="rounded-xl p-3 text-center border border-green-200 bg-green-50">
                       <div className="text-base font-bold text-green-800">{fmtMoney(totalRevenue)}</div>
                       <div className="text-xs text-green-600">הכנסה חודשית</div>
@@ -218,7 +218,7 @@ export default function GroupsPage() {
                   </div>
 
                   {/* Additional info row */}
-                  <div className="grid grid-cols-3 gap-3 mt-3 text-xs">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mt-3 text-xs">
                     <div className="flex justify-between border-b border-slate-100 pb-1">
                       <span className="text-slate-500">סה"כ שטח</span>
                       <span className="font-semibold text-slate-700">{totalArea.toLocaleString("he-IL")} מ"ר</span>

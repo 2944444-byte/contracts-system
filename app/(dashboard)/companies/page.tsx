@@ -164,7 +164,7 @@ export default function CompaniesPage() {
                 <div className="col-span-2"><label className="mb-1 block text-xs font-semibold text-slate-700">הערות</label><textarea value={fNotes} onChange={function(e){setFNotes(e.target.value);}} rows={2} className={ic}/></div>
                 <div className="col-span-2 border-t border-slate-200 pt-3 mt-1">
                   <div className="text-xs font-bold text-slate-600 mb-2">🏦 פרטי בנק (למכתבי דרישה)</div>
-                  <div className="grid grid-cols-3 gap-3">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                     <div><label className="mb-1 block text-xs text-slate-600">שם בנק</label><input value={fBankName} onChange={function(e){setFBankName(e.target.value);}} className={ic} placeholder="בנק הפועלים"/></div>
                     <div><label className="mb-1 block text-xs text-slate-600">סניף</label><input value={fBankBranch} onChange={function(e){setFBankBranch(e.target.value);}} className={ic} placeholder="159"/></div>
                     <div><label className="mb-1 block text-xs text-slate-600">מס׳ חשבון</label><input value={fBankAccount} onChange={function(e){setFBankAccount(e.target.value);}} className={ic} placeholder="15156"/></div>

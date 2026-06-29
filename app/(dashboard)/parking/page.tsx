@@ -137,7 +137,7 @@ export default function ParkingPage() {
         subtitle={totalAllocated + " מקומות | " + rentedQty + " מושכרים | " + (totalAllocated - rentedQty) + " פנויים"} />
 
       {/* Stats */}
-      <div className="grid grid-cols-4 gap-3 mb-5">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
         {[
           { label: "מושכרים", value: String(rentedQty), color: "text-green-700", bg: "bg-green-50" },
           { label: "פנויים", value: String(totalAllocated - rentedQty), color: "text-blue-700", bg: "bg-blue-50" },
@@ -180,7 +180,7 @@ export default function ParkingPage() {
                     <h3 className="text-lg font-bold text-slate-800">🅿️ {group.prop.name}</h3>
                     <span className="text-xs text-slate-400">{declared > 0 ? declared + " מקומות מוגדרים" : allocatedQty + " מקומות"}</span>
                   </div>
-                  <div className="grid grid-cols-3 gap-2">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                     <div className="rounded-lg bg-green-50 border border-green-100 p-2 text-center">
                       <div className="text-sm font-black text-green-700">{rentedInProp}</div>
                       <div className="text-[10px] text-green-600">מושכרים</div>

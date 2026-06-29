@@ -321,7 +321,7 @@ export default function AlertsPage() {
       )}
 
       {/* KPI */}
-      <div className="grid grid-cols-3 gap-3 mb-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-4">
         {[
           {l:"דחופות",   v:urgentOpen,  bg:"bg-red-50",    border:"border-red-200",   c:"text-red-700",    f:"urgent"},
           {l:"אזהרות",   v:warningOpen, bg:"bg-yellow-50", border:"border-yellow-200",c:"text-yellow-700", f:"warning"},

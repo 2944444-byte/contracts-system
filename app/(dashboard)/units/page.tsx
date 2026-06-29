@@ -153,7 +153,7 @@ export default function UnitsPage() {
         actionLabel="+ יחידה" onAction={openNew} />
 
       {/* Global stats */}
-      <div className="grid grid-cols-4 gap-3 mb-5">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
         {[
           {label:"מושכרות",value:String(occupied),pct:spaces.length>0?Math.round(occupied/spaces.length*100):0,color:"text-green-700",bg:"bg-green-50"},
           {label:"פנויות",value:String(vacant),pct:spaces.length>0?Math.round(vacant/spaces.length*100):0,color:"text-blue-700",bg:"bg-blue-50"},
@@ -190,7 +190,7 @@ export default function UnitsPage() {
                     <h3 className="text-lg font-bold text-slate-800">🏢 {group.prop.name}</h3>
                     <span className="text-xs text-slate-400">{propSpaces.length} יחידות</span>
                   </div>
-                  <div className="grid grid-cols-4 gap-2">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                     <div className="rounded-lg bg-green-50 border border-green-100 p-2 text-center">
                       <div className="text-sm font-black text-green-700">{propOccupied}</div>
                       <div className="text-[10px] text-green-600">מושכרות</div>
@@ -248,7 +248,7 @@ export default function UnitsPage() {
             <div className="p-6 space-y-3">
               <div><label className="mb-1 block text-xs font-semibold text-slate-700">נכס *</label><select value={fPropertyId} onChange={function(e){setFPropertyId(e.target.value);}} className={ic}><option value="">-- בחר --</option>{properties.map(function(p){return <option key={p.id} value={p.id}>{p.name}</option>;})}</select></div>
               <div><label className="mb-1 block text-xs font-semibold text-slate-700">שם *</label><input type="text" value={fName} onChange={function(e){setFName(e.target.value);}} className={ic}/></div>
-              <div><label className="mb-1 block text-xs font-semibold text-slate-700">סוג יחידה</label><div className="grid grid-cols-3 gap-1.5">{SPACE_TYPES.map(function(t){return <button key={t.v} type="button" onClick={function(){setFType(t.v);}} className={"rounded-lg border p-1.5 text-center "+(fType===t.v?"border-blue-500 bg-blue-50":"border-slate-200")}><div>{t.icon}</div><div className={"text-xs "+(fType===t.v?"text-blue-700 font-bold":"text-slate-500")}>{t.l}</div></button>;})}</div></div>
+              <div><label className="mb-1 block text-xs font-semibold text-slate-700">סוג יחידה</label><div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">{SPACE_TYPES.map(function(t){return <button key={t.v} type="button" onClick={function(){setFType(t.v);}} className={"rounded-lg border p-1.5 text-center "+(fType===t.v?"border-blue-500 bg-blue-50":"border-slate-200")}><div>{t.icon}</div><div className={"text-xs "+(fType===t.v?"text-blue-700 font-bold":"text-slate-500")}>{t.l}</div></button>;})}</div></div>
               <div className="grid grid-cols-2 gap-3">
                 <div><label className="mb-1 block text-xs font-semibold text-slate-700">שטח (מ"ר)</label><input type="number" value={fArea} onChange={function(e){setFArea(e.target.value);}} className={ic}/></div>
                 <div><label className="mb-1 block text-xs font-semibold text-slate-700">קומה</label><input type="number" value={fFloor} onChange={function(e){setFFloor(e.target.value);}} className={ic}/></div>

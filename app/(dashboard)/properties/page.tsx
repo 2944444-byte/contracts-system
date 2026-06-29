@@ -389,7 +389,7 @@ export default function PropertiesPage() {
                 {/* KPI. The revenue cards explicitly say "חודשי" + show the
                     annual extrapolation underneath — the user previously
                     couldn't tell whether the number was monthly or yearly. */}
-                <div className="grid grid-cols-5 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
                   {[
                     {
                       label: cpiLoading ? "מחשב הצמדה..." : "שכ\"ד חודשי צמוד",
@@ -419,7 +419,7 @@ export default function PropertiesPage() {
                 </div>
 
                 {/* פרטים נוספים */}
-                <div className="grid grid-cols-3 gap-2 mt-3 text-xs">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-3 text-xs">
                   {[
                     {l:"סוג",    v:typeInfo(selProp.property_type).l},
                     {l:"שטח",   v:selProp.total_area ? selProp.total_area+' מ"ר' : "—"},
@@ -449,7 +449,7 @@ export default function PropertiesPage() {
                     <span className="font-semibold text-slate-700 text-sm">יחידות ({selSpaces.length})</span>
                     <button onClick={function(){router.push("/units?propertyId="+selProp.id);}} className="text-xs text-blue-600 hover:underline">נהל →</button>
                   </div>
-                  <div className="px-5 py-3 grid grid-cols-3 gap-2">
+                  <div className="px-5 py-3 grid grid-cols-2 sm:grid-cols-3 gap-2">
                     {[
                       {label:"מושכרות", count:selOccupied,                               color:"text-green-600"},
                       {label:"פנויות",  count:selVacant.length, color:"text-blue-600"},
@@ -588,7 +588,7 @@ export default function PropertiesPage() {
               </div>
               <div>
                 <label className="mb-2 block text-xs font-semibold text-slate-700">סוג נכס</label>
-                <div className="grid grid-cols-5 gap-1.5">
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-1.5">
                   {PROP_TYPES.map(function(t) {
                     return (
                       <button key={t.v} type="button" onClick={function(){setFType(t.v);}}

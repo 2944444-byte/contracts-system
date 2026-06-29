@@ -277,7 +277,7 @@ export default function TenantsPage() {
                   </div>
                 )}
                 {/* KPI */}
-                <div className="grid grid-cols-3 gap-3 mb-4">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-4">
                   {[
                     { label: "חוזים פעילים",    value: String(selContracts.length),  color: "text-slate-800", bg: "bg-slate-50"  },
                     { label: "הכנסה חודשית צמודה", value: fmtMoney(selRevenue),          color: "text-green-700", bg: "bg-green-50"  },

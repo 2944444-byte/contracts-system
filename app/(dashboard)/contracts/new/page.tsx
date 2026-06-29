@@ -1082,7 +1082,7 @@ export default function ContractsNewPage() {
               <label className="mb-2 block text-xs font-semibold text-slate-700">
                 סוג חוזה
               </label>
-              <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
+              <div className="grid grid-cols-2 sm:grid-cols-3 sm:grid-cols-5 gap-2">
                 {CONTRACT_TYPES.map((ct) => (
                   <button
                     key={ct.v}
@@ -1162,7 +1162,7 @@ export default function ContractsNewPage() {
                     + יחידה חדשה
                   </button>
                 </div>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                   {spaces.map((s) => {
                     const sel = selSpaces.includes(s.id);
                     return (
@@ -1220,7 +1220,7 @@ export default function ContractsNewPage() {
             {hasFutureHandover && (
               <div className="rounded-lg border border-amber-200 bg-amber-50/50 p-3 mb-3 space-y-3">
                 <div className="text-xs font-bold text-amber-800">📋 פרטי מסירה</div>
-                <div className="grid grid-cols-3 gap-3">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                   <div>
                     <label className="mb-1 block text-[10px] font-semibold text-slate-600">תאריך חתימה</label>
                     <input type="date" value={signingDate} onChange={(e) => setSigningDate(e.target.value)} className={ic} />
@@ -1492,7 +1492,7 @@ export default function ContractsNewPage() {
                 <div className="text-xs font-bold text-blue-700 mb-2">
                   תצוגת שכ&quot;ד חודשי
                 </div>
-                <div className="grid grid-cols-3 gap-3 text-center">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-center">
                   {[
                     { l: 'שכ"ד בסיס', v: fmtMoney(baseRent) },
                     { l: 'מע"מ', v: fmtMoney(vat) },
@@ -2455,7 +2455,7 @@ export default function ContractsNewPage() {
                                     }} className="text-xs text-red-500">הסר</button>
                                   )}
                                 </div>
-                                <div className="grid grid-cols-4 gap-2">
+                                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                                   <div>
                                     <label className="mb-1 block text-xs text-slate-500">משנה</label>
                                     <input type="number" min="1" max={optYears} value={tier.from_year}
@@ -2725,7 +2725,7 @@ export default function ContractsNewPage() {
             {addGuarantee && (
               <div className="space-y-3">
                 {/* Guarantee type */}
-                <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-3 sm:grid-cols-5 gap-2">
                   {GUARANTEE_TYPES.map((t) => (
                     <button
                       key={t.v}

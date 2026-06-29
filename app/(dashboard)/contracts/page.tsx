@@ -1109,7 +1109,7 @@ export default function ContractsPage() {
                 )}
 
                 {/* KPI — redesigned */}
-                <div className="grid grid-cols-4 gap-2 mb-3">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
                   <div className="rounded-xl p-2.5 text-center border border-green-200 bg-green-50">
                     <div className="text-base text-green-800 font-bold">{fmtMoney(displayRent)}</div>
                     <div className="text-xs text-green-600">{cpiAdjustedRent > 0 ? "כולל הצמדה" : "בסיס"}</div>

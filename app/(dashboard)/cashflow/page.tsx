@@ -409,7 +409,7 @@ export default function CashflowPage() {
       </div>
 
       {/* KPI strip */}
-      <div className="grid grid-cols-5 gap-3 mb-5">
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-5">
         <div className="rounded-xl border border-slate-200 bg-white p-4 text-center shadow-sm">
           <div className="text-xl font-black text-slate-800">{fmtMoney(totalPotential)}</div>
           <div className="text-xs text-slate-400 mt-0.5">הכנסה שנתית פוטנציאלית</div>

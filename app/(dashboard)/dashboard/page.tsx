@@ -376,7 +376,7 @@ export default function DashboardPage() {
             {/* Quick actions */}
             <div className="rounded-2xl border border-slate-200 bg-white shadow-sm p-4">
               <div className="font-bold text-slate-700 text-sm mb-3">⚡ פעולות מהירות</div>
-              <div className="grid grid-cols-3 gap-2 mb-3">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-3">
                 {QUICK.map(function(q) {
                   return (
                     <button key={q.href} onClick={function(){router.push(q.href);}}
@@ -386,7 +386,7 @@ export default function DashboardPage() {
                   );
                 })}
               </div>
-              <div className="border-t border-slate-100 pt-3 grid grid-cols-4 gap-1.5">
+              <div className="border-t border-slate-100 pt-3 grid grid-cols-2 sm:grid-cols-4 gap-1.5">
                 {LINKS.map(function(l) {
                   return (
                     <button key={l.href} onClick={function(){router.push(l.href);}}

@@ -447,7 +447,7 @@ export default function SafetyPage() {
       )}
 
       {/* KPI — clickable filters */}
-      <div className="grid grid-cols-4 gap-3 mb-5">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
         {[
           {f:"all",     label:"סה\"כ",       value:propScoped.length, color:"text-slate-600", bg:"bg-white"},
           {f:"valid",   label:"תקינות",     value:valid.length,    color:"text-green-700", bg:"bg-white"},
@@ -655,7 +655,7 @@ export default function SafetyPage() {
 
               <div>
                 <label className="mb-2 block text-xs font-semibold text-slate-700">שיוך בדיקה</label>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                   {SCOPES.map(function(s) {
                     return (
                       <button key={s.v} type="button" title={s.desc} onClick={function(){
@@ -675,7 +675,7 @@ export default function SafetyPage() {
               {fScope === "unit" && fPropertyId && spaces.length > 0 && (
                 <div>
                   <label className="mb-2 block text-xs font-semibold text-slate-700">בחר יחידות *</label>
-                  <div className="grid grid-cols-3 gap-1.5 max-h-40 overflow-y-auto">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 max-h-40 overflow-y-auto">
                     {spaces.map(function(sp) {
                       const sel = fSelectedSpaces.includes(sp.id);
                       return (
@@ -701,7 +701,7 @@ export default function SafetyPage() {
 
               <div>
                 <label className="mb-2 block text-xs font-semibold text-slate-700">סוג בדיקה</label>
-                <div className="grid grid-cols-4 gap-1.5">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
                   {INSPECTION_TYPES.map(function(t) {
                     return (
                       <button key={t.v} type="button" onClick={function(){setFType(t.v);}}

@@ -642,7 +642,7 @@ export default function InsurancesPage() {
       )}
 
       {/* KPI — clickable filters */}
-      <div className="grid grid-cols-4 gap-3 mb-5">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
         {[
           {f:"all",     label:"הכל",        value:propFiltered.length, color:"text-slate-600", bg:"bg-white"},
           {f:"active",  label:"פעילים",     value:active.length,       color:"text-green-700", bg:"bg-white"},

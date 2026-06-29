@@ -412,7 +412,7 @@ export default function UsersPage() {
       {msg && <div className="mb-4 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm font-semibold text-green-700">{msg}</div>}
 
       {/* KPI per role */}
-      <div className="grid grid-cols-3 gap-3 mb-5">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-5">
         {ROLES.map(function(r){
           var cnt = visibleUsers.filter(function(u){ return u.role === r.v; }).length;
           return <div key={r.v} className="rounded-xl border border-slate-200 bg-white p-3 text-center" title={r.desc}>
@@ -537,7 +537,7 @@ export default function UsersPage() {
 
               <div>
                 <div className="text-xs font-bold text-slate-700 mb-1.5">תפקיד</div>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                   {ROLES.map(function(r){
                     var allowed = r.v === "viewer" ? canCreateViewers : r.v === "manager" ? canCreateManagers : canCreateAdmins;
                     var on = fRole === r.v;

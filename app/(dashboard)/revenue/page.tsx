@@ -607,7 +607,7 @@ export default function RevenuePage() {
       ) : (
         <>
           {/* KPI strip */}
-          <div className={"grid gap-3 mb-5 " + (hasAnyMgmt ? "grid-cols-4" : "grid-cols-3")}>
+          <div className={"grid gap-3 mb-5 " + (hasAnyMgmt ? "grid-cols-2 sm:grid-cols-4" : "grid-cols-2 sm:grid-cols-3")}>
             <div className="rounded-xl border border-slate-200 bg-white shadow-sm p-4 text-center">
               <div className="text-2xl font-black text-slate-700">{fmtMoney(totGross)}</div>
               <div className="text-xs text-slate-400 mt-1">מחזור ברוטו {selYear}</div>

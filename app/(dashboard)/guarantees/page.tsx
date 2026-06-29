@@ -536,7 +536,7 @@ export default function GuaranteesPage() {
         actionLabel="+ ערבות חדשה" onAction={function(){ openNew(); }} />
 
       {/* KPIs — clickable filters */}
-      <div className="grid grid-cols-6 gap-3 mb-5">
+      <div className="grid grid-cols-3 sm:grid-cols-6 gap-3 mb-5">
         {[
           { f: "all",       label: "הכל",        value: guarantees.length, sub: "כל הערבויות",            color: "text-slate-600",  bg: "bg-white" },
           { f: "active",    label: "פעילות",     value: active.length,     sub: fmtMoney(totalActive),    color: "text-slate-800",  bg: "bg-white" },
@@ -860,7 +860,7 @@ export default function GuaranteesPage() {
               </div>
               <div>
                 <label className="mb-2 block text-xs font-semibold text-slate-700">סוג</label>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                   {GUARANTEE_TYPES.map(function (t) {
                     return (
                       <button key={t.v} type="button" onClick={function () { setFType(t.v); }}
