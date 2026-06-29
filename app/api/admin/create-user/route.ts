@@ -36,12 +36,16 @@ export async function POST(req: NextRequest) {
 
     // צור profile
     if (data.user) {
+      // Per-user secret for the ICS calendar feed (see /api/calendar/ics).
+      const calendarToken = (globalThis.crypto?.randomUUID?.() ?? "").replace(/-/g, "") +
+                            (globalThis.crypto?.randomUUID?.() ?? "").replace(/-/g, "");
       await admin.from("user_profiles").upsert({
         id:        data.user.id,
         email:     data.user.email,
         full_name: fullName ?? email,
         role:      newRole,
         is_active: true,
+        calendar_token: calendarToken || undefined,
       });
     }
 
