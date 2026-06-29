@@ -109,9 +109,9 @@ export default function TimelinePage() {
           <div className="text-5xl mb-3">📊</div><div>אין חוזים להצגה</div>
         </div>
       ) : (
-        <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+        <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-x-auto">
           {/* Header שנים */}
-          <div className="border-b border-slate-200 bg-slate-50">
+          <div className="border-b border-slate-200 bg-slate-50 min-w-[760px]">
             <div className="flex">
               <div className="w-52 shrink-0 px-4 py-2 text-xs font-semibold text-slate-500 border-l border-slate-200">שוכר / נכס</div>
               <div className="flex-1 relative">
@@ -141,7 +141,7 @@ export default function TimelinePage() {
           </div>
 
           {/* שורות */}
-          <div className="divide-y divide-slate-100">
+          <div className="divide-y divide-slate-100 min-w-[760px]">
             {filtered.map(function(c) {
               const bar = c.start_date && c.end_date ? getBar(c.start_date, c.end_date) : null;
               const color = STATUS_COLORS[c.status] ?? "bg-slate-300";
