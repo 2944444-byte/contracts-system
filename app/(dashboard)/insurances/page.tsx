@@ -525,7 +525,7 @@ export default function InsurancesPage() {
         </>} />
 
       {/* Tabs */}
-      <div className="flex gap-1 mb-5 border-b border-slate-200">
+      <div className="flex flex-wrap gap-1 mb-5 border-b border-slate-200">
         {[{v:"building",l:"🏢 ביטוח מבנה"},{v:"tenant",l:"👤 ביטוח שוכר (יחידות)"}].map(function(t) {
           return (
             <button key={t.v} onClick={function(){setActiveTab(t.v as any); setFilterSt("all");}}

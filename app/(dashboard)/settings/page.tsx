@@ -114,7 +114,7 @@ export default function SettingsPage() {
 
       {msg&&<div className={"mb-4 rounded-xl border px-4 py-3 text-sm font-semibold "+(msg.startsWith("✅")?"bg-green-50 border-green-200 text-green-700":"bg-red-50 border-red-200 text-red-700")}>{msg}</div>}
 
-      <div className="flex gap-1 border-b border-slate-200 mb-5">
+      <div className="flex flex-wrap gap-1 border-b border-slate-200 mb-5">
         {TABS.map(function(t){return (
           <button key={t.id} onClick={function(){setTab(t.id);}}
             className={"px-4 py-2.5 text-sm font-semibold border-b-2 -mb-px "+(tab===t.id?"border-blue-600 text-blue-700":"border-transparent text-slate-500 hover:text-slate-700")}>

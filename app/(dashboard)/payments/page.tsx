@@ -703,13 +703,13 @@ export default function PaymentsPage() {
             className={ic + " flex-1 min-w-[200px]"}
           />
           <Dropdown
-            className="w-32"
+            className="w-full sm:w-32"
             value={String(filterYear)}
             onChange={function(v) { setFilterYear(Number(v)); }}
             options={yearOptions.map(function(y) { return { value: String(y), label: "📅 " + y }; })}
           />
           <Dropdown
-            className="w-48"
+            className="w-full sm:w-48"
             value={filterProperty}
             placeholder="🏢 נכס: הכל"
             onChange={function(v) { setFilterProperty(v); }}

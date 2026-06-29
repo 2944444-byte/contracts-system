@@ -386,7 +386,7 @@ export default function CashflowPage() {
 
       {/* Filter bar */}
       <div className="mb-4 rounded-xl border border-slate-200 bg-white p-3 flex flex-wrap items-center gap-2">
-        <select value={propertyFilter} onChange={function(e) { setPropertyFilter(e.target.value); }} className={ic + " w-48"}>
+        <select value={propertyFilter} onChange={function(e) { setPropertyFilter(e.target.value); }} className={ic + " w-full sm:w-48"}>
           <option value="">🏢 נכס: הכל</option>
           {properties.map(function(p) { return <option key={p.id} value={p.id}>{p.name}</option>; })}
         </select>

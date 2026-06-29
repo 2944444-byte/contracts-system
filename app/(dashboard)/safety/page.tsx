@@ -413,7 +413,7 @@ export default function SafetyPage() {
         } />
 
       {/* Tabs: public (management) vs tenant (units/contracts) */}
-      <div className="flex gap-1 mb-5 border-b border-slate-200">
+      <div className="flex flex-wrap gap-1 mb-5 border-b border-slate-200">
         {[{v:"public",l:"🏢 ציבורי / מבנה (חברת ניהול)",c:publicCount},{v:"tenant",l:"🏠 יחידות / שוכרים (חוזים)",c:tenantCount}].map(function(t) {
           return (
             <button key={t.v} onClick={function(){setActiveTab(t.v as any); setFilterSt("all"); setFilterType("all");}}

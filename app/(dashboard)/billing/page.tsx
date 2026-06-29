@@ -84,7 +84,7 @@ export default function BillingPage() {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 mb-6 border-b border-slate-200">
+      <div className="flex flex-wrap gap-1 mb-6 border-b border-slate-200">
         {TABS.map(function (t) {
           return (
             <button key={t.v} onClick={function () { setActiveTab(t.v); }}

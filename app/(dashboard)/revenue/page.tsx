@@ -551,7 +551,7 @@ export default function RevenuePage() {
             );})}
           </select>
         </div>
-        <div className="w-32">
+        <div className="w-full sm:w-32">
           <label className="mb-1 block text-xs font-semibold text-slate-700">שנה</label>
           <select value={selYear} onChange={function(e){setSelYear(Number(e.target.value));}} className={ic}>
             {yearOptions.map(function(y){return <option key={y} value={y}>{y}</option>;})}

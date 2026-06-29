@@ -1082,19 +1082,19 @@ export default function LettersPage() {
                   className={ic}
                 />
               </div>
-              <select value={filterYear} onChange={function(e){setFilterYear(e.target.value);}} className={ic + " w-32"}>
+              <select value={filterYear} onChange={function(e){setFilterYear(e.target.value);}} className={ic + " w-full sm:w-32"}>
                 <option value="">📅 שנה: הכל</option>
                 {allYears.map(function(y){ return <option key={y} value={String(y)}>{y}</option>; })}
               </select>
-              <select value={filterType} onChange={function(e){setFilterType(e.target.value);}} className={ic + " w-48"}>
+              <select value={filterType} onChange={function(e){setFilterType(e.target.value);}} className={ic + " w-full sm:w-48"}>
                 <option value="">📋 סוג: הכל</option>
                 {LETTER_CATEGORIES.map(function(c){ return <option key={c.key} value={c.key}>{c.icon} {c.label}</option>; })}
               </select>
-              <select value={filterProp} onChange={function(e){setFilterProp(e.target.value);}} className={ic + " w-44"}>
+              <select value={filterProp} onChange={function(e){setFilterProp(e.target.value);}} className={ic + " w-full sm:w-44"}>
                 <option value="">🏢 נכס: הכל</option>
                 {Object.keys(allProps).map(function(k){ return <option key={k} value={k}>{allProps[k]}</option>; })}
               </select>
-              <select value={filterStatus} onChange={function(e){setFilterStatus(e.target.value);}} className={ic + " w-36"}>
+              <select value={filterStatus} onChange={function(e){setFilterStatus(e.target.value);}} className={ic + " w-full sm:w-36"}>
                 <option value="">✉️ סטטוס: הכל</option>
                 <option value="draft">טיוטה</option>
                 <option value="ready">מוכן לשליחה</option>
