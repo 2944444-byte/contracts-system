@@ -42,8 +42,13 @@ export default function CalendarPage() {
     const { data: u } = await supabase.auth.getUser();
     if (!u?.user) return;
     const { data: p } = await supabase.from("user_profiles").select("calendar_token").eq("id", u.user.id).maybeSingle();
-    if (p?.calendar_token && typeof window !== "undefined") {
-      setFeedUrl(window.location.origin + "/api/calendar/ics?token=" + p.calendar_token);
+    if (p?.calendar_token) {
+      // The feed MUST be served from the PUBLIC production domain — the
+      // git-branch / team-slug URLs are gated by Vercel Authentication (SSO),
+      // which Google/Outlook can't pass. The canonical *.vercel.app alias is
+      // public. Override with NEXT_PUBLIC_SITE_URL if a custom domain is added.
+      const base = process.env.NEXT_PUBLIC_SITE_URL || "https://contracts-system.vercel.app";
+      setFeedUrl(base + "/api/calendar/ics?token=" + p.calendar_token);
     }
   }
 
