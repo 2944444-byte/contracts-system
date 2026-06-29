@@ -121,7 +121,7 @@ export default function GlobalSearch() {
         ) : (
           <div className="p-3" dir="rtl">
             <div className="text-xs font-semibold text-slate-400 mb-2 px-1">⚡ פעולות מהירות</div>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
               {QUICK.map(function(q,i){
                 return (
                   <button key={q.href} onClick={function(){go(q.href);}}

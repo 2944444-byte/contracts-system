@@ -1109,7 +1109,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
         {results.length > 0 && (
           <div className="mt-5 space-y-4">
             {/* Summary KPIs */}
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
               <div className="rounded-lg bg-green-50 border border-green-200 p-3 text-center">
                 <div className="text-xs text-green-600">שכ&quot;ד צמוד (לפני מע&quot;מ)</div>
                 <div className="text-lg font-black text-green-800">{fmtMoney(totalRentOnly)}</div>
@@ -1160,7 +1160,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
                   )}
 
                   {/* Contract details */}
-                  <div className="px-5 py-2 grid grid-cols-5 gap-2 text-xs border-b border-slate-100 bg-blue-50/30">
+                  <div className="px-5 py-2 grid grid-cols-2 sm:grid-cols-5 gap-2 text-xs border-b border-slate-100 bg-blue-50/30">
                     <div>
                       <div className="text-slate-500">שכ&quot;ד בסיס</div>
                       <div className="font-bold text-slate-800">{fmtMoney(r.baseRentMonthly)}/חודש</div>
@@ -1213,7 +1213,8 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
                   </div>
 
                   {/* Check table */}
-                  <table className="w-full text-sm text-right">
+                  <div className="overflow-x-auto">
+                  <table className="w-full text-sm text-right min-w-[640px]">
                     <thead className="bg-slate-50 text-xs">
                       <tr>
                         <th className="px-3 py-2 font-semibold text-slate-700">תקופה</th>
@@ -1251,6 +1252,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
                       </tr>
                     </tfoot>
                   </table>
+                  </div>
                 </div>
               );
             })}
@@ -1301,7 +1303,8 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
                             <div className="text-xs text-blue-700">סה&quot;כ שנתי כולל מע&quot;מ</div>
                           </div>
                         </div>
-                        <table className="w-full text-sm text-right">
+                        <div className="overflow-x-auto">
+                        <table className="w-full text-sm text-right min-w-[640px]">
                           <thead className="bg-blue-50 text-xs">
                             <tr>
                               <th className="px-4 py-2 font-bold text-blue-800">תקופה</th>
@@ -1339,6 +1342,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
                             </tr>
                           </tfoot>
                         </table>
+                        </div>
                       </div>
                     );
                   })}

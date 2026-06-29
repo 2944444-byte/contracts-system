@@ -44,7 +44,8 @@ export default function PropertyBudgetManager({ propertyId, propertyName, onClos
       </div>
 
       {loading ? <div className="text-center py-8 text-slate-400">טוען...</div> : (
-        <table className="w-full text-right text-sm">
+        <div className="overflow-x-auto">
+        <table className="w-full text-right text-sm min-w-[640px]">
           <thead className="text-xs text-slate-500 border-b bg-slate-50">
             <tr>
               <th className="px-3 py-2">שנה</th><th className="px-3 py-2">ניהול</th>
@@ -72,6 +73,7 @@ export default function PropertyBudgetManager({ propertyId, propertyName, onClos
             ))}
           </tbody>
         </table>
+        </div>
       )}
 
       {editing && (
