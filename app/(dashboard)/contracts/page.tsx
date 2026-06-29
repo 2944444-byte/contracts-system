@@ -942,8 +942,9 @@ export default function ContractsPage() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
-        {/* List */}
-        <div className="lg:col-span-2 space-y-2 max-h-[70vh] overflow-y-auto pl-1">
+        {/* List — on mobile, hidden once a contract is selected (the detail
+            takes over full-screen); on desktop both columns always show. */}
+        <div className={(selected ? "hidden lg:block " : "") + "lg:col-span-2 space-y-2 lg:max-h-[70vh] lg:overflow-y-auto pl-1"}>
           {loading ? <div className="text-center py-8 text-slate-400">טוען...</div> : filtered.length===0 ? (
             <div className="rounded-xl border-2 border-dashed border-slate-200 p-8 text-center text-slate-400">
               <div className="text-4xl mb-2">📄</div><div>אין חוזים</div>
@@ -995,14 +996,15 @@ export default function ContractsPage() {
           })}
         </div>
 
-        {/* Details */}
-        <div className="lg:col-span-3">
+        {/* Details — on mobile, shown only when a contract is selected. */}
+        <div className={(selected ? "" : "hidden lg:block ") + "lg:col-span-3"}>
           {!selContract ? (
             <div className="rounded-xl border-2 border-dashed border-slate-200 bg-white p-12 text-center text-slate-400">
               <div className="text-5xl mb-3">📄</div><div>בחר חוזה לצפייה</div>
             </div>
           ) : (
             <div className="space-y-3">
+              <button onClick={function(){setSelected(null);}} className="lg:hidden flex items-center gap-1 text-sm font-semibold text-blue-600 -mb-1">→ חזרה לרשימת החוזים</button>
               {/* Header */}
               <div className="rounded-xl border border-slate-200 bg-white shadow-sm p-5">
                 <div className="flex items-start justify-between mb-4">

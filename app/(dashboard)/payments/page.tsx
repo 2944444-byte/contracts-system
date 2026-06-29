@@ -831,7 +831,8 @@ export default function PaymentsPage() {
                   </div>
                 </button>
                 {!isCollapsed && (
-                  <table className="w-full text-right text-sm">
+                  <div className="overflow-x-auto">
+                  <table className="w-full min-w-[680px] text-right text-sm">
                     <thead className="bg-slate-50/50 border-b">
                       <tr>
                         <th className="px-2 py-2 font-semibold text-slate-700 w-8">
@@ -965,6 +966,7 @@ export default function PaymentsPage() {
                       })}
                     </tbody>
                   </table>
+                  </div>
                 )}
               </div>
             );

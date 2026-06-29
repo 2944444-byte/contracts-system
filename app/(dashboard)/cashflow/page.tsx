@@ -535,8 +535,8 @@ export default function CashflowPage() {
           )}
 
           {/* Detailed monthly table — broken by income source */}
-          <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-            <table className="w-full text-right text-sm">
+          <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-x-auto">
+            <table className="w-full text-right text-sm min-w-[640px]">
               <thead className="bg-slate-50 border-b">
                 <tr>
                   <th className="px-3 py-3 font-semibold text-slate-700">חודש</th>

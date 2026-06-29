@@ -431,8 +431,8 @@ export default function UsersPage() {
           <div className="text-5xl mb-3">👥</div><div>אין משתמשים — צור את הראשון</div>
         </div>
       ) : (
-        <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-          <table className="w-full text-right text-sm">
+        <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-x-auto">
+          <table className="w-full text-right text-sm min-w-[640px]">
             <thead className="bg-slate-50 border-b">
               <tr>
                 <th className="px-4 py-3 font-semibold text-slate-700">משתמש</th>

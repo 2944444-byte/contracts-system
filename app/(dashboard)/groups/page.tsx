@@ -136,7 +136,7 @@ export default function GroupsPage() {
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-5">
           {/* List */}
-          <div className="space-y-2">
+          <div className={(selected ? "hidden lg:block " : "") + "space-y-2"}>
             {groups.map(function(g) {
               const props = properties.filter(function(p){return p.group_id===g.id;});
               const propIds = props.map(function(p){return p.id;});
@@ -166,7 +166,8 @@ export default function GroupsPage() {
           </div>
 
           {/* Detail */}
-          <div className="lg:col-span-3">
+          <div className={(selected ? "" : "hidden lg:block ") + "lg:col-span-3"}>
+            {selected && <button onClick={function(){setSelected(null);}} className="lg:hidden flex items-center gap-1 text-sm font-semibold text-blue-600 mb-2">→ חזרה לרשימה</button>}
             {!selGroup ? (
               <div className="rounded-xl border-2 border-dashed border-slate-200 bg-white p-12 text-center text-slate-400">
                 <div className="text-5xl mb-3">📁</div>

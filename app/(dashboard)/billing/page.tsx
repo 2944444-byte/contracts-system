@@ -728,8 +728,8 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
         {propId && isMixed && mixedRows.length > 0 && (
           <div className="space-y-3">
             <h3 className="text-sm font-bold text-purple-700">{"תעריף לפי סוג שימוש"}</h3>
-            <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-              <table className="w-full text-right text-sm">
+            <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-x-auto">
+              <table className="w-full text-right text-sm min-w-[640px]">
                 <thead className="bg-slate-50 border-b">
                   <tr>
                     <th className="px-4 py-2.5 font-semibold text-slate-700">{"סוג שימוש"}</th>
@@ -899,8 +899,8 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
           var revenueSkippedCount = mgmtResults.filter(function(r){ return r.isRevenueBased && Math.abs(r.difference) >= 0.01; }).length;
           return (
           <div className="mt-5">
-            <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-              <table className="w-full text-right text-sm">
+            <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-x-auto">
+              <table className="w-full text-right text-sm min-w-[640px]">
                 <thead className="bg-slate-50 border-b">
                   <tr>
                     <th className="px-4 py-3 font-semibold text-slate-700">שוכר</th>
@@ -1757,8 +1757,8 @@ function InsuranceTab({ properties }: { properties: any[] }) {
               </div>
             )}
 
-            <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-              <table className="w-full text-right text-sm">
+            <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-x-auto">
+              <table className="w-full text-right text-sm min-w-[640px]">
                 <thead className="bg-slate-50 border-b">
                   <tr>
                     <th className="px-4 py-3 font-semibold text-slate-700">שוכר / יחידות</th>
@@ -1829,7 +1829,7 @@ function InsuranceTab({ properties }: { properties: any[] }) {
 
             {/* Vacant-units breakdown + per-unit disposition (3-way) */}
             {spaceVacancies.length > 0 && (
-              <div className="mt-4 rounded-xl border-2 border-amber-200 bg-amber-50/50 overflow-hidden">
+              <div className="mt-4 rounded-xl border-2 border-amber-200 bg-amber-50/50 overflow-x-auto">
                 <div className="bg-amber-100/60 px-4 py-2.5">
                   <div className="font-bold text-amber-900 text-sm">🏚 יחידות ריקות / חלקיות שמרכיבות את חלק הבעלים</div>
                   <div className="text-[11px] text-amber-700 mt-0.5 leading-relaxed">
@@ -1839,7 +1839,7 @@ function InsuranceTab({ properties }: { properties: any[] }) {
                     {" "}או <span className="font-semibold">חיוב השוכר האחרון</span> (כשמצופה חידוש — רק הוא משלם).
                   </div>
                 </div>
-                <table className="w-full text-right text-sm">
+                <table className="w-full min-w-[640px] text-right text-sm">
                   <thead className="bg-amber-50 border-b border-amber-200">
                     <tr>
                       <th className="px-3 py-2 font-semibold text-amber-900">יחידה</th>
@@ -2549,8 +2549,8 @@ function WasteTab({ properties }: { properties: any[] }) {
 
         {results.length > 0 && (
           <div className="mt-5">
-            <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-              <table className="w-full text-right text-sm">
+            <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-x-auto">
+              <table className="w-full text-right text-sm min-w-[640px]">
                 <thead className="bg-slate-50 border-b">
                   <tr>
                     <th className="px-4 py-3 font-semibold text-slate-700">{"שוכר"}</th>

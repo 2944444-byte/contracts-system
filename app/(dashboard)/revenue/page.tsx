@@ -629,8 +629,8 @@ export default function RevenuePage() {
           </div>
 
           {/* 12-month table */}
-          <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden mb-4">
-            <table className="w-full text-right text-sm">
+          <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-x-auto mb-4">
+            <table className="w-full min-w-[640px] text-right text-sm">
               <thead className="bg-slate-50 border-b">
                 <tr>
                   <th className="px-3 py-3 font-semibold text-slate-700">חודש</th>

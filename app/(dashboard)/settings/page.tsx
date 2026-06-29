@@ -178,8 +178,8 @@ export default function SettingsPage() {
               <button onClick={addVatRate} className="rounded-lg bg-blue-600 text-white text-xs px-3 py-1.5 font-semibold hover:bg-blue-700">+ הוסף</button>
             </div>
             {vatRates.length===0 ? <div className="text-center py-8 text-slate-400">אין שיעורי מע"מ</div> : (
-              <div className="rounded-xl border border-slate-200 overflow-hidden">
-                <table className="w-full text-right text-sm">
+              <div className="rounded-xl border border-slate-200 overflow-x-auto">
+                <table className="w-full text-right text-sm min-w-[640px]">
                   <thead className="bg-slate-50 border-b"><tr><th className="px-4 py-2.5 font-semibold text-slate-600">שיעור</th><th className="px-4 py-2.5 font-semibold text-slate-600">תחילה</th><th className="px-4 py-2.5 font-semibold text-slate-600">סיום</th><th className="px-4 py-2.5 font-semibold text-slate-600">הערה</th><th className="px-4 py-2.5 font-semibold text-slate-600">עודכן</th></tr></thead>
                   <tbody>
                     {vatRates.map(function(v){return (
