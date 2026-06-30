@@ -18,10 +18,15 @@ const ROLES = [
 const roleInfo = function(v: string) { return ROLES.find(function(r){ return r.v === v; }) || ROLES[2]; };
 
 function genPassword(): string {
-  var chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
-  var out = "";
-  for (var i = 0; i < 10; i++) out += chars[Math.floor(Math.random() * chars.length)];
-  return out;
+  // Guarantee one of each class (upper/lower/digit/symbol) so the password meets
+  // Supabase's strongest "letters, digits and symbols" requirement + length ≥ 8.
+  var U = "ABCDEFGHJKLMNPQRSTUVWXYZ", L = "abcdefghjkmnpqrstuvwxyz", D = "23456789", S = "!@#$%^&*-_=+";
+  var all = U + L + D + S;
+  function pick(s: string) { return s[Math.floor(Math.random() * s.length)]; }
+  var arr = [pick(U), pick(L), pick(D), pick(S)];
+  for (var i = arr.length; i < 12; i++) arr.push(pick(all));
+  for (var j = arr.length - 1; j > 0; j--) { var k = Math.floor(Math.random() * (j + 1)); var t = arr[j]; arr[j] = arr[k]; arr[k] = t; }
+  return arr.join("");
 }
 
 export default function UsersPage() {
