@@ -2,6 +2,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from '@/lib/supabase';
+import { authHeaders } from '@/lib/api-auth-client';
 import { PageHero } from '@/components/ui';
 import { getScopeIds, scopeRows } from '@/lib/permissions';
 import { loadCompanyInfo, letterContent } from '@/lib/letter-format';
@@ -75,7 +76,7 @@ export default function AlertsPage() {
     (async function() {
       await loadAlerts();
       try {
-        const res = await fetch("/api/alerts/sync", { method: "POST" });
+        const res = await fetch("/api/alerts/sync", { method: "POST", headers: await authHeaders() });
         const d = await res.json();
         if (cancelled) return;
         if ((d.created ?? 0) > 0) {

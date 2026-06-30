@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import { supabase } from '@/lib/supabase';
+import { authHeaders } from '@/lib/api-auth-client';
 import { logAudit } from '@/lib/audit-log';
 import { PageHero } from '@/components/ui';
 import { getScopeIds, scopeRows } from '@/lib/permissions';
@@ -873,7 +874,7 @@ export default function LettersPage() {
     // Cc = the remaining domain recipients + the property's authorized users.
     var ccList = Array.from(new Set((toList.slice(1)).concat(g.cc || [])));
     var res = await fetch("/api/send-letter", {
-      method: "POST", headers: { "Content-Type": "application/json" },
+      method: "POST", headers: await authHeaders(),
       body: JSON.stringify({
         to: toList[0], cc: ccList, subject: g.subject,
         shortHtml: shortEmailHtml(g.tenant, g.subject, company),
@@ -919,7 +920,7 @@ export default function LettersPage() {
     try {
       var pdf = await letterToPdfBase64(l);
       var res = await fetch("/api/send-letter", {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST", headers: await authHeaders(),
         body: JSON.stringify({ to: toList[0], cc: cc, subject: subject, shortHtml: shortEmailHtml(tenant, subject, company), pdfBase64: pdf, filename: safeFilename(fileBase) }),
       });
       var d = await res.json();

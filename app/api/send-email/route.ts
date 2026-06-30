@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
+import { requireUser } from "@/lib/admin-api-auth";
 import { sendEmail } from "../../../lib/email-utils";
 
 export async function POST(req: NextRequest) {
   try {
+    if (!(await requireUser(req))) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     const { to, subject, html } = await req.json();
     if (!to || !subject || !html) {
       return NextResponse.json({ error: "Missing to/subject/html" }, { status: 400 });

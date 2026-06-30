@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { requireUser } from "@/lib/admin-api-auth";
 import Anthropic from "@anthropic-ai/sdk";
 import { EXTRACT_PROMPT } from "@/lib/extract-prompt";
 
@@ -6,6 +7,7 @@ const PROMPT = EXTRACT_PROMPT;
 
 export async function POST(req: NextRequest) {
   try {
+    if (!(await requireUser(req))) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     const body = await req.json();
     const { text, images } = body;
 

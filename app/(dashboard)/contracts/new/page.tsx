@@ -2,6 +2,7 @@
 import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import { authHeaders } from '@/lib/api-auth-client';
 import { getScopeIds, getCompanyScopeIds, getTenantScopeIds, scopeRows, scopeGroups } from '@/lib/permissions';
 import { logAudit } from "@/lib/audit-log";
 import {
@@ -554,7 +555,7 @@ export default function ContractsNewPage() {
           }
           var ocrRes = await fetch("/api/extract-contract", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: await authHeaders(),
             body: JSON.stringify({ images: imagePages }),
           });
           if (!ocrRes.ok) throw new Error("OCR API error " + ocrRes.status);
@@ -589,7 +590,7 @@ export default function ContractsNewPage() {
       if (!skipApiCall) {
         const res = await fetch("/api/extract-contract", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: await authHeaders(),
           body: JSON.stringify({ text }),
         });
         if (!res.ok) throw new Error("API error " + res.status);

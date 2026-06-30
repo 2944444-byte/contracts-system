@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import { supabase } from '@/lib/supabase';
+import { authHeaders } from '@/lib/api-auth-client';
 import { syncContractStatuses } from '@/lib/contractSync';
 import { PageHero } from '@/components/ui';
 
@@ -47,7 +48,7 @@ export default function SettingsPage() {
   async function syncAlerts() {
     setSyncing("alerts");
     try {
-      const res = await fetch("/api/alerts/sync",{method:"POST"});
+      const res = await fetch("/api/alerts/sync",{method:"POST", headers: await authHeaders()});
       const d = await res.json();
       showMsg(`✅ נוצרו ${d.created??0} התראות`);
     } catch { showMsg("❌ שגיאה בסנכרון התראות"); }

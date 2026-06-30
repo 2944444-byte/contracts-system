@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
 import { supabase } from '@/lib/supabase';
+import { authHeaders } from '@/lib/api-auth-client';
 import { logAudit } from '@/lib/audit-log';
 import PropertyHierarchyFilter from '@/components/PropertyHierarchyFilter';
 import { PageHero } from '@/components/ui';
@@ -172,7 +173,7 @@ export default function InsurancesPage() {
     setDocExtracting(true); setDocExtractMsg("קורא את המסמך ומנתח...");
     try {
       const res = await fetch("/api/extract-from-url", {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST", headers: await authHeaders(),
         body: JSON.stringify({ fileUrl: fDocUrl }),
       });
       const data = await res.json();
@@ -346,7 +347,7 @@ export default function InsurancesPage() {
     setReqExtracting(true); setReqExtractMsg("קורא את המסמך ומנתח...");
     try {
       const res = await fetch("/api/extract-from-url", {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST", headers: await authHeaders(),
         body: JSON.stringify({ fileUrl: reqDocUrl }),
       });
       const data = await res.json();

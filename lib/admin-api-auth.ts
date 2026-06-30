@@ -37,6 +37,20 @@ export async function callerRole(req: Request, admin: SupabaseClient): Promise<"
   return p ? p.role : null;
 }
 
+// Lightweight gate for action routes (send-email, extract, etc.): is the caller
+// any logged-in user? Verifies the bearer JWT (works with service or anon key).
+export async function requireUser(req: Request): Promise<boolean> {
+  try {
+    const auth = req.headers.get("authorization") || "";
+    const token = auth.toLowerCase().startsWith("bearer ") ? auth.slice(7) : "";
+    if (!token) return false;
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+    const client = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, key, { auth: { autoRefreshToken: false, persistSession: false } });
+    const { data } = await client.auth.getUser(token);
+    return !!data?.user?.id;
+  } catch (e) { return false; }
+}
+
 // Is this admin UNRESTRICTED (master, or no scope rows)? A SCOPED admin must
 // not be able to create admins — that would let him mint an unrestricted one.
 export async function isUnrestrictedAdmin(p: { uid: string; role: string; isMaster: boolean }, admin: SupabaseClient): Promise<boolean> {

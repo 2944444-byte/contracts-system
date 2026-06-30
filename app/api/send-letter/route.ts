@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { requireUser } from "@/lib/admin-api-auth";
 import { sendEmail } from "@/lib/email-utils";
 
 export const runtime = "nodejs";
@@ -9,6 +10,7 @@ export const maxDuration = 30;
 // here as base64. Body: { to, cc?, subject, shortHtml, pdfBase64, filename }.
 export async function POST(req: NextRequest) {
   try {
+    if (!(await requireUser(req))) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     const { to, cc, subject, shortHtml, pdfBase64, filename } = await req.json();
     if (!to) return NextResponse.json({ ok: false, error: "missing recipient" }, { status: 400 });
     if (!pdfBase64) return NextResponse.json({ ok: false, error: "missing pdf" }, { status: 400 });
