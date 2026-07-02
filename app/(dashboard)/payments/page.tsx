@@ -731,11 +731,20 @@ export default function PaymentsPage() {
           <div className="text-xs text-slate-500 mr-auto">
             {filtered.length} / {rows.length}
           </div>
-          {Object.values(selected).filter(Boolean).length > 0 && (
-            <button onClick={bulkMarkSelectedPaid} className="rounded-lg border border-green-300 bg-green-50 px-4 py-2 text-sm font-bold text-green-700 hover:bg-green-100">
-              ✓ סמן {Object.values(selected).filter(Boolean).length} נבחרים כשולמו
-            </button>
-          )}
+          {(function() {
+            // Selected rows + their combined total — lets the user confirm the
+            // sum matches what the tenant is paying in ONE transfer / cheque.
+            var sel = rows.filter(function(r) { return selected[r.id]; });
+            if (sel.length === 0) return null;
+            var tot = sel.reduce(function(s, r) { return s + (r.totalAmount || 0); }, 0);
+            return (
+              <div className="flex items-center gap-2 rounded-lg border border-green-300 bg-green-50 px-3 py-1.5">
+                <span className="text-sm font-bold text-green-800 whitespace-nowrap">{sel.length} נבחרו · סה&quot;כ {fmtMoney(tot)}</span>
+                <button onClick={bulkMarkSelectedPaid} className="rounded-md bg-green-600 text-white px-3 py-1 text-sm font-bold hover:bg-green-700 whitespace-nowrap">✓ סמן כשולמו</button>
+                <button onClick={function() { setSelected({}); }} className="rounded-md border border-slate-300 text-slate-500 px-2 py-1 text-sm hover:bg-slate-100" title="נקה בחירה">✕</button>
+              </div>
+            );
+          })()}
           {filtered.filter(function(r) { return r.status !== "paid"; }).length > 0 && (
             <button onClick={bulkMarkAllPaid} className="rounded-lg border border-green-300 bg-green-50 px-4 py-2 text-sm font-semibold text-green-700 hover:bg-green-100" title="סמן את כל המסוננים כשולמו">
               ₪ סמן הכל כשולם
