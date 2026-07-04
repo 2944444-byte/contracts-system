@@ -257,7 +257,9 @@ export default function UsersPage() {
   // ── Send credentials (local mail client — works in test mode; can move to
   //    the Resend path once configured) ──
   function sendCreds(c: { name: string; email: string; password: string }) {
-    var origin = typeof window !== "undefined" ? window.location.origin : "";
+    // Always link to the PUBLIC production URL — the admin may be browsing a
+    // protected git-branch URL that would force a Vercel login on the recipient.
+    var origin = process.env.NEXT_PUBLIC_SITE_URL || "https://contracts-system.vercel.app";
     var body = "שלום " + c.name + ",\n\n"
       + "להלן פרטי הגישה שלך למערכת PropManager:\n\n"
       + "קישור למערכת: " + origin + "/login\n"
