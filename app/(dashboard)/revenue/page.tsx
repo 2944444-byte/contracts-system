@@ -262,11 +262,22 @@ export default function RevenuePage() {
     const c = contracts.find(function(x){return x.id===contractId;});
     if (!c) return null;
     const pct = c.revenue_pct ?? 0;
+    // Effective area for the reported month — walk the base+amendment area
+    // timeline so a mid-contract store/size change (e.g. golf 365→110) uses the
+    // RIGHT sqm, matching the table. Falls back to the contract's charged_area.
+    var area = Number(c.charged_area) || 0;
+    if (periodDate && segments.length > 0) {
+      var pd = new Date(periodDate);
+      for (var si = 0; si < segments.length; si++) {
+        var sg = segments[si];
+        if (pd >= sg.startDate && (sg.endDate === null || pd <= sg.endDate)) { area = sg.area; break; }
+      }
+    }
     var mgmtMonthly: number;
     if (manualMgmt != null && manualMgmt > 0) {
       mgmtMonthly = manualMgmt;
-    } else if (c.mgmt_included_in_revenue && c.mgmt_fee_per_sqm && c.charged_area) {
-      mgmtMonthly = Number(c.mgmt_fee_per_sqm) * Number(c.charged_area);
+    } else if (c.mgmt_included_in_revenue && c.mgmt_fee_per_sqm && area) {
+      mgmtMonthly = Number(c.mgmt_fee_per_sqm) * area;
     } else {
       mgmtMonthly = 0;
     }
@@ -274,7 +285,7 @@ export default function RevenuePage() {
     const netGross      = pct > 0 ? Math.max(grossRevenue - mgmtMonthly / (pct/100), 0)
                                   : grossRevenue;                          // מחזור נטו (information)
     const rentFromRev   = consideration - mgmtMonthly;                    // שכ"ד מפדיון (before min)
-    const minRent       = (c.min_rent_per_sqm??0)*(c.charged_area??0)+(c.investment_addition??0);
+    const minRent       = (c.min_rent_per_sqm??0)*area+(c.investment_addition??0);
     const finalRent     = Math.max(rentFromRev, minRent);
     const vat           = c.vat_type==="taxable" ? finalRent*vatPctAt(vatRates, periodDate || new Date()) : 0;
     return {
@@ -284,7 +295,7 @@ export default function RevenuePage() {
       rentFromRev,                    // consideration − mgmt (before min)
       minRent, finalRent, vat,
       total: finalRent + vat,
-      area: Number(c.charged_area) || 0,
+      area: area,
     };
   }
 
