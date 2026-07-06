@@ -266,10 +266,10 @@ export default function RevenuePage() {
     // timeline so a mid-contract store/size change (e.g. golf 365→110) uses the
     // RIGHT sqm, matching the table. Falls back to the contract's charged_area.
     var area = Number(c.charged_area) || 0;
-    if (periodDate && segments.length > 0) {
+    if (periodDate && areaSegments.length > 0) {
       var pd = new Date(periodDate);
-      for (var si = 0; si < segments.length; si++) {
-        var sg = segments[si];
+      for (var si = 0; si < areaSegments.length; si++) {
+        var sg = areaSegments[si];
         if (pd >= sg.startDate && (sg.endDate === null || pd <= sg.endDate)) { area = sg.area; break; }
       }
     }
