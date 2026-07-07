@@ -101,6 +101,9 @@ export default function SafetyPage() {
   const [fStandard,       setFStandard]       = useState("");
   const [fFreq,           setFFreq]           = useState("");
   const [fSelectedSpaces, setFSelectedSpaces] = useState<string[]>([]);
+  // When adding a cert for a specific tenant, restrict the unit picker to that
+  // tenant's contract units (null = show all property units, e.g. mgmt checks).
+  const [fRestrictSpaces, setFRestrictSpaces] = useState<string[] | null>(null);
   const [fInspector,      setFInspector]      = useState("");
   const [fCertNum,        setFCertNum]        = useState("");
   const [fLastDate,       setFLastDate]       = useState("");
@@ -174,13 +177,15 @@ export default function SafetyPage() {
     setFNotes(function(prev){ return prev || c.note; });
   }
 
-  function openNew(prefillPropId?: string, prefillKey?: string) {
+  function openNew(prefillPropId?: string, prefillKey?: string, prefillSpaces?: string[]) {
     setIsNew(true); setEditingId("new");
     var tenantTab = activeTab === "tenant";
     setFPropertyId(prefillPropId || ""); setFType("fire");
     setFScope(tenantTab ? "unit" : "public");
     setFCheckKey(""); setFStandard(""); setFFreq("");
-    setFSelectedSpaces([]); setFInspector(""); setFCertNum("");
+    setFSelectedSpaces(prefillSpaces || []);
+    setFRestrictSpaces(prefillSpaces && prefillSpaces.length ? prefillSpaces : null);
+    setFInspector(""); setFCertNum("");
     setFLastDate(""); setFNextDate(""); setFStatus("valid");
     setFNotes(""); setFResponsible(tenantTab ? "tenant" : "management"); setFDocUrl("");
     if (fileRef.current) fileRef.current.value = "";
@@ -197,7 +202,7 @@ export default function SafetyPage() {
     setFFreq(ins.frequency_months ? String(ins.frequency_months) : "");
     setFResponsible(ins.responsible_party ?? "management");
     const linkedSpaces = (ins.inspection_spaces || []).map(function(s: any) { return s.space_id; });
-    setFSelectedSpaces(linkedSpaces);
+    setFSelectedSpaces(linkedSpaces); setFRestrictSpaces(null);
     setFInspector(ins.inspector??""); setFCertNum(ins.certificate_number??"");
     setFLastDate(ins.last_inspection_date?.split("T")[0]??"");
     setFNextDate(ins.next_inspection_date?.split("T")[0]??"");
@@ -308,6 +313,31 @@ export default function SafetyPage() {
       if (error) throw error;
       await logAudit({ entity_type:"letter", entity_id:data.id, action:"safety_demand" });
       alert("✅ נוצרה טיוטת מכתב דרישה — היכנס למסך מכתבים לעריכה והדפסה");
+    } catch (e:any) { alert("שגיאה: " + (e?.message || e)); }
+  }
+
+  // Demand/reminder letter straight from a tenant who is MISSING the fire cert
+  // (no inspection row yet) — creates a letters draft, sent from the letters
+  // screen (which handles the tenant's contacts + PDF).
+  async function sendSafetyDemandForContract(c: any) {
+    try {
+      var cat = catalogInfo("tenant_fire_license");
+      var checkLabel = cat ? cat.l : "אישור בטיחות";
+      var body = "שוכר/ת נכבד/ה " + (c.tenants?.name || "") + ",\n\n" +
+        "בהתאם להוראות הסכם השכירות ונוהל הבטיחות, עליך להמציא/לחדש את האישור הבא עבור המושכר" +
+        (c.properties?.name ? " (" + c.properties.name + ")" : "") + ":\n" +
+        "• " + checkLabel + (cat && cat.standard ? " (" + cat.standard + ")" : "") + "\n" +
+        "\nנא להמציא אישור בתוקף בהקדם, ולהפקיד עותק במשרדנו לתיק הנכס.\n\nבברכה,\nהנהלת הנכס";
+      const { data, error } = await supabase.from("letters").insert({
+        contract_id: c.id,
+        letter_type: "demand",
+        title: "דרישת אישור בטיחות — " + checkLabel,
+        content_json: { body: body, kind: "safety_demand" },
+        status: "draft",
+      }).select().single();
+      if (error) throw error;
+      await logAudit({ entity_type:"letter", entity_id:data.id, action:"safety_demand" });
+      alert("✅ נוצרה טיוטת מכתב דרישה לשוכר — היכנס למסך מכתבים לשליחה/הדפסה");
     } catch (e:any) { alert("שגיאה: " + (e?.message || e)); }
   }
 
@@ -480,8 +510,12 @@ export default function SafetyPage() {
                   <div className="font-semibold text-slate-800">{(c.tenants as any)?.name}</div>
                   <div className="text-slate-500">{(c.properties as any)?.name}</div>
                   <div className="text-[10px] text-indigo-700 mt-0.5">יח&apos;: {spacesLabel(c)}</div>
-                  <button onClick={function(){openNew(c.property_id, "tenant_fire_license");}} title="הוסף אישור בטיחות עבור שוכר זה"
-                    className="mt-1.5 text-[11px] rounded bg-rose-600 hover:bg-rose-700 text-white px-2 py-1 font-semibold">+ הוסף אישור</button>
+                  <div className="mt-1.5 flex flex-wrap gap-1">
+                    <button onClick={function(){openNew(c.property_id, "tenant_fire_license", (((c as any).contract_spaces as any[])||[]).map(function(cs:any){return cs.space_id;}).filter(Boolean));}} title="הוסף אישור בטיחות עבור שוכר זה"
+                      className="text-[11px] rounded bg-rose-600 hover:bg-rose-700 text-white px-2 py-1 font-semibold">+ הוסף אישור</button>
+                    <button onClick={function(){sendSafetyDemandForContract(c);}} title="צור מכתב דרישה/תזכורת לשוכר להמצאת אישור הבטיחות"
+                      className="text-[11px] rounded border border-rose-300 text-rose-700 hover:bg-rose-100 px-2 py-1 font-semibold">✉ שלח בקשה</button>
+                  </div>
                 </div>
               );
             })}
@@ -675,8 +709,9 @@ export default function SafetyPage() {
               {fScope === "unit" && fPropertyId && spaces.length > 0 && (
                 <div>
                   <label className="mb-2 block text-xs font-semibold text-slate-700">בחר יחידות *</label>
+                  {fRestrictSpaces && <div className="text-[11px] text-teal-600 mb-1.5">מוצגות רק היחידות שבחוזה השוכר.</div>}
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 max-h-40 overflow-y-auto">
-                    {spaces.map(function(sp) {
+                    {spaces.filter(function(sp){ return !fRestrictSpaces || fRestrictSpaces.indexOf(sp.id) !== -1; }).map(function(sp) {
                       const sel = fSelectedSpaces.includes(sp.id);
                       return (
                         <button key={sp.id} type="button" onClick={function(){ toggleSpace(sp.id); }}
