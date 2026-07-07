@@ -58,7 +58,7 @@ export async function runAlertSync(supabase: SupabaseClient): Promise<{ created:
 
   // 1. Contracts expiring + options
   const { data: contracts } = await supabase.from("contracts")
-    .select("id,property_id,end_date,is_amendment,parent_contract_id,tenants(name),properties(name),contract_options(id,status,is_exercised,start_date,end_date,notice_days_before_end,notice_type,option_number)")
+    .select("id,property_id,end_date,is_amendment,parent_contract_id,tenant_id,tenants(name),properties(name),contract_options(id,status,is_exercised,start_date,end_date,notice_days_before_end,notice_type,option_number)")
     .in("status", ["active", "expiring", "extended"]);
   for (const c of (contracts ?? []) as any[]) {
     if (c.end_date) {
@@ -191,30 +191,28 @@ export async function runAlertSync(supabase: SupabaseClient): Promise<{ created:
   const todayStr = new Date().toISOString().split("T")[0];
   {
     const { data: tenantIns } = await supabase.from("insurances_tenant").select("contract_id,end_date,status");
-    // Insurance is held at the CONTRACT-FAMILY level: a base contract and all its
-    // amendments (תוספות) share ONE tenant insurance certificate, which is linked
-    // to the base. So we (a) resolve every contract to its family root, (b) treat
-    // a family as covered if ANY contract in it has active insurance, and
-    // (c) emit ONE alert per uncovered family — not per contract row. This stops
-    // amendments being falsely flagged and stops duplicate alerts per tenant.
-    const rootOf = function (c: any) { return (c && (c.parent_contract_id || c.id)) || null; };
+    // Insurance coverage is evaluated per (TENANT + PROPERTY). A base contract and
+    // its amendments (תוספות) are the same tenant on the same property and share
+    // ONE certificate — but parent_contract_id is unreliable in the data (some
+    // amendments have it NULL), so we group by tenant+property instead. A group is
+    // covered if ANY of its contracts has active insurance; we emit ONE alert per
+    // uncovered group. This stops amendments being falsely flagged and stops the
+    // duplicate alerts per tenant.
+    const groupKey = function (c: any) { return (c.tenant_id || "?") + "|" + (c.property_id || "?"); };
     const contractById: Record<string, any> = {};
     (contracts ?? []).forEach(function (c: any) { contractById[c.id] = c; });
-    const coveredRoots = new Set(
+    const coveredGroups = new Set(
       (tenantIns ?? [])
         .filter(function (x: any) { return x.contract_id && x.status === "active" && x.end_date && x.end_date >= todayStr; })
-        .map(function (x: any) { return rootOf(contractById[x.contract_id]) || x.contract_id; })
+        .map(function (x: any) { const c = contractById[x.contract_id]; return c ? groupKey(c) : null; })
+        .filter(Boolean) as string[]
     );
-    // Group active contracts by family; pick the base as the representative.
-    const families: Record<string, any[]> = {};
-    (contracts ?? []).forEach(function (c: any) {
-      const r = rootOf(c); if (!r) return;
-      (families[r] = families[r] || []).push(c);
-    });
-    for (const root of Object.keys(families)) {
-      if (coveredRoots.has(root)) continue;
-      const fam = families[root];
-      const rep = fam.find(function (c: any) { return !c.is_amendment; }) || fam[0];
+    const groups: Record<string, any[]> = {};
+    (contracts ?? []).forEach(function (c: any) { const k = groupKey(c); (groups[k] = groups[k] || []).push(c); });
+    for (const key of Object.keys(groups)) {
+      if (coveredGroups.has(key)) continue;
+      const g = groups[key];
+      const rep = g.find(function (c: any) { return !c.is_amendment; }) || g[0];
       if (await hasOpen(rep.id, "insurance")) continue;
       const cName = (rep.tenants?.name ?? "") + (rep.properties?.name ? " — " + rep.properties.name : "");
       await add({
