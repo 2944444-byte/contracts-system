@@ -58,7 +58,7 @@ export async function runAlertSync(supabase: SupabaseClient): Promise<{ created:
 
   // 1. Contracts expiring + options
   const { data: contracts } = await supabase.from("contracts")
-    .select("id,property_id,end_date,tenants(name),properties(name),contract_options(id,status,is_exercised,start_date,end_date,notice_days_before_end,notice_type,option_number)")
+    .select("id,property_id,end_date,is_amendment,parent_contract_id,tenants(name),properties(name),contract_options(id,status,is_exercised,start_date,end_date,notice_days_before_end,notice_type,option_number)")
     .in("status", ["active", "expiring", "extended"]);
   for (const c of (contracts ?? []) as any[]) {
     if (c.end_date) {
@@ -191,21 +191,38 @@ export async function runAlertSync(supabase: SupabaseClient): Promise<{ created:
   const todayStr = new Date().toISOString().split("T")[0];
   {
     const { data: tenantIns } = await supabase.from("insurances_tenant").select("contract_id,end_date,status");
-    const coveredContracts = new Set(
+    // Insurance is held at the CONTRACT-FAMILY level: a base contract and all its
+    // amendments (תוספות) share ONE tenant insurance certificate, which is linked
+    // to the base. So we (a) resolve every contract to its family root, (b) treat
+    // a family as covered if ANY contract in it has active insurance, and
+    // (c) emit ONE alert per uncovered family — not per contract row. This stops
+    // amendments being falsely flagged and stops duplicate alerts per tenant.
+    const rootOf = function (c: any) { return (c && (c.parent_contract_id || c.id)) || null; };
+    const contractById: Record<string, any> = {};
+    (contracts ?? []).forEach(function (c: any) { contractById[c.id] = c; });
+    const coveredRoots = new Set(
       (tenantIns ?? [])
         .filter(function (x: any) { return x.contract_id && x.status === "active" && x.end_date && x.end_date >= todayStr; })
-        .map(function (x: any) { return x.contract_id; })
+        .map(function (x: any) { return rootOf(contractById[x.contract_id]) || x.contract_id; })
     );
-    for (const c of (contracts ?? []) as any[]) {
-      if (coveredContracts.has(c.id)) continue;
-      if (await hasOpen(c.id, "insurance")) continue;
-      const cName = (c.tenants?.name ?? "") + (c.properties?.name ? " — " + c.properties.name : "");
+    // Group active contracts by family; pick the base as the representative.
+    const families: Record<string, any[]> = {};
+    (contracts ?? []).forEach(function (c: any) {
+      const r = rootOf(c); if (!r) return;
+      (families[r] = families[r] || []).push(c);
+    });
+    for (const root of Object.keys(families)) {
+      if (coveredRoots.has(root)) continue;
+      const fam = families[root];
+      const rep = fam.find(function (c: any) { return !c.is_amendment; }) || fam[0];
+      if (await hasOpen(rep.id, "insurance")) continue;
+      const cName = (rep.tenants?.name ?? "") + (rep.properties?.name ? " — " + rep.properties.name : "");
       await add({
         title: `אין אישור ביטוח בתוקף: ${cName}`,
         message: "לחוזה פעיל זה לא רשומה אף תעודת ביטוח שוכר בתוקף. יש לדרוש מהשוכר אישור ביטוח (ראה מסך ביטוחים — מנוע התאימות).",
         alert_type: "insurance_missing", severity: "urgent",
-        entity_type: "insurance", entity_id: c.id, contract_id: c.id,
-        property_id: c.property_id ?? null, due_date: todayStr,
+        entity_type: "insurance", entity_id: rep.id, contract_id: rep.id,
+        property_id: rep.property_id ?? null, due_date: todayStr,
       });
     }
   }
