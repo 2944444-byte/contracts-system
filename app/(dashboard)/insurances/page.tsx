@@ -496,9 +496,23 @@ export default function InsurancesPage() {
     if (c.parent_contract_id) return false;
     return true;
   });
-  const contractsMissingTenantIns = baseActiveContracts.filter(function(c:any){
-    if (c.no_tenant_insurance_required) return false;
-    return !contractHasActiveTenantIns(c.id);
+  // Missing tenant insurance — evaluated per (tenant + property) so a base and
+  // its amendments count as ONE group, and a group is covered if ANY contract in
+  // it has an active certificate (matches lib/alerts-sync.ts, and is robust to
+  // amendments whose parent_contract_id is unset). One row per uncovered group.
+  const insGroups: Record<string, any[]> = {};
+  contracts.forEach(function(c:any){
+    if (filterPropIds.length>0 && !filterPropIds.includes(c.property_id)) return;
+    const k = (c.tenant_id||"?") + "|" + (c.property_id||"?");
+    (insGroups[k] = insGroups[k] || []).push(c);
+  });
+  const contractsMissingTenantIns = Object.keys(insGroups).map(function(k){
+    const g = insGroups[k];
+    return g.find(function(c:any){ return !c.is_amendment; }) || g[0];
+  }).filter(function(rep:any){
+    if (rep.no_tenant_insurance_required) return false;
+    const g = insGroups[(rep.tenant_id||"?") + "|" + (rep.property_id||"?")];
+    return !g.some(function(c:any){ return contractHasActiveTenantIns(c.id); });
   });
   const contractsExemptTenantIns = baseActiveContracts.filter(function(c:any){
     return c.no_tenant_insurance_required && !contractHasActiveTenantIns(c.id);
