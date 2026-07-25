@@ -594,8 +594,8 @@ export default function InsurancesPage() {
                   <div className="mt-1.5 flex gap-1 flex-wrap">
                     <button onClick={function(){openNew(c.id);}} title="הוסף אישור ביטוח עבור שוכר זה"
                       className="text-[11px] rounded bg-rose-600 hover:bg-rose-700 text-white px-2 py-1 font-semibold">+ הוסף אישור</button>
-                    <button onClick={function(){sendInsuranceDemand(c, []);}} title="צור טיוטת מכתב דרישת אישור ביטוח"
-                      className="text-[11px] rounded border border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100 px-2 py-1">✉ דרישה</button>
+                    <button onClick={function(){sendInsuranceDemand(c, []);}} title="צור מכתב דרישה/תזכורת לשוכר להמצאת אישור ביטוח"
+                      className="text-[11px] rounded border border-rose-300 text-rose-700 hover:bg-rose-100 px-2 py-1 font-semibold">✉ שלח בקשה</button>
                     <button onClick={function(){openReqEditor(c);}} title="הגדר אילו כיסויים וגבולות אחריות נדרשים בהסכם זה"
                       className="text-[11px] rounded border border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 px-2 py-1">⚙ דרישות</button>
                     <button onClick={function(){markNoTenantInsurance(c.id,(c.tenants as any)?.name||"");}}
