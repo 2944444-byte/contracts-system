@@ -1559,9 +1559,10 @@ export default function ContractsNewPage() {
                 unexplained and the payment terms are captured with the contract. */}
             {Number(investAdd) > 0 && (
               <div className="rounded-xl border border-purple-200 bg-purple-50/40 p-4 mt-3">
-                <div className="text-sm font-bold text-purple-800 mb-1">🏗 פירוט השקעות בינוי ותנאי החזר</div>
+                <div className="text-sm font-bold text-purple-800 mb-1">🏗 פירוט השקעות בינוי ותנאי החזר <span className="text-[11px] font-semibold text-purple-500">(אופציונלי)</span></div>
                 <div className="text-[11px] text-purple-600 mb-3 leading-relaxed">
                   ההשקעה שביצע המשכיר עבור השוכר, ומתי מוחזר לשוכר התשלום עבורה (בדרך כלל X ימים לאחר השלמת העבודות ופתיחת העסק, כנגד דו&quot;ח מוסדר וחשבונית).
+                  <br/>אפשר להשאיר ריק — התוספת החודשית לבדה מספיקה, והמערכת תחשב איתה את שכ&quot;ד והמקדמות כרגיל.
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
