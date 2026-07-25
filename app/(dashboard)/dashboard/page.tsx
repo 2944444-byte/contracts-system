@@ -8,6 +8,15 @@ import { getKnownIndexMonth } from '@/lib/cpi-utils';
 import CalcProgress, { CalcProgressState } from '@/components/CalcProgress';
 
 function fmtMoney(n: number) { return "₪" + (n ?? 0).toLocaleString("he-IL",{minimumFractionDigits:2,maximumFractionDigits:2}); }
+// Headline KPI numbers: drop the agorot once the figure is big, so long sums
+// (e.g. ₪1,320,563.46) fit the card instead of being clipped to "...,563.46".
+// The exact value stays available via the element's title.
+function fmtMoneyKpi(n: number) {
+  var v = n ?? 0;
+  return Math.abs(v) >= 1000
+    ? "₪" + Math.round(v).toLocaleString("he-IL")
+    : "₪" + v.toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
 
 // Calculate base monthly rent for a contract (handles per-unit pricing)
@@ -33,6 +42,7 @@ export default function DashboardPage() {
   const [guarantees, setGuarantees] = useState<any[]>([]);
   const [alerts, setAlerts] = useState<any[]>([]);
   const [unsentLetters, setUnsentLetters] = useState<any[]>([]);
+  const [openCharges, setOpenCharges] = useState<any[]>([]);
   const [cpiRatios, setCpiRatios] = useState<Record<string, number>>({});
   const [cpiProgress, setCpiProgress] = useState<CalcProgressState | null>(null);
 
@@ -47,13 +57,15 @@ export default function DashboardPage() {
   useEffect(function() { loadAll(); }, []);
 
   async function loadAll() {
-    const [{ data: pg }, { data: p }, { data: c }, { data: sp }, { data: gu }, { data: al }] = await Promise.all([
+    const [{ data: pg }, { data: p }, { data: c }, { data: sp }, { data: gu }, { data: al }, { data: ch }] = await Promise.all([
       supabase.from("property_groups").select("id,group_name").order("group_name"),
       supabase.from("properties").select("id,name,group_id,city,total_area,property_type"),
       supabase.from("contracts").select("id,status,rent_per_sqm,charged_area,investment_addition,property_id,end_date,start_date,index_base_date,indexation_method,index_mechanism,is_amendment,tenants(name),properties(name),contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area))").in("status",["active","extended","expiring"]),
       supabase.from("spaces").select("id,property_id,status,space_name,area"),
       supabase.from("guarantees").select("id,contract_id,amount_required,amount_actual,end_date,guarantee_type").eq("status","active"),
-      supabase.from("alerts").select("id,title,severity,due_date,entity_type,contract_id").eq("is_resolved",false).order("severity").order("due_date").limit(20),
+      supabase.from("alerts").select("id,title,severity,due_date,entity_type,contract_id").eq("is_resolved",false).order("due_date", { ascending: true }).limit(20),
+      // Money still owed — the most actionable number for a property manager.
+      supabase.from("charges").select("id,contract_id,total_amount,due_date,status").eq("status","pending"),
     ]);
 
     // Data-level scoping: KPIs/sums must only include allowed properties.
@@ -69,6 +81,7 @@ export default function DashboardPage() {
     setSpaces(scopeRows(sp ?? [], scope, function(x: any){ return x.property_id; }));
     setGuarantees((gu ?? []).filter(byCid));
     setAlerts((al ?? []).filter(byCid));
+    setOpenCharges((ch ?? []).filter(byCid));
 
     // Letters waiting to be sent (draft + ready) — surfaced as a banner.
     const { data: ul } = await supabase.from("letters")
@@ -232,6 +245,14 @@ export default function DashboardPage() {
     return days <= 90;
   });
 
+  // Open (unpaid) charges — respects the same group/property filter.
+  const contractIdSet: Record<string, boolean> = {};
+  filteredContracts.forEach(function(c: any){ contractIdSet[c.id] = true; });
+  const filteredOpenCharges = openCharges.filter(function(ch: any){ return contractIdSet[ch.contract_id]; });
+  const openChargesTotal = filteredOpenCharges.reduce(function(s: number, ch: any){ return s + (Number(ch.total_amount) || 0); }, 0);
+  const todayIso = new Date().toISOString().split("T")[0];
+  const overdueCharges = filteredOpenCharges.filter(function(ch: any){ return ch.due_date && ch.due_date < todayIso; });
+
   // Guarantee analysis
   const totalGuarantees = filteredGuarantees.reduce(function(s,g){return s+(Number(g.amount_required)||0);},0);
   const guaranteeGaps = filteredGuarantees.filter(function(g){return (Number(g.amount_actual)||0) < (Number(g.amount_required)||0);});
@@ -333,7 +354,7 @@ export default function DashboardPage() {
                 <div className="w-11 h-11 rounded-xl bg-emerald-100 flex items-center justify-center text-2xl shrink-0">💰</div>
                 <div className="min-w-0">
                   <div className="text-[11px] font-semibold text-slate-500">הכנסה חודשית צמודה</div>
-                  <div className="text-2xl font-black text-emerald-700 leading-tight truncate">{fmtMoney(indexedRevenue)}</div>
+                  <div title={fmtMoney(indexedRevenue)} className="text-xl xl:text-2xl font-black text-emerald-700 leading-tight whitespace-nowrap tabular-nums">{fmtMoneyKpi(indexedRevenue)}</div>
                 </div>
               </div>
               <div className="text-xs text-slate-400 mt-2">בסיס: {fmtMoney(baseRevenue)}</div>
@@ -377,7 +398,15 @@ export default function DashboardPage() {
           </div>
 
           {/* Row 2 — secondary KPIs */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-5">
+            <button onClick={function(){router.push("/payments");}}
+              className={"rounded-xl border p-3 text-right hover:shadow-sm " + (overdueCharges.length>0?"bg-red-50 border-red-100":"bg-white border-slate-200")}>
+              <div title={fmtMoney(openChargesTotal)} className={"text-lg xl:text-xl font-black whitespace-nowrap tabular-nums " + (overdueCharges.length>0?"text-red-700":"text-slate-700")}>{fmtMoneyKpi(openChargesTotal)}</div>
+              <div className="text-xs text-slate-500 mt-0.5">
+                חיובים פתוחים ({filteredOpenCharges.length})
+                {overdueCharges.length > 0 && <span className="text-red-600 font-semibold"> · {overdueCharges.length} באיחור</span>}
+              </div>
+            </button>
             <button onClick={function(){router.push("/properties");}}
               className="rounded-xl border border-slate-200 p-3 text-right hover:shadow-sm bg-white">
               <div className="text-xl font-black text-purple-700">{filteredProps.length}</div>
@@ -390,12 +419,12 @@ export default function DashboardPage() {
             </button>
             <button onClick={function(){router.push("/guarantees");}}
               className={"rounded-xl border p-3 text-right hover:shadow-sm " + (guaranteeGaps.length>0?"bg-orange-50 border-orange-100":"bg-white border-slate-200")}>
-              <div className={"text-xl font-black " + (guaranteeGaps.length>0?"text-orange-700":"text-slate-700")}>{fmtMoney(totalGuarantees)}</div>
+              <div title={fmtMoney(totalGuarantees)} className={"text-lg xl:text-xl font-black whitespace-nowrap tabular-nums " + (guaranteeGaps.length>0?"text-orange-700":"text-slate-700")}>{fmtMoneyKpi(totalGuarantees)}</div>
               <div className="text-xs text-slate-500 mt-0.5">ערבויות{guaranteeGaps.length > 0 ? " ("+guaranteeGaps.length+" פערים)" : ""}</div>
             </button>
             <button onClick={function(){router.push("/contracts");}}
               className="rounded-xl border border-slate-200 p-3 text-right hover:shadow-sm bg-white">
-              <div className="text-xl font-black text-green-700">{fmtMoney(indexedRevenue * 12)}</div>
+              <div title={fmtMoney(indexedRevenue * 12)} className="text-lg xl:text-xl font-black text-green-700 whitespace-nowrap tabular-nums">{fmtMoneyKpi(indexedRevenue * 12)}</div>
               <div className="text-xs text-slate-500 mt-0.5">הכנסה שנתית צמודה</div>
             </button>
           </div>
