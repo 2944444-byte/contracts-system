@@ -878,7 +878,7 @@ export default function GuaranteesPage() {
                 <div><label className="mb-1 block text-xs font-semibold text-slate-700">בנק/מוציא</label><input type="text" value={fBank} onChange={function (e) { setFBank(e.target.value); }} className={ic}/></div>
                 <div><label className="mb-1 block text-xs font-semibold text-slate-700">אסמכתא</label><input type="text" value={fRef} onChange={function (e) { setFRef(e.target.value); }} className={ic} dir="ltr"/></div>
                 <div><label className="mb-1 block text-xs font-semibold text-slate-700">תחילה</label><input type="date" value={fStartDate} onChange={function (e) { setFStartDate(e.target.value); }} className={ic}/></div>
-                <div><label className="mb-1 block text-xs font-semibold text-slate-700">סיום</label><input type="date" value={fEndDate} onChange={function (e) { setFEndDate(e.target.value); }} className={ic}/></div>
+                <div><label className="mb-1 block text-xs font-semibold text-slate-700">סיום {(fType==="promissory_note"||fType==="cash"||fType==="personal") && <span className="font-normal text-slate-400">(בד״כ ללא תוקף — אפשר להשאיר ריק)</span>}</label><input type="date" value={fEndDate} onChange={function (e) { setFEndDate(e.target.value); }} className={ic}/></div>
               </div>
               <div>
                 <label className="mb-1 block text-xs font-semibold text-slate-700">סטטוס</label>

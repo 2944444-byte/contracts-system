@@ -197,6 +197,10 @@ export default function ContractsNewPage() {
   const [guaranteeEnd, setGuaranteeEnd] = useState("");
   const [guarantors, setGuarantors] = useState<Array<{name: string; id_number: string}>>([]);
   const [guaranteeDocUrl, setGuaranteeDocUrl] = useState("");
+  // Additional securities beyond the primary one — most contracts have BOTH a
+  // bank guarantee AND a promissory note. Each ticked type is saved as its own
+  // guarantee row (open — no amount/expiry).
+  const [additionalGuarantees, setAdditionalGuarantees] = useState<string[]>([]);
   const [depositCalcMethod, setDepositCalcMethod] = useState<"months_based" | "fixed_amount">("months_based");
   const [depositMonths, setDepositMonths] = useState(3);
   const [depositIncludesMgmt, setDepositIncludesMgmt] = useState(false);
@@ -384,6 +388,10 @@ export default function ContractsNewPage() {
         setGuaranteeBank(g.bank || "");
         setGuaranteeEnd(g.end_date || "");
         setGuaranteeDocUrl(g.document_url || "");
+        // Any further guarantee rows → additional securities.
+        var extraTypes: string[] = [];
+        (c.guarantees as any[]).slice(1).forEach(function(x: any){ if (x.guarantee_type && extraTypes.indexOf(x.guarantee_type) === -1) extraTypes.push(x.guarantee_type); });
+        setAdditionalGuarantees(extraTypes);
       }
     }
     loadParent();
@@ -874,13 +882,13 @@ export default function ContractsNewPage() {
       }
 
       // Guarantee
-      if (addGuarantee && guaranteeAmt) {
+      if (addGuarantee && (guaranteeAmt || guaranteeType === "promissory_note" || guaranteeType === "cash")) {
         var noExpiry = guaranteeType === "promissory_note" || guaranteeType === "cash";
         var validGuarantors = guarantors.filter(function(g){return g.name || g.id_number;});
         await supabase.from("guarantees").insert({
           contract_id: contract.id,
           guarantee_type: guaranteeType,
-          amount_required: Number(guaranteeAmt),
+          amount_required: guaranteeAmt ? Number(guaranteeAmt) : null,
           amount_actual: guaranteeActual ? Number(guaranteeActual) : null,
           bank: guaranteeBank || null,
           end_date: noExpiry ? null : (guaranteeEnd || null),
@@ -888,6 +896,16 @@ export default function ContractsNewPage() {
           guarantors: guaranteeType === "promissory_note" && validGuarantors.length > 0 ? validGuarantors : null,
           status: "active",
         });
+      }
+
+      // Additional securities (e.g. שטר חוב alongside a bank guarantee) — one
+      // open guarantee row per ticked type (no amount/expiry); details can be
+      // completed later in the guarantees screen.
+      if (addGuarantee && additionalGuarantees.length > 0) {
+        var extraGuar = additionalGuarantees
+          .filter(function(t){ return t !== guaranteeType; })
+          .map(function(t){ return { contract_id: contract.id, guarantee_type: t, amount_required: null, amount_actual: null, bank: null, end_date: null, document_url: null, status: "active" }; });
+        if (extraGuar.length > 0) await supabase.from("guarantees").insert(extraGuar);
       }
 
       // Price Tiers → save ORIGINAL tiers (with is_recurring intact)
@@ -2752,6 +2770,28 @@ export default function ContractsNewPage() {
                       </div>
                     </button>
                   ))}
+                </div>
+
+                {/* Additional securities — most contracts also carry a שטר חוב
+                    alongside the bank guarantee. Tick any extra types; each is
+                    saved as its own guarantee row (open, no amount/expiry). */}
+                <div className="rounded-xl border border-slate-200 p-3">
+                  <div className="text-xs font-bold text-slate-700 mb-2">ביטחונות נוספים בהסכם (אופציונלי)</div>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                    {GUARANTEE_TYPES.filter((t) => t.v !== guaranteeType).map((t) => {
+                      const on = additionalGuarantees.indexOf(t.v) !== -1;
+                      return (
+                        <button key={t.v} type="button"
+                          onClick={() => setAdditionalGuarantees((prev) => on ? prev.filter((x) => x !== t.v) : prev.concat([t.v]))}
+                          className={"rounded-lg border p-2 text-center text-xs " + (on ? "border-blue-500 bg-blue-50 text-blue-700 font-semibold" : "border-slate-200 text-slate-600 hover:bg-slate-50")}>
+                          <div>{t.icon}</div><div>{t.l}</div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {additionalGuarantees.length > 0 && (
+                    <div className="text-[11px] text-slate-400 mt-1.5">יישמרו כערבויות נפרדות. שטר חוב / פיקדון — ללא תוקף כברירת מחדל; אפשר להשלים סכום ופרטים במסך ערבויות.</div>
+                  )}
                 </div>
 
                 {/* Deposit calculation method */}
