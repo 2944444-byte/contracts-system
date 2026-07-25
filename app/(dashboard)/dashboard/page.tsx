@@ -43,6 +43,7 @@ export default function DashboardPage() {
   const [alerts, setAlerts] = useState<any[]>([]);
   const [unsentLetters, setUnsentLetters] = useState<any[]>([]);
   const [allCharges, setAllCharges] = useState<any[]>([]);
+  const [advances, setAdvances] = useState<any[]>([]);
   const [cpiRatios, setCpiRatios] = useState<Record<string, number>>({});
   const [cpiProgress, setCpiProgress] = useState<CalcProgressState | null>(null);
 
@@ -57,7 +58,7 @@ export default function DashboardPage() {
   useEffect(function() { loadAll(); }, []);
 
   async function loadAll() {
-    const [{ data: pg }, { data: p }, { data: c }, { data: sp }, { data: gu }, { data: al }, { data: ch }] = await Promise.all([
+    const [{ data: pg }, { data: p }, { data: c }, { data: sp }, { data: gu }, { data: al }, { data: ch }, { data: ap }] = await Promise.all([
       supabase.from("property_groups").select("id,group_name").order("group_name"),
       supabase.from("properties").select("id,name,group_id,city,total_area,property_type"),
       supabase.from("contracts").select("id,status,rent_per_sqm,charged_area,investment_addition,property_id,end_date,start_date,index_base_date,indexation_method,index_mechanism,is_amendment,tenants(name),properties(name),contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area))").in("status",["active","extended","expiring"]),
@@ -67,6 +68,9 @@ export default function DashboardPage() {
       // All charges — drives the open-charges KPI, the 12-month trend and the
       // YTD collection rate. Small table, so one fetch covers all three.
       supabase.from("charges").select("id,contract_id,total_amount,due_date,status"),
+      // Rent advances/cheques — the bulk of actual monthly income, so the trend
+      // reflects real cash flow rather than only the recently-created charges.
+      supabase.from("advance_payments").select("id,contract_id,property_id,check_date,total_with_vat,status"),
     ]);
 
     // Data-level scoping: KPIs/sums must only include allowed properties.
@@ -75,14 +79,23 @@ export default function DashboardPage() {
     var cidOk: Record<string, boolean> = {};
     scC.forEach(function(x: any){ cidOk[x.id] = true; });
     var byCid = function(r: any){ return scope === null || !!cidOk[r.contract_id]; };
+    // Rows that may be linked to a PROPERTY instead of a contract (e.g. building
+    // insurance / safety alerts). Checking contract_id alone hid them from
+    // scoped users even though the property is theirs.
+    var byCidOrProp = function(r: any){
+      if (scope === null) return true;
+      if (r.property_id) return scope.indexOf(r.property_id) !== -1;
+      return !!cidOk[r.contract_id];
+    };
     var scP = scopeRows(p ?? [], scope, function(x: any){ return x.id; });
     setPropGroups(scopeGroups(pg ?? [], scope, scP));
     setProperties(scP);
     setContracts(scC.filter(function(c:any){return !c.is_amendment;}));
     setSpaces(scopeRows(sp ?? [], scope, function(x: any){ return x.property_id; }));
     setGuarantees((gu ?? []).filter(byCid));
-    setAlerts((al ?? []).filter(byCid));
+    setAlerts((al ?? []).filter(byCidOrProp));
     setAllCharges((ch ?? []).filter(byCid));
+    setAdvances((ap ?? []).filter(byCidOrProp));
 
     // Letters waiting to be sent (draft + ready) — surfaced as a banner.
     const { data: ul } = await supabase.from("letters")
@@ -251,6 +264,9 @@ export default function DashboardPage() {
   filteredContracts.forEach(function(c: any){ contractIdSet[c.id] = true; });
   const filteredCharges = allCharges.filter(function(ch: any){ return contractIdSet[ch.contract_id]; });
   const filteredOpenCharges = filteredCharges.filter(function(ch: any){ return ch.status === "pending"; });
+  const filteredAdvances = advances.filter(function(a: any){
+    return a.property_id ? filteredPropIds.includes(a.property_id) : !!contractIdSet[a.contract_id];
+  });
   const openChargesTotal = filteredOpenCharges.reduce(function(s: number, ch: any){ return s + (Number(ch.total_amount) || 0); }, 0);
   const todayIso = new Date().toISOString().split("T")[0];
   const overdueCharges = filteredOpenCharges.filter(function(ch: any){ return ch.due_date && ch.due_date < todayIso; });
@@ -282,6 +298,16 @@ export default function DashboardPage() {
       if (!m) return;
       var amt = Number(ch.total_amount) || 0;
       if (ch.status === "paid") m.paid += amt; else m.open += amt;
+      m.total += amt;
+    });
+    // Rent advances/cheques by their cheque date — this is where most of the
+    // monthly income actually sits, so the trend reflects real cash flow.
+    filteredAdvances.forEach(function(a: any){
+      if (!a.check_date) return;
+      var m = byKey[String(a.check_date).slice(0, 7)];
+      if (!m) return;
+      var amt = Number(a.total_with_vat) || 0;
+      if (a.status === "received" || a.status === "paid") m.paid += amt; else m.open += amt;
       m.total += amt;
     });
   })();
@@ -528,10 +554,11 @@ export default function DashboardPage() {
           {trendMax > 0 && (
             <div className="rounded-2xl border border-slate-200 bg-white shadow-sm p-4 mb-5">
               <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
-                <span className="font-bold text-slate-700 text-sm">📊 חיובים ב-12 החודשים האחרונים</span>
+                <span className="font-bold text-slate-700 text-sm">📊 תזרים 12 החודשים האחרונים</span>
                 <span className="flex items-center gap-3 text-[11px] text-slate-500">
                   <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-emerald-500 inline-block" />שולם</span>
                   <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-amber-400 inline-block" />פתוח</span>
+                  <span className="text-slate-300">(חיובים + מקדמות שכ"ד)</span>
                 </span>
               </div>
               <div className="flex items-end justify-between gap-1 h-32">
