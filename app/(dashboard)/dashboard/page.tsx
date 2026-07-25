@@ -42,7 +42,7 @@ export default function DashboardPage() {
   const [guarantees, setGuarantees] = useState<any[]>([]);
   const [alerts, setAlerts] = useState<any[]>([]);
   const [unsentLetters, setUnsentLetters] = useState<any[]>([]);
-  const [openCharges, setOpenCharges] = useState<any[]>([]);
+  const [allCharges, setAllCharges] = useState<any[]>([]);
   const [cpiRatios, setCpiRatios] = useState<Record<string, number>>({});
   const [cpiProgress, setCpiProgress] = useState<CalcProgressState | null>(null);
 
@@ -63,9 +63,10 @@ export default function DashboardPage() {
       supabase.from("contracts").select("id,status,rent_per_sqm,charged_area,investment_addition,property_id,end_date,start_date,index_base_date,indexation_method,index_mechanism,is_amendment,tenants(name),properties(name),contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area))").in("status",["active","extended","expiring"]),
       supabase.from("spaces").select("id,property_id,status,space_name,area"),
       supabase.from("guarantees").select("id,contract_id,amount_required,amount_actual,end_date,guarantee_type").eq("status","active"),
-      supabase.from("alerts").select("id,title,severity,due_date,entity_type,contract_id").eq("is_resolved",false).order("due_date", { ascending: true }).limit(20),
-      // Money still owed — the most actionable number for a property manager.
-      supabase.from("charges").select("id,contract_id,total_amount,due_date,status").eq("status","pending"),
+      supabase.from("alerts").select("id,title,severity,due_date,entity_type,contract_id,property_id").eq("is_resolved",false).order("due_date", { ascending: true }).limit(60),
+      // All charges — drives the open-charges KPI, the 12-month trend and the
+      // YTD collection rate. Small table, so one fetch covers all three.
+      supabase.from("charges").select("id,contract_id,total_amount,due_date,status"),
     ]);
 
     // Data-level scoping: KPIs/sums must only include allowed properties.
@@ -81,7 +82,7 @@ export default function DashboardPage() {
     setSpaces(scopeRows(sp ?? [], scope, function(x: any){ return x.property_id; }));
     setGuarantees((gu ?? []).filter(byCid));
     setAlerts((al ?? []).filter(byCid));
-    setOpenCharges((ch ?? []).filter(byCid));
+    setAllCharges((ch ?? []).filter(byCid));
 
     // Letters waiting to be sent (draft + ready) — surfaced as a banner.
     const { data: ul } = await supabase.from("letters")
@@ -245,13 +246,99 @@ export default function DashboardPage() {
     return days <= 90;
   });
 
-  // Open (unpaid) charges — respects the same group/property filter.
+  // Charges — respects the same group/property filter.
   const contractIdSet: Record<string, boolean> = {};
   filteredContracts.forEach(function(c: any){ contractIdSet[c.id] = true; });
-  const filteredOpenCharges = openCharges.filter(function(ch: any){ return contractIdSet[ch.contract_id]; });
+  const filteredCharges = allCharges.filter(function(ch: any){ return contractIdSet[ch.contract_id]; });
+  const filteredOpenCharges = filteredCharges.filter(function(ch: any){ return ch.status === "pending"; });
   const openChargesTotal = filteredOpenCharges.reduce(function(s: number, ch: any){ return s + (Number(ch.total_amount) || 0); }, 0);
   const todayIso = new Date().toISOString().split("T")[0];
   const overdueCharges = filteredOpenCharges.filter(function(ch: any){ return ch.due_date && ch.due_date < todayIso; });
+
+  // YTD collection rate — of everything billed this year (due date already
+  // passed), how much was actually collected.
+  const yearStartIso = new Date().getFullYear() + "-01-01";
+  const ytdDue = filteredCharges.filter(function(ch: any){ return ch.due_date && ch.due_date >= yearStartIso && ch.due_date <= todayIso; });
+  const ytdBilled = ytdDue.reduce(function(s: number, ch: any){ return s + (Number(ch.total_amount) || 0); }, 0);
+  const ytdPaid = ytdDue.filter(function(ch: any){ return ch.status === "paid"; })
+                        .reduce(function(s: number, ch: any){ return s + (Number(ch.total_amount) || 0); }, 0);
+  const collectionPct = ytdBilled > 0 ? Math.round((ytdPaid / ytdBilled) * 100) : null;
+
+  // 12-month charge trend (paid vs still open), oldest → newest.
+  const HEB_M = ["ינו","פבר","מרץ","אפר","מאי","יונ","יול","אוג","ספט","אוק","נוב","דצמ"];
+  const trendMonths: Array<{ label: string; key: string; paid: number; open: number; total: number }> = [];
+  (function(){
+    var now = new Date();
+    for (var i = 11; i >= 0; i--) {
+      var d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      var key = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0");
+      trendMonths.push({ label: HEB_M[d.getMonth()], key: key, paid: 0, open: 0, total: 0 });
+    }
+    var byKey: Record<string, any> = {};
+    trendMonths.forEach(function(m){ byKey[m.key] = m; });
+    filteredCharges.forEach(function(ch: any){
+      if (!ch.due_date) return;
+      var m = byKey[String(ch.due_date).slice(0, 7)];
+      if (!m) return;
+      var amt = Number(ch.total_amount) || 0;
+      if (ch.status === "paid") m.paid += amt; else m.open += amt;
+      m.total += amt;
+    });
+  })();
+  const trendMax = trendMonths.reduce(function(mx, m){ return Math.max(mx, m.total); }, 0);
+
+  // Per-property breakdown: income, occupancy and open debt side by side.
+  const propertyRows = filteredProps.map(function(p: any){
+    var pContracts = filteredContracts.filter(function(c: any){ return c.property_id === p.id; });
+    var income = pContracts.reduce(function(s: number, c: any){ return s + calcContractRent(c) * (cpiRatios[c.id] || 1); }, 0);
+    var pSpaces = spaces.filter(function(s: any){ return s.property_id === p.id; });
+    var pArea = pSpaces.reduce(function(s: number, x: any){ return s + (Number(x.area) || 0); }, 0);
+    var occArea = 0;
+    var held: Record<string, boolean> = {};
+    pContracts.forEach(function(c: any){ (c.contract_spaces || []).forEach(function(cs: any){ if (cs.space_id) held[cs.space_id] = true; }); });
+    pSpaces.forEach(function(x: any){ if (held[x.id]) occArea += Number(x.area) || 0; });
+    var pOpen = filteredOpenCharges.filter(function(ch: any){
+      var c = filteredContracts.find(function(x: any){ return x.id === ch.contract_id; });
+      return c && c.property_id === p.id;
+    }).reduce(function(s: number, ch: any){ return s + (Number(ch.total_amount) || 0); }, 0);
+    return {
+      id: p.id, name: p.name, income: income, open: pOpen,
+      contracts: pContracts.length,
+      occPct: pArea > 0 ? Math.round((occArea / pArea) * 100) : 0,
+    };
+  }).sort(function(a, b){ return b.income - a.income; });
+
+  // Action centre — upcoming obligations grouped by kind, nearest first.
+  const ACTION_KINDS: Record<string, { label: string; icon: string; href: string }> = {
+    insurance:        { label: "ביטוחים",        icon: "🛡️", href: "/insurances" },
+    guarantee:        { label: "ערבויות",        icon: "🏦", href: "/guarantees" },
+    safety:           { label: "בדיקות בטיחות",  icon: "🔒", href: "/safety" },
+    arrears:          { label: "גבייה / חובות",  icon: "💳", href: "/payments" },
+    contract_option:  { label: "מועדי אופציה",   icon: "🔁", href: "/contracts" },
+    option:           { label: "מועדי אופציה",   icon: "🔁", href: "/contracts" },
+    contract:         { label: "חוזים",          icon: "📄", href: "/contracts" },
+  };
+  // Alerts limited to the selected group/property (by their own property_id or
+  // via their contract), so the action centre matches the filter above.
+  const filteredAlerts = alerts.filter(function(a: any){
+    if (a.property_id) return filteredPropIds.includes(a.property_id);
+    if (a.contract_id) return !!contractIdSet[a.contract_id];
+    return true;
+  });
+  const actionGroups = (function(){
+    var acc: Record<string, { label: string; icon: string; href: string; count: number; nearest: string | null; soon: number }> = {};
+    var in30 = new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0];
+    filteredAlerts.forEach(function(a: any){
+      var meta = ACTION_KINDS[a.entity_type] || { label: "אחר", icon: "🔔", href: "/alerts" };
+      var k = meta.label;
+      if (!acc[k]) acc[k] = { label: meta.label, icon: meta.icon, href: meta.href, count: 0, nearest: null, soon: 0 };
+      acc[k].count++;
+      if (a.due_date && (!acc[k].nearest || a.due_date < acc[k].nearest!)) acc[k].nearest = a.due_date;
+      if (a.due_date && a.due_date <= in30) acc[k].soon++;
+    });
+    return Object.keys(acc).map(function(k){ return acc[k]; })
+      .sort(function(x, y){ return (y.soon - x.soon) || String(x.nearest).localeCompare(String(y.nearest)); });
+  })();
 
   // Guarantee analysis
   const totalGuarantees = filteredGuarantees.reduce(function(s,g){return s+(Number(g.amount_required)||0);},0);
@@ -427,6 +514,116 @@ export default function DashboardPage() {
               <div title={fmtMoney(indexedRevenue * 12)} className="text-lg xl:text-xl font-black text-green-700 whitespace-nowrap tabular-nums">{fmtMoneyKpi(indexedRevenue * 12)}</div>
               <div className="text-xs text-slate-500 mt-0.5">הכנסה שנתית צמודה</div>
             </button>
+            <button onClick={function(){router.push("/payments");}}
+              title={collectionPct === null ? "" : "נגבו " + fmtMoney(ytdPaid) + " מתוך " + fmtMoney(ytdBilled) + " שחויבו השנה"}
+              className="rounded-xl border border-slate-200 p-3 text-right hover:shadow-sm bg-white">
+              <div className={"text-lg xl:text-xl font-black tabular-nums " + (collectionPct === null ? "text-slate-400" : collectionPct >= 90 ? "text-green-700" : collectionPct >= 70 ? "text-amber-600" : "text-red-600")}>
+                {collectionPct === null ? "—" : collectionPct + "%"}
+              </div>
+              <div className="text-xs text-slate-500 mt-0.5">אחוז גבייה (השנה)</div>
+            </button>
+          </div>
+
+          {/* 12-month charge trend — paid vs still open, per month. */}
+          {trendMax > 0 && (
+            <div className="rounded-2xl border border-slate-200 bg-white shadow-sm p-4 mb-5">
+              <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                <span className="font-bold text-slate-700 text-sm">📊 חיובים ב-12 החודשים האחרונים</span>
+                <span className="flex items-center gap-3 text-[11px] text-slate-500">
+                  <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-emerald-500 inline-block" />שולם</span>
+                  <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-amber-400 inline-block" />פתוח</span>
+                </span>
+              </div>
+              <div className="flex items-end justify-between gap-1 h-32">
+                {trendMonths.map(function(m, i){
+                  var hPaid = trendMax > 0 ? (m.paid / trendMax) * 100 : 0;
+                  var hOpen = trendMax > 0 ? (m.open / trendMax) * 100 : 0;
+                  return (
+                    <div key={i} className="flex-1 flex flex-col items-center justify-end h-full gap-1 group">
+                      <div className="w-full flex flex-col justify-end h-full rounded-t overflow-hidden" title={m.label + ": שולם " + fmtMoney(m.paid) + " · פתוח " + fmtMoney(m.open)}>
+                        {hOpen > 0 && <div className="w-full bg-amber-400 group-hover:bg-amber-500 transition-colors" style={{ height: hOpen + "%" }} />}
+                        {hPaid > 0 && <div className="w-full bg-emerald-500 group-hover:bg-emerald-600 transition-colors" style={{ height: hPaid + "%" }} />}
+                      </div>
+                      <span className="text-[9px] text-slate-400">{m.label}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Action centre + per-property breakdown */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-5">
+            <div className="rounded-2xl border border-slate-200 bg-white shadow-sm p-4">
+              <div className="flex items-center justify-between mb-3">
+                <span className="font-bold text-slate-700 text-sm">⏰ דורש טיפול</span>
+                <button onClick={function(){router.push("/alerts");}} className="text-xs text-blue-600 font-semibold">הכל →</button>
+              </div>
+              {actionGroups.length === 0 ? (
+                <div className="text-xs text-slate-400 py-6 text-center">אין משימות פתוחות 🎉</div>
+              ) : (
+                <div className="space-y-1.5">
+                  {actionGroups.map(function(g, i){
+                    return (
+                      <button key={i} onClick={function(){router.push(g.href);}}
+                        className="w-full flex items-center justify-between gap-2 rounded-xl border border-slate-100 hover:border-slate-300 hover:bg-slate-50 px-3 py-2 text-right transition-colors">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="text-lg shrink-0">{g.icon}</span>
+                          <div className="min-w-0">
+                            <div className="text-sm font-semibold text-slate-700 truncate">{g.label}</div>
+                            {g.nearest && <div className="text-[11px] text-slate-400">הקרוב: {fmtDate(g.nearest)}</div>}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {g.soon > 0 && <span className="text-[10px] font-bold bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full">{g.soon} תוך 30 יום</span>}
+                          <span className="text-sm font-black text-slate-700">{g.count}</span>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-white shadow-sm p-4">
+              <div className="flex items-center justify-between mb-3">
+                <span className="font-bold text-slate-700 text-sm">🏢 פילוח לפי נכס</span>
+                <button onClick={function(){router.push("/properties");}} className="text-xs text-blue-600 font-semibold">הכל →</button>
+              </div>
+              {propertyRows.length === 0 ? (
+                <div className="text-xs text-slate-400 py-6 text-center">אין נכסים להצגה</div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-right text-xs min-w-[420px]">
+                    <thead className="text-slate-400">
+                      <tr className="border-b border-slate-100">
+                        <th className="py-1.5 font-semibold">נכס</th>
+                        <th className="py-1.5 font-semibold">חוזים</th>
+                        <th className="py-1.5 font-semibold">תפוסה</th>
+                        <th className="py-1.5 font-semibold">הכנסה/חודש</th>
+                        <th className="py-1.5 font-semibold">חוב פתוח</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {propertyRows.map(function(r){
+                        return (
+                          <tr key={r.id} onClick={function(){router.push("/properties");}}
+                            className="border-b border-slate-50 last:border-0 hover:bg-slate-50 cursor-pointer">
+                            <td className="py-2 font-semibold text-slate-700 truncate max-w-[10rem]">{r.name}</td>
+                            <td className="py-2 text-slate-500">{r.contracts}</td>
+                            <td className="py-2">
+                              <span className={"font-bold " + (r.occPct >= 90 ? "text-green-700" : r.occPct >= 70 ? "text-amber-600" : "text-red-600")}>{r.occPct}%</span>
+                            </td>
+                            <td className="py-2 font-semibold text-emerald-700 tabular-nums whitespace-nowrap" title={fmtMoney(r.income)}>{fmtMoneyKpi(r.income)}</td>
+                            <td className={"py-2 tabular-nums whitespace-nowrap font-semibold " + (r.open > 0 ? "text-red-600" : "text-slate-300")} title={fmtMoney(r.open)}>{r.open > 0 ? fmtMoneyKpi(r.open) : "—"}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Row 3 — panels */}
