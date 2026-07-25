@@ -530,6 +530,7 @@ export default function ContractsNewPage() {
   async function handleAiExtract(file: File) {
     setAiExtracting(true);
     setAiResult(null);
+    let pdfTotalPages = 0;
     try {
       let text = "";
       if (file.name.endsWith(".pdf")) {
@@ -538,7 +539,12 @@ export default function ContractsNewPage() {
         const arrayBuffer = await file.arrayBuffer();
         const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
         const pages: string[] = [];
-        for (let i = 1; i <= pdf.numPages; i++) {
+        // Read only the first 40 pages — commercial lease PDFs are often 20-30MB
+        // with appended annexes/scans, but the contract TERMS live in the first
+        // pages. This keeps extraction fast/cheap without any user action.
+        const maxTextPages = Math.min(40, pdf.numPages);
+        pdfTotalPages = pdf.numPages;
+        for (let i = 1; i <= maxTextPages; i++) {
           const page = await pdf.getPage(i);
           const content = await page.getTextContent();
           pages.push(content.items.map((item: any) => item.str).join(" "));
@@ -551,7 +557,7 @@ export default function ContractsNewPage() {
           var imagePages: string[] = [];
           var canvas = document.createElement("canvas");
           var ctx = canvas.getContext("2d");
-          var maxOcrPages = Math.min(10, pdf.numPages);
+          var maxOcrPages = Math.min(15, pdf.numPages);
           for (var pi = 1; pi <= maxOcrPages; pi++) {
             var ocrPage = await pdf.getPage(pi);
             var viewport = ocrPage.getViewport({ scale: 1.5 });
@@ -605,6 +611,8 @@ export default function ContractsNewPage() {
         data = await res.json();
         if (data.error) throw new Error(data.error);
       }
+      // Surface page-trim info in the verification summary (client text path).
+      if (pdfTotalPages > 40 && data && !data._truncated) data._truncated = { totalPages: pdfTotalPages, keptPages: 40, truncated: true };
 
       // Auto-fill fields
       let filled = 0;
@@ -644,10 +652,37 @@ export default function ContractsNewPage() {
       if (data.payment_frequency) { setPaymentFreq(data.payment_frequency); filled++; }
       if (data.index_base_date) { setBaseCPIDate(data.index_base_date + "-15"); filled++; }
       if (data.index_base_value) { setBaseCPI(String(data.index_base_value)); filled++; }
+      if (data.end_date) { setEndDate(data.end_date); filled++; }
+      if (data.rent_type === "revenue") { setRentType("revenue_pct"); filled++; }
+      if (data.revenue_pct) { setRevenuePct(String(data.revenue_pct)); filled++; }
+      if (data.grace_months != null && data.grace_months !== "") { setGraceMonths(String(data.grace_months)); filled++; }
       if (data.guarantee_type) { setAddGuarantee(true); setGuaranteeType(data.guarantee_type); filled++; }
       if (data.guarantee_amount) { setGuaranteeAmt(String(data.guarantee_amount)); filled++; }
+      if (data.guarantee_bank) { setGuaranteeBank(String(data.guarantee_bank)); filled++; }
+      if (data.guarantee_expiry) { setGuaranteeEnd(String(data.guarantee_expiry)); filled++; }
+      if (data.guarantee_months) { setDepositMonths(Number(data.guarantee_months)); filled++; }
+      if (Array.isArray(data.additional_guarantee_types) && data.additional_guarantee_types.length > 0) {
+        setAddGuarantee(true);
+        setAdditionalGuarantees(data.additional_guarantee_types.filter(function(x: any) { return x && x !== data.guarantee_type; }));
+        filled++;
+      }
 
-      setAiResult("מולאו " + filled + " שדות מהחוזה" + (data.tenant_name ? " | שוכר: " + data.tenant_name : ""));
+      // Verification summary: list notable extracted values (incl. ones the form
+      // doesn't auto-fill) so the user can eyeball what the AI read vs the doc.
+      var extra: string[] = [];
+      if (data.mgmt_fee_per_sqm) extra.push("דמי ניהול/מ\"ר: " + data.mgmt_fee_per_sqm);
+      if (data.vat_type) extra.push("מע\"מ: " + data.vat_type);
+      if (data.indexation_method) extra.push("הצמדה: " + data.indexation_method);
+      if (data.min_rent_per_sqm) extra.push("שכ\"ד מינ'/מ\"ר: " + data.min_rent_per_sqm);
+      if (Array.isArray(data.rent_steps) && data.rent_steps.length) extra.push(data.rent_steps.length + " מדרגות שכ\"ד");
+      if (Array.isArray(data.options) && data.options.length) extra.push(data.options.length + " אופציות");
+      if (Array.isArray(data.guarantors) && data.guarantors.length) extra.push(data.guarantors.length + " ערבים");
+      if (data.insurance_requirements && Object.keys(data.insurance_requirements).length) extra.push(Object.keys(data.insurance_requirements).length + " דרישות ביטוח");
+      setAiResult(
+        "מולאו " + filled + " שדות מהחוזה" + (data.tenant_name ? " | שוכר: " + data.tenant_name : "") +
+        (extra.length ? "\nנשלף גם (לבדיקה ידנית): " + extra.join(" · ") : "") +
+        (data._truncated ? "\n📄 המסמך נחתך אוטומטית ל-" + data._truncated.keptPages + " עמודים ראשונים (מתוך " + data._truncated.totalPages + ")." : "")
+      );
     } catch (e: any) {
       setAiResult("שגיאה: " + (e.message || "לא ניתן לקרוא את הקובץ"));
     } finally {

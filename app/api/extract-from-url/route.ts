@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireUser } from "@/lib/admin-api-auth";
 import Anthropic from "@anthropic-ai/sdk";
 import { EXTRACT_PROMPT } from "@/lib/extract-prompt";
+import { truncatePdf } from "@/lib/pdf-truncate";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -55,18 +56,30 @@ export async function POST(req: NextRequest) {
 
     const ctype = (res.headers.get("content-type") || "").toLowerCase();
     const lower = url.toLowerCase();
-    const buf = Buffer.from(await res.arrayBuffer());
-    if (buf.length > 28 * 1024 * 1024) {
-      return NextResponse.json({ error: "הקובץ גדול מדי (מעל 28MB)." }, { status: 400 });
+    let buf: Buffer = Buffer.from(await res.arrayBuffer());
+    // Allow large downloads (multi-part lease PDFs are commonly 20-30MB) — we
+    // trim them to the first pages below, so the payload sent onward stays small.
+    if (buf.length > 60 * 1024 * 1024) {
+      return NextResponse.json({ error: "הקובץ גדול מדי (מעל 60MB)." }, { status: 400 });
     }
 
     const client = new Anthropic({ apiKey });
     let content: any[];
+    let truncNote: { totalPages: number; keptPages: number; truncated: boolean } | null = null;
 
     const isPdf  = ctype.includes("pdf") || lower.includes(".pdf");
     const isDocx = ctype.includes("word") || ctype.includes("officedocument") || lower.includes(".docx");
 
     if (isPdf) {
+      // Auto-trim to the first 40 pages (contract terms) — no user action needed.
+      try {
+        const t = await truncatePdf(buf, 40);
+        buf = t.buffer;
+        truncNote = { totalPages: t.totalPages, keptPages: t.keptPages, truncated: t.truncated };
+      } catch (e) { /* corrupt/uncopyable → send original, size-checked below */ }
+      if (buf.length > 30 * 1024 * 1024) {
+        return NextResponse.json({ error: "המסמך גדול מדי לעיבוד גם לאחר חיתוך ל-40 עמודים. נסה להעלות רק את גוף החוזה." }, { status: 400 });
+      }
       // Claude reads PDFs natively (text + scanned pages).
       content = [
         { type: "text", text: EXTRACT_PROMPT + "\n\nלהלן מסמך החוזה (PDF):" },
@@ -90,11 +103,12 @@ export async function POST(req: NextRequest) {
 
     const message = await client.messages.create({
       model: "claude-sonnet-4-20250514",
-      max_tokens: 4096,
+      max_tokens: 8192,
       messages: [{ role: "user", content }],
     });
     const raw = message.content[0].type === "text" ? message.content[0].text : "";
     const data = parseJson(raw);
+    if (truncNote?.truncated) data._truncated = truncNote;
     return NextResponse.json(data);
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? String(e) }, { status: 500 });

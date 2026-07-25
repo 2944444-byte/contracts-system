@@ -34,13 +34,28 @@ export const EXTRACT_PROMPT = `אתה מומחה לניתוח חוזי שכיר�
 - index_base_value: ערך מדד הבסיס (מספר עשרוני, null אם אין)
 - payment_frequency: תדירות תשלום - החזר אחד מ: monthly/quarterly/other
 - parking_spots: מספר חניות (null אם אין)
-- parking_monthly_fee: דמי חניה חודשיים (null אם אין)
+- parking_monthly_fee: דמי חניה חודשיים לחניה בודדת (null אם אין)
+- mgmt_fee_per_sqm: דמי ניהול למ"ר לחודש (מספר בלבד, null אם אין)
+- vat_type: החזר אחד מ: plus_vat (שכ"ד בתוספת מע"מ) / included (כולל מע"מ) / exempt (פטור ממע"מ). null אם לא צוין
+- rent_type: סוג שכ"ד - החזר אחד מ: fixed (סכום קבוע) / per_sqm (לפי מ"ר) / revenue (אחוז מפדיון/מחזור). null אם לא ברור
+- revenue_pct: אחוז מהפדיון/מחזור (רק בחוזי פדיון, מספר בלבד, null אם אין)
+- min_rent_per_sqm: שכ"ד מינימלי למ"ר (בחוזי פדיון, null אם אין)
+- indexation_method: שיטת הצמדה למדד - החזר אחד מ: none (ללא הצמדה) / regular (הצמדה רגילה) / highest_in_period (המדד הגבוה בתקופה) / no_drop (הצמדה ללא ירידה). null אם לא צוין
+- grace_months: חודשי גרייס / דחיית תשלום מתחילת השכירות (מספר שלם, null אם אין)
+- grace_type: החזר אחד מ: no_charge (ללא חיוב בתקופת הגרייס) / discount (הנחה). null אם אין גרייס
+- rent_steps: מערך מדרגות עליית שכ"ד לאורך התקופה (אם החוזה קובע עליות מדורגות). כל איבר: {"effective_date":"YYYY-MM-DD","rent_per_sqm":מספר או "amount":מספר}. [] אם אין מדרגות
 
-ערבות / בטוחה:
-- guarantee_type: סוג הבטוחה - החזר אחד מ: bank (ערבות בנקאית) / cash (פיקדון/מזומן) / promissory_note (שטר חוב) / check (שיקים) / personal (ערבות אישית) / other (null אם אין)
-- guarantee_amount: סכום הערבות/הבטוחה בשקלים (מספר בלבד, null אם אין)
+ערבות / בטוחה (בחוזים רבים יש כמה בטוחות יחד — למשל ערבות בנקאית וגם שטר חוב):
+- guarantee_type: סוג הבטוחה **העיקרית** - החזר אחד מ: bank (ערבות בנקאית) / cash (פיקדון/מזומן) / promissory_note (שטר חוב) / check (שיקים) / personal (ערבות אישית) / other (null אם אין)
+- guarantee_amount: סכום הבטוחה העיקרית בשקלים (מספר בלבד, null אם אין)
 - guarantee_months: לכמה חודשי שכירות שווה הערבות אם מצוין (מספר שלם, null אם אין)
-- guarantee_expiry: תאריך פקיעת הערבות בפורמט YYYY-MM-DD (null אם אין)
+- guarantee_expiry: תאריך פקיעת הערבות בפורמט YYYY-MM-DD (null אם אין; לשטר חוב לרוב אין תוקף)
+- guarantee_bank: שם הבנק שהוציא את הערבות הבנקאית (null אם אין)
+- additional_guarantee_types: מערך סוגי בטוחות **נוספות** מלבד העיקרית (כל איבר אחד מ: bank/cash/promissory_note/check/personal/other). [] אם אין נוספות
+- guarantors: מערך ערבים (בעיקר לשטר חוב / ערבות אישית). כל איבר: {"name":"שם","id_number":"ת.ז."}. [] אם אין
+
+אופציות להארכה:
+- options: מערך אופציות להארכה. כל איבר: {"duration_months":מספר,"notice_type":"exercise" (דרושה הודעת מימוש) או "non_exercise" (דרושה הודעת אי-מימוש),"notice_days_before_end":מספר ימי הודעה לפני תום התקופה}. [] אם אין אופציות
 
 דרישות ביטוח של השוכר (מתוך נספח האחריות והביטוח / סעיף "ביטוחי השוכרת"):
 - insurance_requirements: אובייקט JSON הממפה את סוגי הכיסוי הנדרשים מהשוכר לגבול האחריות / סכום הביטוח המינימלי בשקלים.
