@@ -1,9 +1,14 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
+// Use the service key: this is a server-side reference-data route, and since
+// cpi_records has RLS (authenticated-only), the anon key returns NOTHING here
+// (no user session) — which used to force a live CBS fetch on every lookup and
+// surface false "index not published" errors when CBS was slow/empty.
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+  { auth: { autoRefreshToken: false, persistSession: false } }
 );
 
 // Only series 120010 (base 2020=100) — the current official series
@@ -38,14 +43,17 @@ export async function GET(request: Request) {
   const toYear = searchParams.get("to_year") ? parseInt(searchParams.get("to_year")!) : null;
   const singleYear = searchParams.get("year") ? parseInt(searchParams.get("year")!) : null;
 
-  // If no specific fetch requested, return DB records
-  if (!refresh && !fromYear && !toYear && !singleYear) {
-    const { data, error } = await supabase
-      .from("cpi_records")
-      .select("*")
-      .eq("base_year", BASE_YEAR)
-      .order("year")
-      .order("month");
+  // Serve from the DB FIRST (unless a forced refresh) — for the whole series or
+  // for a requested year/range. The DB already holds the published CPI; the live
+  // CBS API is only a fallback for genuinely-missing periods.
+  if (!refresh) {
+    let q = supabase.from("cpi_records").select("*").eq("base_year", BASE_YEAR);
+    if (singleYear || fromYear || toYear) {
+      const yFrom = fromYear ?? singleYear!;
+      const yTo = toYear ?? singleYear!;
+      q = q.gte("year", yFrom).lte("year", yTo);
+    }
+    const { data, error } = await q.order("year").order("month");
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     if (data && data.length > 0) return NextResponse.json({ source: "db", records: data, count: data.length });
   }
