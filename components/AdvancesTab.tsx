@@ -47,6 +47,7 @@ interface AdvanceRow {
   spaceArea: number;
   baseRentMonthly: number;
   indexedRentMonthly: number;
+  investmentMonthly?: number;  // תוספת שכ"ד בגין השקעות included in the base
   mgmtAdvanceMonthly: number;
   parkingMonthly: number;
   parkingSpots: number;
@@ -345,6 +346,11 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
         var spacesToProcess = activeSnapshot.spaces || [];
         var parkingMonthly = contractParkingMonthly[c.id] || 0;
         var parkingAddedToFirstSpace = false;
+        // Contract-level investment rent addition (תוספת שכ"ד בגין השקעות) —
+        // part of the rent, so it must be INDEXED like the rest per the
+        // contract's own indexation settings. Attached once (first space).
+        var investMonthly = Number(c.investment_addition) || 0;
+        var investAddedToFirstSpace = false;
 
         // Process EACH space separately (per-unit view)
         for (var cs of spacesToProcess) {
@@ -390,6 +396,18 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
           var yearEnd = new Date(year, 11, 31);
           var rentBeforeAnniversary = rentAtDate(schedule, yearStart);
           var rentAfterAnniversary = rentAtDate(schedule, yearEnd);
+
+          // Investment rent addition — folded into the space's rent BEFORE
+          // indexation so it's indexed, totalled, displayed and saved exactly
+          // like the rest of the rent (added on top of tiers/options, which
+          // apply to the space rent only). Once per contract (first space).
+          var thisInvestMonthly = 0;
+          if (!investAddedToFirstSpace && investMonthly > 0) {
+            thisInvestMonthly = investMonthly;
+            investAddedToFirstSpace = true;
+            rentBeforeAnniversary += thisInvestMonthly;
+            rentAfterAnniversary += thisInvestMonthly;
+          }
 
           // Anniversary = first schedule entry whose date falls in target year.
           // If no change in year, fall back to contract anniversary (used by
@@ -738,6 +756,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
               cpiError: cpiErrorMsg,
               vatPct: displayVatPct,
               isQuarterly: isQuarterly,
+              investmentMonthly: thisInvestMonthly,
               mgmtAdvanceMonthly: mgmtMonthly,
               parkingMonthly: thisParkingMonthly,
               parkingSpots: thisParkingSpots,
@@ -921,6 +940,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
           appendix += "שטח מחויב: " + ur2.spaceArea + ' מ"ר\n';
           appendix += "שכ\"ד בסיס: " + fmtMoney(ur2.baseRentMonthly) + "/חודש";
           if (ur2.spaceArea > 0) appendix += " (" + (ur2.baseRentMonthly / ur2.spaceArea).toFixed(2) + '₪/מ"ר)';
+          if ((ur2.investmentMonthly ?? 0) > 0) appendix += " — כולל תוספת שכ\"ד בגין השקעות " + fmtMoney(ur2.investmentMonthly!) + "/חודש";
           appendix += "\n";
           appendix += "שכ\"ד צמוד למדד: " + fmtMoney(ur2.indexedRentMonthly) + "/חודש";
           if (ur2.spaceArea > 0) appendix += " (" + (ur2.indexedRentMonthly / ur2.spaceArea).toFixed(2) + '₪/מ"ר)';
@@ -1164,6 +1184,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
                     <div>
                       <div className="text-slate-500">שכ&quot;ד בסיס</div>
                       <div className="font-bold text-slate-800">{fmtMoney(r.baseRentMonthly)}/חודש</div>
+                      {(r.investmentMonthly ?? 0) > 0 && <div className="text-xs text-purple-600 font-semibold">כולל תוספת השקעות {fmtMoney(r.investmentMonthly!)}/חודש</div>}
                       {r.spaceArea > 0 && <div className="text-xs text-slate-400">(בסיס: {(r.baseRentMonthly / r.spaceArea).toFixed(2)}₪/מ&quot;ר)</div>}
                       {r.rentChangeDate && r.rentAfter && (
                         <div className="text-orange-600 mt-0.5">→ {fmtMoney(r.rentAfter)} מ-{fmtDate(r.rentChangeDate)}
