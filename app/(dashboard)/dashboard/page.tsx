@@ -76,6 +76,12 @@ export default function DashboardPage() {
       .in("status", ["draft", "ready"]).order("created_at", { ascending: false });
     setUnsentLetters(scopeRows(ul ?? [], scope, function(l: any){ return l.property_id || l.contracts?.property_id; }));
 
+    // Render NOW — every KPI/table above already has its data. The CPI ratios
+    // below need slow external CBS calls; they fill in progressively while the
+    // dashboard is already usable (and the progress bar is visible, since it
+    // renders inside the non-loading branch).
+    setLoading(false);
+
     // Compute per-contract CPI ratios.
     // Group contracts by (base date + mechanism) to dedupe CBS calls — but
     // each contract still receives its own ratio based on its own base date
@@ -113,39 +119,62 @@ export default function DashboardPage() {
       var totalGroups = groupKeys.length;
       setCpiProgress({ current: 0, total: totalGroups, label: "מחשב יחס מדד לכל החוזים...", startedAt: calcStart });
 
-      // Process groups sequentially to update progress; each group is one
-      // base-date × mechanism pair (peak scan can be ~30 CBS calls).
+      // Groups run CONCURRENTLY (bounded pool) instead of one-by-one: each group
+      // is a base-date × mechanism pair, and a peak scan alone can be ~30 CBS
+      // calls — sequentially that dominated dashboard load time. Results are
+      // cached per known-index month, so revisits within the month are instant.
       var groupResults: any[] = [];
-      for (var gi = 0; gi < groupKeys.length; gi++) {
-        var k = groupKeys[gi];
-        var g = groupMap[k];
-        setCpiProgress({
-          current: gi + 1,
-          total: totalGroups,
-          label: g.isHighest ? "סורק שיא מדד..." : "מביא יחס מדד...",
-          startedAt: calcStart,
-        });
-        try {
-          var groupRatio = 1;
-          if (g.isHighest) {
-            var baseDateObj = new Date(g.rawBase);
-            var peak = await fetchHighestChainedCpi({
-              baseFromDate: g.fromDate,
-              scanFromYear: baseDateObj.getFullYear(),
-              scanFromMonth: baseDateObj.getMonth() + 1,
-              scanToYear: nowKnown.year,
-              scanToMonth: nowKnown.month,
-            });
-            if (peak.success && peak.peakRatio) {
-              groupResults.push({ key: k, ratio: peak.peakRatio });
-              continue;
+      var doneCount = 0;
+      var nextIdx = 0;
+      var cacheStamp = ":" + nowKnown.year + "-" + nowKnown.month;
+      var readCache = function(k: string): number | null {
+        try { var v = sessionStorage.getItem("cpiratio:" + k + cacheStamp); return v ? Number(v) : null; } catch (e) { return null; }
+      };
+      var writeCache = function(k: string, ratio: number) {
+        try { sessionStorage.setItem("cpiratio:" + k + cacheStamp, String(ratio)); } catch (e) { /* quota/private mode */ }
+      };
+      var bump = function(label: string) {
+        doneCount++;
+        setCpiProgress({ current: doneCount, total: totalGroups, label: label, startedAt: calcStart });
+      };
+
+      var cpiWorker = async function(): Promise<void> {
+        while (true) {
+          var myIdx = nextIdx++;
+          if (myIdx >= groupKeys.length) return;
+          var k = groupKeys[myIdx];
+          var g = groupMap[k];
+          var cached = readCache(k);
+          if (cached !== null && !isNaN(cached)) { groupResults.push({ key: k, ratio: cached }); bump("מדד (מטמון)..."); continue; }
+          try {
+            var ratio = 1;
+            var got = false;
+            if (g.isHighest) {
+              var baseDateObj = new Date(g.rawBase);
+              var peak = await fetchHighestChainedCpi({
+                baseFromDate: g.fromDate,
+                scanFromYear: baseDateObj.getFullYear(),
+                scanFromMonth: baseDateObj.getMonth() + 1,
+                scanToYear: nowKnown.year,
+                scanToMonth: nowKnown.month,
+              });
+              if (peak.success && peak.peakRatio) { ratio = peak.peakRatio; got = true; }
             }
-          }
-          var data: any = await fetchCpiAdjusted({ value: 10000, fromDate: g.fromDate, toDate: todayCbs });
-          groupRatio = (data && data.success) ? (Number(data.adjustedRentPerSqm) || 10000) / 10000 : 1;
-          groupResults.push({ key: k, ratio: groupRatio });
-        } catch { groupResults.push({ key: k, ratio: 1 }); }
-      }
+            if (!got) {
+              var data: any = await fetchCpiAdjusted({ value: 10000, fromDate: g.fromDate, toDate: todayCbs });
+              ratio = (data && data.success) ? (Number(data.adjustedRentPerSqm) || 10000) / 10000 : 1;
+            }
+            groupResults.push({ key: k, ratio: ratio });
+            writeCache(k, ratio);
+          } catch (e) { groupResults.push({ key: k, ratio: 1 }); }
+          bump(g.isHighest ? "סורק שיא מדד..." : "מביא יחס מדד...");
+        }
+      };
+
+      var poolSize = Math.min(4, groupKeys.length || 1);
+      var workers: Promise<void>[] = [];
+      for (var w = 0; w < poolSize; w++) workers.push(cpiWorker());
+      await Promise.all(workers);
 
       var ratioMap: Record<string, number> = {};
       groupResults.forEach(function(r: any) {
