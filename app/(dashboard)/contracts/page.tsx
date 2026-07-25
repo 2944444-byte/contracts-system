@@ -166,7 +166,7 @@ export default function ContractsPage() {
 
   async function loadContracts() {
     const { data } = await supabase.from("contracts")
-      .select("*, tenants(name,phone,primary_email,company_name), properties(name,city), contract_options(id,option_number,duration_months,duration_years,start_date,end_date,notice_days_before_end,notice_type,status,is_exercised,rent_mechanism,rent_increase_pct,new_rent_value,option_group,exit_points,price_schedule_type,price_tiers), guarantees(id,guarantee_type,status,amount_required,amount_actual,end_date,bank,document_url), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,index_base_value,index_base_date,use_original_index,spaces(space_name,area))")
+      .select("*, tenants(name,phone,primary_email,company_name), properties(name,city), contract_options(id,option_number,duration_months,duration_years,start_date,end_date,notice_days_before_end,notice_type,status,is_exercised,rent_mechanism,rent_increase_pct,new_rent_value,option_group,exit_points,price_schedule_type,price_tiers), guarantees(id,guarantee_type,status,amount_required,amount_actual,end_date,bank,document_url), contract_ti(id,description,ti_type,ti_amount,recovery_method,recovery_amount_monthly,recovery_start_date,recovery_end_date,payment_trigger,payment_days_after,payment_due_date,payment_installments,requires_invoice,requires_report,paid_at,paid_amount,payment_notes,notes), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,index_base_value,index_base_date,use_original_index,spaces(space_name,area))")
       .order("end_date");
     // Data-level scoping: managers/viewers see only contracts of their
     // allowed properties (admin scope is null = everything).
@@ -1191,7 +1191,7 @@ export default function ContractsPage() {
                       <span className="text-slate-500">
                         שכ&quot;ד נוכחי למ&quot;ר
                         {currentContractYear > 0 && <span className="text-blue-500"> (שנה {currentContractYear})</span>}
-                        {investPerSqm > 0 && <span> + תוספת {fmtMoney(investPerSqm)}</span>}
+                        {investPerSqm > 0 && <span className="text-purple-600 font-semibold" title="תוספת שכ&quot;ד בגין השקעות בינוי שביצע המשכיר במושכר"> + תוספת השקעות בינוי {fmtMoney(investPerSqm)}</span>}
                       </span>
                       <span className="font-black text-slate-800">{fmtMoney(trueRentPerSqm)}/מ&quot;ר</span>
                     </div>
@@ -1755,6 +1755,65 @@ export default function ContractsPage() {
                       );
                     })}
                   </div>
+                </div>
+              )}
+
+              {/* Construction investments (השקעות בינוי) — the landlord funds
+                  fit-out works for the tenant and recovers it as a rent
+                  addition. Shown whenever there are TI records OR the contract
+                  carries an investment rent addition, so the "+ תוספת" above is
+                  never unexplained. */}
+              {((selContract.contract_ti??[]).length > 0 || Number(selContract.investment_addition) > 0) && (
+                <div className="rounded-xl border border-purple-200 bg-purple-50/40 shadow-sm p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="text-xs font-bold text-purple-700">🏗 השקעות בינוי ({(selContract.contract_ti??[]).length})</div>
+                    {Number(selContract.investment_addition) > 0 && (
+                      <div className="text-xs font-bold text-purple-800">תוספת שכ&quot;ד: {fmtMoney(Number(selContract.investment_addition))}/חודש</div>
+                    )}
+                  </div>
+                  <div className="text-[11px] text-purple-600 mb-3 leading-relaxed">
+                    השקעות שביצע המשכיר במושכר עבור השוכר (התאמות/בינוי), שתמורתן משולמת תוספת לשכ&quot;ד. התוספת צמודה למדד ככל שאר שכ&quot;ד.
+                  </div>
+                  {(selContract.contract_ti??[]).length === 0 ? (
+                    <div className="rounded-lg border border-dashed border-purple-200 bg-white px-3 py-2 text-[11px] text-purple-500">
+                      לא הוזן פירוט השקעות לחוזה זה — קיימת תוספת שכ&quot;ד בגין השקעות בלבד. ניתן להשלים את הפירוט (סכום, תנאי תשלום) בעריכת החוזה.
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {(selContract.contract_ti??[]).map(function(ti: any) {
+                        var TRIG: Record<string,string> = { on_completion: "עם השלמת העבודות", on_handover: "במסירת המושכר", on_opening: "עם פתיחת העסק", fixed_date: "בתאריך קבוע", installments: "בתשלומים" };
+                        var trig = TRIG[ti.payment_trigger] || ti.payment_trigger || "";
+                        var when = (ti.payment_days_after ? ti.payment_days_after + " ימים " : "") + trig;
+                        return (
+                          <div key={ti.id} className="rounded-lg border border-purple-200 bg-white p-3">
+                            <div className="flex items-start justify-between gap-2 flex-wrap">
+                              <div className="font-semibold text-slate-800 text-sm">{ti.description || "השקעת בינוי"}</div>
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-xs font-bold bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full">{fmtMoney(Number(ti.ti_amount) || 0)}</span>
+                                {ti.paid_at
+                                  ? <span className="text-[10px] font-bold bg-green-100 text-green-700 px-2 py-0.5 rounded-full">✓ שולם {fmtDate(ti.paid_at)}</span>
+                                  : <span className="text-[10px] font-bold bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">ממתין לתשלום</span>}
+                              </div>
+                            </div>
+                            <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-0.5 text-[11px] text-slate-600 mt-1.5">
+                              {when && <div><span className="text-slate-400">מועד תשלום: </span>{when}</div>}
+                              {ti.payment_due_date && <div><span className="text-slate-400">תאריך יעד: </span>{fmtDate(ti.payment_due_date)}</div>}
+                              {ti.payment_installments > 0 && <div><span className="text-slate-400">תשלומים: </span>{ti.payment_installments}</div>}
+                              {Number(ti.recovery_amount_monthly) > 0 && <div><span className="text-slate-400">החזר חודשי: </span>{fmtMoney(Number(ti.recovery_amount_monthly))}</div>}
+                              {ti.recovery_start_date && <div><span className="text-slate-400">תחילת החזר: </span>{fmtDate(ti.recovery_start_date)}</div>}
+                              {ti.paid_amount != null && <div><span className="text-slate-400">שולם בפועל: </span>{fmtMoney(Number(ti.paid_amount))}</div>}
+                            </div>
+                            {(ti.requires_report || ti.requires_invoice) && (
+                              <div className="text-[10px] text-amber-700 mt-1.5">
+                                📋 התשלום כנגד {[ti.requires_report ? "דו&quot;ח עבודות מוסדר" : "", ti.requires_invoice ? "חשבונית" : ""].filter(Boolean).join(" + ")}
+                              </div>
+                            )}
+                            {(ti.payment_notes || ti.notes) && <div className="text-[11px] text-slate-500 mt-1">{ti.payment_notes || ti.notes}</div>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               )}
 

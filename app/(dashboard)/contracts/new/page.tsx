@@ -157,6 +157,17 @@ export default function ContractsNewPage() {
   const [rentPerSqm, setRentPerSqm] = useState("");
   const [chargedArea, setChargedArea] = useState("");
   const [investAdd, setInvestAdd] = useState("");
+  // Construction-investment (השקעות בינוי) detail + reimbursement terms: the
+  // landlord funds fit-out works and pays the tenant back, typically X days
+  // after works completion / handover / opening, against a report + invoice.
+  const [tiAmount, setTiAmount] = useState("");
+  const [tiDescription, setTiDescription] = useState("");
+  const [tiPaymentTrigger, setTiPaymentTrigger] = useState("on_completion");
+  const [tiPaymentDays, setTiPaymentDays] = useState("");
+  const [tiInstallments, setTiInstallments] = useState("");
+  const [tiRequiresReport, setTiRequiresReport] = useState(true);
+  const [tiRequiresInvoice, setTiRequiresInvoice] = useState(true);
+  const [tiPaymentNotes, setTiPaymentNotes] = useState("");
   // Early termination
   const [earlyTermination, setEarlyTermination] = useState(false);
   const [terminationNoticeDays, setTerminationNoticeDays] = useState("30");
@@ -653,6 +664,12 @@ export default function ContractsNewPage() {
       if (data.index_base_date) { setBaseCPIDate(data.index_base_date + "-15"); filled++; }
       if (data.index_base_value) { setBaseCPI(String(data.index_base_value)); filled++; }
       if (data.end_date) { setEndDate(data.end_date); filled++; }
+      if (data.investment_amount) { setTiAmount(String(data.investment_amount)); filled++; }
+      if (data.investment_description) { setTiDescription(String(data.investment_description)); filled++; }
+      if (data.investment_payment_trigger) { setTiPaymentTrigger(String(data.investment_payment_trigger)); filled++; }
+      if (data.investment_payment_days) { setTiPaymentDays(String(data.investment_payment_days)); filled++; }
+      if (data.investment_requires_invoice === false) setTiRequiresInvoice(false);
+      if (data.investment_requires_report === false) setTiRequiresReport(false);
       if (data.rent_type === "revenue") { setRentType("revenue_pct"); filled++; }
       if (data.revenue_pct) { setRevenuePct(String(data.revenue_pct)); filled++; }
       if (data.grace_months != null && data.grace_months !== "") { setGraceMonths(String(data.grace_months)); filled++; }
@@ -930,6 +947,27 @@ export default function ContractsNewPage() {
           document_url: guaranteeDocUrl || null,
           guarantors: guaranteeType === "promissory_note" && validGuarantors.length > 0 ? validGuarantors : null,
           status: "active",
+        });
+      }
+
+      // Construction investment (השקעות בינוי) — store the itemised record +
+      // reimbursement terms alongside the contract's monthly rent addition.
+      if (Number(investAdd) > 0 && (tiAmount || tiDescription)) {
+        await supabase.from("contract_ti").insert({
+          contract_id: contract.id,
+          ti_type: "one_time",
+          description: tiDescription || null,
+          ti_amount: Number(tiAmount) || 0,
+          recovery_method: "monthly_addition",
+          recovery_amount_monthly: Number(investAdd) || null,
+          recovery_start_date: startDate || null,
+          recovery_end_date: endDate || null,
+          payment_trigger: tiPaymentTrigger || null,
+          payment_days_after: tiPaymentDays ? Number(tiPaymentDays) : null,
+          payment_installments: tiPaymentTrigger === "installments" && tiInstallments ? Number(tiInstallments) : null,
+          requires_report: tiRequiresReport,
+          requires_invoice: tiRequiresInvoice,
+          payment_notes: tiPaymentNotes || null,
         });
       }
 
@@ -1441,14 +1479,16 @@ export default function ContractsNewPage() {
               </div>
               <div>
                 <label className="mb-1 block text-xs font-semibold text-slate-700">
-                  תוספת השקעות (₪)
+                  תוספת שכ&quot;ד בגין השקעות בינוי (₪/חודש)
                 </label>
                 <input
                   type="number"
                   value={investAdd}
                   onChange={(e) => setInvestAdd(e.target.value)}
                   className={ic}
+                  placeholder="0"
                 />
+                <p className="mt-1 text-[11px] text-slate-400">תוספת חודשית לשכ&quot;ד תמורת השקעות בינוי שביצע המשכיר. מוצמדת למדד ככל שכ&quot;ד.</p>
               </div>
               <div>
                 <label className="mb-1 block text-xs font-semibold text-slate-700">
@@ -1512,6 +1552,62 @@ export default function ContractsNewPage() {
                 />
               </div>
             </div>
+            )}
+
+            {/* Construction-investment detail + reimbursement terms. Appears once
+                an investment rent addition is entered, so the addition is never
+                unexplained and the payment terms are captured with the contract. */}
+            {Number(investAdd) > 0 && (
+              <div className="rounded-xl border border-purple-200 bg-purple-50/40 p-4 mt-3">
+                <div className="text-sm font-bold text-purple-800 mb-1">🏗 פירוט השקעות בינוי ותנאי החזר</div>
+                <div className="text-[11px] text-purple-600 mb-3 leading-relaxed">
+                  ההשקעה שביצע המשכיר עבור השוכר, ומתי מוחזר לשוכר התשלום עבורה (בדרך כלל X ימים לאחר השלמת העבודות ופתיחת העסק, כנגד דו&quot;ח מוסדר וחשבונית).
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-slate-700">סכום ההשקעה הכולל (₪)</label>
+                    <input type="number" value={tiAmount} onChange={(e) => setTiAmount(e.target.value)} className={ic} placeholder="0" />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-slate-700">תיאור העבודות</label>
+                    <input type="text" value={tiDescription} onChange={(e) => setTiDescription(e.target.value)} className={ic} placeholder="התאמות מבנה, ריצוף, חשמל..." />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-slate-700">מועד תשלום ההשקעה לשוכר</label>
+                    <select value={tiPaymentTrigger} onChange={(e) => setTiPaymentTrigger(e.target.value)} className={ic}>
+                      <option value="on_completion">עם השלמת העבודות</option>
+                      <option value="on_opening">עם פתיחת העסק</option>
+                      <option value="on_handover">במסירת המושכר</option>
+                      <option value="fixed_date">בתאריך קבוע</option>
+                      <option value="installments">בתשלומים</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-slate-700">ימים לאחר המועד</label>
+                    <input type="number" value={tiPaymentDays} onChange={(e) => setTiPaymentDays(e.target.value)} className={ic} placeholder="למשל 30" />
+                  </div>
+                  {tiPaymentTrigger === "installments" && (
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-slate-700">מספר תשלומים</label>
+                      <input type="number" value={tiInstallments} onChange={(e) => setTiInstallments(e.target.value)} className={ic} placeholder="למשל 3" />
+                    </div>
+                  )}
+                  <div className="sm:col-span-2">
+                    <label className="mb-1 block text-xs font-semibold text-slate-700">הערות לתשלום</label>
+                    <input type="text" value={tiPaymentNotes} onChange={(e) => setTiPaymentNotes(e.target.value)} className={ic} placeholder="תנאים מיוחדים להחזר ההשקעה..." />
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-4 mt-3">
+                  <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-700">
+                    <input type="checkbox" checked={tiRequiresReport} onChange={(e) => setTiRequiresReport(e.target.checked)} className="w-4 h-4" />
+                    כנגד דו&quot;ח עבודות מוסדר
+                  </label>
+                  <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-700">
+                    <input type="checkbox" checked={tiRequiresInvoice} onChange={(e) => setTiRequiresInvoice(e.target.checked)} className="w-4 h-4" />
+                    כנגד חשבונית
+                  </label>
+                </div>
+              </div>
             )}
 
             {/* Early termination clause */}

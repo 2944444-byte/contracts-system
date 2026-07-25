@@ -62,8 +62,8 @@ export function TIManager({ contractId, contractEndDate }: Props) {
         ti_amount:      Number(form.ti_amount),
         recovery_method: form.recovery_method,
         recovery_amount_monthly: form.recovery_amount_monthly ? Number(form.recovery_amount_monthly) : null,
-        recovery_start: form.recovery_start || null,
-        recovery_end:   form.recovery_end || null,
+        recovery_start_date: form.recovery_start || null,
+        recovery_end_date:   form.recovery_end || null,
         notes:          form.notes || null,
       };
       await supabase.from("contract_ti").insert(payload);
@@ -125,8 +125,8 @@ export function TIManager({ contractId, contractEndDate }: Props) {
                       {r.recovery_amount_monthly && (
                         <div>החזר חודשי: <strong>₪{r.recovery_amount_monthly.toLocaleString()}</strong></div>
                       )}
-                      {r.recovery_start && r.recovery_end && (
-                        <div>{r.recovery_start} — {r.recovery_end}</div>
+                      {r.recovery_start_date && r.recovery_end_date && (
+                        <div>{r.recovery_start_date} — {r.recovery_end_date}</div>
                       )}
                     </div>
                   </div>
