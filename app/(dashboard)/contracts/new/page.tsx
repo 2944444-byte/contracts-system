@@ -568,22 +568,38 @@ export default function ContractsNewPage() {
           var imagePages: string[] = [];
           var canvas = document.createElement("canvas");
           var ctx = canvas.getContext("2d");
-          var maxOcrPages = Math.min(15, pdf.numPages);
+          // Page scans are sent as JPEG, not PNG: a PNG page is several MB, so
+          // 15 of them blew past the serverless request-body limit (HTTP 413).
+          // Also stop once the accumulated payload nears the cap, so a heavy
+          // scan degrades to fewer pages instead of failing outright.
+          var MAX_OCR_BYTES = 3200000; // ~3.2MB of base64, safely under the limit
+          var usedBytes = 0;
+          var maxOcrPages = Math.min(12, pdf.numPages);
           for (var pi = 1; pi <= maxOcrPages; pi++) {
             var ocrPage = await pdf.getPage(pi);
-            var viewport = ocrPage.getViewport({ scale: 1.5 });
+            var viewport = ocrPage.getViewport({ scale: 1.3 });
             canvas.width = viewport.width;
             canvas.height = viewport.height;
             await ocrPage.render({ canvasContext: ctx!, viewport: viewport }).promise;
-            var dataUrl = canvas.toDataURL("image/png");
-            imagePages.push(dataUrl.split(",")[1]); // base64 without prefix
+            var dataUrl = canvas.toDataURL("image/jpeg", 0.72);
+            var b64 = dataUrl.split(",")[1];
+            if (usedBytes + b64.length > MAX_OCR_BYTES) break;
+            usedBytes += b64.length;
+            imagePages.push(b64);
+            setAiResult("סורק PDF עם OCR... (" + imagePages.length + " עמודים)");
           }
+          if (imagePages.length === 0) throw new Error("לא ניתן להכין עמודים לסריקה");
           var ocrRes = await fetch("/api/extract-contract", {
             method: "POST",
             headers: await authHeaders(),
-            body: JSON.stringify({ images: imagePages }),
+            body: JSON.stringify({ images: imagePages, mediaType: "image/jpeg" }),
           });
-          if (!ocrRes.ok) throw new Error("OCR API error " + ocrRes.status);
+          if (!ocrRes.ok) {
+            var oErr: any = null; try { oErr = await ocrRes.json(); } catch (e) {}
+            throw new Error(oErr?.error || (ocrRes.status === 413
+              ? "המסמך הסרוק כבד מדי לשליחה. נסה קובץ קטן יותר או המר ל-PDF טקסטואלי."
+              : "שגיאת OCR (" + ocrRes.status + ")"));
+          }
           var ocrData = await ocrRes.json();
           if (ocrData.error) throw new Error(ocrData.error);
           // Store OCR result for the main flow below
@@ -616,9 +632,12 @@ export default function ContractsNewPage() {
         const res = await fetch("/api/extract-contract", {
           method: "POST",
           headers: await authHeaders(),
-          body: JSON.stringify({ text }),
+          body: JSON.stringify({ text: String(text).substring(0, 200000) }),
         });
-        if (!res.ok) throw new Error("API error " + res.status);
+        if (!res.ok) {
+          var sErr: any = null; try { sErr = await res.json(); } catch (e) {}
+          throw new Error(sErr?.error || "שגיאת שרת (" + res.status + ")");
+        }
         data = await res.json();
         if (data.error) throw new Error(data.error);
       }

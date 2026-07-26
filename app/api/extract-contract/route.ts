@@ -20,25 +20,25 @@ export async function POST(req: NextRequest) {
     let content: any[];
 
     if (images && Array.isArray(images) && images.length > 0) {
-      // OCR mode: send page images to Claude Vision
+      // OCR mode: send page images to Claude Vision. The client sends JPEG
+      // (much smaller than PNG — PNG page scans blew past the request-body
+      // limit and produced a 413).
+      const mediaType = (body.mediaType === "image/png") ? "image/png" : "image/jpeg";
       content = [
         { type: "text", text: PROMPT + `\n\nלהלן ${images.length} עמודים ראשונים מהחוזה הסרוק:` },
       ];
-      for (const img of images.slice(0, 10)) { // max 10 pages
+      for (const img of images.slice(0, 12)) {
         content.push({
           type: "image",
-          source: {
-            type: "base64",
-            media_type: "image/png",
-            data: img,
-          },
+          source: { type: "base64", media_type: mediaType, data: img },
         });
       }
     } else if (text) {
-      // Text mode: send extracted text
+      // Text mode: send extracted text. 60K chars covers the whole body of a
+      // long lease (20K cut off the guarantee/insurance annexes entirely).
       content = [{
         type: "text",
-        text: PROMPT + `\n\nטקסט החוזה (${Math.round(text.length / 1000)}K תווים):\n${text.substring(0, 20000)}`,
+        text: PROMPT + `\n\nטקסט החוזה (${Math.round(text.length / 1000)}K תווים):\n${text.substring(0, 60000)}`,
       }];
     } else {
       return NextResponse.json({ error: "No text or images provided" }, { status: 400 });
@@ -46,7 +46,10 @@ export async function POST(req: NextRequest) {
 
     const message = await client.messages.create({
       model: "claude-sonnet-4-20250514",
-      max_tokens: 4096,
+      // The extraction schema grew (tiers, options, guarantors, insurance
+      // requirements…) — 4096 truncated the JSON mid-object, which surfaced as
+      // a parse failure / API error 500.
+      max_tokens: 8192,
       messages: [{ role: "user", content }],
     });
 
