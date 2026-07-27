@@ -20,6 +20,7 @@ import {
   type PriceTier,
 } from "@/lib/contract-utils";
 import { penaltyTermsFromRow, penaltyTermsToRow } from "@/lib/option-penalty";
+import ExtraGuaranteesEditor, { emptyExtraGuarantee, extraGuaranteeFromRow, extraGuaranteeToRow, type ExtraGuarantee } from '@/components/ExtraGuaranteesEditor';
 import OptionPenaltyFields from '@/components/OptionPenaltyFields';
 import TenantForm from '@/components/TenantForm';
 import PropertyForm from '@/components/PropertyForm';
@@ -213,7 +214,7 @@ export default function ContractsNewPage() {
   // Additional securities beyond the primary one — most contracts have BOTH a
   // bank guarantee AND a promissory note. Each ticked type is saved as its own
   // guarantee row (open — no amount/expiry).
-  const [additionalGuarantees, setAdditionalGuarantees] = useState<string[]>([]);
+  const [additionalGuarantees, setAdditionalGuarantees] = useState<ExtraGuarantee[]>([]);
   const [depositCalcMethod, setDepositCalcMethod] = useState<"months_based" | "fixed_amount">("months_based");
   const [depositMonths, setDepositMonths] = useState(3);
   const [depositIncludesMgmt, setDepositIncludesMgmt] = useState(false);
@@ -305,7 +306,7 @@ export default function ContractsNewPage() {
     if (!amendmentOfId) return;
     async function loadParent() {
       var { data: c } = await supabase.from("contracts")
-        .select("*, tenants(name), properties(name), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area)), contract_options(id,option_number,duration_months,duration_years,notice_type,notice_days_before_end,rent_mechanism,rent_increase_pct,new_rent_value,option_group,exit_points,price_schedule_type,price_tiers,non_exercise_penalty_type,non_exercise_penalty_value,non_exercise_penalty_basis,non_exercise_penalty_months,non_exercise_penalty_indexed,non_exercise_penalty_vat,non_exercise_penalty_days,non_exercise_penalty_notes), guarantees(id,guarantee_type,amount_required,amount_actual,bank,end_date,document_url)")
+        .select("*, tenants(name), properties(name), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area)), contract_options(id,option_number,duration_months,duration_years,notice_type,notice_days_before_end,rent_mechanism,rent_increase_pct,new_rent_value,option_group,exit_points,price_schedule_type,price_tiers,non_exercise_penalty_type,non_exercise_penalty_value,non_exercise_penalty_basis,non_exercise_penalty_months,non_exercise_penalty_indexed,non_exercise_penalty_vat,non_exercise_penalty_days,non_exercise_penalty_notes), guarantees(id,guarantee_type,amount_required,amount_actual,bank,reference_number,end_date,document_url,notes,guarantors)")
         .eq("id", amendmentOfId).single();
       if (!c) return;
       setAmendmentParent(c);
@@ -413,10 +414,8 @@ export default function ContractsNewPage() {
         setGuaranteeBank(g.bank || "");
         setGuaranteeEnd(g.end_date || "");
         setGuaranteeDocUrl(g.document_url || "");
-        // Any further guarantee rows → additional securities.
-        var extraTypes: string[] = [];
-        (c.guarantees as any[]).slice(1).forEach(function(x: any){ if (x.guarantee_type && extraTypes.indexOf(x.guarantee_type) === -1) extraTypes.push(x.guarantee_type); });
-        setAdditionalGuarantees(extraTypes);
+        // Any further guarantee rows → additional securities, with their details.
+        setAdditionalGuarantees((c.guarantees as any[]).slice(1).map(extraGuaranteeFromRow));
       }
     }
     loadParent();
@@ -713,7 +712,11 @@ export default function ContractsNewPage() {
       if (data.guarantee_months) { setDepositMonths(Number(data.guarantee_months)); filled++; }
       if (Array.isArray(data.additional_guarantee_types) && data.additional_guarantee_types.length > 0) {
         setAddGuarantee(true);
-        setAdditionalGuarantees(data.additional_guarantee_types.filter(function(x: any) { return x && x !== data.guarantee_type; }));
+        setAdditionalGuarantees(
+          data.additional_guarantee_types
+            .filter(function(x: any) { return x && x !== data.guarantee_type; })
+            .map(function(x: any) { return emptyExtraGuarantee(String(x)); })
+        );
         filled++;
       }
 
@@ -1028,14 +1031,16 @@ export default function ContractsNewPage() {
         });
       }
 
-      // Additional securities (e.g. שטר חוב alongside a bank guarantee) — one
-      // open guarantee row per ticked type (no amount/expiry); details can be
-      // completed later in the guarantees screen.
+      // Additional securities (e.g. שטר חוב alongside a bank guarantee) — each
+      // saved as its own guarantee row with the details entered in the form.
       if (addGuarantee && additionalGuarantees.length > 0) {
-        var extraGuar = additionalGuarantees
-          .filter(function(t){ return t !== guaranteeType; })
-          .map(function(t){ return { contract_id: contract.id, guarantee_type: t, amount_required: null, amount_actual: null, bank: null, end_date: null, document_url: null, status: "active" }; });
-        if (extraGuar.length > 0) await supabase.from("guarantees").insert(extraGuar);
+        // No type filtering — a contract can hold two securities of the same
+        // kind (e.g. two bank guarantees); dropping them would lose data.
+        var extraGuar = additionalGuarantees.map(function(e){ return { ...extraGuaranteeToRow(e, contract.id), status: "active" }; });
+        if (extraGuar.length > 0) {
+          var { error: exErr } = await supabase.from("guarantees").insert(extraGuar);
+          if (exErr) alert("שגיאה בשמירת ביטחונות נוספים: " + exErr.message);
+        }
       }
 
       // Price Tiers → save ORIGINAL tiers (with is_recurring intact)
@@ -2971,26 +2976,13 @@ export default function ContractsNewPage() {
                 </div>
 
                 {/* Additional securities — most contracts also carry a שטר חוב
-                    alongside the bank guarantee. Tick any extra types; each is
-                    saved as its own guarantee row (open, no amount/expiry). */}
-                <div className="rounded-xl border border-slate-200 p-3">
-                  <div className="text-xs font-bold text-slate-700 mb-2">ביטחונות נוספים בהסכם (אופציונלי)</div>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                    {GUARANTEE_TYPES.filter((t) => t.v !== guaranteeType).map((t) => {
-                      const on = additionalGuarantees.indexOf(t.v) !== -1;
-                      return (
-                        <button key={t.v} type="button"
-                          onClick={() => setAdditionalGuarantees((prev) => on ? prev.filter((x) => x !== t.v) : prev.concat([t.v]))}
-                          className={"rounded-lg border p-2 text-center text-xs " + (on ? "border-blue-500 bg-blue-50 text-blue-700 font-semibold" : "border-slate-200 text-slate-600 hover:bg-slate-50")}>
-                          <div>{t.icon}</div><div>{t.l}</div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                  {additionalGuarantees.length > 0 && (
-                    <div className="text-[11px] text-slate-400 mt-1.5">יישמרו כערבויות נפרדות. שטר חוב / פיקדון — ללא תוקף כברירת מחדל; אפשר להשלים סכום ופרטים במסך ערבויות.</div>
-                  )}
-                </div>
+                    alongside the bank guarantee. Each is saved as its own
+                    guarantee row with its amount, issuer, expiry and guarantors. */}
+                <ExtraGuaranteesEditor
+                  value={additionalGuarantees}
+                  onChange={setAdditionalGuarantees}
+                  inputClass={ic}
+                />
 
                 {/* Deposit calculation method */}
                 <div className="rounded-xl border border-slate-200 p-4 space-y-3">

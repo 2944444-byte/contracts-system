@@ -18,6 +18,7 @@ import {
 } from "@/lib/contract-utils";
 import { penaltyTermsFromRow, penaltyTermsToRow } from "@/lib/option-penalty";
 import OptionPenaltyFields from '@/components/OptionPenaltyFields';
+import ExtraGuaranteesEditor, { extraGuaranteeFromRow, extraGuaranteeToRow, NO_EXPIRY_TYPES, type ExtraGuarantee } from '@/components/ExtraGuaranteesEditor';
 import TenantForm from '@/components/TenantForm';
 import PropertyForm from '@/components/PropertyForm';
 
@@ -179,6 +180,9 @@ export default function ContractEditPage() {
   const [guaranteeActual, setGuaranteeActual] = useState("");
   const [guaranteeBank, setGuaranteeBank] = useState("");
   const [guaranteeEnd, setGuaranteeEnd] = useState("");
+  const [guaranteeId, setGuaranteeId] = useState<string | null>(null);
+  const [loadedGuaranteeIds, setLoadedGuaranteeIds] = useState<string[]>([]);
+  const [additionalGuarantees, setAdditionalGuarantees] = useState<ExtraGuarantee[]>([]);
   const [depositCalcMethod, setDepositCalcMethod] = useState<"months_based" | "fixed_amount">("months_based");
   const [depositMonths, setDepositMonths] = useState(3);
   const [depositIncludesMgmt, setDepositIncludesMgmt] = useState(false);
@@ -268,7 +272,9 @@ export default function ContractEditPage() {
     // Load children
     const [{ data: opts }, { data: guar }, { data: cs }] = await Promise.all([
       supabase.from("contract_options").select("*").eq("contract_id", id).order("option_number"),
-      supabase.from("guarantees").select("*").eq("contract_id", id).limit(1),
+      // ALL securities, not just the first — saving deletes every row for the
+      // contract, so anything not loaded here would be silently destroyed.
+      supabase.from("guarantees").select("*").eq("contract_id", id).order("created_at"),
       supabase.from("contract_spaces").select("*").eq("contract_id", id),
     ]);
 
@@ -527,15 +533,26 @@ export default function ContractEditPage() {
       })));
     }
 
-    // Populate Step 5
-    if (guar && guar.length > 0) {
-      const g = guar[0];
+    // Populate Step 5. An active security leads — a contract can hold an older
+    // row already returned/forfeited, and that shouldn't take the primary slot.
+    const guarSorted = (guar ?? []).slice().sort(function(a: any, b: any) {
+      const ra = a.status === "active" ? 0 : 1, rb = b.status === "active" ? 0 : 1;
+      if (ra !== rb) return ra - rb;
+      return String(a.created_at ?? "").localeCompare(String(b.created_at ?? ""));
+    });
+    setLoadedGuaranteeIds(guarSorted.map(function(x: any){ return x.id; }));
+    if (guarSorted.length > 0) {
+      const g = guarSorted[0];
       setAddGuarantee(true);
+      setGuaranteeId(g.id);
       setGuaranteeType(g.guarantee_type ?? "bank");
       setGuaranteeAmt(g.amount_required?.toString() ?? "");
       setGuaranteeActual(g.amount_actual?.toString() ?? "");
       setGuaranteeBank(g.bank ?? "");
       setGuaranteeEnd(g.end_date?.split("T")[0] ?? "");
+      // Every further row is an additional security (שטר חוב, פיקדון…) with its
+      // own amount/issuer/expiry — editable here rather than being wiped on save.
+      setAdditionalGuarantees(guarSorted.slice(1).map(extraGuaranteeFromRow));
     }
     if (c.deposit_calculation_method) setDepositCalcMethod(c.deposit_calculation_method as any);
     if (c.deposit_includes_mgmt) setDepositIncludesMgmt(true);
@@ -823,18 +840,53 @@ export default function ContractEditPage() {
         }
       }
 
-      // Delete + re-insert guarantee
-      await supabase.from("guarantees").delete().eq("contract_id", id);
-      if (addGuarantee && guaranteeAmt) {
-        await supabase.from("guarantees").insert({
-          contract_id: id,
-          guarantee_type: guaranteeType,
-          amount_required: Number(guaranteeAmt),
-          amount_actual: guaranteeActual ? Number(guaranteeActual) : null,
-          bank: guaranteeBank || null,
-          end_date: guaranteeEnd || null,
-          status: "active",
-        });
+      // Securities are UPDATED in place, not deleted and re-created: a
+      // guarantee row carries state this form doesn't edit (status, extension
+      // history, forfeiture, attached documents) that a re-insert would lose.
+      // Only rows the user actually removed are deleted.
+      if (addGuarantee) {
+        var keepIds: string[] = [];
+        var noExp = NO_EXPIRY_TYPES.indexOf(guaranteeType) !== -1;
+        // A promissory note / cash deposit is a valid security with no amount
+        // yet, so don't gate the primary row on an amount being filled in.
+        if (guaranteeAmt || noExp) {
+          var primaryRow: any = {
+            contract_id: id,
+            guarantee_type: guaranteeType,
+            amount_required: guaranteeAmt ? Number(guaranteeAmt) : null,
+            amount_actual: guaranteeActual ? Number(guaranteeActual) : null,
+            bank: guaranteeBank || null,
+            end_date: noExp ? null : (guaranteeEnd || null),
+          };
+          if (guaranteeId) {
+            await supabase.from("guarantees").update(primaryRow).eq("id", guaranteeId);
+            keepIds.push(guaranteeId);
+          } else {
+            var { data: newPrimary } = await supabase.from("guarantees")
+              .insert({ ...primaryRow, status: "active" }).select("id").single();
+            if (newPrimary?.id) keepIds.push(newPrimary.id);
+          }
+        }
+        // No type filtering — two securities of the same kind are legitimate.
+        for (var gi = 0; gi < additionalGuarantees.length; gi++) {
+          var e = additionalGuarantees[gi];
+          var row = extraGuaranteeToRow(e, id);
+          if (e.id) {
+            var { error: uErr } = await supabase.from("guarantees").update(row).eq("id", e.id);
+            if (uErr) alert("שגיאה בעדכון ביטחון: " + uErr.message);
+            keepIds.push(e.id);
+          } else {
+            var { data: ins, error: iErr } = await supabase.from("guarantees")
+              .insert({ ...row, status: "active" }).select("id").single();
+            if (iErr) alert("שגיאה בשמירת ביטחון: " + iErr.message);
+            if (ins?.id) keepIds.push(ins.id);
+          }
+        }
+        // Delete only the rows the user actually removed from the form.
+        var toDelete = loadedGuaranteeIds.filter(function(x){ return keepIds.indexOf(x) === -1; });
+        if (toDelete.length > 0) await supabase.from("guarantees").delete().in("id", toDelete);
+      } else if (loadedGuaranteeIds.length > 0) {
+        await supabase.from("guarantees").delete().in("id", loadedGuaranteeIds);
       }
 
       // Delete + re-insert price tiers (save ORIGINAL tiers, not expanded)
@@ -2172,10 +2224,20 @@ export default function ContractEditPage() {
                     <label className="mb-1 block text-xs font-semibold text-slate-700">בנק / מוציא</label>
                     <input type="text" value={guaranteeBank} onChange={(e) => setGuaranteeBank(e.target.value)} className={ic} />
                   </div>
-                  <div>
-                    <label className="mb-1 block text-xs font-semibold text-slate-700">תוקף ערבות</label>
-                    <input type="date" value={guaranteeEnd} onChange={(e) => setGuaranteeEnd(e.target.value)} className={ic} />
-                  </div>
+                  {NO_EXPIRY_TYPES.indexOf(guaranteeType) === -1 && (
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-slate-700">תוקף ערבות</label>
+                      <input type="date" value={guaranteeEnd} onChange={(e) => setGuaranteeEnd(e.target.value)} className={ic} />
+                    </div>
+                  )}
+                </div>
+
+                <div className="mt-3">
+                  <ExtraGuaranteesEditor
+                    value={additionalGuarantees}
+                    onChange={setAdditionalGuarantees}
+                    inputClass={ic}
+                  />
                 </div>
               </div>
             )}
