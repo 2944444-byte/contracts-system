@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireUser } from "@/lib/admin-api-auth";
 import Anthropic from "@anthropic-ai/sdk";
 import { EXTRACT_PROMPT } from "@/lib/extract-prompt";
+import { MODEL, firstText } from "@/lib/claude";
+
+export const runtime = "nodejs";
+export const maxDuration = 60;
 
 const PROMPT = EXTRACT_PROMPT;
 
@@ -45,16 +49,19 @@ export async function POST(req: NextRequest) {
     }
 
     const message = await client.messages.create({
-      model: "claude-sonnet-4-20250514",
+      model: MODEL,
       // The extraction schema grew (tiers, options, guarantors, insurance
       // requirements…) — 4096 truncated the JSON mid-object, which surfaced as
       // a parse failure / API error 500.
       max_tokens: 8192,
+      // Thinking is on by default on this model and would share max_tokens with
+      // the JSON output; extraction needs the whole budget for the answer.
+      thinking: { type: "disabled" },
       messages: [{ role: "user", content }],
     });
 
-    const raw = message.content[0].type === "text" ? message.content[0].text : "";
-    const clean = raw.replace(/```json|```/g, "").trim();
+    const raw = firstText(message.content);
+    const clean = raw.replace(/```json|```/g, "").replace(/<\/?thinking>/g, "").trim();
 
     let data;
     try {

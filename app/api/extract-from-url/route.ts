@@ -3,6 +3,7 @@ import { requireUser } from "@/lib/admin-api-auth";
 import Anthropic from "@anthropic-ai/sdk";
 import { EXTRACT_PROMPT } from "@/lib/extract-prompt";
 import { truncatePdf } from "@/lib/pdf-truncate";
+import { MODEL, firstText } from "@/lib/claude";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -102,11 +103,14 @@ export async function POST(req: NextRequest) {
     }
 
     const message = await client.messages.create({
-      model: "claude-sonnet-4-20250514",
+      model: MODEL,
       max_tokens: 8192,
+      // Thinking is on by default on this model and would share max_tokens with
+      // the JSON output; extraction needs the whole budget for the answer.
+      thinking: { type: "disabled" },
       messages: [{ role: "user", content }],
     });
-    const raw = message.content[0].type === "text" ? message.content[0].text : "";
+    const raw = firstText(message.content);
     const data = parseJson(raw);
     if (truncNote?.truncated) data._truncated = truncNote;
     return NextResponse.json(data);
