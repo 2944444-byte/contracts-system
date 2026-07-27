@@ -16,6 +16,8 @@ import {
   type ExtensionOption,
   type PriceTier,
 } from "@/lib/contract-utils";
+import { penaltyTermsFromRow, penaltyTermsToRow } from "@/lib/option-penalty";
+import OptionPenaltyFields from '@/components/OptionPenaltyFields';
 import TenantForm from '@/components/TenantForm';
 import PropertyForm from '@/components/PropertyForm';
 
@@ -521,6 +523,7 @@ export default function ContractEditPage() {
         price_tiers: o.price_tiers && Array.isArray(o.price_tiers) ? o.price_tiers : [],
         option_group: o.option_group ?? null,
         exit_points: o.exit_points && Array.isArray(o.exit_points) ? o.exit_points : [],
+        non_exercise_penalty: penaltyTermsFromRow(o),
       })));
     }
 
@@ -602,6 +605,16 @@ export default function ContractEditPage() {
   function updateOption(idx: number, field: string, value: any) {
     setExtensionOptions((prev) => prev.map((opt, i) => (i === idx ? { ...opt, [field]: value } : opt)));
   }
+
+  // Leased area used to preview a per-sqm non-exercise penalty.
+  const penaltyPreviewArea = (function() {
+    var sum = 0;
+    selSpaces.forEach(function(sid) {
+      const sp = spaces.find(function(s) { return s.id === sid; });
+      if (sp?.area) sum += Number(sp.area) || 0;
+    });
+    return sum > 0 ? sum : (Number(chargedArea) || 0);
+  })();
 
   function removeOption(idx: number) {
     setExtensionOptions((prev) => prev.filter((_, i) => i !== idx));
@@ -740,9 +753,12 @@ export default function ContractEditPage() {
       // Save options: preserve status of existing options, delete removed ones
       // First load existing option statuses to preserve exercised state
       const { data: existingOpts } = await supabase.from("contract_options")
-        .select("option_number,status,is_exercised").eq("contract_id", id);
-      const existingStatusMap: Record<number, { status: string; is_exercised: boolean }> = {};
-      (existingOpts ?? []).forEach(function(o: any) { existingStatusMap[o.option_number] = { status: o.status, is_exercised: o.is_exercised }; });
+        .select("option_number,status,is_exercised,declined_at,non_exercise_charge_id").eq("contract_id", id);
+      // Options are deleted and re-inserted on save, so every piece of RECORDED
+      // STATE (not terms) has to be carried across — otherwise editing a contract
+      // would wipe a decline and its penalty charge link.
+      const existingStatusMap: Record<number, any> = {};
+      (existingOpts ?? []).forEach(function(o: any) { existingStatusMap[o.option_number] = o; });
 
       await supabase.from("contract_options").delete().eq("contract_id", id);
       if (extensionOptions.length > 0) {
@@ -770,6 +786,9 @@ export default function ContractEditPage() {
               price_tiers: opt.price_schedule_type === "custom" ? (opt.price_tiers || []) : [],
               option_group: opt.option_group || null,
               exit_points: opt.exit_points?.length > 0 ? opt.exit_points : [],
+              declined_at: existing?.declined_at ?? null,
+              non_exercise_charge_id: existing?.non_exercise_charge_id ?? null,
+              ...penaltyTermsToRow(opt.non_exercise_penalty),
             };
           })
         ).select("id,option_number");
@@ -2001,6 +2020,15 @@ export default function ContractEditPage() {
                       )}
                     </div>
                   )}
+
+                  {/* Compensation if this option is not exercised */}
+                  <OptionPenaltyFields
+                    value={opt.non_exercise_penalty}
+                    onChange={(next) => updateOption(idx, "non_exercise_penalty", next)}
+                    area={penaltyPreviewArea}
+                    baseTermMonths={leasePeriodUnit === "years" ? Number(leasePeriodValue) * 12 : Number(leasePeriodValue)}
+                    optionMonths={opt.duration_months || (opt.duration_years || 0) * 12}
+                  />
 
                   {/* Year-by-year price forecast */}
                   {opt.duration_years > 0 && Number(rentPerSqm) > 0 && (function() {

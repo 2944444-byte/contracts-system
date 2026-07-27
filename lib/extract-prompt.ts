@@ -61,7 +61,17 @@ export const EXTRACT_PROMPT = `אתה מומחה לניתוח חוזי שכיר�
 - guarantors: מערך ערבים (בעיקר לשטר חוב / ערבות אישית). כל איבר: {"name":"שם","id_number":"ת.ז."}. [] אם אין
 
 אופציות להארכה:
-- options: מערך אופציות להארכה. כל איבר: {"duration_months":מספר,"notice_type":"exercise" (דרושה הודעת מימוש) או "non_exercise" (דרושה הודעת אי-מימוש),"notice_days_before_end":מספר ימי הודעה לפני תום התקופה}. [] אם אין אופציות
+- options: מערך אופציות להארכה. כל איבר: {"duration_months":מספר,"notice_type":"exercise" (דרושה הודעת מימוש) או "non_exercise" (דרושה הודעת אי-מימוש),"notice_days_before_end":מספר ימי הודעה לפני תום התקופה}.
+  אם קיים בחוזה סעיף פיצוי/קנס על אי מימוש האופציה ("במידה והשוכרת לא תאריך... תשלם פיצוי בסך X ₪ למ״ר לחודש..."), הוסף לאותו איבר גם:
+  "non_exercise_penalty_type": "per_sqm_month" (פיצוי לפי ₪ למ״ר לחודש) או "fixed" (סכום כולל קבוע) או "none",
+  "non_exercise_penalty_value": הסכום במספרים (₪ למ״ר לחודש, או הסכום הקבוע),
+  "non_exercise_penalty_basis": "first_term" (הפיצוי מחושב לכל תקופת השכירות הראשונה) / "option_term" (לתקופת האופציה) / "custom_months",
+  "non_exercise_penalty_months": מספר חודשים — רק אם basis הוא custom_months,
+  "non_exercise_penalty_indexed": true אם נכתב "בתוספת הפרשי הצמדה למדד",
+  "non_exercise_penalty_vat": true אם נכתב "בתוספת מע״מ",
+  "non_exercise_penalty_days": מספר הימים לתשלום ממועד ההודעה (למשל 30),
+  "non_exercise_penalty_notes": ציטוט קצר של לשון הסעיף.
+  אם אין סעיף כזה — החזר "non_exercise_penalty_type":"none". [] אם אין אופציות כלל
 
 דרישות ביטוח של השוכר (מתוך נספח האחריות והביטוח / סעיף "ביטוחי השוכרת"):
 - insurance_requirements: אובייקט JSON הממפה את סוגי הכיסוי הנדרשים מהשוכר לגבול האחריות / סכום הביטוח המינימלי בשקלים.

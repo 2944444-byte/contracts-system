@@ -11,6 +11,8 @@ import { getVatPct } from '@/lib/vat';
 import { getScopeIds, scopeRows } from '@/lib/permissions';
 import CalcProgress, { CalcProgressState } from '@/components/CalcProgress';
 import { buildPriceTimeline, calculateTierPreviews, buildSpaceRentSchedule, rentAtDate, type PriceTier } from '@/lib/contract-utils';
+import { penaltyTermsFromRow, hasPenalty, describePenaltyTerms, contractArea, penaltyMonths } from '@/lib/option-penalty';
+import { previewOptionDecline, applyOptionDecline } from '@/lib/option-decline';
 // CPI + price timeline
 
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
@@ -101,6 +103,7 @@ export default function ContractsPage() {
   const [contracts, setContracts] = useState<any[]>([]);
   const [loading,   setLoading]   = useState(true);
   const [syncing,   setSyncing]   = useState(false);
+  const [declining, setDeclining] = useState<string | null>(null);
   // Configured VAT rate (vat_rates) — fetched once; default 18% until loaded.
   const [vatPct,    setVatPct]    = useState(0.18);
   useEffect(function(){ getVatPct().then(setVatPct); }, []);
@@ -166,7 +169,7 @@ export default function ContractsPage() {
 
   async function loadContracts() {
     const { data } = await supabase.from("contracts")
-      .select("*, tenants(name,phone,primary_email,company_name), properties(name,city), contract_options(id,option_number,duration_months,duration_years,start_date,end_date,notice_days_before_end,notice_type,status,is_exercised,rent_mechanism,rent_increase_pct,new_rent_value,option_group,exit_points,price_schedule_type,price_tiers), guarantees(id,guarantee_type,status,amount_required,amount_actual,end_date,bank,document_url), contract_ti(id,description,ti_type,ti_amount,recovery_method,recovery_amount_monthly,recovery_start_date,recovery_end_date,payment_trigger,payment_days_after,payment_due_date,payment_installments,requires_invoice,requires_report,paid_at,paid_amount,payment_notes,notes), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,index_base_value,index_base_date,use_original_index,spaces(space_name,area))")
+      .select("*, tenants(name,phone,primary_email,company_name), properties(name,city), contract_options(id,option_number,duration_months,duration_years,start_date,end_date,notice_days_before_end,notice_type,status,is_exercised,rent_mechanism,rent_increase_pct,new_rent_value,option_group,exit_points,price_schedule_type,price_tiers,non_exercise_penalty_type,non_exercise_penalty_value,non_exercise_penalty_basis,non_exercise_penalty_months,non_exercise_penalty_indexed,non_exercise_penalty_vat,non_exercise_penalty_days,non_exercise_penalty_notes,declined_at,non_exercise_charge_id), guarantees(id,guarantee_type,status,amount_required,amount_actual,end_date,bank,document_url), contract_ti(id,description,ti_type,ti_amount,recovery_method,recovery_amount_monthly,recovery_start_date,recovery_end_date,payment_trigger,payment_days_after,payment_due_date,payment_installments,requires_invoice,requires_report,paid_at,paid_amount,payment_notes,notes), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,index_base_value,index_base_date,use_original_index,spaces(space_name,area))")
       .order("end_date");
     // Data-level scoping: managers/viewers see only contracts of their
     // allowed properties (admin scope is null = everything).
@@ -669,6 +672,49 @@ export default function ContractsPage() {
     }
 
     await loadContracts();
+  }
+
+  // Mark an option as NOT exercised. If the contract carries a non-exercise
+  // compensation clause, the amount is computed here (area × ₪/sqm × months,
+  // + CPI linkage, + VAT at the notice date) and raised as a charge the tenant
+  // has to pay within the agreed number of days.
+  async function handleDeclineOption(opt: any) {
+    setDeclining(opt.id);
+    try {
+      const preview = await previewOptionDecline(opt.id);
+      if (!preview) { alert("לא נמצאה האופציה"); return; }
+      const { terms, calc } = preview;
+
+      if (!calc) {
+        if (!confirm("לסמן את אופציה " + opt.option_number + " כלא ממומשת?\n(לא הוגדר פיצוי על אי מימוש בהסכם — לא ייווצר חיוב)")) return;
+      } else if (!calc.ok) {
+        alert("לא ניתן לחשב את הפיצוי: " + (calc.error || "שגיאה לא ידועה"));
+        return;
+      } else {
+        const lines = [
+          "לסמן את אופציה " + opt.option_number + " כלא ממומשת ולחייב את השוכר בפיצוי?",
+          "",
+          terms.type === "per_sqm_month"
+            ? "בסיס: " + terms.value + " ₪ למ\"ר × " + calc.area.toLocaleString("he-IL") + " מ\"ר × " + calc.months + " חודשים = " + fmtMoney(calc.rawBase)
+            : "בסיס: " + fmtMoney(calc.rawBase),
+          terms.indexed ? "הצמדה למדד: ×" + calc.cpiRatio.toFixed(4) + " → " + fmtMoney(calc.base) : "ללא הצמדה",
+          terms.vat ? "מע\"מ " + Math.round(calc.vatPct * 100) + "%: " + fmtMoney(calc.vatAmount) : "ללא מע\"מ",
+          "סה\"כ לתשלום: " + fmtMoney(calc.total),
+          "מועד תשלום אחרון: " + fmtDate(calc.dueDate) + " (" + terms.days + " יום מההודעה)",
+        ];
+        if (!confirm(lines.join("\n"))) return;
+      }
+
+      const res = await applyOptionDecline({ preview });
+      if (!res.ok) { alert("שגיאה: " + (res.error || "לא ידוע")); return; }
+
+      await loadContracts();
+      if (calc?.ok) {
+        alert("✅ האופציה סומנה כלא ממומשת ונוצר חיוב פיצוי על סך " + fmtMoney(calc.total) + ".\nניתן לשלוח אותו לשוכר ממסך החיובים.");
+      }
+    } finally {
+      setDeclining(null);
+    }
   }
 
   const filtered = contracts.filter(function(c) {
@@ -1849,9 +1895,11 @@ export default function ContractsPage() {
                         : null;
                       const noticePassed = noticeDate ? new Date() > noticeDate : false;
                       const isExercised = opt.is_exercised || opt.status === "exercised";
-                      const needsAttention = noticePassed && !isExercised && opt.status !== "expired";
+                      const isDeclined = opt.status === "declined";
+                      const needsAttention = noticePassed && !isExercised && !isDeclined && opt.status !== "expired";
+                      const penalty = penaltyTermsFromRow(opt);
                       return (
-                        <div key={opt.id} className={"rounded-lg border p-3 " + (needsAttention ? "border-red-300 bg-red-50" : isExercised ? "border-green-200 bg-green-50" : opt.option_group ? "border-purple-200 bg-purple-50/30" : "border-slate-100")}>
+                        <div key={opt.id} className={"rounded-lg border p-3 " + (needsAttention ? "border-red-300 bg-red-50" : isExercised ? "border-green-200 bg-green-50" : isDeclined ? "border-rose-200 bg-rose-50" : opt.option_group ? "border-purple-200 bg-purple-50/30" : "border-slate-100")}>
                           <div className="flex items-center justify-between mb-1">
                             <div className="flex items-center gap-2">
                               <span className="text-sm font-bold text-slate-700">אופציה {opt.option_number} — {optYears} שנים</span>
@@ -1859,13 +1907,31 @@ export default function ContractsPage() {
                             </div>
                             <div className="flex items-center gap-2">
                               <span className={"text-xs px-2 py-0.5 rounded-full font-semibold " +
-                                (isExercised ? "bg-green-100 text-green-700" : opt.status==="expired" ? "bg-red-100 text-red-600" : "bg-blue-100 text-blue-600")}>
-                                {isExercised ? "✓ מומשה" : opt.status==="expired" ? "פגה" : "ממתינה"}
+                                (isExercised ? "bg-green-100 text-green-700" : isDeclined ? "bg-rose-100 text-rose-700" : opt.status==="expired" ? "bg-red-100 text-red-600" : "bg-blue-100 text-blue-600")}>
+                                {isExercised ? "✓ מומשה" : isDeclined ? "✗ לא מומשה" : opt.status==="expired" ? "פגה" : "ממתינה"}
                               </span>
-                              {!isExercised && opt.status !== "expired" && (
+                              {!isExercised && !isDeclined && opt.status !== "expired" && (
                                 <button onClick={async (e) => { e.stopPropagation(); if (confirm("לסמן אופציה כמומשת?")) await handleExerciseOption(opt.id, true); }}
                                   className="text-xs border border-green-300 bg-green-50 text-green-700 rounded px-2 py-0.5 hover:bg-green-100 font-semibold">
                                   סמן מימוש
+                                </button>
+                              )}
+                              {!isExercised && !isDeclined && opt.status !== "expired" && (
+                                <button disabled={declining === opt.id}
+                                  onClick={async (e) => { e.stopPropagation(); await handleDeclineOption(opt); }}
+                                  className="text-xs border border-rose-300 bg-rose-50 text-rose-700 rounded px-2 py-0.5 hover:bg-rose-100 font-semibold disabled:opacity-50">
+                                  {declining === opt.id ? "מחשב…" : "סמן אי-מימוש"}
+                                </button>
+                              )}
+                              {isDeclined && (
+                                <button onClick={async (e) => {
+                                  e.stopPropagation();
+                                  if (!confirm("לבטל את סימון אי-המימוש?\n(חיוב הפיצוי שנוצר לא יימחק — יש לבטלו במסך החיובים)")) return;
+                                  await supabase.from("contract_options").update({ status: "pending", declined_at: null }).eq("id", opt.id);
+                                  await loadContracts();
+                                }}
+                                  className="text-xs border border-slate-200 text-slate-500 rounded px-2 py-0.5 hover:bg-slate-50">
+                                  בטל
                                 </button>
                               )}
                               {isExercised && (
@@ -1891,9 +1957,32 @@ export default function ContractsPage() {
                               </div>
                             )}
                           </div>
+                          {hasPenalty(penalty) && (
+                            <div className="mt-1.5 rounded bg-rose-50 border border-rose-200 px-2 py-1.5 text-xs text-rose-700">
+                              <div className="font-semibold">⚖️ פיצוי על אי מימוש: {describePenaltyTerms(penalty, selContract, opt)}</div>
+                              {penalty.type === "per_sqm_month" && (function() {
+                                const area = contractArea(selContract);
+                                const months = penaltyMonths(penalty, selContract, opt);
+                                if (!(area > 0 && months > 0)) return null;
+                                return (
+                                  <div className="text-[11px] text-rose-600">
+                                    אומדן לפני הצמדה ומע&quot;מ: {fmtMoney(Number(penalty.value) * area * months)}
+                                    {" "}({penalty.value} × {area.toLocaleString("he-IL")} מ&quot;ר × {months} ח&apos;)
+                                  </div>
+                                );
+                              })()}
+                              {penalty.notes && <div className="text-[11px] text-rose-500 mt-0.5">{penalty.notes}</div>}
+                            </div>
+                          )}
+                          {isDeclined && (
+                            <div className="mt-1.5 rounded bg-rose-100 border border-rose-200 px-2 py-1.5 text-xs text-rose-700 font-semibold">
+                              ✗ סומנה כלא ממומשת{opt.declined_at ? " ב-" + fmtDate(opt.declined_at) : ""}
+                              {opt.non_exercise_charge_id ? " · נוצר חיוב פיצוי (מסך חיובים)" : ""}
+                            </div>
+                          )}
                           {needsAttention && (
                             <div className="mt-1.5 rounded bg-red-100 border border-red-200 px-2 py-1.5 text-xs text-red-700 font-semibold">
-                              ⚠️ מועד ההודעה עבר ולא סומן מימוש — האם לסמן כמומשה או כפגה?
+                              ⚠️ מועד ההודעה עבר ולא סומן מימוש — האם לסמן כמומשה או כלא ממומשת?
                             </div>
                           )}
                         </div>

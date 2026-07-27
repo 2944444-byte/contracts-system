@@ -19,6 +19,8 @@ import {
   type IncreaseStep,
   type PriceTier,
 } from "@/lib/contract-utils";
+import { penaltyTermsFromRow, penaltyTermsToRow } from "@/lib/option-penalty";
+import OptionPenaltyFields from '@/components/OptionPenaltyFields';
 import TenantForm from '@/components/TenantForm';
 import PropertyForm from '@/components/PropertyForm';
 
@@ -217,6 +219,17 @@ export default function ContractsNewPage() {
   const [depositIncludesMgmt, setDepositIncludesMgmt] = useState(false);
   const [amendmentNotes, setAmendmentNotes] = useState("");
 
+  // Leased area used to preview a per-sqm non-exercise penalty: the selected
+  // units' area, falling back to the manually charged area.
+  const penaltyPreviewArea = (function() {
+    var sum = 0;
+    selSpaces.forEach(function(sid) {
+      const sp = spaces.find(function(s) { return s.id === sid; });
+      if (sp?.area) sum += Number(sp.area) || 0;
+    });
+    return sum > 0 ? sum : (Number(chargedArea) || 0);
+  })();
+
   // === Auto-calculate end date from start + period ===
   useEffect(() => {
     if (startDate && leasePeriodValue > 0) {
@@ -292,7 +305,7 @@ export default function ContractsNewPage() {
     if (!amendmentOfId) return;
     async function loadParent() {
       var { data: c } = await supabase.from("contracts")
-        .select("*, tenants(name), properties(name), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area)), contract_options(id,option_number,duration_months,duration_years,notice_type,notice_days_before_end,rent_mechanism,rent_increase_pct,new_rent_value,option_group,exit_points,price_schedule_type,price_tiers), guarantees(id,guarantee_type,amount_required,amount_actual,bank,end_date,document_url)")
+        .select("*, tenants(name), properties(name), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area)), contract_options(id,option_number,duration_months,duration_years,notice_type,notice_days_before_end,rent_mechanism,rent_increase_pct,new_rent_value,option_group,exit_points,price_schedule_type,price_tiers,non_exercise_penalty_type,non_exercise_penalty_value,non_exercise_penalty_basis,non_exercise_penalty_months,non_exercise_penalty_indexed,non_exercise_penalty_vat,non_exercise_penalty_days,non_exercise_penalty_notes), guarantees(id,guarantee_type,amount_required,amount_actual,bank,end_date,document_url)")
         .eq("id", amendmentOfId).single();
       if (!c) return;
       setAmendmentParent(c);
@@ -386,6 +399,7 @@ export default function ContractsNewPage() {
             exit_points: o.exit_points || [],
             price_schedule_type: o.price_schedule_type || "inherit",
             price_tiers: o.price_tiers || [],
+            non_exercise_penalty: penaltyTermsFromRow(o),
           };
         }));
       }
@@ -703,6 +717,25 @@ export default function ContractsNewPage() {
         filled++;
       }
 
+      // Options: fill only when the user hasn't entered any, so an extraction
+      // re-run never overwrites hand-entered terms. Carries the non-exercise
+      // compensation clause through when the contract has one.
+      if (Array.isArray(data.options) && data.options.length > 0 && extensionOptions.length === 0) {
+        setExtensionOptions(data.options.map(function(o: any) {
+          const months = Number(o.duration_months) || 0;
+          const base = emptyOption(null);
+          return {
+            ...base,
+            duration_months: months || base.duration_months,
+            duration_years: months ? Math.round(months / 12 * 100) / 100 : base.duration_years,
+            notice_type: o.notice_type === "non_exercise" ? "non_renewal" : "exercise",
+            notice_days_before_end: Number(o.notice_days_before_end) || base.notice_days_before_end,
+            non_exercise_penalty: penaltyTermsFromRow(o),
+          } as ExtensionOption;
+        }));
+        filled++;
+      }
+
       // Verification summary: list notable extracted values (incl. ones the form
       // doesn't auto-fill) so the user can eyeball what the AI read vs the doc.
       var extra: string[] = [];
@@ -711,7 +744,11 @@ export default function ContractsNewPage() {
       if (data.indexation_method) extra.push("הצמדה: " + data.indexation_method);
       if (data.min_rent_per_sqm) extra.push("שכ\"ד מינ'/מ\"ר: " + data.min_rent_per_sqm);
       if (Array.isArray(data.rent_steps) && data.rent_steps.length) extra.push(data.rent_steps.length + " מדרגות שכ\"ד");
-      if (Array.isArray(data.options) && data.options.length) extra.push(data.options.length + " אופציות");
+      if (Array.isArray(data.options) && data.options.length) {
+        extra.push(data.options.length + " אופציות");
+        const withPenalty = data.options.filter(function(o: any) { return o?.non_exercise_penalty_type && o.non_exercise_penalty_type !== "none"; });
+        if (withPenalty.length) extra.push("פיצוי אי-מימוש ב-" + withPenalty.length + " אופציות");
+      }
       if (Array.isArray(data.guarantors) && data.guarantors.length) extra.push(data.guarantors.length + " ערבים");
       if (data.insurance_requirements && Object.keys(data.insurance_requirements).length) extra.push(Object.keys(data.insurance_requirements).length + " דרישות ביטוח");
       setAiResult(
@@ -919,6 +956,7 @@ export default function ContractsNewPage() {
           price_tiers: opt.price_schedule_type === "custom" ? opt.price_tiers : [],
           option_group: opt.option_group || null,
           exit_points: opt.exit_points?.length > 0 ? opt.exit_points : [],
+          ...penaltyTermsToRow(opt.non_exercise_penalty),
         }));
         const { data: insertedOpts } = await supabase.from("contract_options").insert(optionsToInsert).select("id,option_number");
 
@@ -2789,6 +2827,15 @@ export default function ContractsNewPage() {
                       )}
                     </div>
                   )}
+
+                  {/* Compensation if this option is not exercised */}
+                  <OptionPenaltyFields
+                    value={opt.non_exercise_penalty}
+                    onChange={(next) => updateOption(idx, "non_exercise_penalty", next)}
+                    area={penaltyPreviewArea}
+                    baseTermMonths={leasePeriodUnit === "years" ? Number(leasePeriodValue) * 12 : Number(leasePeriodValue)}
+                    optionMonths={opt.duration_months || (opt.duration_years || 0) * 12}
+                  />
 
                   {/* Year-by-year price forecast */}
                   {opt.duration_years > 0 && Number(rentPerSqm) > 0 && (function() {

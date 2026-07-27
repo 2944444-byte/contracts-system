@@ -7,6 +7,7 @@ import { PageHero } from '@/components/ui';
 import { getScopeIds, scopeRows } from '@/lib/permissions';
 import { loadCompanyInfo, letterContent } from '@/lib/letter-format';
 import { logAudit } from '@/lib/audit-log';
+import { previewOptionDecline, applyOptionDecline } from '@/lib/option-decline';
 
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
 function daysLeft(d: string) { return Math.ceil((new Date(d).getTime()-Date.now())/86400000); }
@@ -232,11 +233,34 @@ export default function AlertsPage() {
     var optId = a.entity_id;
     if (!optId) return;
     var isType2 = a.alert_type === "option_nonexercise_notice";
-    var what = exercised
-      ? "לסמן שהאופציה ממומשת ולהאריך את החוזה עד סוף תקופת האופציה?"
-      : (isType2
-        ? "לסמן שהתקבלה הודעת אי-מימוש מהדייר? (האופציה לא תמומש והחוזה יסתיים במועדו)"
-        : "לסמן אי-מימוש? (לא התקבלה הודעת מימוש — האופציה פוקעת והחוזה יסתיים במועדו)");
+
+    // Non-exercise may carry a compensation clause — route it through the shared
+    // decline flow so the charge is raised here exactly as on the contract screen.
+    if (!exercised) {
+      setWorking("option");
+      try {
+        var preview = await previewOptionDecline(optId);
+        if (!preview) { alert("לא נמצאה האופציה"); return; }
+        var calc = preview.calc;
+        var head = isType2
+          ? "לסמן שהתקבלה הודעת אי-מימוש מהדייר? (האופציה לא תמומש והחוזה יסתיים במועדו)"
+          : "לסמן אי-מימוש? (לא התקבלה הודעת מימוש — האופציה פוקעת והחוזה יסתיים במועדו)";
+        if (calc && !calc.ok) { alert("לא ניתן לחשב את הפיצוי: " + (calc.error || "שגיאה")); return; }
+        if (calc?.ok) {
+          head += "\n\nלפי ההסכם יחויב פיצוי אי-מימוש:\nסה\"כ " + Math.round(calc.total).toLocaleString("he-IL")
+            + " ₪ (כולל " + (calc.vatPct > 0 ? "מע\"מ" : "ללא מע\"מ") + ") · לתשלום עד " + calc.dueDate;
+        }
+        if (!confirm(head)) return;
+        var res = await applyOptionDecline({ preview: preview });
+        if (!res.ok) { alert("שגיאה: " + (res.error || "לא ידוע")); return; }
+        await loadAlerts();
+        if (calc?.ok) alert("✅ נוצר חיוב פיצוי על סך " + Math.round(calc.total).toLocaleString("he-IL") + " ₪ — ניתן לשלוח אותו לשוכר ממסך החיובים.");
+      } catch (e: any) { alert("שגיאה: " + (e?.message || e)); }
+      finally { setWorking(""); }
+      return;
+    }
+
+    var what = "לסמן שהאופציה ממומשת ולהאריך את החוזה עד סוף תקופת האופציה?";
     if (!confirm(what)) return;
     setWorking("option");
     try {

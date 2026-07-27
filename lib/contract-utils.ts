@@ -1,4 +1,5 @@
 import { addMonths, addYears, format } from "date-fns";
+import { emptyPenaltyTerms, type PenaltyTerms } from "@/lib/option-penalty";
 
 /**
  * Calculate contract end date from start date + period.
@@ -54,6 +55,8 @@ export type ExtensionOption = {
   option_group: string | null; // null = sequential, "A"/"B" = alternatives
   // Exit points: tenant can exit early at specific years
   exit_points: Array<{ year: number; notice_days: number; penalty_months: number }>;
+  // Compensation owed if the option is NOT exercised
+  non_exercise_penalty: PenaltyTerms;
 };
 
 export type IncreaseStep = {
@@ -433,6 +436,7 @@ export function emptyOption(group: string | null = null): ExtensionOption {
     price_tiers: [],
     option_group: group,
     exit_points: [],
+    non_exercise_penalty: emptyPenaltyTerms(),
   };
 }
 
