@@ -6,6 +6,8 @@ import PropertyHierarchyFilter from '@/components/PropertyHierarchyFilter';
 import BillingGroupsManager from '@/components/BillingGroupsManager';
 import { fetchCpiAdjusted } from '@/lib/cpi-server';
 import { getGraceDaysForProperty, dueDateFromGrace } from '@/lib/grace-days';
+import { mgmtProtectionFromRow, mgmtCeilingForYear, applyMgmtProtection, hasMgmtProtection, describeMgmtProtection } from '@/lib/mgmt-protection';
+import { fetchCpiAdjustedWithRetry } from '@/lib/cpi-server';
 import { getVatPct, getVatTypeMap, applyVat } from '@/lib/vat';
 import { loadCompanyInfo, letterContent } from '@/lib/letter-format';
 import { PageHero } from '@/components/ui';
@@ -22,7 +24,9 @@ function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL")
 
 type Tab = "management" | "insurance" | "waste" | "advances" | "saved_advances" | "cpi_diff";
 
-interface MgmtResult { contractId: string; tenantName: string; spaceNames: string; chargedArea: number; advance: number; actualShare: number; difference: number; isRevenueBased: boolean; }
+interface MgmtResult { contractId: string; tenantName: string; spaceNames: string; chargedArea: number; advance: number; actualShare: number; difference: number; isRevenueBased: boolean;
+  // Management-fee protection (cap / fixed) applied to this year's reconciliation
+  protectionLabel?: string; ceilingAmount?: number; absorbed?: number; capped?: boolean; }
 interface InsResult {
   contractId: string;
   tenantName: string;
@@ -332,7 +336,7 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
       // (their mgmt is paid as part of the % rent — no separate charge).
       const { data: contracts } = await supabase
         .from("contracts")
-        .select("id, charged_area, rent_per_sqm, rent_type, revenue_pct, mgmt_included_in_revenue, is_amendment, tenants(name), contract_spaces(space_id, spaces(id, space_name, area))")
+        .select("id, charged_area, rent_per_sqm, rent_type, revenue_pct, mgmt_included_in_revenue, is_amendment, start_date, indexation_method, index_base_date, mgmt_protection_type, mgmt_protection_value, mgmt_protection_months, mgmt_protection_indexed, mgmt_protection_notes, tenants(name), contract_spaces(space_id, spaces(id, space_name, area))")
         .eq("property_id", propId)
         .eq("is_amendment", false)
         .in("status", ["active", "expiring", "extended"]);
@@ -372,6 +376,31 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
       const defaultAnnualBudget = hasGroups ? annualBudget : annualBudget; // still same source
       const defaultRate = defaultSpaceArea > 0 ? defaultAnnualBudget / defaultSpaceArea / 12 : (totalArea > 0 ? annualBudget / totalArea / 12 : 0);
 
+      // Contracts whose management fee is protected need one CPI ratio each
+      // (base index → the reconciled year). Distinct base dates are fetched
+      // once and shared — most contracts on a property have the same base.
+      const protectionRatios: Record<string, number> = {};
+      const baseDatesNeeded: string[] = [];
+      for (const c of (contracts ?? [])) {
+        const pr = mgmtProtectionFromRow(c);
+        if (!hasMgmtProtection(pr) || !pr.indexed) continue;
+        if (c.indexation_method === "none" || !c.index_base_date) continue;
+        const bd = String(c.index_base_date).slice(0, 10);
+        if (baseDatesNeeded.indexOf(bd) === -1) baseDatesNeeded.push(bd);
+      }
+      for (const bd of baseDatesNeeded) {
+        const d = new Date(bd);
+        if (d.getDate() === 15) d.setDate(16);
+        const fromCbs = String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0") + "-" + d.getFullYear();
+        // Mid-year is the representative point for a full year's ceiling.
+        const toCbs = "07-01-" + year;
+        const res: any = await fetchCpiAdjustedWithRetry({ value: 10000, fromDate: fromCbs, toDate: toCbs });
+        if (res?.success) {
+          const ratio = Number(res.adjustedRentPerSqm) / 10000;
+          if (ratio > 0) protectionRatios[bd] = ratio;
+        }
+      }
+
       const results: MgmtResult[] = (contracts ?? []).map(function (c: any) {
         let advance = 0;
         let actualShare = 0;
@@ -400,6 +429,19 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
         // on the revenue page.
         const isRevenueBased = c.rent_type === "revenue_pct" || c.rent_type === "revenue_based" || Number(c.revenue_pct) > 0;
 
+        // Management-fee protection: during the protected period the tenant is
+        // never billed above the agreed ceiling. An overrun is absorbed by the
+        // landlord; an overpayment still comes back to the tenant, so the
+        // reconciliation stays one-directional in the tenant's favour.
+        const prot = mgmtProtectionFromRow(c);
+        const ceiling = mgmtCeilingForYear({
+          contract: c, protection: prot, area: contractArea, year: year,
+          cpiRatio: c.index_base_date ? protectionRatios[String(c.index_base_date).slice(0, 10)] : null,
+        });
+        const applied = applyMgmtProtection({
+          advance: advance, actualShare: actualShare, ceiling: ceiling, type: prot.type,
+        });
+
         return {
           contractId: c.id,
           tenantName: c.tenants?.name ?? "—",
@@ -407,8 +449,12 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
           chargedArea: contractArea,
           advance,
           actualShare,
-          difference: actualShare - advance,
+          difference: applied.chargeableShare - advance,
           isRevenueBased,
+          protectionLabel: ceiling.applies ? describeMgmtProtection(prot, c) : undefined,
+          ceilingAmount: ceiling.applies ? ceiling.amount : undefined,
+          absorbed: applied.absorbed,
+          capped: applied.capped,
         };
       });
       setMgmtResults(results);
@@ -932,7 +978,17 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
                         <td className="px-4 py-3 text-xs text-slate-600">{r.spaceNames}</td>
                         <td className="px-4 py-3 text-slate-600">{r.chargedArea.toLocaleString("he-IL")}</td>
                         <td className="px-4 py-3">{fmtMoney(r.advance)}</td>
-                        <td className="px-4 py-3">{fmtMoney(r.actualShare)}</td>
+                        <td className="px-4 py-3">
+                          {fmtMoney(r.actualShare)}
+                          {r.protectionLabel && (
+                            <div className={"text-[10px] mt-0.5 rounded inline-block px-1.5 py-0.5 " + (r.capped ? "bg-teal-100 text-teal-800" : "bg-slate-100 text-slate-600")}
+                              title={r.protectionLabel}>
+                              🛡️ {r.capped
+                                ? "תקרה " + fmtMoney(r.ceilingAmount || 0) + " · נספג " + fmtMoney(r.absorbed || 0)
+                                : "מוגן — מתחת לתקרה"}
+                            </div>
+                          )}
+                        </td>
                         <td className={"px-4 py-3 font-semibold rounded " + (r.isRevenueBased ? "text-slate-500" : color)}>
                           {fmtMoney(r.difference)}
                         </td>

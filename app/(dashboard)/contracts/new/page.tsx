@@ -22,6 +22,8 @@ import {
 import { penaltyTermsFromRow, penaltyTermsToRow } from "@/lib/option-penalty";
 import { baseIndexRuleToRow, baseIndexRuleFromRow, type BaseIndexRule } from "@/lib/base-index-rule";
 import BaseIndexRuleFields from '@/components/BaseIndexRuleFields';
+import MgmtProtectionFields from '@/components/MgmtProtectionFields';
+import { mgmtProtectionFromRow, mgmtProtectionToRow, emptyMgmtProtection, type MgmtProtection } from '@/lib/mgmt-protection';
 import ExtraGuaranteesEditor, { emptyExtraGuarantee, extraGuaranteeFromRow, extraGuaranteeToRow, type ExtraGuarantee } from '@/components/ExtraGuaranteesEditor';
 import OptionPenaltyFields from '@/components/OptionPenaltyFields';
 import TenantForm from '@/components/TenantForm';
@@ -185,6 +187,7 @@ export default function ContractsNewPage() {
   const [baseCPI, setBaseCPI] = useState("");
   const [baseCPIDate, setBaseCPIDate] = useState("");
   const [baseIndexRule, setBaseIndexRule] = useState<BaseIndexRule>({ mode: "fixed", anchor: "actual_handover", offsetMonths: null });
+  const [mgmtProtection, setMgmtProtection] = useState<MgmtProtection>(emptyMgmtProtection());
   const [mgmtFeePct, setMgmtFeePct] = useState("");
   const [documentUrl, setDocumentUrl] = useState("");
 
@@ -370,6 +373,7 @@ export default function ContractsNewPage() {
       setBaseCPI(c.index_base_value ? String(c.index_base_value) : "");
       setBaseCPIDate(c.index_base_date || "");
       setBaseIndexRule(baseIndexRuleFromRow(c));
+      setMgmtProtection(mgmtProtectionFromRow(c));
       // Grace — typically no grace for amendment
       setHasGrace(false);
       // Load price tiers
@@ -844,6 +848,7 @@ export default function ContractsNewPage() {
         index_base_value: baseCPI ? Number(baseCPI) : null,
         index_base_date: baseCPIDate || null,
         ...baseIndexRuleToRow(baseIndexRule),
+        ...mgmtProtectionToRow(mgmtProtection),
         index_base_resolved_at: baseIndexRule.mode === "derived" && baseCPIDate ? new Date().toISOString() : null,
         mgmt_fee_per_sqm: mgmtFeePct ? Number(mgmtFeePct) : null,
         document_url: documentUrl || null,
@@ -1934,6 +1939,13 @@ export default function ContractsNewPage() {
                   className={ic}
                 />
               </div>
+              <MgmtProtectionFields
+                value={mgmtProtection}
+                onChange={setMgmtProtection}
+                contractStart={startDate}
+                area={penaltyPreviewArea}
+                inputClass={ic}
+              />
             </div>
 
             {/* Document URL */}

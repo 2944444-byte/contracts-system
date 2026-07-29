@@ -2,6 +2,7 @@
 // inserts alert rows (deduped against existing open alerts). Used by the
 // manual POST /api/alerts/sync and the daily cron /api/cron/sync-contracts.
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { mgmtProtectionFromRow, protectionEndDate, describeMgmtProtection } from "@/lib/mgmt-protection";
 
 export interface NewAlert {
   title: string;
@@ -54,6 +55,35 @@ export async function runAlertSync(supabase: SupabaseClient): Promise<{ created:
     if (error) return; // don't count failed inserts
     created++;
     newAlerts.push({ title: a.title, severity: a.severity, entity_type: a.entity_type, due_date: a.due_date });
+  }
+
+  // 0. Management-fee protection about to end — the manager has to run the
+  //    closing reconciliation against the property's actual cost and refund any
+  //    overpayment, so this needs to surface BEFORE the period lapses.
+  {
+    const { data: protectedContracts } = await supabase.from("contracts")
+      .select("id,property_id,tenant_id,start_date,tenants(name),properties(name),mgmt_protection_type,mgmt_protection_value,mgmt_protection_months,mgmt_protection_indexed,mgmt_protection_reconciled_at")
+      .in("status", ["active", "expiring", "extended"])
+      .neq("mgmt_protection_type", "none");
+    for (const c of (protectedContracts ?? []) as any[]) {
+      if (c.mgmt_protection_reconciled_at) continue;   // already settled
+      const prot = mgmtProtectionFromRow(c);
+      const end = protectionEndDate(c, prot);
+      if (!end) continue;
+      const days = daysUntil(end.toISOString().slice(0, 10));
+      if (days > 90 || days < -365) continue;          // window: 3 months before → a year after
+      if (await hasOpen(c.id, "mgmt_protection")) continue;
+      const label = (c.tenants?.name ?? "") + " — " + (c.properties?.name ?? "");
+      await add({
+        title: (days >= 0 ? "תום הגנת דמי ניהול בעוד " + days + " ימים: " : "הגנת דמי ניהול הסתיימה: ") + label,
+        message: describeMgmtProtection(prot, c) + " · יש לבצע התחשבנות מול העלות בפועל ולהחזיר תשלום עודף לשוכר.",
+        severity: days <= 30 ? "warning" : "info",
+        alert_type: "mgmt_protection_end",
+        entity_type: "mgmt_protection", entity_id: c.id,
+        contract_id: c.id, property_id: c.property_id ?? null, tenant_id: c.tenant_id ?? null,
+        due_date: end.toISOString().slice(0, 10),
+      });
+    }
   }
 
   // 1. Contracts expiring + options
