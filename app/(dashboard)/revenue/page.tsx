@@ -7,10 +7,12 @@ import { PageHero } from '@/components/ui';
 import { getScopeIds, scopeRows } from '@/lib/permissions';
 import { minRentForPeriod } from '@/lib/min-rent';
 import { revenueCategoriesFromRow, splitRevenue, hasCategories, describeCategories } from '@/lib/revenue-categories';
+import { periodsForYear, computeSettlement, FREQ_LABELS, type SettlementFreq, type SettlementCalc, type SettlementPeriod } from '@/lib/revenue-settlement';
 import { fetchCpiAdjustedWithRetry } from '@/lib/cpi-server';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 function fmtMoney(n: number) { return (n && Math.abs(n) > 0.001) ? "₪"+n.toLocaleString("he-IL",{minimumFractionDigits:2,maximumFractionDigits:2}) : "—"; }
+function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
 function fmtNum(n: number, dec=2) { return (n && Math.abs(n) > 0.001) ? n.toLocaleString("he-IL",{minimumFractionDigits:dec,maximumFractionDigits:dec}) : "—"; }
 
 // Bucket created via migration add_attachment_to_revenue_reports.
@@ -80,6 +82,10 @@ export default function RevenuePage() {
   // the ORIGINAL base index.
   const [minTiers, setMinTiers] = useState<any[]>([]);
   const [minCpiByMonth, setMinCpiByMonth] = useState<Record<string, number>>({});
+  // Periodic settlement (quarterly / half-yearly / yearly): each period restates
+  // both sides to the index known on its settlement date and bills the gap.
+  const [settlements, setSettlements] = useState<Array<{ period: SettlementPeriod; calc: SettlementCalc }>>([]);
+  const [settling, setSettling] = useState<string>("");
 
   // Uploads a file to the revenue_attachments bucket and returns the metadata
   // that should be written onto the revenue_reports row. Throws on failure.
@@ -146,6 +152,60 @@ export default function RevenuePage() {
   }
 
   useEffect(function() { setFByCategory({}); }, [fContractId]);
+
+  // Build this year's settlements for the selected contract. One CBS ratio per
+  // month (month → settlement date); when the contract says a late report is
+  // settled at the higher index, the ratio to TODAY is taken as well and the
+  // larger of the two is used, exactly as the clause reads.
+  useEffect(function() {
+    var cancelled = false;
+    (async function() {
+      var c: any = contracts.find(function(x: any) { return x.id === selContractId; });
+      var freq = (c?.revenue_settlement_freq || "monthly") as SettlementFreq;
+      if (!c || freq === "monthly") { setSettlements([]); return; }
+
+      var periods = periodsForYear(selYear, freq, Number(c.revenue_settlement_day) || 15);
+      var vatPct = c.vat_type === "taxable" ? vatPctAt(vatRates, new Date()) : 0;
+      var out: Array<{ period: SettlementPeriod; calc: SettlementCalc }> = [];
+
+      for (var pi = 0; pi < periods.length; pi++) {
+        var period = periods[pi];
+        var periodReports = reports.filter(function(r: any) {
+          return r.contract_id === selContractId && String(r.report_month).slice(0, 7) >= period.periodStart.slice(0, 7)
+            && String(r.report_month).slice(0, 7) <= period.periodEnd.slice(0, 7);
+        });
+        if (periodReports.length === 0) continue;   // nothing to settle yet
+
+        var ratios: Record<string, number> = {};
+        if (c.indexation_method !== "none") {
+          var toDates = [period.settlementDate];
+          if (c.revenue_late_report_higher_index && new Date() > new Date(period.settlementDate)) {
+            toDates.push(new Date().toISOString().slice(0, 10));
+          }
+          for (var mi = 0; mi < period.months.length; mi++) {
+            var key = period.year + "-" + String(period.months[mi]).padStart(2, "0") + "-01";
+            var fromCbs = toCbsDate(key);
+            if (!fromCbs) continue;
+            var best = 0;
+            for (var ti = 0; ti < toDates.length; ti++) {
+              var toCbs = toCbsDate(toDates[ti]);
+              if (!toCbs) continue;
+              var res: any = await fetchCpiAdjustedWithRetry({ value: 10000, fromDate: fromCbs, toDate: toCbs });
+              if (cancelled) return;
+              if (res?.success) {
+                var r = Number(res.adjustedRentPerSqm) / 10000;
+                if (r > best) best = r;   // "the higher of the two indices"
+              }
+            }
+            if (best > 0) ratios[key] = best;
+          }
+        }
+        out.push({ period: period, calc: computeSettlement({ period: period, reports: periodReports, ratios: ratios, vatPct: vatPct }) });
+      }
+      if (!cancelled) setSettlements(out);
+    })();
+    return function() { cancelled = true; };
+  }, [selContractId, selYear, contracts.length, reports.length, vatRates.length]);
 
   useEffect(function() { loadAll(); }, [selYear]);
 
@@ -390,6 +450,38 @@ export default function RevenuePage() {
   const previewCalc = fContractId && fEffectiveGross > 0
     ? calcRent(fContractId, fEffectiveGross, fMgmtInGross ? Number(fMgmtInGross) : undefined, fMonth ? fMonth + "-01" : undefined, fByCategory)
     : null;
+
+  // Raise the period's difference as a charge. The settlement date is the tax
+  // point, and the annex gives the tenant 7 days from the demand.
+  async function createSettlementCharge(period: SettlementPeriod, calc: SettlementCalc) {
+    if (!selContractId || calc.difference <= 0) return;
+    if (calc.missingMonths.length > 0 &&
+        !confirm("חסרים דיווחי פדיון ל-" + calc.missingMonths.length + " חודשים בתקופה. ליצור חיוב חלקי בכל זאת?")) return;
+    if (calc.unindexed &&
+        !confirm("חלק מהחודשים לא שוערכו כי המדד טרם פורסם, והם חושבו ללא הצמדה. להמשיך?")) return;
+    setSettling(period.key);
+    try {
+      var { data, error } = await supabase.from("charges").insert({
+        contract_id: selContractId,
+        charge_type: "revenue_settlement",
+        description: "התחשבנות פדיון — " + period.label,
+        base_amount: calc.difference,
+        vat_amount: calc.vatAmount,
+        total_amount: calc.total,
+        vat_type: calc.vatPct > 0 ? "taxable" : "exempt",
+        billing_period_start: period.periodStart,
+        billing_period_end: period.periodEnd,
+        due_date: calc.dueDate,
+        status: "pending",
+        notes: "מינימום משוערך " + calc.totalBase + " · פדיון משוערך " + calc.totalAlt
+          + " · שוערך למדד הידוע ביום " + period.settlementDate,
+      }).select("id").single();
+      if (error) throw error;
+      await logAudit({ entity_type: "charge", entity_id: data.id, action: "revenue_settlement", notes: period.label + " " + calc.total });
+      alert("✅ נוצר חיוב הפרש על סך " + fmtMoney(calc.total) + " לתשלום עד " + fmtDate(calc.dueDate) + ".\nניתן לשלוח אותו לשוכר ממסך החיובים.");
+    } catch (e: any) { alert("שגיאה: " + (e?.message || e)); }
+    finally { setSettling(""); }
+  }
 
   async function handleSave() {
     if (!fContractId || !fMonth || !(fEffectiveGross > 0)) {
@@ -663,7 +755,7 @@ export default function RevenuePage() {
       </div>
 
       {/* Contract context bar */}
-      {selContract && (
+      {selContract && (<>
         <div className="rounded-xl border border-blue-100 bg-blue-50 p-3 mb-5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-700">
           {areaSegments.length <= 1 ? (
             <span><span className="text-slate-500">שטח:</span> <span className="font-semibold">{fallbackArea} מ"ר</span></span>
@@ -728,7 +820,84 @@ export default function RevenuePage() {
             <span className="text-amber-700 text-[11px]">⚠ אין הגדרת mgmt_fee_per_sqm — הזן את דמי הניהול ידנית בכל דיווח</span>
           )}
         </div>
-      )}
+
+        {settlements.length > 0 && (
+          <div className="mt-3 rounded-xl border border-indigo-200 bg-indigo-50/40 p-3">
+            <div className="text-xs font-bold text-indigo-800 mb-2">
+              ⚖️ התחשבנות {FREQ_LABELS[(selContract.revenue_settlement_freq || "monthly") as SettlementFreq]} — הפרש בין המינימום ששולם לתמורה מהפדיון
+            </div>
+            <div className="space-y-2">
+              {settlements.map(function(st) {
+                var c = st.calc;
+                return (
+                  <div key={st.period.key} className="rounded-lg border border-indigo-100 bg-white p-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="text-xs font-bold text-slate-700">
+                        {st.period.label}
+                        <span className="font-normal text-slate-400"> · התחשבנות ליום {fmtDate(st.period.settlementDate)}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className={"text-xs font-bold " + (c.difference > 0 ? "text-red-700" : "text-green-700")}>
+                          {c.difference > 0 ? "הפרש לחיוב " + fmtMoney(c.total) : "אין הפרש — המינימום כיסה"}
+                        </span>
+                        {c.difference > 0 && (
+                          <button disabled={settling === st.period.key}
+                            onClick={function() { createSettlementCharge(st.period, c); }}
+                            className="rounded border border-indigo-300 bg-indigo-50 text-indigo-700 px-2 py-0.5 text-[11px] font-bold hover:bg-indigo-100 disabled:opacity-50">
+                            {settling === st.period.key ? "יוצר..." : "צור חיוב הפרש"}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <div className="mt-1.5 overflow-x-auto">
+                      <table className="w-full text-[11px]">
+                        <thead className="text-slate-400">
+                          <tr>
+                            <th className="text-right font-semibold py-0.5">חודש</th>
+                            <th className="text-right font-semibold">מינימום ששולם</th>
+                            <th className="text-right font-semibold">תמורה מפדיון</th>
+                            <th className="text-right font-semibold">מקדם שערוך</th>
+                            <th className="text-right font-semibold">מינימום משוערך</th>
+                            <th className="text-right font-semibold">פדיון משוערך</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {c.rows.map(function(r) {
+                            return (
+                              <tr key={r.monthKey} className={"border-t border-slate-50 " + (r.reported ? "" : "opacity-50")}>
+                                <td className="py-0.5">{HEB_MONTHS[r.month]}{r.reported ? "" : " (לא דווח)"}</td>
+                                <td>{fmtMoney(r.base)}</td>
+                                <td>{fmtMoney(r.alt)}</td>
+                                <td className="text-slate-400">×{r.ratio.toFixed(4)}</td>
+                                <td>{fmtMoney(r.indexedBase)}</td>
+                                <td>{fmtMoney(r.indexedAlt)}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                        <tfoot className="border-t border-slate-200 font-bold">
+                          <tr>
+                            <td className="py-0.5">סה&quot;כ</td>
+                            <td colSpan={3}></td>
+                            <td>{fmtMoney(c.totalBase)}</td>
+                            <td>{fmtMoney(c.totalAlt)}</td>
+                          </tr>
+                        </tfoot>
+                      </table>
+                    </div>
+                    {(c.missingMonths.length > 0 || c.unindexed) && (
+                      <div className="mt-1 text-[11px] text-amber-700">
+                        {c.missingMonths.length > 0 && <>⚠ חסרים דיווחים: {c.missingMonths.map(function(m){return HEB_MONTHS[m];}).join(", ")} — ההתחשבנות חלקית. </>}
+                        {c.unindexed && <>⚠ חלק מהחודשים לא שוערכו (מדד טרם פורסם) וחושבו ×1.</>}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </>)}
 
       {loading ? (
         <div className="flex items-center justify-center gap-2 py-12 text-slate-400 text-sm"><span className="inline-block w-4 h-4 rounded-full border-2 border-slate-200 border-t-blue-600 animate-spin" aria-label="loading"></span>טוען...</div>
