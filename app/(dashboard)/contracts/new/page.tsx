@@ -21,6 +21,7 @@ import {
 } from "@/lib/contract-utils";
 import { penaltyTermsFromRow, penaltyTermsToRow } from "@/lib/option-penalty";
 import { baseIndexRuleToRow, baseIndexRuleFromRow, type BaseIndexRule } from "@/lib/base-index-rule";
+import { clawbackTermsToRow } from "@/lib/investment-clawback";
 import BaseIndexRuleFields from '@/components/BaseIndexRuleFields';
 import MgmtProtectionFields from '@/components/MgmtProtectionFields';
 import { mgmtProtectionFromRow, mgmtProtectionToRow, emptyMgmtProtection, type MgmtProtection } from '@/lib/mgmt-protection';
@@ -168,6 +169,12 @@ export default function ContractsNewPage() {
   // landlord funds fit-out works and pays the tenant back, typically X days
   // after works completion / handover / opening, against a report + invoice.
   const [tiAmount, setTiAmount] = useState("");
+  // Early-exit clawback: the investment is given against a minimum stay, and
+  // leaving before it ends repays the unearned months.
+  const [tiClawbackMonths, setTiClawbackMonths] = useState("");
+  const [tiClawbackIndexed, setTiClawbackIndexed] = useState(true);
+  const [tiClawbackVat, setTiClawbackVat] = useState(true);
+  const [tiClawbackNotes, setTiClawbackNotes] = useState("");
   const [tiDescription, setTiDescription] = useState("");
   const [tiPaymentTrigger, setTiPaymentTrigger] = useState("on_completion");
   const [tiPaymentDays, setTiPaymentDays] = useState("");
@@ -1056,6 +1063,13 @@ export default function ContractsNewPage() {
           requires_report: tiRequiresReport,
           requires_invoice: tiRequiresInvoice,
           payment_notes: tiPaymentNotes || null,
+          ...clawbackTermsToRow({
+            months: Number(tiClawbackMonths) || null,
+            indexed: tiClawbackIndexed,
+            vat: tiClawbackVat,
+            indexFrom: null,
+            notes: tiClawbackNotes || null,
+          }),
         });
       }
 
@@ -1727,6 +1741,36 @@ export default function ContractsNewPage() {
                       <input type="number" value={tiInstallments} onChange={(e) => setTiInstallments(e.target.value)} className={ic} placeholder="למשל 3" />
                     </div>
                   )}
+                  <div className="sm:col-span-2 rounded-lg border border-rose-200 bg-rose-50/40 p-3 space-y-2">
+                    <div className="text-xs font-bold text-rose-800">↩️ החזר השקעה ביציאה מוקדמת</div>
+                    <div className="text-[11px] text-rose-600">
+                      ההשקעה ניתנת כנגד התחייבות לתקופת שכירות. יוצא השוכר קודם — הוא מחזיר את החלק היחסי:
+                      סכום ההשקעה ÷ חודשי ההתחייבות × החודשים שנותרו.
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      <span className="text-rose-700">חודשי התחייבות</span>
+                      <input type="number" min="0" value={tiClawbackMonths}
+                        onChange={(e) => setTiClawbackMonths(e.target.value)}
+                        className="w-24 rounded border border-slate-200 px-2 py-1 text-center text-xs" placeholder="120" />
+                      <label className="flex items-center gap-1 text-rose-700">
+                        <input type="checkbox" checked={tiClawbackIndexed} onChange={(e) => setTiClawbackIndexed(e.target.checked)} />
+                        צמוד למדד ממועד ההעמדה
+                      </label>
+                      <label className="flex items-center gap-1 text-rose-700">
+                        <input type="checkbox" checked={tiClawbackVat} onChange={(e) => setTiClawbackVat(e.target.checked)} />
+                        בתוספת מע&quot;מ
+                      </label>
+                    </div>
+                    <input type="text" value={tiClawbackNotes} onChange={(e) => setTiClawbackNotes(e.target.value)}
+                      placeholder="לשון הסעיף / הערות (לא חובה)" className={ic} />
+                    {Number(tiClawbackMonths) > 0 && Number(tiAmount) > 0 && (
+                      <div className="text-[11px] text-rose-700 font-semibold">
+                        {Math.round(Number(tiAmount) / Number(tiClawbackMonths) * 100) / 100} ₪ לכל חודש שנותר · לדוגמה: יציאה לאחר{" "}
+                        {Math.round(Number(tiClawbackMonths) * 0.75)} חודשים → החזר{" "}
+                        {Math.round(Number(tiAmount) / Number(tiClawbackMonths) * (Number(tiClawbackMonths) - Math.round(Number(tiClawbackMonths) * 0.75))).toLocaleString("he-IL")} ₪ לפני הצמדה ומע&quot;מ
+                      </div>
+                    )}
+                  </div>
                   <div className="sm:col-span-2">
                     <label className="mb-1 block text-xs font-semibold text-slate-700">הערות לתשלום</label>
                     <input type="text" value={tiPaymentNotes} onChange={(e) => setTiPaymentNotes(e.target.value)} className={ic} placeholder="תנאים מיוחדים להחזר ההשקעה..." />

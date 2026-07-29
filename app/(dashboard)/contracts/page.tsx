@@ -707,12 +707,32 @@ export default function ContractsPage() {
         if (!confirm(lines.join("\n"))) return;
       }
 
+      // A funded investment repays its unearned months on an early exit — show
+      // it before anything is written, it is often the larger of the two.
+      if (preview.clawback && !preview.clawback.ok) {
+        alert("לא ניתן לחשב את החזר ההשקעות: " + (preview.clawback.error || "שגיאה"));
+        return;
+      }
+      if (preview.clawback?.ok && preview.clawback.total > 0) {
+        const cb = preview.clawback;
+        if (!confirm([
+          "בנוסף, ההשקעה שמומנה מחייבת החזר בגין יציאה מוקדמת:",
+          "",
+          "השקעה " + fmtMoney(cb.fundedAmount) + " ÷ " + cb.commitmentMonths + " חודשי התחייבות = " + fmtMoney(cb.perMonth) + " לחודש",
+          "נשכר " + cb.monthsRented + " חודשים · נותרו " + cb.monthsRemaining,
+          cb.cpiRatio !== 1 ? "הצמדה: ×" + cb.cpiRatio.toFixed(4) : "ללא הצמדה",
+          "סה\"כ להחזר: " + fmtMoney(cb.total),
+        ].join("\n"))) return;
+      }
+
       const res = await applyOptionDecline({ preview });
       if (!res.ok) { alert("שגיאה: " + (res.error || "לא ידוע")); return; }
 
       await loadContracts();
       if (calc?.ok) {
-        alert("✅ האופציה סומנה כלא ממומשת ונוצר חיוב פיצוי על סך " + fmtMoney(calc.total) + ".\nניתן לשלוח אותו לשוכר ממסך החיובים.");
+        alert("✅ האופציה סומנה כלא ממומשת ונוצר חיוב פיצוי על סך " + fmtMoney(calc.total)
+          + (res.clawbackChargeId ? "\nכן נוצר חיוב החזר השקעות על סך " + fmtMoney(preview.clawback?.total || 0) : "")
+          + ".\nניתן לשלוח אותם לשוכר ממסך החיובים.");
       }
     } finally {
       setDeclining(null);
