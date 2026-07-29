@@ -5,6 +5,7 @@ import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit-log';
 import { PageHero } from '@/components/ui';
 import { getScopeIds, scopeRows } from '@/lib/permissions';
+import { reconcileAlerts } from '@/lib/alerts-reconcile';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 
@@ -532,6 +533,9 @@ export default function PaymentsPage() {
   }
   async function markPaid(id: string) {
     await supabase.from("charges").update({ status: "paid", paid_at: new Date().toISOString() }).eq("id", id);
+    // Settling a debt is exactly what an arrears alert was chasing — close it
+    // now rather than leaving it on the alerts screen until the nightly sync.
+    try { await reconcileAlerts(supabase); } catch (e) { /* non-fatal */ }
     await logAudit({ entity_type: "charge", entity_id: id, action: "paid" });
     await loadAll();
   }

@@ -8,6 +8,7 @@ import { getScopeIds, scopeRows } from '@/lib/permissions';
 import { loadCompanyInfo, letterContent } from '@/lib/letter-format';
 import { logAudit } from '@/lib/audit-log';
 import { previewOptionDecline, applyOptionDecline } from '@/lib/option-decline';
+import { reconcileAlerts } from '@/lib/alerts-reconcile';
 
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
 function daysLeft(d: string) { return Math.ceil((new Date(d).getTime()-Date.now())/86400000); }
@@ -80,8 +81,11 @@ export default function AlertsPage() {
         const res = await fetch("/api/alerts/sync", { method: "POST", headers: await authHeaders() });
         const d = await res.json();
         if (cancelled) return;
-        if ((d.created ?? 0) > 0) {
-          setSyncNote("🔄 נוספו " + d.created + " התראות חדשות");
+        if ((d.created ?? 0) > 0 || (d.resolved ?? 0) > 0) {
+          var parts: string[] = [];
+          if (d.created) parts.push("נוספו " + d.created + " התראות חדשות");
+          if (d.resolved) parts.push("נסגרו " + d.resolved + " התראות שטופלו");
+          setSyncNote("🔄 " + parts.join(" · "));
           await loadAlerts();
           setTimeout(function(){ if (!cancelled) setSyncNote(""); }, 6000);
         }
@@ -91,6 +95,12 @@ export default function AlertsPage() {
   }, []);
 
   async function loadAlerts() {
+    // Close anything whose condition was already fixed BEFORE reading the list,
+    // so opening the screen never shows a debt that was paid or a certificate
+    // that has since arrived. Cheap enough to run on every load; failures are
+    // non-fatal — the list still renders.
+    try { await reconcileAlerts(supabase); } catch (e) { /* keep showing the list */ }
+
     // due_date ascending = AGING order: most-overdue first, then nearest deadlines.
     const { data } = await supabase.from("alerts").select("*, contracts(property_id, tenants(name), properties(id,name))").order("due_date", {ascending: true, nullsFirst: false}).order("created_at",{ascending:false});
     var scope = await getScopeIds();

@@ -3,6 +3,7 @@
 // manual POST /api/alerts/sync and the daily cron /api/cron/sync-contracts.
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { mgmtProtectionFromRow, protectionEndDate, describeMgmtProtection } from "@/lib/mgmt-protection";
+import { reconcileAlerts } from "@/lib/alerts-reconcile";
 
 export interface NewAlert {
   title: string;
@@ -39,9 +40,15 @@ function daysUntil(d: string): number {
   return Math.ceil((new Date(d).getTime() - Date.now()) / 86400000);
 }
 
-export async function runAlertSync(supabase: SupabaseClient): Promise<{ created: number; newAlerts: NewAlert[] }> {
+export async function runAlertSync(supabase: SupabaseClient): Promise<{ created: number; resolved: number; newAlerts: NewAlert[] }> {
   let created = 0;
   const newAlerts: NewAlert[] = [];
+
+  // Close first, then create. A sync that only ever added rows left every
+  // fixed item on the screen — a paid debt, a renewed guarantee, a certificate
+  // that finally arrived. Closing first also frees the dedupe key, so an item
+  // that lapsed again gets a fresh, correctly-worded alert.
+  const { resolved } = await reconcileAlerts(supabase);
 
   // Dedupe against UNRESOLVED alerts via is_resolved — the column that actually
   // exists (there is no `status` column on alerts; the old check silently
@@ -298,7 +305,7 @@ export async function runAlertSync(supabase: SupabaseClient): Promise<{ created:
     });
   }
 
-  return { created, newAlerts };
+  return { created, resolved, newAlerts };
 }
 
 // Build an RTL HTML digest email from the alerts created this run.

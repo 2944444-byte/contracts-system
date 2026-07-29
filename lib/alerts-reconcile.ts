@@ -1,0 +1,173 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
+
+// The alert sync only ever CREATED alerts. Nothing closed one whose condition
+// had since been fixed, so a paid debt, a renewed guarantee or a certificate
+// that finally arrived kept its alert open forever — the screen filled with
+// items the data no longer supports.
+//
+// This pass walks every open alert and asks the same question the creator asks:
+// does the condition still hold? If not, the alert is resolved. It is the exact
+// mirror of the creation rules, so the two can't drift apart.
+
+function daysUntil(dateStr: string): number {
+  const d = new Date(dateStr);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  d.setHours(0, 0, 0, 0);
+  return Math.round((d.getTime() - today.getTime()) / 86400000);
+}
+
+export async function reconcileAlerts(supabase: SupabaseClient): Promise<{ resolved: number }> {
+  const todayStr = new Date().toISOString().split("T")[0];
+
+  const { data: open } = await supabase.from("alerts")
+    .select("id, entity_type, entity_id, contract_id, alert_type")
+    .eq("is_resolved", false);
+  if (!open || open.length === 0) return { resolved: 0 };
+
+  const idsFor = function (type: string): string[] {
+    const out: string[] = [];
+    for (const a of open as any[]) if (a.entity_type === type && a.entity_id) out.push(a.entity_id);
+    return Array.from(new Set(out));
+  };
+
+  // Every id that still legitimately has an open alert. Anything else closes.
+  const stillOpen = new Set<string>();
+
+  // ── Arrears: resolved once the contract has no overdue unpaid charge ──
+  const arrearsIds = idsFor("arrears");
+  if (arrearsIds.length > 0) {
+    const { data: overdue } = await supabase.from("charges")
+      .select("contract_id")
+      .in("contract_id", arrearsIds)
+      .neq("status", "paid")
+      .not("due_date", "is", null)
+      .lt("due_date", todayStr);
+    for (const ch of (overdue ?? []) as any[]) stillOpen.add(ch.contract_id);
+  }
+
+  // ── Guarantees: resolved when renewed (or no longer active) ──
+  const guaranteeIds = idsFor("guarantee");
+  if (guaranteeIds.length > 0) {
+    const { data: gs } = await supabase.from("guarantees")
+      .select("id,end_date,status").in("id", guaranteeIds);
+    for (const g of (gs ?? []) as any[]) {
+      if (g.status !== "active" || !g.end_date) continue;   // not active → nothing to chase
+      if (daysUntil(g.end_date) <= 60) stillOpen.add(g.id);
+    }
+  }
+
+  // ── Safety inspections: resolved once the next date moves out of the window ──
+  const safetyIds = idsFor("safety");
+  if (safetyIds.length > 0) {
+    const { data: insp } = await supabase.from("safety_inspections")
+      .select("id,next_inspection_date").in("id", safetyIds);
+    for (const s of (insp ?? []) as any[]) {
+      if (!s.next_inspection_date) continue;
+      if (daysUntil(s.next_inspection_date) <= 60) stillOpen.add(s.id);
+    }
+  }
+
+  // ── Contracts expiring: resolved when extended past the window or ended ──
+  const contractIds = idsFor("contract");
+  if (contractIds.length > 0) {
+    const { data: cs } = await supabase.from("contracts")
+      .select("id,end_date,status").in("id", contractIds);
+    for (const c of (cs ?? []) as any[]) {
+      if (!c.end_date) continue;
+      if (["active", "expiring", "extended"].indexOf(c.status) === -1) continue;  // ended → stop chasing
+      const d = daysUntil(c.end_date);
+      if (d >= 0 && d <= 90) stillOpen.add(c.id);
+    }
+  }
+
+  // ── Options: resolved the moment the outcome is recorded. Two entity_type
+  //    spellings exist in the data ("option" and "contract_option"); both point
+  //    at a contract_options row, and the bulk of open alerts use the latter.
+  const optionIds = Array.from(new Set(idsFor("option").concat(idsFor("contract_option"))));
+  if (optionIds.length > 0) {
+    const { data: opts } = await supabase.from("contract_options")
+      .select("id,status,is_exercised").in("id", optionIds);
+    for (const o of (opts ?? []) as any[]) {
+      if (o.is_exercised) continue;
+      if (["exercised", "declined", "expired"].indexOf(o.status) !== -1) continue;
+      stillOpen.add(o.id);
+    }
+  }
+
+  // ── Management-fee protection: resolved once the closing reconciliation is recorded ──
+  const protIds = idsFor("mgmt_protection");
+  if (protIds.length > 0) {
+    const { data: cs } = await supabase.from("contracts")
+      .select("id,mgmt_protection_reconciled_at,mgmt_protection_type").in("id", protIds);
+    for (const c of (cs ?? []) as any[]) {
+      if (c.mgmt_protection_reconciled_at) continue;
+      if (!c.mgmt_protection_type || c.mgmt_protection_type === "none") continue;
+      stillOpen.add(c.id);
+    }
+  }
+
+  // ── Insurance: the same entity_type covers two different things —
+  //    a specific policy row (expiring), and a contract with NO certificate.
+  const insuranceIds = idsFor("insurance");
+  if (insuranceIds.length > 0) {
+    // (a) policy rows still inside the expiry window
+    for (const table of ["insurances_building", "insurances_tenant"]) {
+      const { data: rows } = await supabase.from(table)
+        .select("id,end_date,status").in("id", insuranceIds);
+      for (const x of (rows ?? []) as any[]) {
+        if (x.status !== "active" || !x.end_date) continue;
+        if (daysUntil(x.end_date) <= 60) stillOpen.add(x.id);
+      }
+    }
+    // (b) "no certificate at all" alerts, keyed by the contract. Mirrors the
+    //     creation rule: cover is per tenant+property, so a certificate on any
+    //     contract of that group clears the whole group.
+    const { data: cs } = await supabase.from("contracts")
+      .select("id,tenant_id,property_id,status").in("id", insuranceIds);
+    if (cs && cs.length > 0) {
+      const { data: tenantIns } = await supabase.from("insurances_tenant")
+        .select("contract_id,end_date,status");
+      const { data: allContracts } = await supabase.from("contracts")
+        .select("id,tenant_id,property_id").in("status", ["active", "expiring", "extended"]);
+      const byId: Record<string, any> = {};
+      (allContracts ?? []).forEach(function (c: any) { byId[c.id] = c; });
+      const key = function (c: any) { return (c?.tenant_id || "?") + "|" + (c?.property_id || "?"); };
+      const covered = new Set<string>();
+      for (const x of (tenantIns ?? []) as any[]) {
+        if (x.status !== "active" || !x.end_date || x.end_date < todayStr) continue;
+        const c = byId[x.contract_id];
+        if (c) covered.add(key(c));
+      }
+      for (const c of cs as any[]) {
+        // Contract no longer active → nothing to chase.
+        if (["active", "expiring", "extended"].indexOf(c.status) === -1) continue;
+        if (covered.has(key(c))) continue;
+        stillOpen.add(c.id);
+      }
+    }
+  }
+
+  // Anything whose condition no longer holds gets closed. Alert types this pass
+  // doesn't own (charge-backed ones like a penalty or a clawback, which are
+  // settled through the charge itself) are left alone.
+  const OWNED = ["arrears", "guarantee", "safety", "contract", "option", "contract_option", "insurance", "mgmt_protection"];
+  // Informational notices report that something HAPPENED — there is no condition
+  // to re-test, so they stay until the user closes them. Auto-closing would make
+  // an event they may not have seen disappear on its own.
+  const NOTICES = ["option_auto_exercised"];
+  const toResolve: string[] = [];
+  for (const a of open as any[]) {
+    if (OWNED.indexOf(a.entity_type) === -1) continue;
+    if (a.alert_type && NOTICES.indexOf(a.alert_type) !== -1) continue;
+    if (!a.entity_id) continue;
+    if (stillOpen.has(a.entity_id)) continue;
+    toResolve.push(a.id);
+  }
+
+  if (toResolve.length === 0) return { resolved: 0 };
+  await supabase.from("alerts")
+    .update({ is_resolved: true, handled_at: new Date().toISOString() })
+    .in("id", toResolve);
+  return { resolved: toResolve.length };
+}
