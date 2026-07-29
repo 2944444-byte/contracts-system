@@ -5,6 +5,8 @@ import { logAudit } from '@/lib/audit-log';
 import { getVatRates, vatPctAt, type VatRate } from '@/lib/vat';
 import { PageHero } from '@/components/ui';
 import { getScopeIds, scopeRows } from '@/lib/permissions';
+import { minRentForPeriod } from '@/lib/min-rent';
+import { fetchCpiAdjustedWithRetry } from '@/lib/cpi-server';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 function fmtMoney(n: number) { return (n && Math.abs(n) > 0.001) ? "₪"+n.toLocaleString("he-IL",{minimumFractionDigits:2,maximumFractionDigits:2}) : "—"; }
@@ -15,6 +17,15 @@ function fmtNum(n: number, dec=2) { return (n && Math.abs(n) > 0.001) ? n.toLoca
 const REVENUE_BUCKET = "revenue_attachments";
 
 const HEB_MONTHS = ["", "ינואר", "פברואר", "מרץ", "אפריל", "מאי", "יוני", "יולי", "אוגוסט", "ספטמבר", "אוקטובר", "נובמבר", "דצמבר"];
+
+// CBS calculator wants MM-DD-YYYY; day 15 is the publication day, bumped to 16
+// so the "known index" resolves the same way it does across the app.
+function toCbsDate(dateStr: string): string | null {
+  var d = new Date(dateStr);
+  if (isNaN(d.getTime())) return null;
+  if (d.getDate() === 15) d.setDate(16);
+  return String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0") + "-" + d.getFullYear();
+}
 
 function monthKey(year: number, m: number): string {
   return year + "-" + String(m).padStart(2, "0") + "-01";
@@ -60,6 +71,11 @@ export default function RevenuePage() {
   // Key = "YYYY-MM". Value = the actual mgmt amount for that month.
   // Empty until the reconciliation flow starts writing to this table.
   const [mgmtActualByMonth, setMgmtActualByMonth] = useState<Record<string, number>>({});
+  // Rent steps + CPI ratios drive the MINIMUM rent: the floor is not frozen at
+  // the signed figure — it rises with the contract's steps and stays linked to
+  // the ORIGINAL base index.
+  const [minTiers, setMinTiers] = useState<any[]>([]);
+  const [minCpiByMonth, setMinCpiByMonth] = useState<Record<string, number>>({});
 
   // Uploads a file to the revenue_attachments bucket and returns the metadata
   // that should be written onto the revenue_reports row. Throws on failure.
@@ -130,6 +146,45 @@ export default function RevenuePage() {
   // Reload the area timeline + mgmt rates when the user picks a different tenant
   // or year.
   useEffect(function() { loadAreaSegments(selContractId); }, [selContractId, selYear]);
+
+  // Load the selected contract's rent steps, then resolve one CPI ratio per
+  // month of the selected year (base index → that month). Ratios come from the
+  // CBS calculator, which handles base-year rebasing — a raw index/index ratio
+  // would be wrong across a base change. A month whose index isn't published
+  // yet is simply left out, and the floor for it is shown un-linked rather than
+  // silently under-stated.
+  useEffect(function() {
+    var cancelled = false;
+    (async function() {
+      if (!selContractId) { setMinTiers([]); setMinCpiByMonth({}); return; }
+      var { data: tiers } = await supabase.from("contract_price_tiers")
+        .select("increase_type,increase_value,from_year,to_year,is_recurring,recurring_every_years")
+        .eq("contract_id", selContractId).order("from_year");
+      if (cancelled) return;
+      setMinTiers(tiers ?? []);
+
+      var c: any = contracts.find(function(x: any) { return x.id === selContractId; });
+      if (!c || c.indexation_method === "none" || !c.index_base_date) { setMinCpiByMonth({}); return; }
+      var fromCbs = toCbsDate(c.index_base_date);
+      if (!fromCbs) { setMinCpiByMonth({}); return; }
+
+      var map: Record<string, number> = {};
+      for (var m = 1; m <= 12; m++) {
+        var key = monthKey(selYear, m);
+        var toCbs = toCbsDate(key);
+        if (!toCbs) continue;
+        if (new Date(key) > new Date()) continue;   // future month — nothing to link to
+        var res: any = await fetchCpiAdjustedWithRetry({ value: 10000, fromDate: fromCbs, toDate: toCbs });
+        if (cancelled) return;
+        if (res?.success) {
+          var ratio = Number(res.adjustedRentPerSqm) / 10000;
+          if (ratio > 0) map[key] = ratio;
+        }
+      }
+      if (!cancelled) setMinCpiByMonth(map);
+    })();
+    return function() { cancelled = true; };
+  }, [selContractId, selYear, contracts.length]);
 
   // Build the chronological area timeline from the base contract + amendments,
   // then pull the per-space mgmt rate from billing_groups for the selected year
@@ -232,7 +287,7 @@ export default function RevenuePage() {
     var yearStart = selYear + "-01-01";
     var yearEnd   = (selYear + 1) + "-01-01"; // exclusive — avoids the Feb-31 bug entirely
     const [{ data: c }, { data: r }] = await Promise.all([
-      supabase.from("contracts").select("id,property_id,status,rent_type,revenue_pct,min_rent_per_sqm,charged_area,rent_per_sqm,investment_addition,vat_type,mgmt_fee_per_sqm,mgmt_included_in_revenue,tenants(name),properties(name)").in("status",["active","expiring","extended"]),
+      supabase.from("contracts").select("id,property_id,status,rent_type,revenue_pct,min_rent_per_sqm,charged_area,rent_per_sqm,investment_addition,vat_type,mgmt_fee_per_sqm,mgmt_included_in_revenue,start_date,indexation_method,index_base_date,index_base_value,tenants(name),properties(name)").in("status",["active","expiring","extended"]),
       supabase.from("revenue_reports").select("*,contracts(property_id,tenants(name),properties(name))").gte("report_month",yearStart).lt("report_month",yearEnd).order("report_month",{ascending:true}),
     ]);
     var scope = await getScopeIds();
@@ -285,7 +340,18 @@ export default function RevenuePage() {
     const netGross      = pct > 0 ? Math.max(grossRevenue - mgmtMonthly / (pct/100), 0)
                                   : grossRevenue;                          // מחזור נטו (information)
     const rentFromRev   = consideration - mgmtMonthly;                    // שכ"ד מפדיון (before min)
-    const minRent       = (c.min_rent_per_sqm??0)*area+(c.investment_addition??0);
+    // Floor = the minimum after the contract's rent steps, linked to the
+    // ORIGINAL base index — not the figure signed years ago.
+    const minCalc       = minRentForPeriod({
+      baseMinPerSqm: Number(c.min_rent_per_sqm) || 0,
+      tiers: minTiers,
+      contractStart: c.start_date || periodDate || new Date(),
+      date: periodDate || new Date(),
+      area: area,
+      investmentAddition: Number(c.investment_addition) || 0,
+      cpiRatio: periodDate ? minCpiByMonth[String(periodDate).slice(0, 8) + "01"] : null,
+    });
+    const minRent       = minCalc.amount;
     const finalRent     = Math.max(rentFromRev, minRent);
     const vat           = c.vat_type==="taxable" ? finalRent*vatPctAt(vatRates, periodDate || new Date()) : 0;
     return {
@@ -293,7 +359,7 @@ export default function RevenuePage() {
       consideration,                  // 12% × gross
       calcRent: consideration,        // alias used elsewhere
       rentFromRev,                    // consideration − mgmt (before min)
-      minRent, finalRent, vat,
+      minRent, minCalc, finalRent, vat,
       total: finalRent + vat,
       area: area,
     };
@@ -589,9 +655,34 @@ export default function RevenuePage() {
             </span>
           )}
           <span><span className="text-slate-500">% פידיון:</span> <span className="font-semibold">{pctLabel}%</span></span>
-          {selContract.min_rent_per_sqm && (
-            <span><span className="text-slate-500">מינ' למ"ר:</span> <span className="font-semibold">{fmtMoney(Number(selContract.min_rent_per_sqm))}</span></span>
-          )}
+          {selContract.min_rent_per_sqm && (function() {
+            // Show the floor as it stands NOW, not as signed — steps and linkage
+            // both move it, and a stale figure here misleads the check against
+            // the turnover share.
+            var nowKey = monthKey(selYear, Math.min(12, new Date().getMonth() + 1));
+            var nowMin = minRentForPeriod({
+              baseMinPerSqm: Number(selContract.min_rent_per_sqm) || 0,
+              tiers: minTiers,
+              contractStart: selContract.start_date || nowKey,
+              date: nowKey,
+              area: 1,
+              cpiRatio: minCpiByMonth[nowKey],
+            });
+            var moved = Math.abs(nowMin.perSqmIndexed - Number(selContract.min_rent_per_sqm)) > 0.005;
+            return (
+              <span>
+                <span className="text-slate-500">מינ' למ&quot;ר:</span>{" "}
+                <span className="font-semibold">{fmtMoney(nowMin.perSqmIndexed)}</span>
+                {moved && (
+                  <span className="text-[11px] text-slate-400">
+                    {" "}(בחוזה {fmtMoney(Number(selContract.min_rent_per_sqm))}
+                    {nowMin.perSqm !== Number(selContract.min_rent_per_sqm) ? " · אחרי מדרגות " + fmtMoney(nowMin.perSqm) : ""}
+                    {nowMin.indexed ? " · צמוד ×" + nowMin.cpiRatio.toFixed(4) : " · טרם הוצמד"})
+                  </span>
+                )}
+              </span>
+            );
+          })()}
           {mgmtIncluded && (
             <span className="rounded-md bg-amber-100 text-amber-900 px-2 py-0.5 font-semibold">
               ⚙️ ניהול כלול במחזור — מנוטרל אוטומטית
