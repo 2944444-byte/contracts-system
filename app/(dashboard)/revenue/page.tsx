@@ -848,12 +848,10 @@ export default function RevenuePage() {
                 חיוב שייווצר כאן לא תואם את תדירות ההתחשבנות שבהסכם.
               </div>
             )}
-            {(settleViewFreq || selContract.revenue_settlement_freq || "monthly") === "monthly" && (
-              <div className="mb-2 rounded bg-slate-50 border border-slate-200 px-2 py-1.5 text-[11px] text-slate-600">
-                בהתחשבנות חודשית שכ&quot;ד החודש כבר מחויב במלואו מהדיווח עצמו (הגבוה מבין המינימום לפדיון).
-                צור כאן חיוב הפרש רק אם השוכר משלם את המינימום בלבד מדי חודש — אחרת ייווצר חיוב כפול.
-              </div>
-            )}
+            <div className="mb-2 rounded bg-slate-50 border border-slate-200 px-2 py-1.5 text-[11px] text-slate-600">
+              המודל: השוכר משלם את המינימום מדי חודש, וההשלמה לפדיון נגבית בהתחשבנות.
+              במסך החיובים ההשלמה מוצגת בניכוי המינימום שכבר חויב באותו חודש, כדי שהמינימום לא ייגבה פעמיים.
+            </div>
             <div className="space-y-2">
               {settlements.map(function(st) {
                 var c = st.calc;

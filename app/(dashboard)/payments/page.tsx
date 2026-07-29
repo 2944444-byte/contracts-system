@@ -354,9 +354,27 @@ export default function PaymentsPage() {
       }
     });
 
+    // A turnover tenant normally pays the MINIMUM monthly (rent advances) and
+    // only the top-up to the turnover share is settled afterwards. Billing the
+    // report's full final rent alongside those advances would show the minimum
+    // twice, so work out what each month already carried.
+    var minBilledByMonth: Record<string, number> = {};
+    adv.forEach(function(a: any) {
+      if (!a.check_date) return;
+      var k = a.contract_id + "|" + String(a.check_date).slice(0, 7);
+      minBilledByMonth[k] = (minBilledByMonth[k] || 0) + (Number(a.total_before_vat) || 0);
+    });
+
     // Revenue (פידיון) reports → virtual rows
     revenueRows.forEach(function(rev: any) {
-      var finalRent = Number(rev.final_rent) || 0;
+      var fullRent = Number(rev.final_rent) || 0;
+      if (fullRent < 0.01) return;
+      // Net off whatever the month's advances already billed. With no advances
+      // this is the whole rent, exactly as before.
+      var alreadyBilled = minBilledByMonth[rev.contract_id + "|" + String(rev.report_month).slice(0, 7)] || 0;
+      var isTopUp = alreadyBilled > 0.01;
+      var finalRent = isTopUp ? Math.round(Math.max(0, fullRent - alreadyBilled) * 100) / 100 : fullRent;
+      // Minimum already covered the month — nothing further to collect.
       if (finalRent < 0.01) return;
       var contract = rev.contracts || contractMap[rev.contract_id];
       var tenant = (contract?.tenants as any)?.name || "—";
@@ -373,7 +391,9 @@ export default function PaymentsPage() {
         tenantName: tenant,
         propertyName: property,
         chargeType: "rent",
-        description: "שכ\"ד פידיון — " + monthLabel + " (מחזור " + fmtMoney(Number(rev.gross_revenue) || 0) + ")",
+        description: (isTopUp ? "השלמה לפדיון — " : "שכ\"ד פידיון — ") + monthLabel
+          + " (מחזור " + fmtMoney(Number(rev.gross_revenue) || 0)
+          + (isTopUp ? " · מינימום שחויב " + fmtMoney(alreadyBilled) : "") + ")",
         baseAmount: finalRent,
         vatAmount: vat,
         totalAmount: finalRent + vat,
