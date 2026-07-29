@@ -204,7 +204,7 @@ export default function PaymentsPage() {
         .or("due_date.gte." + yearStart + ",billing_period_start.gte." + yearStart)
         .or("due_date.lt." + yearEnd + ",billing_period_start.lt." + yearEnd)
         .order("due_date", { ascending: true }),
-      supabase.from("contracts").select("id,property_id,vat_type,rent_type,revenue_pct,revenue_report_day,start_date,end_date,rent_per_sqm,charged_area,investment_addition,is_amendment,tenants(name),properties(name)").in("status", ["active", "expiring", "extended"]),
+      supabase.from("contracts").select("id,property_id,vat_type,rent_type,revenue_pct,revenue_report_day,revenue_minimum_advance,minimum_rent,start_date,end_date,rent_per_sqm,charged_area,investment_addition,is_amendment,tenants(name),properties(name)").in("status", ["active", "expiring", "extended"]),
       // Rent advances for the year (both paid + unpaid — paid ones still need
       // to show on this screen so שולמו KPI is honest)
       includeAdvances ? supabase.from("advance_payments")
@@ -371,9 +371,17 @@ export default function PaymentsPage() {
       if (fullRent < 0.01) return;
       // Net off whatever the month's advances already billed. With no advances
       // this is the whole rent, exactly as before.
+      var revContract: any = rev.contracts || contractMap[rev.contract_id];
+      var paysMinAdvance = !!revContract?.revenue_minimum_advance;
       var alreadyBilled = minBilledByMonth[rev.contract_id + "|" + String(rev.report_month).slice(0, 7)] || 0;
-      var isTopUp = alreadyBilled > 0.01;
-      var finalRent = isTopUp ? Math.round(Math.max(0, fullRent - alreadyBilled) * 100) / 100 : fullRent;
+      // The arrangement comes from the contract, not from whether advance rows
+      // happen to exist yet: a month whose advances have not been generated
+      // must still show the top-up, or the minimum gets collected twice.
+      var expectedMin = paysMinAdvance ? (Number(revContract?.minimum_rent) || 0) : 0;
+      var creditedMin = paysMinAdvance ? Math.max(alreadyBilled, expectedMin) : alreadyBilled;
+      var isTopUp = creditedMin > 0.01;
+      var advanceMissing = paysMinAdvance && alreadyBilled < 0.01 && expectedMin > 0.01;
+      var finalRent = isTopUp ? Math.round(Math.max(0, fullRent - creditedMin) * 100) / 100 : fullRent;
       // Minimum already covered the month — nothing further to collect.
       if (finalRent < 0.01) return;
       var contract = rev.contracts || contractMap[rev.contract_id];
@@ -393,7 +401,8 @@ export default function PaymentsPage() {
         chargeType: "rent",
         description: (isTopUp ? "השלמה לפדיון — " : "שכ\"ד פידיון — ") + monthLabel
           + " (מחזור " + fmtMoney(Number(rev.gross_revenue) || 0)
-          + (isTopUp ? " · מינימום שחויב " + fmtMoney(alreadyBilled) : "") + ")",
+          + (isTopUp ? " · מינימום שחויב " + fmtMoney(creditedMin) : "")
+          + (advanceMissing ? " · ⚠ טרם הופקה מקדמת מינימום לחודש זה" : "") + ")",
         baseAmount: finalRent,
         vatAmount: vat,
         totalAmount: finalRent + vat,

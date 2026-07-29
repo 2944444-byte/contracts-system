@@ -356,7 +356,7 @@ export default function RevenuePage() {
     var yearStart = selYear + "-01-01";
     var yearEnd   = (selYear + 1) + "-01-01"; // exclusive — avoids the Feb-31 bug entirely
     const [{ data: c }, { data: r }] = await Promise.all([
-      supabase.from("contracts").select("id,property_id,status,rent_type,revenue_pct,min_rent_per_sqm,charged_area,rent_per_sqm,investment_addition,vat_type,mgmt_fee_per_sqm,mgmt_included_in_revenue,start_date,indexation_method,index_base_date,index_base_value,revenue_categories,tenants(name),properties(name)").in("status",["active","expiring","extended"]),
+      supabase.from("contracts").select("id,property_id,status,rent_type,revenue_pct,min_rent_per_sqm,charged_area,rent_per_sqm,investment_addition,vat_type,mgmt_fee_per_sqm,mgmt_included_in_revenue,start_date,indexation_method,index_base_date,index_base_value,revenue_categories,revenue_minimum_advance,minimum_rent,tenants(name),properties(name)").in("status",["active","expiring","extended"]),
       supabase.from("revenue_reports").select("*,contracts(property_id,tenants(name),properties(name))").gte("report_month",yearStart).lt("report_month",yearEnd).order("report_month",{ascending:true}),
     ]);
     var scope = await getScopeIds();
@@ -849,8 +849,9 @@ export default function RevenuePage() {
               </div>
             )}
             <div className="mb-2 rounded bg-slate-50 border border-slate-200 px-2 py-1.5 text-[11px] text-slate-600">
-              המודל: השוכר משלם את המינימום מדי חודש, וההשלמה לפדיון נגבית בהתחשבנות.
-              במסך החיובים ההשלמה מוצגת בניכוי המינימום שכבר חויב באותו חודש, כדי שהמינימום לא ייגבה פעמיים.
+              {selContract.revenue_minimum_advance
+                ? "המודל בהסכם זה: המינימום משולם כמקדמה מדי חודש, וההתחשבנות גובה רק את ההשלמה לאחוז מהפדיון. במסך החיובים ההשלמה מוצגת בניכוי המינימום שכבר חויב."
+                : "המודל בהסכם זה: ללא מקדמות — כל דיווח מחייב את מלוא שכ\"ד החודש (הגבוה מבין המינימום לפדיון). אם עברתם למקדמות מינימום, סמנו זאת בהסכם כדי שההשלמה תחושב נכון."}
             </div>
             <div className="space-y-2">
               {settlements.map(function(st) {

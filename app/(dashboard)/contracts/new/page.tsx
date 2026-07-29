@@ -192,6 +192,7 @@ export default function ContractsNewPage() {
   const [paymentFreq, setPaymentFreq] = useState("monthly");
   // Turnover leases settle on their own cadence — a monthly minimum with a
   // quarterly reconciliation is common, so these are independent of paymentFreq.
+  const [revMinAdvance, setRevMinAdvance] = useState(false);
   const [revCategories, setRevCategories] = useState<RevenueCategory[]>([]);
   const [revSettleFreq, setRevSettleFreq] = useState("monthly");
   const [revSettleDay, setRevSettleDay] = useState("15");
@@ -383,6 +384,7 @@ export default function ContractsNewPage() {
       setInvestAdd(c.investment_addition ? String(c.investment_addition) : "");
       setVatType(c.vat_type || "taxable");
       setPaymentFreq(c.payment_frequency || "monthly");
+      setRevMinAdvance(!!c.revenue_minimum_advance);
       setRevCategories(revenueCategoriesFromRow(c));
       setRevSettleFreq(c.revenue_settlement_freq || "monthly");
       setRevSettleDay(c.revenue_settlement_day ? String(c.revenue_settlement_day) : "15");
@@ -855,6 +857,7 @@ export default function ContractsNewPage() {
         revenue_pct: rentType === "revenue_pct" ? Number(revenuePct) || null : null,
         minimum_rent: rentType === "revenue_pct" ? Number(minimumRent) || 0 : null,
         revenue_report_day: rentType === "revenue_pct" ? Number(revenueReportDay) || 5 : null,
+        revenue_minimum_advance: rentType === "revenue_pct" ? revMinAdvance : false,
         revenue_categories: rentType === "revenue_pct" ? revCategories.filter(function(c){ return c.name.trim(); }) : [],
         revenue_settlement_freq: rentType === "revenue_pct" ? revSettleFreq : "monthly",
         revenue_settlement_day: rentType === "revenue_pct" ? (Number(revSettleDay) || null) : null,
@@ -1546,6 +1549,20 @@ export default function ContractsNewPage() {
                     <label className="mb-1 block text-xs font-semibold text-purple-700">יום הגשת דו&quot;ח פדיון</label>
                     <input type="number" min="1" max="28" value={revenueReportDay}
                       onChange={(e) => setRevenueReportDay(e.target.value)} className={ic} />
+                  </div>
+                  <div className="col-span-2 rounded-lg border border-purple-200 bg-white/60 p-2.5">
+                    <label className="flex items-start gap-2 text-xs text-slate-700">
+                      <input type="checkbox" checked={revMinAdvance}
+                        onChange={(e) => setRevMinAdvance(e.target.checked)} className="rounded mt-0.5" />
+                      <span>
+                        <b>השוכר משלם מקדמת מינימום מדי חודש</b> — ובהתחשבנות נגבית רק ההשלמה לאחוז מהפדיון.
+                        <span className="block text-[11px] text-purple-600 mt-0.5">
+                          {revMinAdvance
+                            ? "המינימום ייגבה כמקדמה, וההשלמה תוצג בניכוי מה שכבר חויב באותו חודש."
+                            : "ללא מקדמות — כל דיווח מחייב את מלוא שכ\"ד החודש (הגבוה מבין המינימום לפדיון)."}
+                        </span>
+                      </span>
+                    </label>
                   </div>
                   <div>
                     <label className="mb-1 block text-xs font-semibold text-purple-700">תדירות דו&quot;ח פדיון</label>
