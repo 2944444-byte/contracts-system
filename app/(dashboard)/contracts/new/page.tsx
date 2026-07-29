@@ -22,6 +22,8 @@ import {
 import { penaltyTermsFromRow, penaltyTermsToRow } from "@/lib/option-penalty";
 import { baseIndexRuleToRow, baseIndexRuleFromRow, type BaseIndexRule } from "@/lib/base-index-rule";
 import { clawbackTermsToRow } from "@/lib/investment-clawback";
+import { revenueCategoriesFromRow, type RevenueCategory } from "@/lib/revenue-categories";
+import RevenueCategoriesEditor from "@/components/RevenueCategoriesEditor";
 import BaseIndexRuleFields from '@/components/BaseIndexRuleFields';
 import MgmtProtectionFields from '@/components/MgmtProtectionFields';
 import { mgmtProtectionFromRow, mgmtProtectionToRow, emptyMgmtProtection, type MgmtProtection } from '@/lib/mgmt-protection';
@@ -190,6 +192,7 @@ export default function ContractsNewPage() {
   const [paymentFreq, setPaymentFreq] = useState("monthly");
   // Turnover leases settle on their own cadence — a monthly minimum with a
   // quarterly reconciliation is common, so these are independent of paymentFreq.
+  const [revCategories, setRevCategories] = useState<RevenueCategory[]>([]);
   const [revSettleFreq, setRevSettleFreq] = useState("monthly");
   const [revSettleDay, setRevSettleDay] = useState("15");
   const [revReportFreq, setRevReportFreq] = useState("monthly");
@@ -380,6 +383,7 @@ export default function ContractsNewPage() {
       setInvestAdd(c.investment_addition ? String(c.investment_addition) : "");
       setVatType(c.vat_type || "taxable");
       setPaymentFreq(c.payment_frequency || "monthly");
+      setRevCategories(revenueCategoriesFromRow(c));
       setRevSettleFreq(c.revenue_settlement_freq || "monthly");
       setRevSettleDay(c.revenue_settlement_day ? String(c.revenue_settlement_day) : "15");
       setRevReportFreq(c.revenue_report_freq || "monthly");
@@ -851,6 +855,7 @@ export default function ContractsNewPage() {
         revenue_pct: rentType === "revenue_pct" ? Number(revenuePct) || null : null,
         minimum_rent: rentType === "revenue_pct" ? Number(minimumRent) || 0 : null,
         revenue_report_day: rentType === "revenue_pct" ? Number(revenueReportDay) || 5 : null,
+        revenue_categories: rentType === "revenue_pct" ? revCategories.filter(function(c){ return c.name.trim(); }) : [],
         revenue_settlement_freq: rentType === "revenue_pct" ? revSettleFreq : "monthly",
         revenue_settlement_day: rentType === "revenue_pct" ? (Number(revSettleDay) || null) : null,
         revenue_report_freq: rentType === "revenue_pct" ? revReportFreq : "monthly",
@@ -1566,6 +1571,7 @@ export default function ContractsNewPage() {
                     <input type="number" min="1" max="28" value={revSettleDay}
                       onChange={(e) => setRevSettleDay(e.target.value)} className={ic} />
                   </div>
+                  <RevenueCategoriesEditor value={revCategories} onChange={setRevCategories} basePct={revenuePct} />
                   <div className="flex items-start gap-2 pt-5 col-span-2">
                     <input type="checkbox" id="revLateIdx" checked={revLateHigherIndex}
                       onChange={(e) => setRevLateHigherIndex(e.target.checked)} className="rounded mt-0.5" />

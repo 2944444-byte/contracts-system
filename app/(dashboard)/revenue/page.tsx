@@ -6,6 +6,7 @@ import { getVatRates, vatPctAt, type VatRate } from '@/lib/vat';
 import { PageHero } from '@/components/ui';
 import { getScopeIds, scopeRows } from '@/lib/permissions';
 import { minRentForPeriod } from '@/lib/min-rent';
+import { revenueCategoriesFromRow, splitRevenue, hasCategories, describeCategories } from '@/lib/revenue-categories';
 import { fetchCpiAdjustedWithRetry } from '@/lib/cpi-server';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
@@ -51,6 +52,9 @@ export default function RevenuePage() {
   const [fContractId,  setFContractId]  = useState("");
   const [fMonth,       setFMonth]       = useState<string>(""); // YYYY-MM
   const [fGrossRevenue,setFGrossRevenue]=useState("");
+  // Per-category turnover for contracts that price delivery (or anything else)
+  // at its own percentage. Empty for a single-percentage contract.
+  const [fByCategory, setFByCategory] = useState<Record<string,string>>({});
   const [fMgmtInGross, setFMgmtInGross] = useState<string>(""); // manual override
   const [fNotes,       setFNotes]       =useState("");
   const [fFile,        setFFile]        = useState<File|null>(null);
@@ -140,6 +144,8 @@ export default function RevenuePage() {
       await loadAll();
     } catch (e: any) { alert("שגיאה: " + (e?.message || e)); }
   }
+
+  useEffect(function() { setFByCategory({}); }, [fContractId]);
 
   useEffect(function() { loadAll(); }, [selYear]);
 
@@ -287,7 +293,7 @@ export default function RevenuePage() {
     var yearStart = selYear + "-01-01";
     var yearEnd   = (selYear + 1) + "-01-01"; // exclusive — avoids the Feb-31 bug entirely
     const [{ data: c }, { data: r }] = await Promise.all([
-      supabase.from("contracts").select("id,property_id,status,rent_type,revenue_pct,min_rent_per_sqm,charged_area,rent_per_sqm,investment_addition,vat_type,mgmt_fee_per_sqm,mgmt_included_in_revenue,start_date,indexation_method,index_base_date,index_base_value,tenants(name),properties(name)").in("status",["active","expiring","extended"]),
+      supabase.from("contracts").select("id,property_id,status,rent_type,revenue_pct,min_rent_per_sqm,charged_area,rent_per_sqm,investment_addition,vat_type,mgmt_fee_per_sqm,mgmt_included_in_revenue,start_date,indexation_method,index_base_date,index_base_value,revenue_categories,tenants(name),properties(name)").in("status",["active","expiring","extended"]),
       supabase.from("revenue_reports").select("*,contracts(property_id,tenants(name),properties(name))").gte("report_month",yearStart).lt("report_month",yearEnd).order("report_month",{ascending:true}),
     ]);
     var scope = await getScopeIds();
@@ -313,7 +319,7 @@ export default function RevenuePage() {
   //      that would yield rent_from_revenue if you applied pct% to it.
   //
   // Mgmt sources (priority): manual override → contract per-sqm × area → 0.
-  function calcRent(contractId: string, grossRevenue: number, manualMgmt?: number, periodDate?: string) {
+  function calcRent(contractId: string, grossRevenue: number, manualMgmt?: number, periodDate?: string, byCategory?: Record<string, any> | null) {
     const c = contracts.find(function(x){return x.id===contractId;});
     if (!c) return null;
     const pct = c.revenue_pct ?? 0;
@@ -336,9 +342,20 @@ export default function RevenuePage() {
     } else {
       mgmtMonthly = 0;
     }
-    const consideration = grossRevenue * (pct/100);                       // תמורה בגין פדיון
-    const netGross      = pct > 0 ? Math.max(grossRevenue - mgmtMonthly / (pct/100), 0)
-                                  : grossRevenue;                          // מחזור נטו (information)
+    // Categories priced separately (delivery at a lower rate, etc.): the
+    // consideration is the sum of each category at ITS rate, and only that
+    // total is measured against the minimum.
+    const cats = revenueCategoriesFromRow(c);
+    const split = splitRevenue({
+      categories: cats,
+      byCategory: byCategory,
+      fallbackGross: grossRevenue,
+      fallbackPct: pct,
+    });
+    const consideration = split.consideration;                            // תמורה בגין פדיון
+    const effPct        = split.effectivePct || pct;
+    const netGross      = effPct > 0 ? Math.max(split.gross - mgmtMonthly / (effPct/100), 0)
+                                     : split.gross;                        // מחזור נטו (information)
     const rentFromRev   = consideration - mgmtMonthly;                    // שכ"ד מפדיון (before min)
     // Floor = the minimum after the contract's rent steps, linked to the
     // ORIGINAL base index — not the figure signed years ago.
@@ -355,7 +372,7 @@ export default function RevenuePage() {
     const finalRent     = Math.max(rentFromRev, minRent);
     const vat           = c.vat_type==="taxable" ? finalRent*vatPctAt(vatRates, periodDate || new Date()) : 0;
     return {
-      pct, mgmtMonthly, netGross,
+      pct, effPct, split, mgmtMonthly, netGross,
       consideration,                  // 12% × gross
       calcRent: consideration,        // alias used elsewhere
       rentFromRev,                    // consideration − mgmt (before min)
@@ -365,14 +382,22 @@ export default function RevenuePage() {
     };
   }
 
-  const previewCalc = fContractId && fGrossRevenue
-    ? calcRent(fContractId, Number(fGrossRevenue), fMgmtInGross ? Number(fMgmtInGross) : undefined, fMonth ? fMonth + "-01" : undefined)
+  // With categories the total is the sum of the per-category inputs, so the
+  // single "gross" box is not what drives the calculation.
+  const fCats = revenueCategoriesFromRow(contracts.find(function(x:any){ return x.id === fContractId; }));
+  const fCatsTotal = fCats.reduce(function(sum, c) { return sum + (Number(fByCategory[c.key]) || 0); }, 0);
+  const fEffectiveGross = hasCategories(fCats) ? fCatsTotal : Number(fGrossRevenue);
+  const previewCalc = fContractId && fEffectiveGross > 0
+    ? calcRent(fContractId, fEffectiveGross, fMgmtInGross ? Number(fMgmtInGross) : undefined, fMonth ? fMonth + "-01" : undefined, fByCategory)
     : null;
 
   async function handleSave() {
-    if (!fContractId||!fGrossRevenue||!fMonth) { alert("חובה: חוזה + חודש + הכנסה ברוטו"); return; }
+    if (!fContractId || !fMonth || !(fEffectiveGross > 0)) {
+      alert(hasCategories(fCats) ? "חובה: חוזה + חודש + פדיון לפחות בסוג אחד" : "חובה: חוזה + חודש + הכנסה ברוטו");
+      return;
+    }
     var manualMgmt = fMgmtInGross ? Number(fMgmtInGross) : undefined;
-    const calc = calcRent(fContractId, Number(fGrossRevenue), manualMgmt, fMonth ? fMonth + "-01" : undefined);
+    const calc = calcRent(fContractId, fEffectiveGross, manualMgmt, fMonth ? fMonth + "-01" : undefined, fByCategory);
     if (!calc) return;
     setSaving(true);
     try {
@@ -383,7 +408,8 @@ export default function RevenuePage() {
 
       const { data } = await supabase.from("revenue_reports").insert({
         contract_id: fContractId, report_month: fMonth + "-01",
-        gross_revenue: Number(fGrossRevenue), revenue_pct: calc.pct,
+        gross_revenue: fEffectiveGross, revenue_pct: calc.effPct || calc.pct,
+        revenue_by_category: hasCategories(fCats) ? fByCategory : null,
         calculated_rent: calc.calcRent, min_rent: calc.minRent,
         final_rent: calc.finalRent, notes: fNotes || null,
         mgmt_in_gross: manualMgmt ?? null,
@@ -655,6 +681,15 @@ export default function RevenuePage() {
             </span>
           )}
           <span><span className="text-slate-500">% פידיון:</span> <span className="font-semibold">{pctLabel}%</span></span>
+          {(function() {
+            var cats = revenueCategoriesFromRow(selContract);
+            if (!hasCategories(cats)) return null;
+            return (
+              <span className="rounded-md bg-purple-100 text-purple-900 px-2 py-0.5 font-semibold" title="הפדיון מדווח בנפרד לכל סוג, והתמורה היא סכום כל סוג לפי האחוז שלו">
+                🧾 {describeCategories(cats)}
+              </span>
+            );
+          })()}
           {selContract.min_rent_per_sqm && (function() {
             // Show the floor as it stands NOW, not as signed — steps and linkage
             // both move it, and a stale figure here misleads the check against
@@ -918,10 +953,44 @@ export default function RevenuePage() {
                   <input type="month" value={fMonth} onChange={function(e){setFMonth(e.target.value);}} className={ic}/>
                 </div>
               </div>
-              <div>
-                <label className="mb-1 block text-xs font-semibold text-slate-700">הכנסה ברוטו (₪) *</label>
-                <input type="number" value={fGrossRevenue} onChange={function(e){setFGrossRevenue(e.target.value);}} className={ic} placeholder="לדוגמה: 500000"/>
-              </div>
+              {hasCategories(fCats) ? (
+                <div className="rounded-lg border border-purple-200 bg-purple-50/40 p-3 space-y-2">
+                  <div className="text-xs font-bold text-purple-800">פדיון לפי סוג *</div>
+                  {fCats.map(function(cat) {
+                    var amt = Number(fByCategory[cat.key]) || 0;
+                    return (
+                      <div key={cat.key} className="flex items-center gap-2">
+                        <span className="text-xs text-purple-700 w-28 truncate">{cat.name}</span>
+                        <span className="text-[11px] text-purple-500 w-12">{cat.pct}%</span>
+                        <input type="number" value={fByCategory[cat.key] ?? ""}
+                          onChange={function(e){ setFByCategory({ ...fByCategory, [cat.key]: e.target.value }); }}
+                          className={ic + " flex-1"} placeholder="0" />
+                        <span className="text-[11px] text-purple-600 w-24 text-left">
+                          {amt > 0 ? fmtMoney(amt * cat.pct / 100) : "—"}
+                        </span>
+                      </div>
+                    );
+                  })}
+                  <div className="flex justify-between text-xs border-t border-purple-200 pt-1.5">
+                    <span className="text-purple-700 font-semibold">סה&quot;כ פדיון</span>
+                    <span className="font-bold">{fmtMoney(fCatsTotal)}</span>
+                  </div>
+                  {previewCalc && (
+                    <div className="flex justify-between text-xs">
+                      <span className="text-purple-700 font-semibold">תמורה משוקללת</span>
+                      <span className="font-bold">{fmtMoney(previewCalc.consideration)} <span className="font-normal text-purple-500">({previewCalc.effPct}% אפקטיבי)</span></span>
+                    </div>
+                  )}
+                  {previewCalc?.split?.missing?.length > 0 && (
+                    <div className="text-[11px] text-amber-700">⚠ לא דווח פדיון עבור: {previewCalc.split.missing.join(", ")} — ייחשב כאפס.</div>
+                  )}
+                </div>
+              ) : (
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">הכנסה ברוטו (₪) *</label>
+                  <input type="number" value={fGrossRevenue} onChange={function(e){setFGrossRevenue(e.target.value);}} className={ic} placeholder="לדוגמה: 500000"/>
+                </div>
+              )}
               {/* Manual mgmt-in-gross — shown only when the contract flag is set.
                   Overrides the auto-derivation (mgmt_fee_per_sqm × area). */}
               {(() => {
