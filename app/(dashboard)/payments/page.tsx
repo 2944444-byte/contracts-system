@@ -204,7 +204,7 @@ export default function PaymentsPage() {
         .or("due_date.gte." + yearStart + ",billing_period_start.gte." + yearStart)
         .or("due_date.lt." + yearEnd + ",billing_period_start.lt." + yearEnd)
         .order("due_date", { ascending: true }),
-      supabase.from("contracts").select("id,property_id,vat_type,rent_type,revenue_pct,revenue_report_day,revenue_minimum_advance,minimum_rent,start_date,end_date,rent_per_sqm,charged_area,investment_addition,is_amendment,tenants(name),properties(name)").in("status", ["active", "expiring", "extended"]),
+      supabase.from("contracts").select("id,property_id,vat_type,rent_type,revenue_pct,revenue_report_day,revenue_minimum_advance,minimum_rent,payment_method,start_date,end_date,rent_per_sqm,charged_area,investment_addition,is_amendment,tenants(name),properties(name)").in("status", ["active", "expiring", "extended"]),
       // Rent advances for the year (both paid + unpaid — paid ones still need
       // to show on this screen so שולמו KPI is honest)
       includeAdvances ? supabase.from("advance_payments")
@@ -359,10 +359,22 @@ export default function PaymentsPage() {
     // report's full final rent alongside those advances would show the minimum
     // twice, so work out what each month already carried.
     var minBilledByMonth: Record<string, number> = {};
+    // Separately: what actually came in. A cheque that was never presented or a
+    // transfer that never arrived is still BILLED, so it keeps reducing the
+    // top-up (otherwise the same shortfall shows up in two rows) — but the user
+    // has to be able to see that the minimum was not in fact collected.
+    var minCollectedByMonth: Record<string, number> = {};
     adv.forEach(function(a: any) {
       if (!a.check_date) return;
       var k = a.contract_id + "|" + String(a.check_date).slice(0, 7);
       minBilledByMonth[k] = (minBilledByMonth[k] || 0) + (Number(a.total_before_vat) || 0);
+      // Collected = an amount actually recorded against the advance. Falls back
+      // to the recorded actual amount; clearing_status is unused in the data.
+      var got = Number(a.actual_paid) || Number(a.actual_amount) || 0;
+      if (got > 0) {
+        var vatShare = Number(a.total_with_vat) > 0 ? (Number(a.total_before_vat) || 0) / Number(a.total_with_vat) : 1;
+        minCollectedByMonth[k] = (minCollectedByMonth[k] || 0) + got * vatShare;
+      }
     });
 
     // Revenue (פידיון) reports → virtual rows
@@ -381,6 +393,11 @@ export default function PaymentsPage() {
       var creditedMin = paysMinAdvance ? Math.max(alreadyBilled, expectedMin) : alreadyBilled;
       var isTopUp = creditedMin > 0.01;
       var advanceMissing = paysMinAdvance && alreadyBilled < 0.01 && expectedMin > 0.01;
+      var collectedMin = minCollectedByMonth[rev.contract_id + "|" + String(rev.report_month).slice(0, 7)] || 0;
+      // Billed but not collected — the minimum is owed on its own row, so say so
+      // rather than letting the top-up imply the month was settled.
+      var advanceUncollected = paysMinAdvance && alreadyBilled > 0.01 && collectedMin < alreadyBilled - 0.01;
+      var byCheque = (revContract?.payment_method || "") === "checks_advance";
       var finalRent = isTopUp ? Math.round(Math.max(0, fullRent - creditedMin) * 100) / 100 : fullRent;
       // Minimum already covered the month — nothing further to collect.
       if (finalRent < 0.01) return;
@@ -402,7 +419,9 @@ export default function PaymentsPage() {
         description: (isTopUp ? "השלמה לפדיון — " : "שכ\"ד פידיון — ") + monthLabel
           + " (מחזור " + fmtMoney(Number(rev.gross_revenue) || 0)
           + (isTopUp ? " · מינימום שחויב " + fmtMoney(creditedMin) : "")
-          + (advanceMissing ? " · ⚠ טרם הופקה מקדמת מינימום לחודש זה" : "") + ")",
+          + (advanceMissing ? " · ⚠ טרם הופקה מקדמת מינימום לחודש זה" : "")
+          + (advanceUncollected ? " · ⚠ " + (byCheque ? "השיק של המינימום טרם נפרע" : "העברת המינימום טרם נרשמה")
+              + " (" + fmtMoney(collectedMin) + " מתוך " + fmtMoney(alreadyBilled) + ")" : "") + ")",
         baseAmount: finalRent,
         vatAmount: vat,
         totalAmount: finalRent + vat,
