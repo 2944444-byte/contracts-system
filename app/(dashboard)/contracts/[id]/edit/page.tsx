@@ -18,6 +18,8 @@ import {
 } from "@/lib/contract-utils";
 import { penaltyTermsFromRow, penaltyTermsToRow } from "@/lib/option-penalty";
 import OptionPenaltyFields from '@/components/OptionPenaltyFields';
+import { baseIndexRuleToRow, baseIndexRuleFromRow, type BaseIndexRule } from "@/lib/base-index-rule";
+import BaseIndexRuleFields from '@/components/BaseIndexRuleFields';
 import ExtraGuaranteesEditor, { extraGuaranteeFromRow, extraGuaranteeToRow, NO_EXPIRY_TYPES, type ExtraGuarantee } from '@/components/ExtraGuaranteesEditor';
 import TenantForm from '@/components/TenantForm';
 import PropertyForm from '@/components/PropertyForm';
@@ -154,6 +156,7 @@ export default function ContractEditPage() {
   const [indexMethod, setIndexMethod] = useState("standard");
   const [baseCPI, setBaseCPI] = useState("");
   const [baseCPIDate, setBaseCPIDate] = useState("");
+  const [baseIndexRule, setBaseIndexRule] = useState<BaseIndexRule>({ mode: "fixed", anchor: "actual_handover", offsetMonths: null });
   const [mgmtFeePct, setMgmtFeePct] = useState("");
   const [documentUrl, setDocumentUrl] = useState("");
 
@@ -400,6 +403,7 @@ export default function ContractEditPage() {
     setIndexMethod(c.indexation_method ?? "standard");
     setBaseCPI(c.index_base_value?.toString() ?? "");
     setBaseCPIDate(c.index_base_date?.split("T")[0] ?? "");
+    setBaseIndexRule(baseIndexRuleFromRow(c));
     setMgmtFeePct(c.mgmt_fee_per_sqm?.toString() ?? "");
     setDocumentUrl(c.document_url ?? "");
 
@@ -697,6 +701,8 @@ export default function ContractEditPage() {
         indexation_method: indexMethod,
         index_base_value: baseCPI ? Number(baseCPI) : null,
         index_base_date: baseCPIDate || null,
+        ...baseIndexRuleToRow(baseIndexRule),
+        index_base_resolved_at: baseIndexRule.mode === "derived" && baseCPIDate ? new Date().toISOString() : null,
         mgmt_fee_per_sqm: mgmtFeePct ? Number(mgmtFeePct) : null,
         document_url: documentUrl || null,
         status,
@@ -1352,6 +1358,24 @@ export default function ContractEditPage() {
                 <label className="mb-1 block text-xs font-semibold text-slate-700">תאריך פרסום מדד הבסיס (מדד ידוע)</label>
                 <input type="date" value={baseCPIDate} onChange={(e) => setBaseCPIDate(e.target.value)} className={ic} />
               </div>
+              <BaseIndexRuleFields
+                value={baseIndexRule}
+                onChange={setBaseIndexRule}
+                contract={{ actual_handover_date: actualHandover, planned_handover_date: plannedHandover, start_date: startDate }}
+                inputClass={ic}
+                onResolve={async function(baseDate) {
+                  setBaseCPIDate(baseDate);
+                  var d = new Date(baseDate);
+                  var rec: any = null;
+                  try {
+                    var res = await fetch("/api/cpi?year=" + d.getFullYear());
+                    var data = await res.json();
+                    rec = (data.records || []).find(function(r: any) { return r.year === d.getFullYear() && r.month === d.getMonth() + 1; });
+                  } catch (e) { /* leave the value for manual entry */ }
+                  if (rec) setBaseCPI(String(rec.value));
+                  else alert("מדד החודש הנגזר טרם פורסם — התאריך נקבע, יש להשלים את הערך כשיפורסם.");
+                }}
+              />
               <div>
                 <label className="mb-1 block text-xs font-semibold text-slate-700">דמי ניהול (₪/מ&quot;ר)</label>
                 <input type="number" value={mgmtFeePct} onChange={(e) => setMgmtFeePct(e.target.value)} className={ic} />

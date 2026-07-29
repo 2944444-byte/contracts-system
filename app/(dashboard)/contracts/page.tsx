@@ -13,6 +13,7 @@ import CalcProgress, { CalcProgressState } from '@/components/CalcProgress';
 import { buildPriceTimeline, calculateTierPreviews, buildSpaceRentSchedule, rentAtDate, type PriceTier } from '@/lib/contract-utils';
 import { penaltyTermsFromRow, hasPenalty, describePenaltyTerms, contractArea, penaltyMonths } from '@/lib/option-penalty';
 import { previewOptionDecline, applyOptionDecline } from '@/lib/option-decline';
+import { baseIndexRuleFromRow, describeBaseIndexRule, baseIndexPending } from '@/lib/base-index-rule';
 // CPI + price timeline
 
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
@@ -1439,6 +1440,20 @@ export default function ContractsPage() {
                     {l:"שיטת תשלום", v: selContract.payment_method==="checks_advance"?"שיקים מראש":selContract.payment_method==="bank_transfer"?"העברה בנקאית":selContract.payment_method==="cash"?"מזומן":selContract.payment_method==="credit_card"?"כרטיס אשראי":"הוראת קבע"},
                   ].map(function(r){return <div key={r.l} className="flex justify-between border-b border-slate-50 py-1"><span className="text-slate-400">{r.l}</span><span className="font-medium">{r.v}</span></div>;})}
                 </div>
+
+                {/* Base index tied to a milestone rather than fixed at signing */}
+                {selContract.index_base_mode === "derived" && (
+                  <div className={"mt-3 rounded-lg border px-3 py-2 text-xs " +
+                    (baseIndexPending(selContract) ? "border-amber-300 bg-amber-50 text-amber-800" : "border-indigo-200 bg-indigo-50/50 text-indigo-800")}>
+                    <div className="font-semibold">
+                      {baseIndexPending(selContract) ? "⏳ " : "📌 "}
+                      {describeBaseIndexRule(baseIndexRuleFromRow(selContract), selContract)}
+                    </div>
+                    {baseIndexPending(selContract) && (
+                      <div className="mt-0.5">כל חישובי ההצמדה בחוזה זה חלקיים עד שייקבע מדד הבסיס.</div>
+                    )}
+                  </div>
+                )}
 
                 {/* Parking info */}
                 {parkingSubs.length > 0 && (

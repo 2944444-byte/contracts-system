@@ -20,6 +20,8 @@ import {
   type PriceTier,
 } from "@/lib/contract-utils";
 import { penaltyTermsFromRow, penaltyTermsToRow } from "@/lib/option-penalty";
+import { baseIndexRuleToRow, baseIndexRuleFromRow, type BaseIndexRule } from "@/lib/base-index-rule";
+import BaseIndexRuleFields from '@/components/BaseIndexRuleFields';
 import ExtraGuaranteesEditor, { emptyExtraGuarantee, extraGuaranteeFromRow, extraGuaranteeToRow, type ExtraGuarantee } from '@/components/ExtraGuaranteesEditor';
 import OptionPenaltyFields from '@/components/OptionPenaltyFields';
 import TenantForm from '@/components/TenantForm';
@@ -182,6 +184,7 @@ export default function ContractsNewPage() {
   const [indexMethod, setIndexMethod] = useState("standard");
   const [baseCPI, setBaseCPI] = useState("");
   const [baseCPIDate, setBaseCPIDate] = useState("");
+  const [baseIndexRule, setBaseIndexRule] = useState<BaseIndexRule>({ mode: "fixed", anchor: "actual_handover", offsetMonths: null });
   const [mgmtFeePct, setMgmtFeePct] = useState("");
   const [documentUrl, setDocumentUrl] = useState("");
 
@@ -240,7 +243,10 @@ export default function ContractsNewPage() {
   }, [startDate, leasePeriodValue, leasePeriodUnit]);
 
   // === Auto-populate CPI base index from start date (month before start) ===
+  // Skipped when the base index is derived from a milestone — there the rule,
+  // not the start date, decides the base month.
   useEffect(() => {
+    if (baseIndexRule.mode === "derived") return;
     if (startDate && cpiRecords.length > 0 && indexMethod !== "none") {
       const start = new Date(startDate);
       if (isNaN(start.getTime())) return;
@@ -254,7 +260,7 @@ export default function ContractsNewPage() {
         setBaseCPIDate(`${baseYear}-${String(baseMonthNum).padStart(2, "0")}-01`);
       }
     }
-  }, [startDate, cpiRecords.length, indexMethod]);
+  }, [startDate, cpiRecords.length, indexMethod, baseIndexRule.mode]);
 
   // === Auto-calculate option dates ===
   useEffect(() => {
@@ -363,6 +369,7 @@ export default function ContractsNewPage() {
       setIndexMethod(c.indexation_method || "standard");
       setBaseCPI(c.index_base_value ? String(c.index_base_value) : "");
       setBaseCPIDate(c.index_base_date || "");
+      setBaseIndexRule(baseIndexRuleFromRow(c));
       // Grace — typically no grace for amendment
       setHasGrace(false);
       // Load price tiers
@@ -836,6 +843,8 @@ export default function ContractsNewPage() {
         indexation_method: indexMethod,
         index_base_value: baseCPI ? Number(baseCPI) : null,
         index_base_date: baseCPIDate || null,
+        ...baseIndexRuleToRow(baseIndexRule),
+        index_base_resolved_at: baseIndexRule.mode === "derived" && baseCPIDate ? new Date().toISOString() : null,
         mgmt_fee_per_sqm: mgmtFeePct ? Number(mgmtFeePct) : null,
         document_url: documentUrl || null,
         status,
@@ -1891,6 +1900,28 @@ export default function ContractsNewPage() {
                   className={ic}
                 />
               </div>
+              <BaseIndexRuleFields
+                value={baseIndexRule}
+                onChange={setBaseIndexRule}
+                contract={{ actual_handover_date: actualHandover, planned_handover_date: plannedHandover, start_date: startDate }}
+                inputClass={ic}
+                onResolve={async function(baseDate) {
+                  setBaseCPIDate(baseDate);
+                  // Pull the value for the derived month so the base isn't left
+                  // as a date with no index behind it.
+                  var d = new Date(baseDate);
+                  var rec = cpiRecords.find(function(r: any) { return r.year === d.getFullYear() && r.month === d.getMonth() + 1; });
+                  if (!rec) {
+                    try {
+                      var res = await fetch("/api/cpi?year=" + d.getFullYear());
+                      var data = await res.json();
+                      rec = (data.records || []).find(function(r: any) { return r.year === d.getFullYear() && r.month === d.getMonth() + 1; });
+                    } catch (e) { /* fall through to the manual field */ }
+                  }
+                  if (rec) setBaseCPI(String(rec.value));
+                  else alert("מדד החודש הנגזר טרם פורסם — התאריך נקבע, יש להשלים את הערך כשיפורסם.");
+                }}
+              />
               <div>
                 <label className="mb-1 block text-xs font-semibold text-slate-700">
                   דמי ניהול (₪/מ&quot;ר)
