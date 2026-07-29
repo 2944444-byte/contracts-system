@@ -825,7 +825,7 @@ export default function ContractsNewPage() {
         planned_handover_date: plannedHandover || null,
         actual_handover_date: actualHandover || null,
         handover_status: hasFutureHandover ? (actualHandover ? "delivered" : "pending") : "not_applicable",
-        start_date: startDate,
+        start_date: startDate || actualHandover || plannedHandover || null,
         end_date: endDate,
         lease_period_value: leasePeriodValue,
         lease_period_unit: leasePeriodUnit,
@@ -1034,7 +1034,7 @@ export default function ContractsNewPage() {
           ti_amount: Number(tiAmount) || 0,
           recovery_method: "monthly_addition",
           recovery_amount_monthly: Number(investAdd) || null,
-          recovery_start_date: startDate || null,
+          recovery_start_date: startDate || actualHandover || plannedHandover || null,
           recovery_end_date: endDate || null,
           payment_trigger: tiPaymentTrigger || null,
           payment_days_after: tiPaymentDays ? Number(tiPaymentDays) : null,
@@ -1395,7 +1395,9 @@ export default function ContractsNewPage() {
                   </div>
                   <div>
                     <label className="mb-1 block text-[10px] font-semibold text-slate-600">יעד מסירה</label>
-                    <input type="date" value={plannedHandover} onChange={(e) => setPlannedHandover(e.target.value)} className={ic} />
+                    <input type="date" value={plannedHandover}
+                      onChange={(e) => { setPlannedHandover(e.target.value); if (e.target.value && !startDate && !actualHandover) setStartDate(e.target.value); }}
+                      className={ic} />
                   </div>
                   <div>
                     <label className="mb-1 block text-[10px] font-semibold text-slate-600">מסירה בפועל</label>
@@ -1408,6 +1410,11 @@ export default function ContractsNewPage() {
                   {!actualHandover ? "⏳ טרם נמסר — תקופת השכירות תתחיל ביום המסירה בפועל" :
                     "✅ נמסר — תחילת השכירות: " + new Date(actualHandover).toLocaleDateString("he-IL")}
                 </div>
+                {!actualHandover && plannedHandover && (
+                  <div className="text-[10px] text-amber-700">
+                    עד למסירה בפועל, תחילת השכירות מחושבת לפי יעד המסירה ({new Date(plannedHandover).toLocaleDateString("he-IL")}) — עדכן את &quot;מסירה בפועל&quot; ביום המסירה והתאריכים יתעדכנו.
+                  </div>
+                )}
               </div>
             )}
 
@@ -3399,7 +3406,12 @@ export default function ContractsNewPage() {
               onClick={() => setStep(step + 1)}
               disabled={
                 (step === 1 && (!tenantId || !propertyId)) ||
-                (step === 2 && (!startDate || (rentType === "revenue_pct" ? !revenuePct : (!rentPerSqm && Object.keys(unitRentOverrides).filter(function(k){return unitRentOverrides[k];}).length === 0))))
+                (step === 2 && (
+                  // A contract awaiting handover has no start date yet — the
+                  // handover date stands in for it, so requiring one here left
+                  // the user stuck on step 2 with no way forward.
+                  (!startDate && !(hasFutureHandover && (plannedHandover || actualHandover))) ||
+                  (rentType === "revenue_pct" ? !revenuePct : (!rentPerSqm && Object.keys(unitRentOverrides).filter(function(k){return unitRentOverrides[k];}).length === 0))))
               }
               className="rounded-xl bg-blue-700 px-6 py-2.5 text-sm font-bold text-white hover:bg-blue-800 disabled:opacity-40"
             >
