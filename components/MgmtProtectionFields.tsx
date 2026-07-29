@@ -43,11 +43,13 @@ export default function MgmtProtectionFields(props: {
               onChange={function(e) { set({ months: e.target.value === "" ? null : Number(e.target.value) }); }}
               className={ic + " w-20 text-center"} placeholder="84" />
             <span className="text-teal-700">חודשי שכירות</span>
-            <label className="flex items-center gap-1 text-teal-700">
-              <input type="checkbox" checked={p.indexed !== false}
-                onChange={function(e) { set({ indexed: e.target.checked }); }} />
-              צמוד למדד הבסיס
-            </label>
+            {/* Indexation is a money decision, not a detail — an explicit
+                choice rather than a checkbox that is easy to skip past. */}
+            <select value={p.indexed === false ? "nominal" : "indexed"} className={ic}
+              onChange={function(e) { set({ indexed: e.target.value === "indexed" }); }}>
+              <option value="indexed">התקרה צמודה למדד הבסיס</option>
+              <option value="nominal">התקרה לא צמודה (סכום נומינלי)</option>
+            </select>
           </div>
 
           <input type="text" value={p.notes ?? ""} placeholder="לשון הסעיף / הערות (לא חובה)"
@@ -59,7 +61,12 @@ export default function MgmtProtectionFields(props: {
               ? "השוכר לא יחויב מעבר לתקרה. עלות עודפת בפועל נספגת על ידי המשכיר, ותשלום עודף מוחזר לשוכר בהתחשבנות."
               : "השוכר משלם בדיוק את הסכום הקבוע, ללא תלות בעלות בפועל."}
             {end && <> · תום ההגנה: <b>{end.toLocaleDateString("he-IL")}</b></>}
-            {yearly > 0 && <> · תקרה שנתית משוערת: <b>{Math.round(yearly).toLocaleString("he-IL")} ₪</b></>}
+            {yearly > 0 && <> · {p.indexed === false ? "תקרה שנתית" : "תקרה שנתית לפי התעריף הנקוב"}: <b>{Math.round(yearly).toLocaleString("he-IL")} ₪</b></>}
+          </div>
+          <div className="text-[11px] text-teal-600">
+            {p.indexed === false
+              ? "התעריף נשאר נומינלי לכל אורך התקופה — הוא לא יעלה עם המדד."
+              : "התעריף עולה עם המדד, ולכן שוכר ששילם מקדמות לפי התעריף הנקוב עשוי להשלים את ההפרש עד התקרה המוצמדת."}
           </div>
         </>
       )}

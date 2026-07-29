@@ -140,7 +140,9 @@ export function describeMgmtProtection(p: MgmtProtection, contract?: any): strin
     ? "דמי ניהול קבועים " + p.value + " ₪ למ\"ר"
     : "תקרת דמי ניהול " + p.value + " ₪ למ\"ר");
   if (p.months) parts.push(p.months + " חודשי שכירות ראשונים");
-  if (p.indexed) parts.push("צמוד למדד הבסיס");
+  // State the linkage either way — "no linkage" is a real term of the deal, not
+  // an absence, and it changes what the tenant owes at reconciliation.
+  parts.push(p.indexed ? "צמוד למדד הבסיס" : "ללא הצמדה (נומינלי)");
   if (contract) {
     const end = protectionEndDate(contract, p);
     if (end) parts.push("עד " + end.toLocaleDateString("he-IL"));
