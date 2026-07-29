@@ -181,6 +181,12 @@ export default function ContractsNewPage() {
   const [terminationBy, setTerminationBy] = useState("both");
   const [vatType, setVatType] = useState("taxable");
   const [paymentFreq, setPaymentFreq] = useState("monthly");
+  // Turnover leases settle on their own cadence — a monthly minimum with a
+  // quarterly reconciliation is common, so these are independent of paymentFreq.
+  const [revSettleFreq, setRevSettleFreq] = useState("monthly");
+  const [revSettleDay, setRevSettleDay] = useState("15");
+  const [revReportFreq, setRevReportFreq] = useState("monthly");
+  const [revLateHigherIndex, setRevLateHigherIndex] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState("checks_advance");
   const [paymentDay, setPaymentDay] = useState("1");
   const [indexMethod, setIndexMethod] = useState("standard");
@@ -367,6 +373,10 @@ export default function ContractsNewPage() {
       setInvestAdd(c.investment_addition ? String(c.investment_addition) : "");
       setVatType(c.vat_type || "taxable");
       setPaymentFreq(c.payment_frequency || "monthly");
+      setRevSettleFreq(c.revenue_settlement_freq || "monthly");
+      setRevSettleDay(c.revenue_settlement_day ? String(c.revenue_settlement_day) : "15");
+      setRevReportFreq(c.revenue_report_freq || "monthly");
+      setRevLateHigherIndex(!!c.revenue_late_report_higher_index);
       setPaymentMethod(c.payment_method || "checks_advance");
       setPaymentDay(c.payment_day ? String(c.payment_day) : "1");
       setIndexMethod(c.indexation_method || "standard");
@@ -834,6 +844,10 @@ export default function ContractsNewPage() {
         revenue_pct: rentType === "revenue_pct" ? Number(revenuePct) || null : null,
         minimum_rent: rentType === "revenue_pct" ? Number(minimumRent) || 0 : null,
         revenue_report_day: rentType === "revenue_pct" ? Number(revenueReportDay) || 5 : null,
+        revenue_settlement_freq: rentType === "revenue_pct" ? revSettleFreq : "monthly",
+        revenue_settlement_day: rentType === "revenue_pct" ? (Number(revSettleDay) || null) : null,
+        revenue_report_freq: rentType === "revenue_pct" ? revReportFreq : "monthly",
+        revenue_late_report_higher_index: rentType === "revenue_pct" ? revLateHigherIndex : false,
         mgmt_included_in_revenue: rentType === "revenue_pct" ? mgmtIncludedInRevenue : false,
         charged_area: Number(chargedArea) || null,
         investment_addition: Number(investAdd) || null,
@@ -1515,6 +1529,37 @@ export default function ContractsNewPage() {
                       onChange={(e) => setRevenueReportDay(e.target.value)} className={ic} />
                   </div>
                   <div>
+                    <label className="mb-1 block text-xs font-semibold text-purple-700">תדירות דו&quot;ח פדיון</label>
+                    <select value={revReportFreq} onChange={(e) => setRevReportFreq(e.target.value)} className={ic}>
+                      <option value="monthly">חודשי</option>
+                      <option value="quarterly">רבעוני</option>
+                      <option value="semiannual">חצי שנתי</option>
+                      <option value="annual">שנתי</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-purple-700">תדירות התחשבנות מול המינימום</label>
+                    <select value={revSettleFreq} onChange={(e) => setRevSettleFreq(e.target.value)} className={ic}>
+                      <option value="monthly">חודשית</option>
+                      <option value="quarterly">רבעונית</option>
+                      <option value="semiannual">חצי שנתית</option>
+                      <option value="annual">שנתית</option>
+                    </select>
+                    <div className="text-[11px] text-purple-500 mt-0.5">אינה חייבת לחפוף לתדירות תשלום שכ&quot;ד</div>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-purple-700">יום עריכת ההתחשבנות (בחודש שאחרי)</label>
+                    <input type="number" min="1" max="28" value={revSettleDay}
+                      onChange={(e) => setRevSettleDay(e.target.value)} className={ic} />
+                  </div>
+                  <div className="flex items-start gap-2 pt-5 col-span-2">
+                    <input type="checkbox" id="revLateIdx" checked={revLateHigherIndex}
+                      onChange={(e) => setRevLateHigherIndex(e.target.checked)} className="rounded mt-0.5" />
+                    <label htmlFor="revLateIdx" className="text-xs text-slate-700">
+                      באיחור בדו&quot;ח — המדד הקובע הוא הגבוה מבין המדד במועד ההתחשבנות שהיה אמור להיערך לבין המדד במועד ההתחשבנות בפועל
+                    </label>
+                  </div>
+                  <div>
                     <label className="mb-1 block text-xs font-semibold text-slate-700">שטח מחויב (מ&quot;ר)</label>
                     <input type="number" value={chargedArea} onChange={(e) => setChargedArea(e.target.value)} className={ic} />
                   </div>
@@ -1535,9 +1580,14 @@ export default function ContractsNewPage() {
               </div>
             )}
 
-            {/* Fixed rent fields */}
-            {rentType === "fixed" && (
+            {/* Rent terms. Only the per-sqm rent is specific to a fixed-rent
+                lease — payment method, frequency, payment day, VAT and the
+                investment addition apply to a turnover lease just the same.
+                They used to sit inside a fixed-rent-only block, so a revenue
+                contract had no way to record any of them. */}
             <div className="grid grid-cols-2 gap-4">
+              {rentType === "fixed" && (
+              <>
               <div>
                 <label className="mb-1 block text-xs font-semibold text-slate-700">
                   שכ&quot;ד למ&quot;ר (₪) *
@@ -1560,6 +1610,8 @@ export default function ContractsNewPage() {
                   className={ic}
                 />
               </div>
+              </>
+              )}
               <div>
                 <label className="mb-1 block text-xs font-semibold text-slate-700">
                   תוספת שכ&quot;ד בגין השקעות בינוי (₪/חודש)
@@ -1635,7 +1687,6 @@ export default function ContractsNewPage() {
                 />
               </div>
             </div>
-            )}
 
             {/* Construction-investment detail + reimbursement terms. Appears once
                 an investment rent addition is entered, so the addition is never
@@ -3258,6 +3309,7 @@ export default function ContractsNewPage() {
                     : "",
                 },
                 { l: 'שכ"ד', v: rentType === "revenue_pct" ? `${revenuePct}% ממחזור${Number(minimumRent) > 0 ? " | מינימום " + fmtMoney(Number(minimumRent)) : " | ללא מינימום"}` : fmtMoney(totalRent) + "/חודש" },
+                ...(rentType === "revenue_pct" ? [{ l: "התחשבנות פדיון", v: ({monthly:"חודשית",quarterly:"רבעונית",semiannual:"חצי שנתית",annual:"שנתית"} as any)[revSettleFreq] + " · דו\"ח " + ({monthly:"חודשי",quarterly:"רבעוני",semiannual:"חצי שנתי",annual:"שנתי"} as any)[revReportFreq] }] : []),
                 { l: "שנתי", v: fmtMoney(annualRent) },
                 {
                   l: "תדירות",
