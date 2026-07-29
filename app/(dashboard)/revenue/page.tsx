@@ -86,6 +86,9 @@ export default function RevenuePage() {
   // both sides to the index known on its settlement date and bills the gap.
   const [settlements, setSettlements] = useState<Array<{ period: SettlementPeriod; calc: SettlementCalc }>>([]);
   const [settling, setSettling] = useState<string>("");
+  // The contract fixes the settlement cadence, but the user may want to LOOK at
+  // the same period at a different one. "" = follow the contract.
+  const [settleViewFreq, setSettleViewFreq] = useState<string>("");
 
   // Uploads a file to the revenue_attachments bucket and returns the metadata
   // that should be written onto the revenue_reports row. Throws on failure.
@@ -161,8 +164,8 @@ export default function RevenuePage() {
     var cancelled = false;
     (async function() {
       var c: any = contracts.find(function(x: any) { return x.id === selContractId; });
-      var freq = (c?.revenue_settlement_freq || "monthly") as SettlementFreq;
-      if (!c || freq === "monthly") { setSettlements([]); return; }
+      var freq = (settleViewFreq || c?.revenue_settlement_freq || "monthly") as SettlementFreq;
+      if (!c) { setSettlements([]); return; }
 
       var periods = periodsForYear(selYear, freq, Number(c.revenue_settlement_day) || 15);
       var vatPct = c.vat_type === "taxable" ? vatPctAt(vatRates, new Date()) : 0;
@@ -205,7 +208,7 @@ export default function RevenuePage() {
       if (!cancelled) setSettlements(out);
     })();
     return function() { cancelled = true; };
-  }, [selContractId, selYear, contracts.length, reports.length, vatRates.length]);
+  }, [selContractId, selYear, contracts.length, reports.length, vatRates.length, settleViewFreq]);
 
   useEffect(function() { loadAll(); }, [selYear]);
 
@@ -823,9 +826,34 @@ export default function RevenuePage() {
 
         {settlements.length > 0 && (
           <div className="mt-3 rounded-xl border border-indigo-200 bg-indigo-50/40 p-3">
-            <div className="text-xs font-bold text-indigo-800 mb-2">
-              ⚖️ התחשבנות {FREQ_LABELS[(selContract.revenue_settlement_freq || "monthly") as SettlementFreq]} — הפרש בין המינימום ששולם לתמורה מהפדיון
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+              <div className="text-xs font-bold text-indigo-800">
+                ⚖️ התחשבנות — הפרש בין המינימום ששולם לתמורה מהפדיון
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-[11px] text-indigo-600">חשב לפי</span>
+                <select value={settleViewFreq} onChange={function(e){ setSettleViewFreq(e.target.value); }}
+                  className="rounded border border-indigo-200 px-2 py-0.5 text-[11px]">
+                  <option value="">לפי החוזה ({FREQ_LABELS[(selContract.revenue_settlement_freq || "monthly") as SettlementFreq]})</option>
+                  <option value="monthly">חודשית</option>
+                  <option value="quarterly">רבעונית</option>
+                  <option value="semiannual">חצי שנתית</option>
+                  <option value="annual">שנתית</option>
+                </select>
+              </div>
             </div>
+            {settleViewFreq && settleViewFreq !== (selContract.revenue_settlement_freq || "monthly") && (
+              <div className="mb-2 rounded bg-amber-50 border border-amber-200 px-2 py-1.5 text-[11px] text-amber-800">
+                תצוגה בלבד — החוזה קובע התחשבנות {FREQ_LABELS[(selContract.revenue_settlement_freq || "monthly") as SettlementFreq]}.
+                חיוב שייווצר כאן לא תואם את תדירות ההתחשבנות שבהסכם.
+              </div>
+            )}
+            {(settleViewFreq || selContract.revenue_settlement_freq || "monthly") === "monthly" && (
+              <div className="mb-2 rounded bg-slate-50 border border-slate-200 px-2 py-1.5 text-[11px] text-slate-600">
+                בהתחשבנות חודשית שכ&quot;ד החודש כבר מחויב במלואו מהדיווח עצמו (הגבוה מבין המינימום לפדיון).
+                צור כאן חיוב הפרש רק אם השוכר משלם את המינימום בלבד מדי חודש — אחרת ייווצר חיוב כפול.
+              </div>
+            )}
             <div className="space-y-2">
               {settlements.map(function(st) {
                 var c = st.calc;
