@@ -91,7 +91,10 @@ export type SettlementCalc = {
   rows: SettlementMonthRow[];
   totalBase: number;
   totalAlt: number;
-  difference: number;      // owed by the tenant when positive; never negative
+  // Owed by the tenant when positive. Negative only under a rent protection,
+  // where it is the amount refunded to the tenant.
+  difference: number;
+  protected?: boolean;
   vatPct: number;
   vatAmount: number;
   total: number;
@@ -120,6 +123,9 @@ export function computeSettlement(params: {
   // fees where those are included in the percentage. `calculated_rent` alone is
   // the share BEFORE that deduction and would overstate the gap.
   altOf?: (rep: any) => number;
+  // Under a rent protection the shortfall goes back to the tenant, so the gap is
+  // allowed to be negative. Off by default: the minimum is otherwise a floor.
+  allowNegative?: boolean;
 }): SettlementCalc {
   const { period, reports, ratios, vatPct } = params;
   const baseOf = params.baseOf ?? function (rep: any) { return Number(rep?.final_rent) || 0; };
@@ -150,10 +156,12 @@ export function computeSettlement(params: {
 
   totalBase = Math.round(totalBase * 100) / 100;
   totalAlt = Math.round(totalAlt * 100) / 100;
-  // One-directional: the minimum is a floor, so a period where turnover fell
-  // short produces nothing to refund.
-  const difference = Math.max(0, Math.round((totalAlt - totalBase) * 100) / 100);
-  const vatAmount = Math.round(difference * vatPct * 100) / 100;
+  // One-directional unless the tenant is protected: the minimum is a floor, so a
+  // period where turnover fell short normally produces nothing to refund. With a
+  // protection in force the shortfall is returned, hence a negative gap.
+  const rawDiff = Math.round((totalAlt - totalBase) * 100) / 100;
+  const difference = params.allowNegative ? rawDiff : Math.max(0, rawDiff);
+  const vatAmount = Math.round(difference * vatPct * 100) / 100;   // follows the sign — a refund carries its VAT back
 
   const due = new Date(period.settlementDate);
   due.setDate(due.getDate() + (params.dueDays ?? 7));
@@ -162,6 +170,7 @@ export function computeSettlement(params: {
   return {
     ok: true,
     rows, totalBase, totalAlt, difference,
+    protected: !!params.allowNegative,
     vatPct, vatAmount,
     total: Math.round((difference + vatAmount) * 100) / 100,
     dueDate,

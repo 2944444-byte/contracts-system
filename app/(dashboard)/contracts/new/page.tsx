@@ -23,6 +23,7 @@ import { penaltyTermsFromRow, penaltyTermsToRow } from "@/lib/option-penalty";
 import { baseIndexRuleToRow, baseIndexRuleFromRow, type BaseIndexRule } from "@/lib/base-index-rule";
 import { clawbackTermsToRow } from "@/lib/investment-clawback";
 import { revenueCategoriesFromRow, type RevenueCategory } from "@/lib/revenue-categories";
+import { revenueProtectionFromRow, revenueProtectionToRow, emptyRevenueProtection, type RevenueProtection } from "@/lib/revenue-protection";
 import RevenueCategoriesEditor from "@/components/RevenueCategoriesEditor";
 import BaseIndexRuleFields from '@/components/BaseIndexRuleFields';
 import MgmtProtectionFields from '@/components/MgmtProtectionFields';
@@ -193,6 +194,7 @@ export default function ContractsNewPage() {
   // Turnover leases settle on their own cadence — a monthly minimum with a
   // quarterly reconciliation is common, so these are independent of paymentFreq.
   const [revMinAdvance, setRevMinAdvance] = useState(false);
+  const [revProtection, setRevProtection] = useState<RevenueProtection>(emptyRevenueProtection());
   const [revCategories, setRevCategories] = useState<RevenueCategory[]>([]);
   const [revSettleFreq, setRevSettleFreq] = useState("monthly");
   const [revSettleDay, setRevSettleDay] = useState("15");
@@ -385,6 +387,7 @@ export default function ContractsNewPage() {
       setVatType(c.vat_type || "taxable");
       setPaymentFreq(c.payment_frequency || "monthly");
       setRevMinAdvance(!!c.revenue_minimum_advance);
+      setRevProtection(revenueProtectionFromRow(c));
       setRevCategories(revenueCategoriesFromRow(c));
       setRevSettleFreq(c.revenue_settlement_freq || "monthly");
       setRevSettleDay(c.revenue_settlement_day ? String(c.revenue_settlement_day) : "15");
@@ -858,6 +861,7 @@ export default function ContractsNewPage() {
         minimum_rent: rentType === "revenue_pct" ? Number(minimumRent) || 0 : null,
         revenue_report_day: rentType === "revenue_pct" ? Number(revenueReportDay) || 5 : null,
         revenue_minimum_advance: rentType === "revenue_pct" ? revMinAdvance : false,
+        ...(rentType === "revenue_pct" ? revenueProtectionToRow(revProtection) : revenueProtectionToRow(null)),
         revenue_categories: rentType === "revenue_pct" ? revCategories.filter(function(c){ return c.name.trim(); }) : [],
         revenue_settlement_freq: rentType === "revenue_pct" ? revSettleFreq : "monthly",
         revenue_settlement_day: rentType === "revenue_pct" ? (Number(revSettleDay) || null) : null,
@@ -1003,6 +1007,7 @@ export default function ContractsNewPage() {
           option_group: opt.option_group || null,
           exit_points: opt.exit_points?.length > 0 ? opt.exit_points : [],
           ...penaltyTermsToRow(opt.non_exercise_penalty),
+          cancels_revenue_protection: !!(opt as any).cancels_revenue_protection,
         }));
         const { data: insertedOpts } = await supabase.from("contract_options").insert(optionsToInsert).select("id,option_number");
 
@@ -1587,6 +1592,34 @@ export default function ContractsNewPage() {
                     <label className="mb-1 block text-xs font-semibold text-purple-700">יום עריכת ההתחשבנות (בחודש שאחרי)</label>
                     <input type="number" min="1" max="28" value={revSettleDay}
                       onChange={(e) => setRevSettleDay(e.target.value)} className={ic} />
+                  </div>
+                  <div className="col-span-2 rounded-lg border border-blue-200 bg-blue-50/40 p-3 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-bold text-blue-800">🛡️ הגנה על שכ&quot;ד</label>
+                      <select value={revProtection.type} className="rounded border border-slate-200 px-2 py-1 text-xs"
+                        onChange={(e) => setRevProtection({ ...revProtection, type: e.target.value as RevenueProtection["type"] })}>
+                        <option value="none">ללא הגנה — המינימום הוא רצפה</option>
+                        <option value="refund_gap">עם הגנה — פער שלילי מוחזר לשוכר</option>
+                      </select>
+                    </div>
+                    {revProtection.type === "refund_gap" && (
+                      <>
+                        <div className="flex flex-wrap items-center gap-2 text-xs">
+                          <span className="text-blue-700">תקופת ההגנה</span>
+                          <input type="number" min="0" value={revProtection.months ?? ""}
+                            onChange={(e) => setRevProtection({ ...revProtection, months: e.target.value === "" ? null : Number(e.target.value) })}
+                            className="w-24 rounded border border-slate-200 px-2 py-1 text-center text-xs" placeholder="חודשים" />
+                          <span className="text-blue-700">חודשי שכירות (ריק = כל תקופת ההסכם)</span>
+                        </div>
+                        <input type="text" value={revProtection.notes ?? ""}
+                          onChange={(e) => setRevProtection({ ...revProtection, notes: e.target.value })}
+                          placeholder="לשון הסעיף / הערות (לא חובה)" className={ic} />
+                        <div className="text-[11px] text-blue-700">
+                          בתקופה המוגנת, תקופת התחשבנות שהפדיון בה נפל מהמינימום מייצרת <b>זיכוי לשוכר</b> ולא אפס.
+                          אפשר לקבוע באופציה להארכה שמימושה מבטל את ההגנה.
+                        </div>
+                      </>
+                    )}
                   </div>
                   <RevenueCategoriesEditor value={revCategories} onChange={setRevCategories} basePct={revenuePct} />
                   <div className="flex items-start gap-2 pt-5 col-span-2">
@@ -2999,6 +3032,19 @@ export default function ContractsNewPage() {
                         })
                       )}
                     </div>
+                  )}
+
+                  {rentType === "revenue_pct" && revProtection.type === "refund_gap" && (
+                    <label className="flex items-start gap-2 rounded-lg border border-blue-200 bg-blue-50/40 p-2.5 text-xs text-slate-700">
+                      <input type="checkbox" checked={!!(opt as any).cancels_revenue_protection}
+                        onChange={(e) => updateOption(idx, "cancels_revenue_protection", e.target.checked)} className="rounded mt-0.5" />
+                      <span>
+                        <b>מימוש אופציה זו מבטל את ההגנה על שכ&quot;ד</b>
+                        <span className="block text-[11px] text-blue-600 mt-0.5">
+                          ההגנה תיפסק ביום שתקופת האופציה מתחילה, גם אם נותרו לה חודשים.
+                        </span>
+                      </span>
+                    </label>
                   )}
 
                   {/* Compensation if this option is not exercised */}

@@ -8,6 +8,7 @@ import { getScopeIds, scopeRows } from '@/lib/permissions';
 import { minRentForPeriod } from '@/lib/min-rent';
 import { revenueCategoriesFromRow, splitRevenue, hasCategories, describeCategories } from '@/lib/revenue-categories';
 import { periodsForYear, computeSettlement, FREQ_LABELS, type SettlementFreq, type SettlementCalc, type SettlementPeriod } from '@/lib/revenue-settlement';
+import { revenueProtectionFromRow, hasRevenueProtection, isPeriodProtected, describeRevenueProtection } from '@/lib/revenue-protection';
 import { fetchCpiAdjustedWithRetry } from '@/lib/cpi-server';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
@@ -171,7 +172,9 @@ export default function RevenuePage() {
       // paid in advance) the report already bills the whole rent, so "the gap
       // between the minimum paid and the turnover share" would be the entire
       // rent — presenting that as an amount to bill invites double-billing.
-      if (!c.revenue_minimum_advance) { setSettlements([]); return; }
+      // Either arrangement can need a settlement: a minimum paid in advance
+      // (collect the top-up) or a protected tenant (refund the shortfall).
+      if (!c.revenue_minimum_advance && !hasRevenueProtection(revenueProtectionFromRow(c))) { setSettlements([]); return; }
 
       var periods = periodsForYear(selYear, freq, Number(c.revenue_settlement_day) || 15);
       var vatPct = c.vat_type === "taxable" ? vatPctAt(vatRates, new Date()) : 0;
@@ -209,8 +212,13 @@ export default function RevenuePage() {
             if (best > 0) ratios[key] = best;
           }
         }
+        var prot = revenueProtectionFromRow(c);
+        var periodProtected = isPeriodProtected({
+          contract: c, protection: prot, options: c.contract_options || [], periodEnd: period.periodEnd,
+        });
         out.push({ period: period, calc: computeSettlement({
           period: period, reports: periodReports, ratios: ratios, vatPct: vatPct,
+          allowNegative: periodProtected,
           // The minimum is what the advances already covered; the settlement
           // collects the gap up to the turnover share.
           baseOf: function(rep: any) { return Number(rep?.min_rent) || 0; },
@@ -375,7 +383,7 @@ export default function RevenuePage() {
     var yearStart = selYear + "-01-01";
     var yearEnd   = (selYear + 1) + "-01-01"; // exclusive — avoids the Feb-31 bug entirely
     const [{ data: c }, { data: r }] = await Promise.all([
-      supabase.from("contracts").select("id,property_id,status,rent_type,revenue_pct,min_rent_per_sqm,charged_area,rent_per_sqm,investment_addition,vat_type,mgmt_fee_per_sqm,mgmt_included_in_revenue,start_date,indexation_method,index_base_date,index_base_value,revenue_categories,revenue_minimum_advance,minimum_rent,tenants(name),properties(name)").in("status",["active","expiring","extended"]),
+      supabase.from("contracts").select("id,property_id,status,rent_type,revenue_pct,min_rent_per_sqm,charged_area,rent_per_sqm,investment_addition,vat_type,mgmt_fee_per_sqm,mgmt_included_in_revenue,start_date,indexation_method,index_base_date,index_base_value,revenue_categories,revenue_minimum_advance,minimum_rent,revenue_protection_type,revenue_protection_months,revenue_protection_notes,contract_options(id,start_date,status,is_exercised,cancels_revenue_protection),tenants(name),properties(name)").in("status",["active","expiring","extended"]),
       supabase.from("revenue_reports").select("*,contracts(property_id,tenants(name),properties(name))").gte("report_month",yearStart).lt("report_month",yearEnd).order("report_month",{ascending:true}),
     ]);
     var scope = await getScopeIds();
@@ -476,7 +484,10 @@ export default function RevenuePage() {
   // Raise the period's difference as a charge. The settlement date is the tax
   // point, and the annex gives the tenant 7 days from the demand.
   async function createSettlementCharge(period: SettlementPeriod, calc: SettlementCalc) {
-    if (!selContractId || calc.difference <= 0) return;
+    if (!selContractId || Math.abs(calc.difference) < 0.01) return;
+    // A negative gap only happens under a rent protection, and it is a refund:
+    // the row is written as a credit so it reads as money going back, not owed.
+    var isCredit = calc.difference < 0;
     if (calc.missingMonths.length > 0 &&
         !confirm("חסרים דיווחי פדיון ל-" + calc.missingMonths.length + " חודשים בתקופה. ליצור חיוב חלקי בכל זאת?")) return;
     if (calc.unindexed &&
@@ -486,7 +497,7 @@ export default function RevenuePage() {
       var { data, error } = await supabase.from("charges").insert({
         contract_id: selContractId,
         charge_type: "revenue_settlement",
-        description: "התחשבנות פדיון — " + period.label,
+        description: (isCredit ? "זיכוי הגנת שכ\"ד — " : "התחשבנות פדיון — ") + period.label,
         base_amount: calc.difference,
         vat_amount: calc.vatAmount,
         total_amount: calc.total,
@@ -496,11 +507,14 @@ export default function RevenuePage() {
         due_date: calc.dueDate,
         status: "pending",
         notes: "מינימום משוערך " + calc.totalBase + " · פדיון משוערך " + calc.totalAlt
-          + " · שוערך למדד הידוע ביום " + period.settlementDate,
+          + " · שוערך למדד הידוע ביום " + period.settlementDate
+          + (isCredit ? " · הפדיון נפל מהמינימום וההגנה בתוקף — מוחזר לשוכר" : ""),
       }).select("id").single();
       if (error) throw error;
       await logAudit({ entity_type: "charge", entity_id: data.id, action: "revenue_settlement", notes: period.label + " " + calc.total });
-      alert("✅ נוצר חיוב הפרש על סך " + fmtMoney(calc.total) + " לתשלום עד " + fmtDate(calc.dueDate) + ".\nניתן לשלוח אותו לשוכר ממסך החיובים.");
+      alert(isCredit
+        ? "✅ נוצר זיכוי לשוכר על סך " + fmtMoney(Math.abs(calc.total)) + " (הגנת שכ\"ד).\nניתן לטפל בו ממסך החיובים."
+        : "✅ נוצר חיוב הפרש על סך " + fmtMoney(calc.total) + " לתשלום עד " + fmtDate(calc.dueDate) + ".\nניתן לשלוח אותו לשוכר ממסך החיובים.");
     } catch (e: any) { alert("שגיאה: " + (e?.message || e)); }
     finally { setSettling(""); }
   }
@@ -873,6 +887,12 @@ export default function RevenuePage() {
                 חיוב שייווצר כאן לא תואם את תדירות ההתחשבנות שבהסכם.
               </div>
             )}
+            {hasRevenueProtection(revenueProtectionFromRow(selContract)) && (
+              <div className="mb-2 rounded bg-blue-50 border border-blue-200 px-2 py-1.5 text-[11px] text-blue-800">
+                🛡️ {describeRevenueProtection(revenueProtectionFromRow(selContract), selContract, selContract.contract_options || [])}
+                {" "}— בתקופה מוגנת פער שלילי מוחזר לשוכר; מחוץ לתקופה המינימום הוא רצפה והפער יהיה אפס.
+              </div>
+            )}
             <div className="mb-2 rounded bg-slate-50 border border-slate-200 px-2 py-1.5 text-[11px] text-slate-600">
               {selContract.revenue_minimum_advance
                 ? "המודל בהסכם זה: המינימום משולם כמקדמה מדי חודש, וההתחשבנות גובה רק את ההשלמה לאחוז מהפדיון. במסך החיובים ההשלמה מוצגת בניכוי המינימום שכבר חויב."
@@ -889,14 +909,16 @@ export default function RevenuePage() {
                         <span className="font-normal text-slate-400"> · התחשבנות ליום {fmtDate(st.period.settlementDate)}</span>
                       </div>
                       <div className="flex items-center gap-2">
-                        <span className={"text-xs font-bold " + (c.difference > 0 ? "text-red-700" : "text-green-700")}>
-                          {c.difference > 0 ? "הפרש לחיוב " + fmtMoney(c.total) : "אין הפרש — המינימום כיסה"}
+                        <span className={"text-xs font-bold " + (c.difference > 0 ? "text-red-700" : c.difference < 0 ? "text-blue-700" : "text-green-700")}>
+                          {c.difference > 0 ? "הפרש לחיוב " + fmtMoney(c.total)
+                            : c.difference < 0 ? "🛡️ להחזר לשוכר " + fmtMoney(Math.abs(c.total))
+                            : "אין הפרש — המינימום כיסה"}
                         </span>
-                        {c.difference > 0 && (
+                        {Math.abs(c.difference) > 0.009 && (
                           <button disabled={settling === st.period.key}
                             onClick={function() { createSettlementCharge(st.period, c); }}
                             className="rounded border border-indigo-300 bg-indigo-50 text-indigo-700 px-2 py-0.5 text-[11px] font-bold hover:bg-indigo-100 disabled:opacity-50">
-                            {settling === st.period.key ? "יוצר..." : "צור חיוב הפרש"}
+                            {settling === st.period.key ? "יוצר..." : (c.difference < 0 ? "צור זיכוי לשוכר" : "צור חיוב הפרש")}
                           </button>
                         )}
                       </div>

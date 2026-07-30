@@ -22,6 +22,7 @@ import { baseIndexRuleToRow, baseIndexRuleFromRow, type BaseIndexRule } from "@/
 import BaseIndexRuleFields from '@/components/BaseIndexRuleFields';
 import MgmtProtectionFields from '@/components/MgmtProtectionFields';
 import { mgmtProtectionFromRow, mgmtProtectionToRow, emptyMgmtProtection, type MgmtProtection } from '@/lib/mgmt-protection';
+import { revenueProtectionFromRow, revenueProtectionToRow, emptyRevenueProtection, type RevenueProtection } from '@/lib/revenue-protection';
 import ExtraGuaranteesEditor, { extraGuaranteeFromRow, extraGuaranteeToRow, NO_EXPIRY_TYPES, type ExtraGuarantee } from '@/components/ExtraGuaranteesEditor';
 import TenantForm from '@/components/TenantForm';
 import PropertyForm from '@/components/PropertyForm';
@@ -160,6 +161,7 @@ export default function ContractEditPage() {
   const [baseCPIDate, setBaseCPIDate] = useState("");
   const [baseIndexRule, setBaseIndexRule] = useState<BaseIndexRule>({ mode: "fixed", anchor: "actual_handover", offsetMonths: null });
   const [mgmtProtection, setMgmtProtection] = useState<MgmtProtection>(emptyMgmtProtection());
+  const [revProtection, setRevProtection] = useState<RevenueProtection>(emptyRevenueProtection());
   const [mgmtFeePct, setMgmtFeePct] = useState("");
   const [documentUrl, setDocumentUrl] = useState("");
 
@@ -408,6 +410,7 @@ export default function ContractEditPage() {
     setBaseCPIDate(c.index_base_date?.split("T")[0] ?? "");
     setBaseIndexRule(baseIndexRuleFromRow(c));
     setMgmtProtection(mgmtProtectionFromRow(c));
+    setRevProtection(revenueProtectionFromRow(c));
     setMgmtFeePct(c.mgmt_fee_per_sqm?.toString() ?? "");
     setDocumentUrl(c.document_url ?? "");
 
@@ -538,6 +541,7 @@ export default function ContractEditPage() {
         option_group: o.option_group ?? null,
         exit_points: o.exit_points && Array.isArray(o.exit_points) ? o.exit_points : [],
         non_exercise_penalty: penaltyTermsFromRow(o),
+        cancels_revenue_protection: !!o.cancels_revenue_protection,
       })));
     }
 
@@ -707,6 +711,7 @@ export default function ContractEditPage() {
         index_base_date: baseCPIDate || null,
         ...baseIndexRuleToRow(baseIndexRule),
         ...mgmtProtectionToRow(mgmtProtection),
+        ...revenueProtectionToRow(revProtection),
         index_base_resolved_at: baseIndexRule.mode === "derived" && baseCPIDate ? new Date().toISOString() : null,
         mgmt_fee_per_sqm: mgmtFeePct ? Number(mgmtFeePct) : null,
         document_url: documentUrl || null,
@@ -817,6 +822,7 @@ export default function ContractEditPage() {
               declined_at: existing?.declined_at ?? null,
               non_exercise_charge_id: existing?.non_exercise_charge_id ?? null,
               ...penaltyTermsToRow(opt.non_exercise_penalty),
+              cancels_revenue_protection: !!(opt as any).cancels_revenue_protection,
             };
           })
         ).select("id,option_number");
