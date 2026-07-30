@@ -166,6 +166,12 @@ export default function RevenuePage() {
       var c: any = contracts.find(function(x: any) { return x.id === selContractId; });
       var freq = (settleViewFreq || c?.revenue_settlement_freq || "monthly") as SettlementFreq;
       if (!c) { setSettlements([]); return; }
+      // A settlement only exists where the tenant pays the minimum separately and
+      // the top-up is collected afterwards. With no minimum (or one that is not
+      // paid in advance) the report already bills the whole rent, so "the gap
+      // between the minimum paid and the turnover share" would be the entire
+      // rent — presenting that as an amount to bill invites double-billing.
+      if (!c.revenue_minimum_advance) { setSettlements([]); return; }
 
       var periods = periodsForYear(selYear, freq, Number(c.revenue_settlement_day) || 15);
       var vatPct = c.vat_type === "taxable" ? vatPctAt(vatRates, new Date()) : 0;
@@ -823,6 +829,12 @@ export default function RevenuePage() {
             <span className="text-amber-700 text-[11px]">⚠ אין הגדרת mgmt_fee_per_sqm — הזן את דמי הניהול ידנית בכל דיווח</span>
           )}
         </div>
+
+        {selContract.revenue_minimum_advance === false && (Number(selContract.minimum_rent) > 0 || selContract.min_rent_per_sqm) && (
+          <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
+            להסכם זה מוגדר מינימום, אך הוא אינו משולם כמקדמה — לכן כל דיווח מחייב את מלוא שכ&quot;ד החודש (הגבוה מבין המינימום לפדיון) ואין התחשבנות תקופתית נפרדת.
+          </div>
+        )}
 
         {settlements.length > 0 && (
           <div className="mt-3 rounded-xl border border-indigo-200 bg-indigo-50/40 p-3">
