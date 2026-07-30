@@ -109,8 +109,15 @@ export function computeSettlement(params: {
   ratios: Record<string, number>;
   vatPct: number;
   dueDays?: number;                      // days from the demand (annex: 7)
+  // What the month was ALREADY billed. Defaults to the month's full rent, so a
+  // tenant who paid the turnover share directly settles to zero — using the
+  // minimum here unconditionally made the whole share look unpaid. A
+  // minimum-advance contract passes the minimum instead: the advance covered
+  // that much, and the gap to the share is what is still owed.
+  baseOf?: (rep: any) => number;
 }): SettlementCalc {
   const { period, reports, ratios, vatPct } = params;
+  const baseOf = params.baseOf ?? function (rep: any) { return Number(rep?.final_rent) || 0; };
   const rows: SettlementMonthRow[] = [];
   const missing: number[] = [];
   var unindexed = false;
@@ -121,7 +128,7 @@ export function computeSettlement(params: {
     const rep = reports.find(function(r: any) { return String(r.report_month).slice(0, 10) === key; });
     if (!rep) missing.push(m);
 
-    const base = Number(rep?.min_rent) || 0;
+    const base = rep ? baseOf(rep) : 0;
     // What the turnover actually yielded, before the floor was applied.
     const alt = Number(rep?.calculated_rent) || 0;
     const ratio = ratios[key] && ratios[key] > 0 ? ratios[key] : 1;

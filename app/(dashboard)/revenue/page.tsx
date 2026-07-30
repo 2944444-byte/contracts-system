@@ -209,7 +209,12 @@ export default function RevenuePage() {
             if (best > 0) ratios[key] = best;
           }
         }
-        out.push({ period: period, calc: computeSettlement({ period: period, reports: periodReports, ratios: ratios, vatPct: vatPct }) });
+        out.push({ period: period, calc: computeSettlement({
+          period: period, reports: periodReports, ratios: ratios, vatPct: vatPct,
+          // The minimum is what the advances already covered; the settlement
+          // collects the gap up to the turnover share.
+          baseOf: function(rep: any) { return Number(rep?.min_rent) || 0; },
+        }) });
       }
       if (!cancelled) setSettlements(out);
     })();
