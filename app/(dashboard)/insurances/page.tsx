@@ -106,7 +106,7 @@ export default function InsurancesPage() {
         .in("status",["active","expiring","extended","upcoming"])
         .order("start_date", { ascending: false }),
       // Existing insurance charges — to flag policies whose charge was already created.
-      supabase.from("charges").select("id, billing_period_start, contracts(property_id)").eq("charge_type", "insurance"),
+      supabase.from("charges").select("id, billing_period_start, contracts!charges_contract_id_fkey(property_id)").eq("charge_type", "insurance"),
     ]);
     var scope = await getScopeIds();
     setBuildingIns(scopeRows(b ?? [], scope, function(x: any){ return x.property_id; }));

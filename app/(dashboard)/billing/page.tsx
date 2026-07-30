@@ -191,7 +191,7 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
     if (!propId) { setExistingMgmtCharges([]); setExistingMgmtLetters([]); return; }
     const [{ data: ch }, { data: lt }] = await Promise.all([
       supabase.from("charges")
-        .select("id, total_amount, status, contract_id, notes, contracts(property_id, tenants(name))")
+        .select("id, total_amount, status, contract_id, notes, contracts!charges_contract_id_fkey(property_id, tenants(name))")
         .eq("charge_type", "management")
         .eq("billing_period_start", year + "-01-01"),
       supabase.from("letters")
@@ -1137,7 +1137,7 @@ function InsuranceTab({ properties }: { properties: any[] }) {
     if (!propId) { setExistingCharges([]); setExistingLetters([]); return; }
     const [{ data: chData }, { data: ltData }] = await Promise.all([
       supabase.from("charges")
-        .select("id, total_amount, status, created_at, notes, contract_id, contracts(property_id, tenants(name))")
+        .select("id, total_amount, status, created_at, notes, contract_id, contracts!charges_contract_id_fkey(property_id, tenants(name))")
         .eq("charge_type", "insurance")
         .eq("billing_period_start", year + "-01-01"),
       supabase.from("letters")
@@ -2089,7 +2089,7 @@ function WasteTab({ properties }: { properties: any[] }) {
     var lbl = periodLabelOf();
     const [{ data: ch }, { data: lt }] = await Promise.all([
       supabase.from("charges")
-        .select("id, total_amount, status, contract_id, notes, contracts(property_id, tenants(name))")
+        .select("id, total_amount, status, contract_id, notes, contracts!charges_contract_id_fkey(property_id, tenants(name))")
         .eq("charge_type", "waste").eq("billing_period_start", dates.start),
       supabase.from("letters")
         .select("id, title, contract_id, status, contracts(property_id)")

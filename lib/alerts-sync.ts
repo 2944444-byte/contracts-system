@@ -282,7 +282,7 @@ export async function runAlertSync(supabase: SupabaseClient): Promise<{ created:
   //    mgmt, insurance, waste…). ONE alert per contract (count + total), so the
   //    screen shows "שכ\"ד בפיגור" per tenant without flooding a row per charge.
   const { data: overdue } = await supabase.from("charges")
-    .select("id,contract_id,total_amount,due_date,charge_type,contracts(property_id,tenants(name))")
+    .select("id,contract_id,total_amount,due_date,charge_type,contracts!charges_contract_id_fkey(property_id,tenants(name))")
     .neq("status", "paid")
     .not("due_date", "is", null)
     .lt("due_date", todayStr);

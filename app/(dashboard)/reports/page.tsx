@@ -40,7 +40,7 @@ export default function ReportsPage() {
       setData(scopeRows(c ?? [], await getScopeIds(), function(x: any){ return x.property_id; }));
     } else if (t==="payments") {
       const { data: p } = await supabase.from("charges")
-        .select("id,charge_type,billing_period_start,base_amount,vat_amount,total_amount,status,contracts(property_id,tenants(name),properties(name))")
+        .select("id,charge_type,billing_period_start,base_amount,vat_amount,total_amount,status,contracts!charges_contract_id_fkey(property_id,tenants(name),properties(name))")
         .gte("billing_period_start", filterYear+"-01-01").lte("billing_period_start", filterYear+"-12-31")
         .order("billing_period_start",{ascending:false});
       setData(scopeRows(p ?? [], await getScopeIds(), function(x: any){ return x.contracts?.property_id; }));

@@ -109,7 +109,7 @@ export default function AlertsPage() {
     // Total money in arrears — computed live from charges (the source), not
     // from alert titles.
     var todayStr = new Date().toISOString().split("T")[0];
-    const { data: od } = await supabase.from("charges").select("total_amount, contracts(property_id)").neq("status","paid").not("due_date","is",null).lt("due_date", todayStr);
+    const { data: od } = await supabase.from("charges").select("total_amount, contracts!charges_contract_id_fkey(property_id)").neq("status","paid").not("due_date","is",null).lt("due_date", todayStr);
     var rows = scopeRows(od ?? [], scope, function(x: any){ return x.contracts?.property_id; });
     setArrears({ count: rows.length, sum: rows.reduce(function(s: number, r: any){ return s + (Number(r.total_amount) || 0); }, 0) });
   }

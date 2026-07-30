@@ -95,11 +95,11 @@ export default function CashflowPage() {
         .gte("check_date", yearStart).lt("check_date", yearEnd),
       // Charges for the year (use due_date when present)
       supabase.from("charges")
-        .select("id, contract_id, charge_type, total_amount, status, due_date, billing_period_start, contracts(tenant_id, property_id, tenants(name), properties(name))")
+        .select("id, contract_id, charge_type, total_amount, status, due_date, billing_period_start, contracts!charges_contract_id_fkey(tenant_id, property_id, tenants(name), properties(name))")
         .or("due_date.gte." + yearStart + ",billing_period_start.gte." + yearStart),
       // Revenue reports for the year
       supabase.from("revenue_reports")
-        .select("id, contract_id, report_month, gross_revenue, final_rent, actual_paid, contracts(tenant_id, property_id, tenants(name), properties(name), vat_type)")
+        .select("id, contract_id, report_month, gross_revenue, final_rent, actual_paid, contracts!charges_contract_id_fkey(tenant_id, property_id, tenants(name), properties(name), vat_type)")
         .gte("report_month", yearStart).lt("report_month", yearEnd),
     ];
 

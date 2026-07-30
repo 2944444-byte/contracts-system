@@ -138,6 +138,9 @@ export default function PaymentsPage() {
   const [rows,      setRows]      = useState<Row[]>([]);
   const [contracts, setContracts] = useState<any[]>([]);
   const [loading,   setLoading]   = useState(true);
+  // Non-empty when a fetch failed — shown on screen so a broken query is never
+  // mistaken for "no data".
+  const [loadError, setLoadError] = useState("");
   const [editingId, setEditingId] = useState("");
   const [saving,    setSaving]    = useState(false);
   // Full VAT-rate history — each charge uses the rate in effect for ITS period
@@ -201,7 +204,11 @@ export default function PaymentsPage() {
       // Load all charges with a due_date in the selected year. Falls back to
       // billing_period_start when due_date is null (older data).
       supabase.from("charges")
-        .select("*, contracts(property_id,tenants(name),properties(name),vat_type)")
+        // The embed names its foreign key explicitly. Without it, ANY second
+        // relationship between charges and contracts makes PostgREST refuse to
+        // resolve the embed and the query returns nothing — which silently
+        // emptied this screen of every charge row once such a key existed.
+        .select("*, contracts!charges_contract_id_fkey(property_id,tenants(name),properties(name),vat_type)")
         .or("due_date.gte." + yearStart + ",billing_period_start.gte." + yearStart)
         .or("due_date.lt." + yearEnd + ",billing_period_start.lt." + yearEnd)
         .order("due_date", { ascending: true }),
@@ -231,6 +238,17 @@ export default function PaymentsPage() {
     var scopedContractIds: Record<string, boolean> = {};
     scopedContracts.forEach(function(c: any){ scopedContractIds[c.id] = true; });
     var inScope = function(contractId: any){ return scope === null || (contractId != null && !!scopedContractIds[contractId]); };
+
+    // A failed query used to fall through as an empty array, so a broken fetch
+    // looked exactly like "there are no charges" — that is what turned a schema
+    // mistake into money apparently vanishing. Surface it instead.
+    // advRes may be the plain { data: [] } stand-in when advances are toggled
+    // off, so it has no `error` field to read.
+    var advErr = (advRes as any).error;
+    if (chargesRes.error) setLoadError("שליפת החיובים נכשלה: " + chargesRes.error.message);
+    else if (advErr) setLoadError("שליפת המקדמות נכשלה: " + advErr.message);
+    else if (revRes.error) setLoadError("שליפת דיווחי הפדיון נכשלה: " + revRes.error.message);
+    else setLoadError("");
 
     var ch = scopeRows(chargesRes.data || [], scope, function(c: any){ return c.contracts?.property_id; });
     // Keep BOTH paid and unpaid advances — paid ones still need to appear
@@ -834,6 +852,13 @@ export default function PaymentsPage() {
           })}
         </div>
       </div>
+
+      {loadError && (
+        <div className="mb-4 rounded-xl border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800">
+          <div className="font-bold">⚠️ שגיאה בטעינת הנתונים — הרשימה שמוצגת אינה מלאה</div>
+          <div className="mt-0.5 text-xs" dir="ltr">{loadError}</div>
+        </div>
+      )}
 
       {/* Top debtors strip — quickly see who owes the most */}
       {topDebtors.length > 0 && (

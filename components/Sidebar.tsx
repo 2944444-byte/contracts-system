@@ -81,7 +81,7 @@ export default function Sidebar() {
       // counts that include other properties' charges/alerts.
       const scope = await getScopeIds();
       const [{ data: ch }, { data: al }] = await Promise.all([
-        supabase.from("charges").select("id,contracts(property_id)").eq("status","pending"),
+        supabase.from("charges").select("id,contracts!charges_contract_id_fkey(property_id)").eq("status","pending"),
         // Unread open alerts only — read-but-open alerts stop inflating the badge.
         supabase.from("alerts").select("id,property_id,contracts(property_id)").eq("is_resolved",false).is("read_at", null),
       ]);

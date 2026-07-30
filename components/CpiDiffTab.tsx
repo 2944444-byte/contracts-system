@@ -75,7 +75,7 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
   async function loadExistingCpiCharges() {
     if (!propId) { setExistingCpiCharges([]); return; }
     var { data } = await supabase.from("charges")
-      .select("id, total_amount, status, contract_id, notes, contracts(property_id, tenants(name))")
+      .select("id, total_amount, status, contract_id, notes, contracts!charges_contract_id_fkey(property_id, tenants(name))")
       .eq("charge_type", "cpi_diff")
       .eq("billing_period_start", year + "-01-01");
     setExistingCpiCharges((data ?? []).filter(function(x:any){ return x.contracts?.property_id === propId; }));
