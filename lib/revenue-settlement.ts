@@ -115,9 +115,15 @@ export function computeSettlement(params: {
   // minimum-advance contract passes the minimum instead: the advance covered
   // that much, and the gap to the share is what is still owed.
   baseOf?: (rep: any) => number;
+  // The turnover-based rent for the month. Must be the SAME figure the monthly
+  // calculation weighs against the minimum — i.e. the share net of management
+  // fees where those are included in the percentage. `calculated_rent` alone is
+  // the share BEFORE that deduction and would overstate the gap.
+  altOf?: (rep: any) => number;
 }): SettlementCalc {
   const { period, reports, ratios, vatPct } = params;
   const baseOf = params.baseOf ?? function (rep: any) { return Number(rep?.final_rent) || 0; };
+  const altOf = params.altOf ?? function (rep: any) { return Number(rep?.calculated_rent) || 0; };
   const rows: SettlementMonthRow[] = [];
   const missing: number[] = [];
   var unindexed = false;
@@ -130,7 +136,7 @@ export function computeSettlement(params: {
 
     const base = rep ? baseOf(rep) : 0;
     // What the turnover actually yielded, before the floor was applied.
-    const alt = Number(rep?.calculated_rent) || 0;
+    const alt = rep ? altOf(rep) : 0;
     const ratio = ratios[key] && ratios[key] > 0 ? ratios[key] : 1;
     if (!ratios[key]) unindexed = true;
 

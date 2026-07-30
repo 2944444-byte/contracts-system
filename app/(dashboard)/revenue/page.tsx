@@ -214,6 +214,14 @@ export default function RevenuePage() {
           // The minimum is what the advances already covered; the settlement
           // collects the gap up to the turnover share.
           baseOf: function(rep: any) { return Number(rep?.min_rent) || 0; },
+          // Same figure the monthly calc compares to the minimum: the share net
+          // of management fees when those come out of the percentage.
+          altOf: function(rep: any) {
+            var share = Number(rep?.calculated_rent) || 0;
+            var mgmt = rep?.mgmt_in_gross != null ? Number(rep.mgmt_in_gross)
+              : (c.mgmt_included_in_revenue && c.mgmt_fee_per_sqm ? Number(c.mgmt_fee_per_sqm) * (Number(c.charged_area) || 0) : 0);
+            return Math.max(0, Math.round((share - (mgmt || 0)) * 100) / 100);
+          },
         }) });
       }
       if (!cancelled) setSettlements(out);
