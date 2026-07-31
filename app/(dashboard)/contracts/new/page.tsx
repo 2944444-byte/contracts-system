@@ -947,6 +947,9 @@ export default function ContractsNewPage() {
       if (addGuarantee) {
         insertPayload.deposit_calculation_method = depositCalcMethod;
         insertPayload.deposit_includes_mgmt = depositIncludesMgmt;
+        // Persist the basis, not just the result — otherwise re-opening the
+        // contract defaults back to 3 months and re-saving changes the sum.
+        insertPayload.deposit_months = depositCalcMethod === "months_based" ? depositMonths : null;
       }
 
       // ── Overlap validation: check for active contracts on same spaces ──
@@ -3248,7 +3251,27 @@ export default function ContractsNewPage() {
                     <button
                       key={t.v}
                       type="button"
-                      onClick={() => setGuaranteeType(t.v)}
+                      onClick={() => {
+                        if (guaranteeType === t.v) return;
+                        // Anything already entered on the current security means
+                        // switching would throw it away — offer to keep it and
+                        // add the new one alongside, which is what a contract
+                        // with two securities actually needs.
+                        var curLabel = GUARANTEE_TYPES.find(g => g.v === guaranteeType)?.l || "הביטחון הנוכחי";
+                        var hasData = !!(guaranteeAmt || guaranteeBank || guaranteeEnd || guaranteeDocUrl || guarantors.some(g => g.name));
+                        if (hasData) {
+                          var addBoth = confirm(
+                            'כבר הוזן ' + curLabel + '.\n\n' +
+                            'אישור — ' + t.l + ' יתווסף כביטחון נוסף, ו' + curLabel + ' יישמר.\n' +
+                            'ביטול — ' + curLabel + ' יוחלף ב' + t.l + ' (הנתונים שהוזנו יימחקו).'
+                          );
+                          if (addBoth) {
+                            setAdditionalGuarantees(prev => prev.concat([emptyExtraGuarantee(t.v)]));
+                            return;
+                          }
+                        }
+                        setGuaranteeType(t.v);
+                      }}
                       className={
                         "rounded-xl border p-2.5 text-center " +
                         (guaranteeType === t.v
@@ -3279,6 +3302,19 @@ export default function ContractsNewPage() {
                   onChange={setAdditionalGuarantees}
                   inputClass={ic}
                 />
+
+                {/* Everything the contract will actually be secured by, in one
+                    line — a security that was replaced rather than added used to
+                    disappear with nothing on screen to show it. */}
+                <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 px-3 py-2 text-xs text-emerald-900">
+                  <b>ביטחונות שיישמרו בהסכם ({1 + additionalGuarantees.length}):</b>{" "}
+                  {(GUARANTEE_TYPES.find(g => g.v === guaranteeType)?.l || guaranteeType)}
+                  {Number(guaranteeAmt) > 0 ? " " + fmtMoney(Number(guaranteeAmt)) : ""}
+                  {additionalGuarantees.map(function(e, i){
+                    var lbl = GUARANTEE_TYPES.find(g => g.v === e.type)?.l || e.type;
+                    return " · " + lbl + (Number(e.amount_required) > 0 ? " " + fmtMoney(Number(e.amount_required)) : "");
+                  }).join("")}
+                </div>
 
                 {/* Deposit calculation method */}
                 <div className="rounded-xl border border-slate-200 p-4 space-y-3">

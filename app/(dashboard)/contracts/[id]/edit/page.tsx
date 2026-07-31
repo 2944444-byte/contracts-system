@@ -26,7 +26,7 @@ import BaseIndexRuleFields from '@/components/BaseIndexRuleFields';
 import MgmtProtectionFields from '@/components/MgmtProtectionFields';
 import { mgmtProtectionFromRow, mgmtProtectionToRow, emptyMgmtProtection, type MgmtProtection } from '@/lib/mgmt-protection';
 import { revenueProtectionFromRow, revenueProtectionToRow, emptyRevenueProtection, type RevenueProtection } from '@/lib/revenue-protection';
-import ExtraGuaranteesEditor, { extraGuaranteeFromRow, extraGuaranteeToRow, NO_EXPIRY_TYPES, type ExtraGuarantee } from '@/components/ExtraGuaranteesEditor';
+import ExtraGuaranteesEditor, { extraGuaranteeFromRow, extraGuaranteeToRow, emptyExtraGuarantee, NO_EXPIRY_TYPES, type ExtraGuarantee } from '@/components/ExtraGuaranteesEditor';
 import TenantForm from '@/components/TenantForm';
 import PropertyForm from '@/components/PropertyForm';
 
@@ -198,6 +198,9 @@ export default function ContractEditPage() {
   const [additionalGuarantees, setAdditionalGuarantees] = useState<ExtraGuarantee[]>([]);
   const [depositCalcMethod, setDepositCalcMethod] = useState<"months_based" | "fixed_amount">("months_based");
   const [depositMonths, setDepositMonths] = useState(3);
+  // The auto-calculated amount must not overwrite what the contract actually
+  // holds. It only takes over once the manager touches one of the inputs.
+  const [depositTouched, setDepositTouched] = useState(false);
   const [depositIncludesMgmt, setDepositIncludesMgmt] = useState(false);
 
   // === Auto-calculate end date ===
@@ -262,10 +265,15 @@ export default function ContractEditPage() {
   });
 
   useEffect(() => {
+    // On load this effect used to fire as soon as the management fee arrived and
+    // silently replace the guarantee amount stored on the contract — the figure
+    // on screen (and then in the DB, on save) was a fresh calculation rather
+    // than what was agreed. Recalculate only after a deliberate change.
+    if (!depositTouched) return;
     if (depositCalcMethod === "months_based" && calculatedDeposit > 0) {
       setGuaranteeAmt(calculatedDeposit.toString());
     }
-  }, [calculatedDeposit, depositCalcMethod]);
+  }, [calculatedDeposit, depositCalcMethod, depositTouched]);
 
   // === Load reference data + existing contract ===
   useEffect(() => {
@@ -591,6 +599,7 @@ export default function ContractEditPage() {
     }
     if (c.deposit_calculation_method) setDepositCalcMethod(c.deposit_calculation_method as any);
     if (c.deposit_includes_mgmt) setDepositIncludesMgmt(true);
+    if (c.deposit_months != null) setDepositMonths(Number(c.deposit_months) || 1);
 
     // Load parking
     if (c.property_id) {
@@ -777,6 +786,7 @@ export default function ContractEditPage() {
       if (addGuarantee) {
         updatePayload.deposit_calculation_method = depositCalcMethod;
         updatePayload.deposit_includes_mgmt = depositIncludesMgmt;
+        updatePayload.deposit_months = depositCalcMethod === "months_based" ? depositMonths : null;
       }
 
       // UPDATE contract
@@ -2248,7 +2258,22 @@ export default function ContractEditPage() {
               <div className="space-y-3">
                 <div className="grid grid-cols-2 sm:grid-cols-3 sm:grid-cols-5 gap-2">
                   {GUARANTEE_TYPES.map((t) => (
-                    <button key={t.v} type="button" onClick={() => setGuaranteeType(t.v)}
+                    <button key={t.v} type="button" onClick={() => {
+                        if (guaranteeType === t.v) return;
+                        // Same rule as the wizard: never silently replace a
+                        // security that already has data on it.
+                        var curLabel = GUARANTEE_TYPES.find(g => g.v === guaranteeType)?.l || "הביטחון הנוכחי";
+                        var hasData = !!(guaranteeAmt || guaranteeBank || guaranteeEnd || guaranteeActual);
+                        if (hasData) {
+                          var addBoth = confirm(
+                            'כבר הוזן ' + curLabel + '.\n\n' +
+                            'אישור — ' + t.l + ' יתווסף כביטחון נוסף, ו' + curLabel + ' יישמר.\n' +
+                            'ביטול — ' + curLabel + ' יוחלף ב' + t.l + ' (הנתונים שהוזנו יימחקו).'
+                          );
+                          if (addBoth) { setAdditionalGuarantees(prev => prev.concat([emptyExtraGuarantee(t.v)])); return; }
+                        }
+                        setGuaranteeType(t.v);
+                      }}
                       className={"rounded-xl border p-2.5 text-center " + (guaranteeType === t.v ? "border-blue-500 bg-blue-50" : "border-slate-200")}>
                       <div>{t.icon}</div>
                       <div className={"text-xs font-semibold " + (guaranteeType === t.v ? "text-blue-700" : "text-slate-600")}>{t.l}</div>
@@ -2259,7 +2284,7 @@ export default function ContractEditPage() {
                   <div className="text-xs font-bold text-slate-700 mb-2">שיטת חישוב סכום ערבות</div>
                   <div className="flex gap-2">
                     {DEPOSIT_METHODS.map((dm) => (
-                      <button key={dm.v} type="button" onClick={() => setDepositCalcMethod(dm.v as any)}
+                      <button key={dm.v} type="button" onClick={() => { setDepositTouched(true); setDepositCalcMethod(dm.v as any); }}
                         className={"rounded-lg border px-3 py-2 text-xs transition-all " +
                           (depositCalcMethod === dm.v ? "border-blue-500 bg-blue-50 font-bold text-blue-700" : "border-slate-200 hover:bg-slate-50")}>
                         {dm.l}
@@ -2271,11 +2296,11 @@ export default function ContractEditPage() {
                       <div className="grid grid-cols-2 gap-3">
                         <div>
                           <label className="mb-1 block text-xs font-semibold text-slate-700">מספר חודשים</label>
-                          <input type="number" min="1" value={depositMonths} onChange={(e) => setDepositMonths(Number(e.target.value) || 1)} className={ic} />
+                          <input type="number" min="1" value={depositMonths} onChange={(e) => { setDepositTouched(true); setDepositMonths(Number(e.target.value) || 1); }} className={ic} />
                         </div>
                         <div className="flex items-end pb-2">
                           <label className="flex items-center gap-2 text-xs font-semibold text-slate-700">
-                            <input type="checkbox" checked={depositIncludesMgmt} onChange={(e) => setDepositIncludesMgmt(e.target.checked)} className="w-4 h-4" />
+                            <input type="checkbox" checked={depositIncludesMgmt} onChange={(e) => { setDepositTouched(true); setDepositIncludesMgmt(e.target.checked); }} className="w-4 h-4" />
                             כולל דמי ניהול
                           </label>
                         </div>
