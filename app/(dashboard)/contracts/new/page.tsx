@@ -1,5 +1,6 @@
 "use client";
 import { useState, useEffect, Suspense } from "react";
+import { guaranteedMonthlyRent } from "@/lib/guarantee-base";
 import RevenuePctTiersEditor from "@/components/RevenuePctTiersEditor";
 import { RevenuePctTier, pctTiersFromRow, describePctTiers } from "@/lib/revenue-pct-steps";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -315,11 +316,20 @@ export default function ContractsNewPage() {
   const totalRent = baseRent + vat;
   const annualRent = baseRent * 12;
 
+  // A guarantee of "N months' rent" needs the rent it is actually measured
+  // against. On a turnover lease that is the MINIMUM, not the (empty) per-sqm
+  // rent — reading baseRent there left the guarantee holding only the
+  // management fee.
+  const guaranteeMonthlyRent = guaranteedMonthlyRent({
+    rentType, rentPerSqm, area: chargedArea, investmentAddition: investAdd,
+    minimumRent, minRentBasis,
+  });
+
   const calculatedDeposit = calculateDepositAmount({
     depositMethod: depositCalcMethod,
     depositMonths,
     fixedAmount: Number(guaranteeAmt) || 0,
-    monthlyRent: baseRent,
+    monthlyRent: guaranteeMonthlyRent,
     managementFee: mgmtFeeMonthly,
     includesManagement: depositIncludesMgmt,
     vatPct: vatType === "taxable" ? currentVatPct : 0,
@@ -3336,6 +3346,19 @@ export default function ContractsNewPage() {
                           <span className="text-lg font-black text-green-800">
                             {fmtMoney(calculatedDeposit)}
                           </span>
+                        </div>
+                      )}
+                      {/* Spell out the basis — a wrong guarantee is expensive
+                          and the numbers behind it were invisible. */}
+                      {calculatedDeposit > 0 && (
+                        <div className="text-xs text-slate-500 mt-1 leading-relaxed">
+                          {depositMonths} × ({fmtMoney(guaranteeMonthlyRent)}
+                          {rentType === "revenue_pct" ? " שכ\"ד מינימום" : " שכ\"ד"}
+                          {depositIncludesMgmt && Number(mgmtFeePct) > 0 ? " + " + fmtMoney(mgmtFeeMonthly) + " דמי ניהול" : ""})
+                          {vatType === "taxable" ? " × מע\"מ " + currentVatPct + "%" : ""}
+                          {rentType === "revenue_pct" && guaranteeMonthlyRent === 0 && (
+                            <span className="text-red-600 font-semibold"> · לא הוזן שכ&quot;ד מינימום — הערבות מכסה דמי ניהול בלבד</span>
+                          )}
                         </div>
                       )}
                     </>

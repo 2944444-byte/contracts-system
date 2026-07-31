@@ -1,5 +1,6 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
+import { guaranteedMonthlyRent } from "@/lib/guarantee-base";
 import RevenuePctTiersEditor from "@/components/RevenuePctTiersEditor";
 import { RevenuePctTier, pctTiersFromRow } from "@/lib/revenue-pct-steps";
 import { useRouter, useParams } from "next/navigation";
@@ -240,11 +241,21 @@ export default function ContractEditPage() {
   const totalRent = baseRent + vat;
   const annualRent = baseRent * 12;
 
+  // Same basis as the wizard: on a turnover lease the guarantee is measured
+  // against the minimum, since there is no per-sqm rent to measure.
+  // baseRent here already folds in per-unit pricing and the investment
+  // addition, so it is used as-is when it exists; the helper only fills the
+  // turnover case, where baseRent is 0 because there is no per-sqm rent.
+  const guaranteeMonthlyRent = baseRent > 0 ? baseRent : guaranteedMonthlyRent({
+    rentType, rentPerSqm, area: chargedArea, investmentAddition: investAdd,
+    minimumRent, minRentBasis,
+  });
+
   const calculatedDeposit = calculateDepositAmount({
     depositMethod: depositCalcMethod,
     depositMonths,
     fixedAmount: Number(guaranteeAmt) || 0,
-    monthlyRent: baseRent,
+    monthlyRent: guaranteeMonthlyRent,
     managementFee: mgmtFeeMonthly,
     includesManagement: depositIncludesMgmt,
     vatPct: vatType === "taxable" ? currentVatPct : 0,
