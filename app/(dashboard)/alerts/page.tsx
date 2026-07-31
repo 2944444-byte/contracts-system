@@ -146,18 +146,44 @@ export default function AlertsPage() {
     setSelected(function(prev){const n=new Set(prev); n.delete(id); return n;});
   }
   async function bulkClose() {
-    if (!selected.size) return;
-    if (!confirm(`לסגור ${selected.size} התראות?`)) return;
+    // Only the open ones — a closed alert in the selection is already closed.
+    var ids = alerts.filter(function(a){ return selected.has(a.id) && !a.is_resolved; }).map(function(a){ return a.id; });
+    if (!ids.length) return;
+    if (!confirm(`לסגור ${ids.length} התראות?`)) return;
     setWorking("close");
-    for (const id of Array.from(selected)) await supabase.from("alerts").update({is_resolved:true, handled_at: new Date().toISOString()}).eq("id",id);
+    for (const id of ids) await supabase.from("alerts").update({is_resolved:true, handled_at: new Date().toISOString()}).eq("id",id);
     setSelected(new Set()); setWorking("");
     await loadAlerts();
   }
   async function bulkDelete() {
     if (!selected.size) return;
-    if (!confirm(`למחוק ${selected.size} התראות לצמיתות?`)) return;
+    var openIn = alerts.filter(function(a){ return selected.has(a.id) && !a.is_resolved; }).length;
+    var msg = `למחוק ${selected.size} התראות לצמיתות?`;
+    // An open alert will simply be re-created by the next sync if its condition
+    // still holds — worth saying, so a bulk clean-up isn't mistaken for a fix.
+    if (openIn > 0) msg += `\n\nשים לב: ${openIn} מהן פתוחות. אם התנאי שיצר אותן עדיין מתקיים — הן ייווצרו מחדש בסנכרון הבא.`;
+    msg += "\n\nהפעולה אינה הפיכה.";
+    if (!confirm(msg)) return;
     setWorking("delete");
-    await supabase.from("alerts").delete().in("id", Array.from(selected));
+    var delIds = Array.from(selected);
+    for (var di = 0; di < delIds.length; di += 100) {
+      await supabase.from("alerts").delete().in("id", delIds.slice(di, di + 100));
+    }
+    setSelected(new Set()); setWorking("");
+    await loadAlerts();
+  }
+
+  // Delete every CLOSED alert currently on screen. Scoped to the filter, so
+  // "ביטוחים + סגורות" clears only that — and never touches an open alert.
+  async function clearClosed() {
+    var ids = filtered.filter(function(a){ return a.is_resolved; }).map(function(a){ return a.id; });
+    if (!ids.length) return;
+    if (!confirm(`למחוק לצמיתות ${ids.length} התראות סגורות?\n\nרק התראות סגורות יימחקו. הפעולה אינה הפיכה.`)) return;
+    setWorking("clear");
+    // Chunked: a very long id list can exceed the request URL limit.
+    for (var i = 0; i < ids.length; i += 100) {
+      await supabase.from("alerts").delete().in("id", ids.slice(i, i + 100));
+    }
     setSelected(new Set()); setWorking("");
     await loadAlerts();
   }
@@ -311,6 +337,10 @@ export default function AlertsPage() {
     return stOk && sevOk && catOk;
   });
 
+  // How much of the selection is still open — closing and lettering apply only
+  // to those, deletion applies to everything selected.
+  const selectedOpenCount = alerts.filter(function(a){ return selected.has(a.id) && !a.is_resolved; }).length;
+
   const open = alerts.filter(function(a){return !a.is_resolved;});
   const urgentOpen  = open.filter(function(a){return sevOf(a) === SEV_MAP.urgent;}).length;
   const warningOpen = open.filter(function(a){return sevOf(a) === SEV_MAP.warning;}).length;
@@ -328,14 +358,18 @@ export default function AlertsPage() {
         </>}
         actions={selected.size>0 ? (
           <div className="flex items-center gap-2 flex-wrap">
-            <button onClick={createLettersFromSelected} disabled={!!working} className="rounded-xl bg-white text-amber-700 px-3 py-2 text-sm font-bold hover:bg-amber-50 shadow-sm disabled:opacity-50">
-              {working==="letters" ? "⏳ יוצר..." : "📄 צור מכתבים (" + selected.size + ")"}
-            </button>
-            <button onClick={bulkClose} disabled={!!working} className="rounded-xl bg-white/15 backdrop-blur border border-white/25 px-3 py-2 text-sm font-semibold text-white hover:bg-white/25 disabled:opacity-50">
-              ✓ סגור {selected.size}
-            </button>
+            {selectedOpenCount>0 && (
+              <button onClick={createLettersFromSelected} disabled={!!working} className="rounded-xl bg-white text-amber-700 px-3 py-2 text-sm font-bold hover:bg-amber-50 shadow-sm disabled:opacity-50">
+                {working==="letters" ? "⏳ יוצר..." : "📄 צור מכתבים (" + selectedOpenCount + ")"}
+              </button>
+            )}
+            {selectedOpenCount>0 && (
+              <button onClick={bulkClose} disabled={!!working} className="rounded-xl bg-white/15 backdrop-blur border border-white/25 px-3 py-2 text-sm font-semibold text-white hover:bg-white/25 disabled:opacity-50">
+                ✓ סגור {selectedOpenCount}
+              </button>
+            )}
             <button onClick={bulkDelete} disabled={!!working} className="rounded-xl bg-white/15 backdrop-blur border border-white/25 px-3 py-2 text-sm font-semibold text-white hover:bg-white/25 disabled:opacity-50">
-              🗑 מחק {selected.size}
+              🗑 מחק {selected.size}{selectedOpenCount>0 ? " (מתוכן " + selectedOpenCount + " פתוחות)" : ""}
             </button>
           </div>
         ) : (unreadOpen > 0 ? (
@@ -397,12 +431,20 @@ export default function AlertsPage() {
           </button>
         );})}
         <div className="flex-1"/>
-        {filtered.some(function(a){return !a.is_resolved;})&&(
+        {filtered.length>0&&(
           <label className="flex items-center gap-1.5 text-xs text-slate-500 cursor-pointer">
-            <input type="checkbox" checked={filtered.filter(function(a){return !a.is_resolved;}).every(function(a){return selected.has(a.id);}) && filtered.some(function(a){return !a.is_resolved;})}
-              onChange={function(e){setSelected(e.target.checked?new Set(filtered.filter(function(a){return !a.is_resolved;}).map(function(a){return a.id;})):new Set());}} className="w-3.5 h-3.5"/>
-            בחר הכל
+            <input type="checkbox" checked={filtered.length>0 && filtered.every(function(a){return selected.has(a.id);})}
+              onChange={function(e){setSelected(e.target.checked?new Set(filtered.map(function(a){return a.id;})):new Set());}} className="w-3.5 h-3.5"/>
+            בחר הכל ({filtered.length})
           </label>
+        )}
+        {/* Clearing the history is the common case — one click, no ticking. */}
+        {filterSt==="closed" && filtered.length>0 && (
+          <button onClick={clearClosed} disabled={!!working}
+            className="rounded-xl border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-100 disabled:opacity-50"
+            title="מוחק לצמיתות את כל ההתראות הסגורות המוצגות (לפי הסינון הנוכחי)">
+            {working==="clear" ? "⏳ מוחק..." : "🗑 נקה היסטוריה (" + filtered.length + ")"}
+          </button>
         )}
       </div>
 
@@ -424,7 +466,7 @@ export default function AlertsPage() {
             const tenant = a.contracts?.tenants?.name || "";
             return (
               <div key={a.id} className={"rounded-xl border p-4 flex items-start gap-3 transition-all "+(isOpen?si.bg+" "+si.border:"bg-white border-slate-200 opacity-60")+(isSel?" ring-2 ring-blue-400":"")+(isUnread?" shadow-md":"")}>
-                {isOpen&&<input type="checkbox" checked={isSel} onChange={function(){toggleSel(a.id);}} className="mt-1 w-4 h-4 shrink-0"/>}
+                <input type="checkbox" checked={isSel} onChange={function(){toggleSel(a.id);}} className="mt-1 w-4 h-4 shrink-0"/>
                 <span className="text-xl shrink-0" title={cat.label}>{cat.icon}</span>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-start gap-2 mb-0.5 flex-wrap">
