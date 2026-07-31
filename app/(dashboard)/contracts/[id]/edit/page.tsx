@@ -426,7 +426,6 @@ export default function ContractEditPage() {
       setMinRentBasis("monthly"); setMinimumRent(String(c.minimum_rent));
     }
     setRevenuePctTiers(pctTiersFromRow(c));
-    setMinimumRent(c.minimum_rent?.toString() ?? "");
     setRevenueReportDay(c.revenue_report_day?.toString() ?? "5");
     setMgmtIncludedInRevenue(c.mgmt_included_in_revenue ?? false);
     setRentPerSqm((effectiveRent || c.rent_per_sqm)?.toString() ?? "");

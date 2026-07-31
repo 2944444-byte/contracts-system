@@ -404,6 +404,17 @@ export default function ContractsNewPage() {
       setInvestAdd(c.investment_addition ? String(c.investment_addition) : "");
       setVatType(c.vat_type || "taxable");
       setPaymentFreq(c.payment_frequency || "monthly");
+      // A turnover amendment inherits the parent's terms: type, percentage,
+      // its steps and the minimum on the basis it was written in. Without this
+      // the amendment came up as a blank fixed-rent contract.
+      setRentType(c.rent_type === "revenue_pct" ? "revenue_pct" : "fixed");
+      setRevenuePct(c.revenue_pct != null ? String(c.revenue_pct) : "");
+      setRevenuePctTiers(pctTiersFromRow(c));
+      if (c.min_rent_per_sqm != null && Number(c.min_rent_per_sqm) > 0) {
+        setMinRentBasis("per_sqm"); setMinimumRent(String(c.min_rent_per_sqm));
+      } else if (Number(c.minimum_rent) > 0) {
+        setMinRentBasis("monthly"); setMinimumRent(String(c.minimum_rent));
+      }
       setRevMinAdvance(!!c.revenue_minimum_advance);
       setRevProtection(revenueProtectionFromRow(c));
       setRevCategories(revenueCategoriesFromRow(c));
