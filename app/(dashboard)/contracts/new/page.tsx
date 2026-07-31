@@ -3672,17 +3672,27 @@ export default function ContractsNewPage() {
               }
 
               // Unified mode: single timeline
+              // On a turnover lease the schedule is the MINIMUM — with a base of
+              // 0 the summary showed "—" for the opening period and the raw
+              // increase (+10) instead of the resulting price (75).
+              const tlBase = rentType === "revenue_pct" && minRentBasis === "per_sqm"
+                ? (Number(minimumRent) || 0) : (Number(rentPerSqm) || 0);
               const timeline = buildPriceTimeline({
                 contractStart: startDate,
                 contractEnd: endDate,
-                baseRentPerSqm: Number(rentPerSqm) || 0,
+                baseRentPerSqm: tlBase,
                 mainTiers: priceTiers,
                 options: extensionOptions,
               });
               if (timeline.length === 0) return null;
               return (
                 <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                  <div className="text-sm font-bold text-slate-800 mb-3 flex items-center gap-2">📊 ציר זמן מחירים</div>
+                  <div className="text-sm font-bold text-slate-800 mb-3 flex items-center gap-2">📊 {rentType === "revenue_pct" ? 'ציר זמן שכ"ד מינימום' : "ציר זמן מחירים"}</div>
+                  {rentType === "revenue_pct" && (
+                    <div className="text-[11px] text-slate-500 mb-2 leading-relaxed">
+                      הסכומים הם ה<b>מינימום</b> למ&quot;ר לחודש. שכ&quot;ד בפועל = הגבוה מבין {revenuePct || 0}% מהפדיון לבין המינימום.
+                    </div>
+                  )}
                   <div className="space-y-1">
                     {timeline.map((entry, i) => {
                       const isOption = entry.source.startsWith("option");

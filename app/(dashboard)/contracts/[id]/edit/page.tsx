@@ -2378,8 +2378,18 @@ export default function ContractEditPage() {
                 { l: "תחילה", v: startDate },
                 { l: "תקופה", v: `${leasePeriodValue} ${leasePeriodUnit === "months" ? "חודשים" : "שנים"}` },
                 { l: "סיום (מחושב)", v: endDate ? new Date(endDate).toLocaleDateString("he-IL") : "" },
-                { l: 'שכ"ד לחודש', v: fmtMoney(totalRent) },
-                { l: "שנתי", v: fmtMoney(annualRent) },
+                // A turnover lease has no fixed monthly rent — state the terms
+                // instead of printing ₪0.00, which read as "collects nothing".
+                { l: 'שכ"ד לחודש', v: rentType === "revenue_pct"
+                    ? `${revenuePct || 0}% מהפדיון` + (Number(minimumRent) > 0
+                        ? ` · מינימום ${fmtMoney(Number(minimumRent))}${minRentBasis === "per_sqm" ? '/מ"ר' : ""}`
+                        : " · ללא מינימום")
+                    : fmtMoney(totalRent) },
+                { l: "שנתי", v: rentType === "revenue_pct"
+                    ? (Number(minimumRent) > 0 && minRentBasis === "per_sqm" && Number(chargedArea) > 0
+                        ? `מינימום ${fmtMoney(Number(minimumRent) * Number(chargedArea) * 12)}`
+                        : Number(minimumRent) > 0 ? `מינימום ${fmtMoney(Number(minimumRent) * 12)}` : "לפי פדיון")
+                    : fmtMoney(annualRent) },
                 { l: "תדירות", v: PAYMENT_FREQS.find((p) => p.v === paymentFreq)?.l },
                 { l: "הצמדה", v: INDEX_METHODS.find((m) => m.v === indexMethod)?.l },
                 { l: 'מע"מ', v: vatType === "taxable" ? `${currentVatPct}%` : "פטור" },
@@ -2430,17 +2440,27 @@ export default function ContractEditPage() {
                 );
               }
               // Unified price timeline
+              // On a turnover lease the schedule is the MINIMUM — with a base of
+              // 0 the summary showed "—" for the opening period and the raw
+              // increase (+10) instead of the resulting price (75).
+              const tlBase = rentType === "revenue_pct" && minRentBasis === "per_sqm"
+                ? (Number(minimumRent) || 0) : (Number(rentPerSqm) || 0);
               const timeline = buildPriceTimeline({
                 contractStart: startDate,
                 contractEnd: endDate,
-                baseRentPerSqm: Number(rentPerSqm) || 0,
+                baseRentPerSqm: tlBase,
                 mainTiers: priceTiers,
                 options: extensionOptions,
               });
               if (timeline.length === 0) return null;
               return (
                 <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                  <div className="text-sm font-bold text-slate-800 mb-3">📊 ציר זמן מחירים</div>
+                  <div className="text-sm font-bold text-slate-800 mb-3">📊 {rentType === "revenue_pct" ? 'ציר זמן שכ"ד מינימום' : "ציר זמן מחירים"}</div>
+                  {rentType === "revenue_pct" && (
+                    <div className="text-[11px] text-slate-500 mb-2 leading-relaxed">
+                      הסכומים הם ה<b>מינימום</b> למ&quot;ר לחודש. שכ&quot;ד בפועל = הגבוה מבין {revenuePct || 0}% מהפדיון לבין המינימום.
+                    </div>
+                  )}
                   <div className="space-y-1">
                     {timeline.map((entry, i) => {
                       const isOption = entry.source.startsWith("option");
