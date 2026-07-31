@@ -341,17 +341,81 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
     setProgress({ current: 0, total: 0, label: "מחשב התחשבנות דמי ניהול...", startedAt: Date.now() });
     try {
       // Load active BASE contracts only. Amendments share a tenant name with
-      // the base, so including them would duplicate tenants in the table
-      // (e.g. Joubaril Aesthetics appearing three times). The base contract's
-      // contract_spaces still describes the current set of units used.
+      // the base, so including them as separate rows would duplicate tenants in
+      // the table. They are loaded separately below as SNAPSHOTS of the unit
+      // set: a tenant who swapped units mid-year held the old unit until the
+      // amendment date and the new one from then on, and the reconciliation has
+      // to follow that — the areas differ, so the share differs.
       // Also pulls revenue_pct / rent_type so revenue-% tenants can be flagged
       // (their mgmt is paid as part of the % rent — no separate charge).
       const { data: contracts } = await supabase
         .from("contracts")
-        .select("id, charged_area, rent_per_sqm, rent_type, revenue_pct, mgmt_included_in_revenue, is_amendment, start_date, indexation_method, index_base_date, mgmt_protection_type, mgmt_protection_value, mgmt_protection_months, mgmt_protection_indexed, mgmt_protection_notes, tenants(name), contract_spaces(space_id, spaces(id, space_name, area))")
+        .select("id, charged_area, rent_per_sqm, rent_type, revenue_pct, mgmt_included_in_revenue, is_amendment, start_date, end_date, indexation_method, index_base_date, mgmt_protection_type, mgmt_protection_value, mgmt_protection_months, mgmt_protection_indexed, mgmt_protection_notes, tenants(name), contract_spaces(space_id, spaces(id, space_name, area))")
         .eq("property_id", propId)
         .eq("is_amendment", false)
         .in("status", ["active", "expiring", "extended"]);
+
+      // Amendments = the unit-set snapshots, each effective from its date.
+      const mgmtBaseIds = (contracts ?? []).map(function (c: any) { return c.id; });
+      const amendsByParent: Record<string, any[]> = {};
+      if (mgmtBaseIds.length > 0) {
+        const { data: amends } = await supabase
+          .from("contracts")
+          .select("id, parent_contract_id, amendment_date, start_date, charged_area, contract_spaces(space_id, spaces(id, space_name, area))")
+          .in("parent_contract_id", mgmtBaseIds)
+          .eq("is_amendment", true)
+          .order("amendment_date", { ascending: true });
+        (amends ?? []).forEach(function (am: any) {
+          const pid = am.parent_contract_id;
+          if (!amendsByParent[pid]) amendsByParent[pid] = [];
+          amendsByParent[pid].push(am);
+        });
+      }
+
+      // The settlement year, in days. Everything below is weighted by the days
+      // a unit was actually held inside it — a unit swap, a mid-year move-in and
+      // a mid-year departure are all the same arithmetic.
+      const yearStartT = new Date(year, 0, 1).getTime();
+      const yearEndExclT = new Date(year + 1, 0, 1).getTime();
+      const yearDays = Math.round((yearEndExclT - yearStartT) / 86400000);
+      const daysInYear = function (startT: number, endExclT: number): number {
+        const s = Math.max(startT, yearStartT);
+        const e = Math.min(endExclT, yearEndExclT);
+        return Math.max(0, Math.round((e - s) / 86400000));
+      };
+      // space_id → days held during the year, per base contract.
+      const heldDaysFor = function (c: any): Record<string, { days: number; area: number; name: string }> {
+        const ams = (amendsByParent[c.id] || []).slice().sort(function (x: any, y: any) {
+          const dx = new Date(x.amendment_date || x.start_date || 0).getTime();
+          const dy = new Date(y.amendment_date || y.start_date || 0).getTime();
+          return dx - dy;
+        });
+        const startT = c.start_date ? new Date(c.start_date).getTime() : yearStartT;
+        const endExclT = c.end_date ? new Date(c.end_date).getTime() + 86400000 : yearEndExclT;
+        const points: Array<{ t: number; spaces: any[] }> = [{ t: startT, spaces: c.contract_spaces || [] }];
+        ams.forEach(function (a: any) {
+          points.push({
+            t: new Date(a.amendment_date || a.start_date || startT).getTime(),
+            spaces: (a.contract_spaces && a.contract_spaces.length > 0) ? a.contract_spaces : [],
+          });
+        });
+        const held: Record<string, { days: number; area: number; name: string }> = {};
+        for (var i = 0; i < points.length; i++) {
+          const segEnd = i < points.length - 1 ? points[i + 1].t : endExclT;
+          const d = daysInYear(points[i].t, segEnd);
+          if (d <= 0) continue;
+          // An amendment that changes terms without listing units keeps the
+          // previous unit set rather than emptying it.
+          var segSpaces = points[i].spaces;
+          if ((!segSpaces || segSpaces.length === 0) && i > 0) segSpaces = points[i - 1].spaces;
+          (segSpaces || []).forEach(function (cs: any) {
+            if (!cs.space_id) return;
+            if (!held[cs.space_id]) held[cs.space_id] = { days: 0, area: Number(cs.spaces?.area) || 0, name: cs.spaces?.space_name || "" };
+            held[cs.space_id].days += d;
+          });
+        }
+        return held;
+      };
 
       // Load property budget (default rate fallback)
       const { data: budget } = await supabase
@@ -419,21 +483,33 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
         let contractArea = 0;
         const spaceNamesList: string[] = [];
 
-        for (const cs of (c.contract_spaces ?? [])) {
-          const spArea = Number(cs.spaces?.area) || 0;
-          contractArea += spArea;
-          if (cs.spaces?.space_name) spaceNamesList.push(cs.spaces.space_name);
-          const info = spaceGroupMap.get(cs.space_id);
+        // Weighted by days held: a unit swapped mid-year contributes only the
+        // days it was actually held, so the old and the new unit each carry
+        // their own share instead of the old one carrying the whole year.
+        const held = heldDaysFor(c);
+        var sqmDays = 0;
+        var heldAny = false;
+        Object.keys(held).forEach(function (sid) {
+          const h = held[sid];
+          if (h.days <= 0 || yearDays <= 0) return;
+          heldAny = true;
+          const w = h.days / yearDays;          // 1 = held the whole year
+          sqmDays += h.area * h.days;
+          if (h.name && spaceNamesList.indexOf(h.name) === -1) spaceNamesList.push(h.name);
+          const info = spaceGroupMap.get(sid);
           if (info) {
-            advance += info.rate * spArea * 12;
-            actualShare += info.groupTotalArea > 0 ? info.groupActualCost * (spArea / info.groupTotalArea) : 0;
+            advance += info.rate * h.area * 12 * w;
+            actualShare += info.groupTotalArea > 0 ? info.groupActualCost * (h.area / info.groupTotalArea) * w : 0;
           } else {
-            advance += defaultRate * spArea * 12;
-            actualShare += defaultSpaceArea > 0 ? defaultActual * (spArea / defaultSpaceArea) : 0;
+            advance += defaultRate * h.area * 12 * w;
+            actualShare += defaultSpaceArea > 0 ? defaultActual * (h.area / defaultSpaceArea) * w : 0;
           }
-        }
+        });
+        // The area the year is billed on: the time-weighted average, so the
+        // protection ceiling scales with the same yardstick as the advance.
+        contractArea = yearDays > 0 ? Math.round((sqmDays / yearDays) * 100) / 100 : 0;
 
-        if (contractArea === 0) contractArea = c.charged_area ?? 0;
+        if (!heldAny || contractArea === 0) contractArea = Number(c.charged_area) || 0;
 
         // Revenue-pct tenants pay management as part of their % rent — they
         // see the reconciliation diff but shouldn't be billed/lettered for it
