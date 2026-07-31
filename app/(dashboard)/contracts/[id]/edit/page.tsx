@@ -1,5 +1,7 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
+import RevenuePctTiersEditor from "@/components/RevenuePctTiersEditor";
+import { RevenuePctTier, pctTiersFromRow } from "@/lib/revenue-pct-steps";
 import { useRouter, useParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { getScopeIds, getCompanyScopeIds, getTenantScopeIds, scopeRows, scopeGroups } from '@/lib/permissions';
@@ -147,6 +149,8 @@ export default function ContractEditPage() {
   const [rentType, setRentType] = useState<"fixed" | "revenue_pct">("fixed");
   const [revenuePct, setRevenuePct] = useState("");
   const [minimumRent, setMinimumRent] = useState("");
+  const [minRentBasis, setMinRentBasis] = useState<"per_sqm"|"monthly">("per_sqm");
+  const [revenuePctTiers, setRevenuePctTiers] = useState<RevenuePctTier[]>([]);
   const [revenueReportDay, setRevenueReportDay] = useState("5");
   const [mgmtIncludedInRevenue, setMgmtIncludedInRevenue] = useState(false);
   const [rentPerSqm, setRentPerSqm] = useState("");
@@ -395,6 +399,14 @@ export default function ContractEditPage() {
     }
     setRentType(c.rent_type === "revenue_pct" ? "revenue_pct" : "fixed");
     setRevenuePct(c.revenue_pct?.toString() ?? "");
+    // Whichever column holds the floor decides how the field is shown, so a
+    // contract keeps the basis it was signed with.
+    if (c.min_rent_per_sqm != null && Number(c.min_rent_per_sqm) > 0) {
+      setMinRentBasis("per_sqm"); setMinimumRent(String(c.min_rent_per_sqm));
+    } else if (Number(c.minimum_rent) > 0) {
+      setMinRentBasis("monthly"); setMinimumRent(String(c.minimum_rent));
+    }
+    setRevenuePctTiers(pctTiersFromRow(c));
     setMinimumRent(c.minimum_rent?.toString() ?? "");
     setRevenueReportDay(c.revenue_report_day?.toString() ?? "5");
     setMgmtIncludedInRevenue(c.mgmt_included_in_revenue ?? false);
@@ -697,7 +709,9 @@ export default function ContractEditPage() {
         rent_type: rentType,
         rent_per_sqm: Number(rentPerSqm) || null,
         revenue_pct: rentType === "revenue_pct" ? Number(revenuePct) || null : null,
-        minimum_rent: rentType === "revenue_pct" ? Number(minimumRent) || 0 : null,
+        minimum_rent: rentType === "revenue_pct" && minRentBasis === "monthly" ? Number(minimumRent) || 0 : null,
+        min_rent_per_sqm: rentType === "revenue_pct" && minRentBasis === "per_sqm" ? Number(minimumRent) || 0 : null,
+        revenue_pct_tiers: rentType === "revenue_pct" && revenuePctTiers.length > 0 ? revenuePctTiers : null,
         revenue_report_day: rentType === "revenue_pct" ? Number(revenueReportDay) || 5 : null,
         mgmt_included_in_revenue: mgmtIncludedInRevenue,
         charged_area: Number(chargedArea) || null,
@@ -1202,8 +1216,19 @@ export default function ContractEditPage() {
                     <input type="number" value={revenuePct} onChange={(e) => setRevenuePct(e.target.value)} className={ic} placeholder="12" />
                   </div>
                   <div>
-                    <label className="mb-1 block text-xs font-semibold text-slate-700">דמי שכירות מינימום (₪/חודש)</label>
-                    <input type="number" value={minimumRent} onChange={(e) => setMinimumRent(e.target.value)} className={ic} placeholder="0" />
+                    <label className="mb-1 block text-xs font-semibold text-slate-700">
+                      שכ&quot;ד מינימום {minRentBasis === "per_sqm" ? '(₪ למ"ר לחודש)' : "(₪ לחודש)"}
+                    </label>
+                    <div className="flex gap-1 mb-1">
+                      <button type="button" onClick={() => setMinRentBasis("per_sqm")}
+                        className={"rounded border px-2 py-1 text-xs " + (minRentBasis === "per_sqm" ? "border-purple-500 bg-purple-50 font-bold text-purple-700" : "border-slate-200 text-slate-500")}>📐 למ&quot;ר</button>
+                      <button type="button" onClick={() => setMinRentBasis("monthly")}
+                        className={"rounded border px-2 py-1 text-xs " + (minRentBasis === "monthly" ? "border-purple-500 bg-purple-50 font-bold text-purple-700" : "border-slate-200 text-slate-500")}>💰 סכום לחודש</button>
+                    </div>
+                    <input type="number" step="0.01" value={minimumRent} onChange={(e) => setMinimumRent(e.target.value)} className={ic} placeholder="0" />
+                    <div className="text-[11px] text-purple-500 mt-0.5">
+                      רק מינימום למ&quot;ר עולה עם מדרגות שכ&quot;ד
+                    </div>
                   </div>
                   <div>
                     <label className="mb-1 block text-xs font-semibold text-slate-700">יום דיווח מחזור</label>
@@ -1215,6 +1240,7 @@ export default function ContractEditPage() {
                     <label htmlFor="mgmtInRev" className="text-xs text-slate-700">דמי ניהול כלולים באחוז מהמחזור</label>
                   </div>
                 </div>
+                <RevenuePctTiersEditor basePct={Number(revenuePct) || 0} tiers={revenuePctTiers} onChange={setRevenuePctTiers} />
               </div>
             )}
 

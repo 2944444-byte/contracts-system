@@ -1,5 +1,6 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
+import { revenuePctAtDate, pctTiersFromRow, describePctTiers } from "@/lib/revenue-pct-steps";
 import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit-log';
 import { getVatRates, vatPctAt, type VatRate } from '@/lib/vat';
@@ -383,7 +384,7 @@ export default function RevenuePage() {
     var yearStart = selYear + "-01-01";
     var yearEnd   = (selYear + 1) + "-01-01"; // exclusive — avoids the Feb-31 bug entirely
     const [{ data: c }, { data: r }] = await Promise.all([
-      supabase.from("contracts").select("id,property_id,status,rent_type,revenue_pct,min_rent_per_sqm,charged_area,rent_per_sqm,investment_addition,vat_type,mgmt_fee_per_sqm,mgmt_included_in_revenue,start_date,indexation_method,index_base_date,index_base_value,revenue_categories,revenue_minimum_advance,minimum_rent,revenue_protection_type,revenue_protection_months,revenue_protection_notes,contract_options(id,start_date,status,is_exercised,cancels_revenue_protection),tenants(name),properties(name)").in("status",["active","expiring","extended"]),
+      supabase.from("contracts").select("id,property_id,status,rent_type,revenue_pct,revenue_pct_tiers,min_rent_per_sqm,charged_area,rent_per_sqm,investment_addition,vat_type,mgmt_fee_per_sqm,mgmt_included_in_revenue,start_date,indexation_method,index_base_date,index_base_value,revenue_categories,revenue_minimum_advance,minimum_rent,revenue_protection_type,revenue_protection_months,revenue_protection_notes,contract_options(id,start_date,status,is_exercised,cancels_revenue_protection),tenants(name),properties(name)").in("status",["active","expiring","extended"]),
       supabase.from("revenue_reports").select("*,contracts(property_id,tenants(name),properties(name))").gte("report_month",yearStart).lt("report_month",yearEnd).order("report_month",{ascending:true}),
     ]);
     var scope = await getScopeIds();
@@ -412,7 +413,15 @@ export default function RevenuePage() {
   function calcRent(contractId: string, grossRevenue: number, manualMgmt?: number, periodDate?: string, byCategory?: Record<string, any> | null) {
     const c = contracts.find(function(x){return x.id===contractId;});
     if (!c) return null;
-    const pct = c.revenue_pct ?? 0;
+    // The percentage can step up over the years ("3.5% until year 3, 4% after"),
+    // so it is resolved for the month being reported — not read off the contract
+    // header. With no steps this returns the single agreed percentage.
+    const pct = revenuePctAtDate({
+      basePct: Number(c.revenue_pct) || 0,
+      tiers: pctTiersFromRow(c),
+      contractStart: c.start_date || periodDate || new Date(),
+      date: periodDate || new Date(),
+    });
     // Effective area for the reported month — walk the base+amendment area
     // timeline so a mid-contract store/size change (e.g. golf 365→110) uses the
     // RIGHT sqm, matching the table. Falls back to the contract's charged_area.
@@ -458,7 +467,11 @@ export default function RevenuePage() {
       investmentAddition: Number(c.investment_addition) || 0,
       cpiRatio: periodDate ? minCpiByMonth[String(periodDate).slice(0, 8) + "01"] : null,
     });
-    const minRent       = minCalc.amount;
+    // Contracts whose minimum was entered as a monthly SUM (min_rent_per_sqm
+    // empty) still have a floor — take the larger of the two readings so
+    // neither way of entering it is silently ignored.
+    const minMonthly    = Number(c.minimum_rent) || 0;
+    const minRent       = Math.max(minCalc.amount, minMonthly);
     const finalRent     = Math.max(rentFromRev, minRent);
     const vat           = c.vat_type==="taxable" ? finalRent*vatPctAt(vatRates, periodDate || new Date()) : 0;
     return {
@@ -809,6 +822,17 @@ export default function RevenuePage() {
             </span>
           )}
           <span><span className="text-slate-500">% פידיון:</span> <span className="font-semibold">{pctLabel}%</span></span>
+          {(function() {
+            // The percentage may step up over the years — show the schedule, so
+            // the figure above isn't mistaken for the rate in force today.
+            var pt = pctTiersFromRow(selContract);
+            if (pt.length === 0) return null;
+            return (
+              <span className="rounded-md bg-purple-100 text-purple-900 px-2 py-0.5 font-semibold" title="האחוז משתנה לאורך השנים; החישוב לכל חודש נעשה לפי האחוז שבתוקף באותה שנת חוזה">
+                📈 {describePctTiers(Number(selContract.revenue_pct) || 0, pt)}
+              </span>
+            );
+          })()}
           {(function() {
             var cats = revenueCategoriesFromRow(selContract);
             if (!hasCategories(cats)) return null;

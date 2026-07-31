@@ -1,5 +1,7 @@
 "use client";
 import { useState, useEffect, Suspense } from "react";
+import RevenuePctTiersEditor from "@/components/RevenuePctTiersEditor";
+import { RevenuePctTier, pctTiersFromRow, describePctTiers } from "@/lib/revenue-pct-steps";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { authHeaders } from '@/lib/api-auth-client';
@@ -163,6 +165,12 @@ export default function ContractsNewPage() {
   const [rentType, setRentType] = useState<"fixed" | "revenue_pct">("fixed");
   const [revenuePct, setRevenuePct] = useState("");
   const [minimumRent, setMinimumRent] = useState("0");
+  // How the minimum is expressed. Leases usually state it per sqm, and only the
+  // per-sqm figure feeds the revenue screen's floor (min_rent_per_sqm) — the
+  // wizard used to write the monthly column only, so a minimum entered here
+  // never reached the calculation.
+  const [minRentBasis, setMinRentBasis] = useState<"per_sqm"|"monthly">("per_sqm");
+  const [revenuePctTiers, setRevenuePctTiers] = useState<RevenuePctTier[]>([]);
   const [revenueReportDay, setRevenueReportDay] = useState("5");
   const [mgmtIncludedInRevenue, setMgmtIncludedInRevenue] = useState(false);
   const [rentPerSqm, setRentPerSqm] = useState("");
@@ -334,7 +342,7 @@ export default function ContractsNewPage() {
     if (!amendmentOfId) return;
     async function loadParent() {
       var { data: c } = await supabase.from("contracts")
-        .select("*, tenants(name), properties(name), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area)), contract_options(id,option_number,duration_months,duration_years,notice_type,notice_days_before_end,rent_mechanism,rent_increase_pct,new_rent_value,option_group,exit_points,price_schedule_type,price_tiers,non_exercise_penalty_type,non_exercise_penalty_value,non_exercise_penalty_basis,non_exercise_penalty_months,non_exercise_penalty_indexed,non_exercise_penalty_vat,non_exercise_penalty_days,non_exercise_penalty_notes), guarantees(id,guarantee_type,amount_required,amount_actual,bank,reference_number,end_date,document_url,notes,guarantors)")
+        .select("*, tenants(name), properties(name), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area)), contract_options(id,option_number,duration_months,duration_years,notice_type,notice_days_before_end,rent_mechanism,revenue_pct_tiers,rent_increase_pct,new_rent_value,option_group,exit_points,price_schedule_type,price_tiers,non_exercise_penalty_type,non_exercise_penalty_value,non_exercise_penalty_basis,non_exercise_penalty_months,non_exercise_penalty_indexed,non_exercise_penalty_vat,non_exercise_penalty_days,non_exercise_penalty_notes), guarantees(id,guarantee_type,amount_required,amount_actual,bank,reference_number,end_date,document_url,notes,guarantors)")
         .eq("id", amendmentOfId).single();
       if (!c) return;
       setAmendmentParent(c);
@@ -429,6 +437,7 @@ export default function ContractsNewPage() {
             notice_type: o.notice_type || "exercise",
             notice_days_before_end: o.notice_days_before_end || 90,
             rent_mechanism: o.rent_mechanism || "no_change",
+            revenue_pct_tiers: Array.isArray(o.revenue_pct_tiers) ? o.revenue_pct_tiers : [],
             rent_increase_pct: o.rent_increase_pct || 0,
             new_rent_value: o.new_rent_value || 0,
             auto_extend: false,
@@ -858,7 +867,11 @@ export default function ContractsNewPage() {
         rent_type: rentType,
         rent_per_sqm: Number(rentPerSqm) || null,
         revenue_pct: rentType === "revenue_pct" ? Number(revenuePct) || null : null,
-        minimum_rent: rentType === "revenue_pct" ? Number(minimumRent) || 0 : null,
+        minimum_rent: rentType === "revenue_pct" && minRentBasis === "monthly" ? Number(minimumRent) || 0 : null,
+        // The per-sqm floor is what the revenue screen reads; it also rises with
+        // the rent steps, so this is the field that makes "המינימום עולה משנה 4" work.
+        min_rent_per_sqm: rentType === "revenue_pct" && minRentBasis === "per_sqm" ? Number(minimumRent) || 0 : null,
+        revenue_pct_tiers: rentType === "revenue_pct" && revenuePctTiers.length > 0 ? revenuePctTiers : null,
         revenue_report_day: rentType === "revenue_pct" ? Number(revenueReportDay) || 5 : null,
         revenue_minimum_advance: rentType === "revenue_pct" ? revMinAdvance : false,
         ...(rentType === "revenue_pct" ? revenueProtectionToRow(revProtection) : revenueProtectionToRow(null)),
@@ -997,6 +1010,7 @@ export default function ContractsNewPage() {
           notice_type: opt.notice_type,
           notice_days_before_end: opt.notice_days_before_end,
           rent_mechanism: opt.rent_mechanism,
+          revenue_pct_tiers: (opt.revenue_pct_tiers && opt.revenue_pct_tiers.length > 0) ? opt.revenue_pct_tiers : null,
           new_rent_value: opt.new_rent_value,
           rent_increase_pct: opt.rent_increase_pct,
           auto_extend: opt.auto_renewal,
@@ -1545,10 +1559,27 @@ export default function ContractsNewPage() {
                       placeholder="12" className={ic} />
                   </div>
                   <div>
-                    <label className="mb-1 block text-xs font-semibold text-purple-700">דמי שכירות מינימום (₪/חודש)</label>
-                    <input type="number" value={minimumRent} onChange={(e) => setMinimumRent(e.target.value)}
+                    <label className="mb-1 block text-xs font-semibold text-purple-700">
+                      שכ&quot;ד מינימום {minRentBasis === "per_sqm" ? '(₪ למ"ר לחודש)' : "(₪ לחודש)"}
+                    </label>
+                    <div className="flex gap-1 mb-1">
+                      <button type="button" onClick={() => setMinRentBasis("per_sqm")}
+                        className={"rounded border px-2 py-1 text-xs " + (minRentBasis === "per_sqm" ? "border-purple-500 bg-purple-50 font-bold text-purple-700" : "border-slate-200 text-slate-500")}>
+                        📐 למ&quot;ר
+                      </button>
+                      <button type="button" onClick={() => setMinRentBasis("monthly")}
+                        className={"rounded border px-2 py-1 text-xs " + (minRentBasis === "monthly" ? "border-purple-500 bg-purple-50 font-bold text-purple-700" : "border-slate-200 text-slate-500")}>
+                        💰 סכום לחודש
+                      </button>
+                    </div>
+                    <input type="number" step="0.01" value={minimumRent} onChange={(e) => setMinimumRent(e.target.value)}
                       placeholder="0 = ללא מינימום" className={ic} />
-                    <div className="text-xs text-purple-500 mt-0.5">0 = ללא מינימום, רק אחוז ממחזור</div>
+                    <div className="text-xs text-purple-500 mt-0.5">
+                      0 = ללא מינימום, רק אחוז ממחזור
+                      {minRentBasis === "per_sqm" && Number(minimumRent) > 0 && Number(chargedArea) > 0 && (
+                        <span> · {fmtMoney(Number(minimumRent) * Number(chargedArea))}/חודש ל-{chargedArea} מ&quot;ר</span>
+                      )}
+                    </div>
                   </div>
                   <div>
                     <label className="mb-1 block text-xs font-semibold text-purple-700">יום הגשת דו&quot;ח פדיון</label>
@@ -1640,9 +1671,15 @@ export default function ContractsNewPage() {
                   </div>
                 </div>
                 {Number(revenuePct) > 0 && (
+                  <RevenuePctTiersEditor basePct={Number(revenuePct) || 0} tiers={revenuePctTiers}
+                    onChange={setRevenuePctTiers}
+                    contractYears={leasePeriodUnit === "years" ? leasePeriodValue : Math.ceil(leasePeriodValue / 12)} />
+                )}
+
+                {Number(revenuePct) > 0 && (
                   <div className="rounded-lg bg-purple-100 border border-purple-300 p-3 text-sm text-purple-800 text-center">
-                    שכ&quot;ד = {revenuePct}% מהפדיון החודשי
-                    {Number(minimumRent) > 0 && <span> | מינימום: {fmtMoney(Number(minimumRent))}/חודש</span>}
+                    שכ&quot;ד = {revenuePctTiers.length > 0 ? describePctTiers(Number(revenuePct) || 0, revenuePctTiers) : revenuePct + "% מהפדיון החודשי"}
+                    {Number(minimumRent) > 0 && <span> | מינימום: {fmtMoney(Number(minimumRent))}{minRentBasis === "per_sqm" ? '/מ"ר/חודש' : "/חודש"}</span>}
                     {Number(minimumRent) === 0 && <span> | ללא מינימום</span>}
                     {mgmtIncludedInRevenue && <span> | דמי ניהול כלולים</span>}
                   </div>
@@ -2306,7 +2343,9 @@ export default function ContractsNewPage() {
                   <input type="checkbox" id="increase" checked={hasIncrease}
                     onChange={(e) => { setHasIncrease(e.target.checked); if (e.target.checked && priceTiers.length === 0) setPriceTiers([emptyPriceTier(1)]); }}
                     className="w-4 h-4" />
-                  <label htmlFor="increase" className="text-sm font-bold text-slate-700">עלייה מדורגת בשכ&quot;ד (Step-Rent)</label>
+                  <label htmlFor="increase" className="text-sm font-bold text-slate-700">
+                    {rentType === "revenue_pct" ? 'עלייה מדורגת בשכ"ד המינימום (Step-Rent)' : 'עלייה מדורגת בשכ"ד (Step-Rent)'}
+                  </label>
                 </div>
                 {hasIncrease && increaseMode === "unified" && (
                   <button type="button" onClick={() => {
@@ -2317,6 +2356,16 @@ export default function ContractsNewPage() {
                   </button>
                 )}
               </div>
+
+              {hasIncrease && rentType === "revenue_pct" && (
+                <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 mb-3 text-xs text-amber-800 leading-relaxed">
+                  בחוזה אחוז-מפדיון המדרגות האלה מעלות את <b>שכ&quot;ד המינימום</b> (הרצפה), לא את האחוז.
+                  {minRentBasis === "per_sqm"
+                    ? <span> הבסיס: {fmtMoney(Number(minimumRent) || 0)}/מ&quot;ר לחודש.</span>
+                    : <span> הבסיס מוזן כסכום חודשי — כדי שהמדרגות יחולו עליו, הזן את המינימום לפי מ&quot;ר.</span>}
+                  {" "}להעלאת <b>האחוז</b> עצמו לאורך השנים — השתמש ב&quot;מדרגות אחוז מהפדיון&quot; בשלב תנאי השכירות.
+                </div>
+              )}
 
               {/* Unified / Per-unit toggle — only when multiple spaces with different prices */}
               {hasIncrease && selSpaces.length > 1 && Object.keys(unitRentOverrides).some(k => unitRentOverrides[k]) && (
@@ -2356,7 +2405,11 @@ export default function ContractsNewPage() {
                   if (diffYears > contractYears) contractYears = diffYears;
                 }
                 const errors = validatePriceTiers(priceTiers, contractYears);
-                const previews = calculateTierPreviews(priceTiers, Number(rentPerSqm) || 0);
+                // On a revenue lease the steps raise the minimum, so THAT is the
+                // base the preview must build on — rentPerSqm is empty there.
+                const stepBase = rentType === "revenue_pct" && minRentBasis === "per_sqm"
+                  ? (Number(minimumRent) || 0) : (Number(rentPerSqm) || 0);
+                const previews = calculateTierPreviews(priceTiers, stepBase);
                 return (
                   <div className="space-y-3">
                     {errors.length > 0 && (
@@ -2374,7 +2427,7 @@ export default function ContractsNewPage() {
                       if (sorted[0]?.from_year > 1) {
                         return (
                           <div className="rounded-lg bg-green-50 border border-green-200 px-4 py-2 text-sm text-green-700 font-semibold">
-                            שנים 1–{sorted[0].from_year - 1}: {fmtMoney(Number(rentPerSqm) || 0)}/מ&quot;ר (מחיר בסיס)
+                            שנים 1–{sorted[0].from_year - 1}: {fmtMoney(stepBase)}/מ&quot;ר ({rentType === "revenue_pct" ? "מינימום בסיס" : "מחיר בסיס"})
                           </div>
                         );
                       }
@@ -2474,8 +2527,8 @@ export default function ContractsNewPage() {
                               className={ic + " text-xs"} />
                           </div>
 
-                          {Number(rentPerSqm) > 0 && (function() {
-                            var expanded = calculateTierPreviews([tier], idx === 0 ? Number(rentPerSqm) : (previews[idx-1]?.calculated_rent_per_sqm ?? Number(rentPerSqm)));
+                          {stepBase > 0 && (function() {
+                            var expanded = calculateTierPreviews([tier], idx === 0 ? stepBase : (previews[idx-1]?.calculated_rent_per_sqm ?? stepBase));
                             if (!expanded.length) return null;
                             return (
                               <div className={"rounded-lg px-3 py-2 text-xs font-semibold space-y-0.5 " + (hasError ? "bg-red-100 text-red-700" : "bg-green-50 border border-green-200 text-green-700")}>
@@ -2483,7 +2536,7 @@ export default function ContractsNewPage() {
                                   return (
                                     <div key={ei}>
                                       שנים {exp.from_year}-{exp.to_year}: {exp.increase_type === "none"
-                                        ? `מחיר קפוא — ${fmtMoney(Number(rentPerSqm))}/מ"ר`
+                                        ? `מחיר קפוא — ${fmtMoney(stepBase)}/מ"ר`
                                         : exp.increase_type === "fixed_total"
                                           ? `+${fmtMoney(exp.increase_value)} → ${fmtMoney(exp.calculated_rent_per_sqm)}/מ"ר`
                                           : `${fmtMoney(exp.calculated_rent_per_sqm)}/מ"ר`}
@@ -2812,12 +2865,31 @@ export default function ContractsNewPage() {
                     )}
                     {opt.rent_mechanism === "new_value" && (
                       <div>
-                        <label className="mb-1 block text-xs font-semibold text-slate-700">מחיר חדש למ&quot;ר (₪)</label>
+                        <label className="mb-1 block text-xs font-semibold text-slate-700">
+                          {rentType === "revenue_pct" ? 'מינימום חדש למ"ר (₪)' : 'מחיר חדש למ"ר (₪)'}
+                        </label>
                         <input type="number" value={opt.new_rent_value ?? ""}
                           onChange={(e) => updateOption(idx, "new_rent_value", Number(e.target.value) || null)} className={ic} />
                       </div>
                     )}
                   </div>
+
+                  {/* On a revenue lease the mechanism above moves the MINIMUM.
+                      The percentage is its own schedule, so it gets its own editor. */}
+                  {rentType === "revenue_pct" && (
+                    <div className="space-y-2">
+                      <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800 leading-relaxed">
+                        בחוזה אחוז-מפדיון &quot;קפיצת המחיר בעת מימוש&quot; ומדרגות המחיר של האופציה מתייחסות ל<b>שכ&quot;ד המינימום</b>.
+                        לשינוי <b>האחוז</b> בתקופת האופציה — הזן מדרגות כאן (שנה 1 = השנה הראשונה של האופציה).
+                      </div>
+                      <RevenuePctTiersEditor
+                        basePct={Number(revenuePct) || 0}
+                        tiers={(opt.revenue_pct_tiers || []) as RevenuePctTier[]}
+                        onChange={(t) => updateOption(idx, "revenue_pct_tiers", t)}
+                        contractYears={opt.duration_years || Math.ceil((opt.duration_months || 0) / 12)}
+                        title={"מדרגות אחוז מהפדיון — אופציה " + (idx + 1)} />
+                    </div>
+                  )}
 
                   {/* Dates */}
                   {opt.start_date && opt.end_date && (

@@ -51,6 +51,9 @@ export type ExtensionOption = {
   // Price schedule within the option period
   price_schedule_type: "inherit" | "custom";
   price_tiers: PriceTier[];
+  // Revenue leases: the turnover percentage can have its own schedule inside
+  // the option period (year 1 = the option's first year). Empty = unchanged.
+  revenue_pct_tiers?: Array<{ from_year: number; to_year: number; pct: number; notes?: string | null }>;
   // Alternative options: same group = choose one (A or B)
   option_group: string | null; // null = sequential, "A"/"B" = alternatives
   // Exit points: tenant can exit early at specific years
