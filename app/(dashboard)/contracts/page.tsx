@@ -14,6 +14,7 @@ import { buildPriceTimeline, calculateTierPreviews, buildSpaceRentSchedule, rent
 import { penaltyTermsFromRow, hasPenalty, describePenaltyTerms, contractArea, penaltyMonths } from '@/lib/option-penalty';
 import { previewOptionDecline, applyOptionDecline } from '@/lib/option-decline';
 import { baseIndexRuleFromRow, describeBaseIndexRule, baseIndexPending, resolveBaseIndexMonth } from '@/lib/base-index-rule';
+import { pctTiersFromRow, describePctTiers } from '@/lib/revenue-pct-steps';
 import { mgmtProtectionFromRow, describeMgmtProtection } from '@/lib/mgmt-protection';
 // CPI + price timeline
 
@@ -394,10 +395,26 @@ export default function ContractsPage() {
     // changes mid-fetch, the superseded run is cancelled so it can't overwrite
     // cpiResult with a stale rent base (which caused the calc/timeline mismatch).
     var cancelled = false;
-    if (!selContract) { setCpiResult(null); return; }
-    if (selContract.indexation_method === "none") { setCpiResult(null); return; }
-    const origRent = Number(selContract.rent_per_sqm);
-    if (!origRent) { setCpiResult(null); return; }
+    // Every early return has to clear the spinner too. It used to clear only
+    // cpiResult, so selecting a contract that needs no calculation left the
+    // previous contract's "מחשב יחס מדד..." running on screen forever.
+    var resetCpi = function () { setCpiResult(null); setCpiLoading(false); setCpiProgress(null); };
+    if (!selContract) { resetCpi(); setCpiPending(""); return; }
+    if (selContract.indexation_method === "none") { resetCpi(); setCpiPending(""); return; }
+
+    // A derived base index that hasn't been fixed yet: there is no base to link
+    // from, so say so instead of computing against a placeholder date.
+    if (baseIndexPending(selContract)) {
+      resetCpi();
+      setCpiPending(describeBaseIndexRule(baseIndexRuleFromRow(selContract), selContract));
+      return;
+    }
+    setCpiPending("");
+
+    // A turnover lease links its MINIMUM to the index — that is the figure to
+    // adjust when there is no per-sqm rent.
+    const origRent = Number(selContract.rent_per_sqm) || Number(selContract.min_rent_per_sqm);
+    if (!origRent) { resetCpi(); return; }
 
     // Rent rate in effect TODAY. The timeline can have GAPS (a tier's period
     // ends before the next change/option begins — e.g. step rent stops at year 5
@@ -419,21 +436,9 @@ export default function ContractsPage() {
       }
     }
 
-    // With a derived base index still unresolved there is no base to link from.
-    // Falling back to start_date computed an indexation against a date the
-    // contract never agreed to — and on a future-handover lease that date is
-    // itself in the future, so the figure was meaningless.
-    if (baseIndexPending(selContract)) {
-      var pendRule = baseIndexRuleFromRow(selContract);
-      setCpiResult(null); setCpiLoading(false); setCpiProgress(null);
-      setCpiPending(describeBaseIndexRule(pendRule, selContract));
-      return;
-    }
-    setCpiPending("");
-
     const refDateStr = selContract.index_base_date || selContract.start_date;
     const baseDate = formatDateForCbs(refDateStr);
-    if (!baseDate) { setCpiResult(null); return; }
+    if (!baseDate) { resetCpi(); return; }
 
     // True rent = current step-rent + investment per sqm
     const cpiInvestPerSqm = selContract.charged_area > 0 && selContract.investment_addition
@@ -443,7 +448,7 @@ export default function ContractsPage() {
 
     // Today's full date for CBS calculator (day matters for known-index)
     const todayForCbs = formatDateForCbs(new Date().toISOString());
-    if (!todayForCbs) { setCpiResult(null); return; }
+    if (!todayForCbs) { resetCpi(); return; }
 
     setCpiLoading(true);
     var cpiCalcStart = Date.now();
@@ -933,7 +938,13 @@ export default function ContractsPage() {
     if (p.subscription_type === "visitor") return; // visitor parking has no fixed monthly fee
     parkingMonthlyTotal += (Number(p.monthly_fee) || 0) * (Number(p.quantity) || 1);
   });
-  var rentBeforeParking = cpiAdjustedRent > 0 ? cpiAdjustedRent : adjustedBaseRent > 0 ? adjustedBaseRent : baseRent;
+  // A turnover lease has no per-sqm rent, so every figure above lands on 0 and
+  // the KPIs read ₪0.00 for a contract that collects a guaranteed minimum. Fall
+  // back to the floor — labelled as such in the box below.
+  var revenueFloorMonthly = selContract?.rent_type === "revenue_pct"
+    ? (Number(selContract?.min_rent_per_sqm) || 0) * (Number(selContract?.charged_area) || 0) || (Number(selContract?.minimum_rent) || 0)
+    : 0;
+  var rentBeforeParking = cpiAdjustedRent > 0 ? cpiAdjustedRent : adjustedBaseRent > 0 ? adjustedBaseRent : (baseRent || revenueFloorMonthly);
   var displayRent = rentBeforeParking + parkingMonthlyTotal;
   const vat         = selContract?.vat_type==="taxable" ? displayRent*vatPct : 0;
   const remaining   = effectiveEndDate ? yearsMonthsLeft(effectiveEndDate) : null;
@@ -1258,7 +1269,10 @@ export default function ContractsPage() {
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
                   <div className="rounded-xl p-2.5 text-center border border-green-200 bg-green-50">
                     <div className="text-base text-green-800 font-bold">{fmtMoney(displayRent)}</div>
-                    <div className="text-xs text-green-600">{cpiAdjustedRent > 0 ? "כולל הצמדה" : "בסיס"}</div>
+                    <div className="text-xs text-green-600">
+                      {selContract.rent_type === "revenue_pct" && cpiAdjustedRent === 0 && adjustedBaseRent === 0 && baseRent === 0
+                        ? "מינימום" : cpiAdjustedRent > 0 ? "כולל הצמדה" : "בסיס"}
+                    </div>
                   </div>
                   <div className="rounded-xl p-2.5 text-center border border-slate-100">
                     <div className="text-base text-slate-500">{fmtMoney(vat)}</div>
@@ -1281,12 +1295,25 @@ export default function ContractsPage() {
                   <div className="rounded-lg bg-purple-50 border border-purple-200 px-3 py-3 mb-2">
                     <div className="flex items-center justify-between mb-1">
                       <span className="text-sm font-bold text-purple-800">📊 שכ&quot;ד לפי מחזור</span>
-                      <span className="text-lg font-black text-purple-800">{selContract.revenue_pct}%</span>
+                      <span className="text-lg font-black text-purple-800">
+                        {(function(){
+                          var pt = pctTiersFromRow(selContract);
+                          return pt.length > 0 ? describePctTiers(Number(selContract.revenue_pct) || 0, pt) : selContract.revenue_pct + "%";
+                        })()}
+                      </span>
                     </div>
                     <div className="text-sm text-purple-600">
-                      {Number(selContract.minimum_rent) > 0
-                        ? `מינימום: ${fmtMoney(Number(selContract.minimum_rent))}/חודש`
-                        : "ללא מינימום — רק אחוז ממחזור"}
+                      {/* The floor lives in min_rent_per_sqm when it was agreed
+                          per sqm — reading only minimum_rent said "no minimum"
+                          for a contract that has one. */}
+                      {Number(selContract.min_rent_per_sqm) > 0
+                        ? `מינימום: ${fmtMoney(Number(selContract.min_rent_per_sqm))}/מ"ר לחודש` +
+                          (Number(selContract.charged_area) > 0
+                            ? ` · ${fmtMoney(Number(selContract.min_rent_per_sqm) * Number(selContract.charged_area))}/חודש`
+                            : "")
+                        : Number(selContract.minimum_rent) > 0
+                          ? `מינימום: ${fmtMoney(Number(selContract.minimum_rent))}/חודש`
+                          : "ללא מינימום — רק אחוז ממחזור"}
                     </div>
                     {selContract.revenue_report_day && (
                       <div className="text-xs text-purple-500 mt-1">דו&quot;ח פדיון עד ה-{selContract.revenue_report_day} לכל חודש</div>
