@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { representativeGuaranteeIds } from "@/lib/guarantee-dedupe";
 import { contractExpiryVerdict } from "@/lib/contract-expiry";
+import { handoverPendingVerdict } from "@/lib/handover-pending";
 
 // The alert sync only ever CREATED alerts. Nothing closed one whose condition
 // had since been fixed, so a paid debt, a renewed guarantee or a certificate
@@ -86,7 +87,7 @@ export async function reconcileAlerts(supabase: SupabaseClient): Promise<{ resol
   const contractIds = idsFor("contract");
   if (contractIds.length > 0) {
     const { data: cs } = await supabase.from("contracts")
-      .select("id,end_date,status,contract_options(id,status,is_exercised)").in("id", contractIds);
+      .select("id,end_date,status,planned_handover_date,actual_handover_date,contract_options(id,status,is_exercised)").in("id", contractIds);
     // The alert sits on the base contract but the tenancy is base + amendments:
     // read the family's latest end date and pooled options, exactly as the
     // creator does, so the two never disagree about whether it still holds.
@@ -94,6 +95,9 @@ export async function reconcileAlerts(supabase: SupabaseClient): Promise<{ resol
       .select("id,parent_contract_id,end_date,contract_options(id,status,is_exercised)")
       .in("parent_contract_id", contractIds).eq("is_amendment", true);
     for (const c of (cs ?? []) as any[]) {
+      // Handover confirmation is its own condition, on the same entity_type —
+      // tested separately so one rule can't vouch for the other.
+      if (handoverPendingVerdict({ contract: c }).applies) keep("contract:handover_pending", c.id);
       if (["active", "expiring", "extended"].indexOf(c.status) === -1) continue;  // ended → stop chasing
       var famEnd = c.end_date ? String(c.end_date).slice(0, 10) : "";
       var famOpts = (c.contract_options ?? []).slice();
@@ -190,7 +194,13 @@ export async function reconcileAlerts(supabase: SupabaseClient): Promise<{ resol
     if (OWNED.indexOf(a.entity_type) === -1) continue;
     if (a.alert_type && NOTICES.indexOf(a.alert_type) !== -1) continue;
     if (!a.entity_id) continue;
-    if (stillOpen.has(a.entity_type + ":" + a.entity_id)) continue;
+    // Several distinct conditions share entity_type 'contract' (expiry/vacating,
+    // handover confirmation). Those carry their own alert_type, so the key
+    // includes it — otherwise one condition falling away would close the other.
+    const key = a.entity_type === "contract" && a.alert_type === "handover_pending"
+      ? "contract:handover_pending:" + a.entity_id
+      : a.entity_type + ":" + a.entity_id;
+    if (stillOpen.has(key)) continue;
     toResolve.push(a.id);
   }
 

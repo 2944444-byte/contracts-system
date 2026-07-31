@@ -6,6 +6,7 @@ import { mgmtProtectionFromRow, protectionEndDate, describeMgmtProtection } from
 import { reconcileAlerts } from "@/lib/alerts-reconcile";
 import { representativeGuaranteeIds } from "@/lib/guarantee-dedupe";
 import { contractExpiryVerdict, contractExpiryTitle } from "@/lib/contract-expiry";
+import { handoverPendingVerdict, handoverPendingTitle, handoverPendingMessage } from "@/lib/handover-pending";
 
 export interface NewAlert {
   title: string;
@@ -97,8 +98,8 @@ export async function runAlertSync(supabase: SupabaseClient): Promise<{ created:
 
   // 1. Contracts expiring + options
   const { data: contracts } = await supabase.from("contracts")
-    .select("id,property_id,end_date,is_amendment,parent_contract_id,tenant_id,tenants(name),properties(name),contract_options(id,status,is_exercised,start_date,end_date,notice_days_before_end,notice_type,option_number)")
-    .in("status", ["active", "expiring", "extended"]);
+    .select("id,property_id,end_date,status,is_amendment,parent_contract_id,tenant_id,planned_handover_date,actual_handover_date,tenants(name),properties(name),contract_options(id,status,is_exercised,start_date,end_date,notice_days_before_end,notice_type,option_number)")
+    .in("status", ["active", "expiring", "extended", "upcoming"]);
   // A contract and its amendments are ONE tenancy: they share an end date and
   // between them hold the options. Alerting per row put the same expiry on the
   // screen three times for a tenant with two amendments, so the family is
@@ -141,6 +142,34 @@ export async function runAlertSync(supabase: SupabaseClient): Promise<{ created:
         }
       }
     }
+    // Handover not confirmed. Until it is, the contract sits outside every
+    // calculation — so this is the one alert that must not be missed on a
+    // future-handover lease.
+    {
+      const hv = handoverPendingVerdict({ contract: c });
+      if (hv.applies) {
+        const label = (c.tenants?.name ?? "") + " — " + (c.properties?.name ?? "");
+        const plannedHe = new Date(c.planned_handover_date).toLocaleDateString("he-IL");
+        const title = handoverPendingTitle(hv, label);
+        const message = handoverPendingMessage(hv, plannedHe);
+        const { data: hExist } = await supabase.from("alerts")
+          .select("id,severity").eq("entity_id", c.id).eq("entity_type", "contract")
+          .eq("alert_type", "handover_pending").eq("is_resolved", false).limit(1);
+        if (hExist && hExist.length) {
+          const prev = hExist[0] as any;
+          const patch: any = { title, message, severity: hv.severity, due_date: String(c.planned_handover_date).slice(0, 10) };
+          if (prev.severity !== hv.severity) patch.read_at = null;   // escalated → unread again
+          await supabase.from("alerts").update(patch).eq("id", prev.id);
+        } else {
+          await add({
+            title, message, severity: hv.severity, alert_type: "handover_pending",
+            entity_type: "contract", entity_id: c.id, contract_id: c.id,
+            property_id: c.property_id ?? null, due_date: String(c.planned_handover_date).slice(0, 10),
+          });
+        }
+      }
+    }
+
     // ── Option notice alerts — TWO mechanisms (per the owner's spec) ──
     // Type 1 `exercise`:    the tenant must give an EXERCISE notice; the manager
     //                       marks it when received. No notice by the deadline →
