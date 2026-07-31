@@ -1022,6 +1022,14 @@ export default function ContractsNewPage() {
           .is("contract_id", null);
       }
 
+      // contract_price_tiers is UNIQUE(contract_id, tier_number), and BOTH the
+      // options' tiers and the contract's own tiers live in it. Numbering each
+      // block from 1 collided, and the second insert (the contract's own rent
+      // steps) was rejected — silently, since the error was never read. One
+      // running counter for the whole contract.
+      var tierSeq = 0;
+      var nextTierNumber = function () { tierSeq++; return tierSeq; };
+
       // Extension Options
       if (extensionOptions.length > 0) {
         const optionsToInsert = extensionOptions.map((opt, i) => ({
@@ -1059,7 +1067,7 @@ export default function ContractsNewPage() {
                 optPreviews.map((tier, i) => ({
                   contract_id: contract.id,
                   option_id: dbOpt.id,
-                  tier_number: i + 1,
+                  tier_number: nextTierNumber(),
                   start_date: uiOpt.start_date,
                   end_date: uiOpt.end_date,
                   increase_type: tier.increase_type,
@@ -1158,7 +1166,7 @@ export default function ContractsNewPage() {
               allTiersToInsert.push({
                 contract_id: contract.id,
                 space_id: sid,
-                tier_number: globalTierNum,
+                tier_number: nextTierNumber(),
                 start_date: tierStart.toISOString().split("T")[0],
                 end_date: tierEnd.toISOString().split("T")[0],
                 increase_type: tier.increase_type,
@@ -1185,7 +1193,7 @@ export default function ContractsNewPage() {
             tierEnd.setFullYear(tierEnd.getFullYear() + tier.to_year);
             allTiersToInsert.push({
               contract_id: contract.id,
-              tier_number: i + 1,
+              tier_number: nextTierNumber(),
               start_date: tierStart.toISOString().split("T")[0],
               end_date: tierEnd.toISOString().split("T")[0],
               increase_type: tier.increase_type,
@@ -1203,7 +1211,8 @@ export default function ContractsNewPage() {
         }
 
         if (allTiersToInsert.length > 0) {
-          await supabase.from("contract_price_tiers").insert(allTiersToInsert);
+          var { error: tierErr } = await supabase.from("contract_price_tiers").insert(allTiersToInsert);
+          if (tierErr) alert("שגיאה בשמירת מדרגות שכ\"ד: " + tierErr.message);
         }
       }
 

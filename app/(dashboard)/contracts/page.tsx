@@ -115,6 +115,9 @@ export default function ContractsPage() {
   const [search,    setSearch]    = useState("");
   const [cpiResult, setCpiResult] = useState<any>(null);
   const [cpiLoading, setCpiLoading] = useState(false);
+  // A derived base index that hasn't been fixed yet: nothing to link to, so the
+  // screen says so instead of computing from a placeholder date.
+  const [cpiPending, setCpiPending] = useState("");
   const [cpiProgress, setCpiProgress] = useState<CalcProgressState | null>(null);
   const [perUnitCpi, setPerUnitCpi] = useState<Record<string, {ratio: number, source: string}>>({});
   const [priceTiers, setPriceTiers] = useState<PriceTier[]>([]);
@@ -394,6 +397,18 @@ export default function ContractsPage() {
         }
       }
     }
+
+    // With a derived base index still unresolved there is no base to link from.
+    // Falling back to start_date computed an indexation against a date the
+    // contract never agreed to — and on a future-handover lease that date is
+    // itself in the future, so the figure was meaningless.
+    if (baseIndexPending(selContract)) {
+      var pendRule = baseIndexRuleFromRow(selContract);
+      setCpiResult(null); setCpiLoading(false); setCpiProgress(null);
+      setCpiPending(describeBaseIndexRule(pendRule, selContract));
+      return;
+    }
+    setCpiPending("");
 
     const refDateStr = selContract.index_base_date || selContract.start_date;
     const baseDate = formatDateForCbs(refDateStr);
@@ -1301,6 +1316,15 @@ export default function ContractsPage() {
                 ) : null}
 
                 {/* CPI-adjusted price via CBS calculator */}
+                {cpiPending && (
+                  <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5 text-xs text-amber-900 leading-relaxed">
+                    <div className="font-bold">⏳ מדד הבסיס עדיין לא נקבע — תלוי במועד המסירה</div>
+                    <div className="mt-0.5">{cpiPending}</div>
+                    <div className="mt-1 text-amber-700">
+                      עד להזנת מועד המסירה בפועל לא מתבצע חישוב הצמדה לחוזה. הזן &quot;📦 מסירה בפועל&quot; — מדד הבסיס ייקבע לפי הכלל, וההצמדה תתחיל להיחשב.
+                    </div>
+                  </div>
+                )}
                 {cpiLoading && cpiProgress && (
                   <div className="mb-3">
                     <CalcProgress {...cpiProgress} />

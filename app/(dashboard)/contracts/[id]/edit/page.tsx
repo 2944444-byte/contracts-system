@@ -456,13 +456,24 @@ export default function ContractEditPage() {
     if (hasAmendments && amends && amends.length > 0) {
       // Check if latest amendment has its own tiers
       var { data: amendTiers } = await supabase.from("contract_price_tiers")
-        .select("*").eq("contract_id", amends[amends.length - 1].id).order("tier_number");
+        .select("*").eq("contract_id", amends[amends.length - 1].id).is("option_id", null).order("tier_number");
       if (amendTiers && amendTiers.length > 0) {
         tiersContractId = amends[amends.length - 1].id;
       }
     }
-    const { data: tiers } = await supabase.from("contract_price_tiers")
-      .select("*").eq("contract_id", tiersContractId).order("tier_number");
+    // Option tiers live in the same table, keyed by option_id. Without this
+    // filter an option's schedule was loaded into the contract's own step-rent
+    // editor, showing terms that belong to the option period.
+    var { data: tiers } = await supabase.from("contract_price_tiers")
+      .select("*").eq("contract_id", tiersContractId).is("option_id", null).order("tier_number");
+    // Fallback for contracts whose tier rows failed to save (the tier_number
+    // collision): the full schedule is also kept on contracts.increase_steps,
+    // so the editor shows the real terms and re-saving writes the rows properly.
+    if ((!tiers || tiers.length === 0) && Array.isArray(c.increase_steps) && c.increase_steps.length > 0) {
+      tiers = (c.increase_steps as any[]).map(function(t: any, i: number) {
+        return { ...t, tier_number: i + 1, space_id: null, option_id: null };
+      });
+    }
     if (tiers && tiers.length > 0) {
       setHasIncrease(true);
       // Check if tiers have space_id → per-unit mode
