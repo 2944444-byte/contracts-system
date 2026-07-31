@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import {
   type BaseIndexRule, type BaseIndexAnchor, ANCHOR_LABELS,
   resolveBaseIndexMonth,
@@ -19,6 +20,20 @@ export default function BaseIndexRuleFields(props: {
   const r = props.value;
   const ic = props.inputClass ?? "w-full rounded-lg border border-slate-200 px-3 py-2 text-sm";
   const resolved = r.mode === "derived" ? resolveBaseIndexMonth({ rule: r, contract: props.contract }) : null;
+
+  // A DERIVED base index must follow its anchor. It used to be applied only by
+  // pressing the button, so correcting a mistyped handover/start date left the
+  // base index sitting on the value derived from the wrong date. Re-apply
+  // whenever the derived month actually changes — guarded so it fires once per
+  // change, not on every keystroke that leaves the result the same.
+  const lastApplied = useRef<string>("");
+  useEffect(function () {
+    if (r.mode !== "derived") { lastApplied.current = ""; return; }
+    if (!resolved || !resolved.ok || !resolved.baseDateForDb) return;
+    if (lastApplied.current === resolved.baseDateForDb) return;
+    lastApplied.current = resolved.baseDateForDb;
+    if (props.onResolve) props.onResolve(resolved.baseDateForDb, resolved.baseLabel || "");
+  }, [r.mode, resolved?.baseDateForDb]);
 
   return (
     <div className="rounded-lg border border-indigo-200 bg-indigo-50/30 p-3 space-y-2 col-span-2">
@@ -52,11 +67,12 @@ export default function BaseIndexRuleFields(props: {
               <div className="font-semibold">
                 נגזר: מדד <b>{resolved.baseLabel}</b> — המדד הידוע ליום {resolved.cutoffDate}
               </div>
+              <div className="text-[10px] text-indigo-500">מתעדכן אוטומטית כשמועד העוגן משתנה</div>
               {props.onResolve && (
                 <button type="button"
                   onClick={function() { props.onResolve!(resolved.baseDateForDb!, resolved.baseLabel!); }}
                   className="mt-1 rounded bg-indigo-600 text-white px-2 py-0.5 text-[11px] font-bold hover:bg-indigo-700">
-                  קבע כמדד הבסיס
+                  רענן מדד בסיס
                 </button>
               )}
             </div>

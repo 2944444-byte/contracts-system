@@ -13,7 +13,7 @@ import CalcProgress, { CalcProgressState } from '@/components/CalcProgress';
 import { buildPriceTimeline, calculateTierPreviews, buildSpaceRentSchedule, rentAtDate, type PriceTier } from '@/lib/contract-utils';
 import { penaltyTermsFromRow, hasPenalty, describePenaltyTerms, contractArea, penaltyMonths } from '@/lib/option-penalty';
 import { previewOptionDecline, applyOptionDecline } from '@/lib/option-decline';
-import { baseIndexRuleFromRow, describeBaseIndexRule, baseIndexPending } from '@/lib/base-index-rule';
+import { baseIndexRuleFromRow, describeBaseIndexRule, baseIndexPending, resolveBaseIndexMonth } from '@/lib/base-index-rule';
 import { mgmtProtectionFromRow, describeMgmtProtection } from '@/lib/mgmt-protection';
 // CPI + price timeline
 
@@ -128,6 +128,10 @@ export default function ContractsPage() {
 
   // Amendment modal state
   const [showAmendModal, setShowAmendModal] = useState(false);
+  // Recording the actual handover — the moment the lease really starts.
+  const [showHandover, setShowHandover] = useState(false);
+  const [handoverDate, setHandoverDate] = useState("");
+  const [handoverSaving, setHandoverSaving] = useState(false);
   const [amendType, setAmendType] = useState<string|null>(null);
   const [amendDate, setAmendDate] = useState(new Date().toISOString().split("T")[0]);
   const [amendNotes, setAmendNotes] = useState("");
@@ -1085,6 +1089,23 @@ export default function ContractsPage() {
                     <button onClick={function(){router.push("/contracts/"+selContract.id+"/edit");}} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">✏️ עריכה</button>
                     <button onClick={function(){router.push("/contracts/"+selContract.id+"/print");}} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">🖨 הדפס</button>
                     <button onClick={function(){router.push("/documents?contract="+selContract.id);}} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50" title="כל המסמכים של החוזה — סריקה, ערבויות, ביטוחים, העלאות">📁 מסמכים</button>
+                    {/* A contract handed over in stages can't start calculating
+                        until the real handover date is known. Surfaced here so it
+                        doesn't require re-opening the whole wizard. */}
+                    {(selContract.planned_handover_date || selContract.actual_handover_date) && (
+                      <button onClick={function(){
+                          setHandoverDate((selContract.actual_handover_date || selContract.planned_handover_date || "").slice(0,10));
+                          setShowHandover(true);
+                        }}
+                        className={"rounded-lg border px-3 py-1.5 text-xs font-semibold " + (selContract.actual_handover_date
+                          ? "border-green-200 bg-green-50 text-green-700 hover:bg-green-100"
+                          : "border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 animate-pulse")}
+                        title="הזנת מועד המסירה בפועל — ממנה מתחילה תקופת השכירות וכל החישובים">
+                        {selContract.actual_handover_date
+                          ? "📦 נמסר " + new Date(selContract.actual_handover_date).toLocaleDateString("he-IL")
+                          : "📦 הזן מסירה בפועל"}
+                      </button>
+                    )}
                     {selContract.document_url && (
                       <a href={selContract.document_url} target="_blank" rel="noopener noreferrer"
                         className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-600 hover:bg-blue-100">📄 צפה בחוזה</a>
@@ -2106,6 +2127,80 @@ export default function ContractsPage() {
         </div>
       </div>
       {/* ═══ Amendment Modal ═══ */}
+      {/* Record the actual handover. Everything downstream — the lease term, the
+          rent steps' contract years, a derived base index — hangs off this date,
+          so it is applied in one place rather than edited field by field. */}
+      {showHandover && selContract && (function(){
+        var planned = (selContract.planned_handover_date || "").slice(0,10);
+        var prevStart = (selContract.start_date || "").slice(0,10);
+        var prevEnd = (selContract.end_date || "").slice(0,10);
+        // The lease keeps its agreed length: the end date moves by the same
+        // number of days the start moved.
+        var shiftDays = (handoverDate && prevStart)
+          ? Math.round((new Date(handoverDate).getTime() - new Date(prevStart).getTime()) / 86400000) : 0;
+        var newEnd = "";
+        if (prevEnd && shiftDays !== 0) {
+          var e = new Date(prevEnd); e.setDate(e.getDate() + shiftDays);
+          newEnd = e.toISOString().slice(0,10);
+        } else { newEnd = prevEnd; }
+        var rule = baseIndexRuleFromRow(selContract);
+        var newBase = rule.mode === "derived"
+          ? resolveBaseIndexMonth({ rule: rule, contract: { ...selContract, actual_handover_date: handoverDate } })
+          : null;
+        return (
+          <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={function(){ if(!handoverSaving) setShowHandover(false); }}>
+            <div className="bg-white rounded-2xl shadow-xl max-w-lg w-full p-6" dir="rtl" onClick={function(e:any){e.stopPropagation();}}>
+              <div className="text-lg font-bold text-slate-800 mb-1">📦 מסירה בפועל</div>
+              <div className="text-xs text-slate-500 mb-4">
+                {selContract.tenants?.name} — {selContract.properties?.name}
+                {planned && <span> · יעד מסירה: {new Date(planned).toLocaleDateString("he-IL")}</span>}
+              </div>
+
+              <label className="mb-1 block text-xs font-semibold text-slate-700">תאריך המסירה בפועל</label>
+              <input type="date" value={handoverDate} onChange={function(e){setHandoverDate(e.target.value);}}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm mb-3" />
+
+              {handoverDate && (
+                <div className="rounded-lg bg-slate-50 border border-slate-200 p-3 text-xs space-y-1 mb-4">
+                  <div className="font-semibold text-slate-700">מה יתעדכן:</div>
+                  <div>· תחילת שכירות: <b>{prevStart ? new Date(prevStart).toLocaleDateString("he-IL") : "—"}</b> ← <b className="text-green-700">{new Date(handoverDate).toLocaleDateString("he-IL")}</b></div>
+                  {newEnd && newEnd !== prevEnd && (
+                    <div>· סיום חוזה: <b>{new Date(prevEnd).toLocaleDateString("he-IL")}</b> ← <b className="text-green-700">{new Date(newEnd).toLocaleDateString("he-IL")}</b> <span className="text-slate-400">(אותה תקופה, {shiftDays > 0 ? "+" : ""}{shiftDays} ימים)</span></div>
+                  )}
+                  {newBase?.ok && (
+                    <div>· מדד בסיס נגזר: <b className="text-green-700">{newBase.baseLabel}</b> <span className="text-slate-400">({describeBaseIndexRule(rule)})</span></div>
+                  )}
+                  <div className="text-slate-400">· שנות החוזה למדרגות שכ&quot;ד/מינימום ייספרו מהתאריך החדש</div>
+                </div>
+              )}
+
+              <div className="flex gap-2">
+                <button disabled={!handoverDate || handoverSaving}
+                  onClick={async function(){
+                    setHandoverSaving(true);
+                    try {
+                      var patch: any = { actual_handover_date: handoverDate, start_date: handoverDate };
+                      if (newEnd) patch.end_date = newEnd;
+                      if (newBase?.ok) { patch.index_base_date = newBase.baseDateForDb; }
+                      var { error } = await supabase.from("contracts").update(patch).eq("id", selContract.id);
+                      if (error) throw new Error(error.message);
+                      await logAudit({ entity_type:"contract", entity_id:selContract.id, action:"handover" });
+                      setShowHandover(false);
+                      await loadContracts();
+                    } catch(e:any) { alert("שגיאה: " + e?.message); }
+                    finally { setHandoverSaving(false); }
+                  }}
+                  className="flex-1 rounded-lg bg-green-600 text-white px-4 py-2 text-sm font-bold hover:bg-green-700 disabled:opacity-50">
+                  {handoverSaving ? "⏳ שומר..." : "✓ אשר מסירה ועדכן"}
+                </button>
+                <button onClick={function(){setShowHandover(false);}} disabled={handoverSaving}
+                  className="rounded-lg border border-slate-300 px-4 py-2 text-sm text-slate-600 hover:bg-slate-50">ביטול</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {showAmendModal && selContract && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={function(){setShowAmendModal(false);}}>
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-xl max-h-[85vh] overflow-y-auto" onClick={function(e){e.stopPropagation();}}>
