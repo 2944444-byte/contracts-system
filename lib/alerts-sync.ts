@@ -132,7 +132,11 @@ export async function runAlertSync(supabase: SupabaseClient): Promise<{ created:
           const patch: any = { title, severity: v.severity, due_date: famEnd[fam] || c.end_date, alert_type: alertType };
           if (prev.severity !== v.severity) patch.read_at = null;   // escalated → unread again
           await supabase.from("alerts").update(patch).eq("id", prev.id);
-        } else if (!(await hasOpen(c.id, "contract"))) {
+        } else {
+          // Deliberately NOT gated on hasOpen(c.id,"contract"): any other open
+          // alert carrying entity_type 'contract' for this contract — an
+          // informational notice, say — would otherwise suppress the expiry
+          // alert entirely. The alert_type query above is the real dedupe.
           await add({ title, severity: v.severity, alert_type: alertType, entity_type: "contract", entity_id: c.id, property_id: c.property_id ?? null, due_date: famEnd[fam] || c.end_date, status: "open" });
         }
       }
