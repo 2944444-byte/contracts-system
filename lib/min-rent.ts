@@ -40,8 +40,13 @@ export function minRentPerSqmAtDate(params: {
 
   var v = base;
   for (const t of expanded) {
-    // A tier that starts in year N raises the floor from year N onward.
-    if ((Number(t.from_year) || 1) > year) break;
+    // from_year is the number of COMPLETED lease years before the step — the
+    // convention the fixed-rent engine uses and the one verified against real
+    // billing (תים נטקום: from_year 5, start 15.2.2021 → the 4% landed on
+    // 15.2.2026, and the split quarter came out at exactly +2%). So a tier with
+    // from_year N first applies in lease year N+1; reading it as "from year N"
+    // stepped the floor a full year early.
+    if ((Number(t.from_year) || 1) >= year) break;
     const inc = Number(t.increase_value) || 0;
     if (t.increase_type === "pct") v = v * (1 + inc / 100);
     else if (t.increase_type === "fixed_sqm") v = v + inc;

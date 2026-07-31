@@ -2460,7 +2460,10 @@ export default function ContractsNewPage() {
                       if (sorted[0]?.from_year > 1) {
                         return (
                           <div className="rounded-lg bg-green-50 border border-green-200 px-4 py-2 text-sm text-green-700 font-semibold">
-                            שנים 1–{sorted[0].from_year - 1}: {fmtMoney(stepBase)}/מ&quot;ר ({rentType === "revenue_pct" ? "מינימום בסיס" : "מחיר בסיס"})
+                            שנים 1–{sorted[0].from_year}: {fmtMoney(stepBase)}/מ&quot;ר ({rentType === "revenue_pct" ? "מינימום בסיס" : "מחיר בסיס"})
+                            <span className="block text-[11px] font-normal opacity-80">
+                              העלייה חלה בתום {sorted[0].from_year} שנות שכירות — כלומר מתחילת שנת שכירות {sorted[0].from_year + 1}
+                            </span>
                           </div>
                         );
                       }
@@ -2497,7 +2500,7 @@ export default function ContractsNewPage() {
                             {!tier.is_recurring ? (
                               <>
                                 <div>
-                                  <label className="mb-1 block text-xs text-slate-500">משנה</label>
+                                  <label className="mb-1 block text-xs text-slate-500">בתום שנת שכירות</label>
                                   <input type="number" min="1" value={tier.from_year}
                                     onChange={(e) => setPriceTiers(prev => prev.map((t, i) => i === idx ? { ...t, from_year: Number(e.target.value) || 1 } : t))}
                                     className={ic} />
