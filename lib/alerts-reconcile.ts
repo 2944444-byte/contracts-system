@@ -31,8 +31,15 @@ export async function reconcileAlerts(supabase: SupabaseClient): Promise<{ resol
     return Array.from(new Set(out));
   };
 
-  // Every id that still legitimately has an open alert. Anything else closes.
+  // Every alert that still legitimately holds, keyed by TYPE + id.
+  //
+  // The key must carry the type. Several rules are keyed by the same contract
+  // id — arrears, "no insurance certificate", contract expiry, management-fee
+  // protection — so a bare id set let one rule vouch for another: a contract
+  // with an open "no certificate" alert also looked like it still had arrears,
+  // and its arrears alert could never close even after every charge was paid.
   const stillOpen = new Set<string>();
+  const keep = function (type: string, id: string) { stillOpen.add(type + ":" + id); };
 
   // ── Arrears: resolved once the contract has no overdue unpaid charge ──
   const arrearsIds = idsFor("arrears");
@@ -43,7 +50,7 @@ export async function reconcileAlerts(supabase: SupabaseClient): Promise<{ resol
       .neq("status", "paid")
       .not("due_date", "is", null)
       .lt("due_date", todayStr);
-    for (const ch of (overdue ?? []) as any[]) stillOpen.add(ch.contract_id);
+    for (const ch of (overdue ?? []) as any[]) keep("arrears", ch.contract_id);
   }
 
   // ── Guarantees: resolved when renewed (or no longer active) ──
@@ -53,7 +60,7 @@ export async function reconcileAlerts(supabase: SupabaseClient): Promise<{ resol
       .select("id,end_date,status").in("id", guaranteeIds);
     for (const g of (gs ?? []) as any[]) {
       if (g.status !== "active" || !g.end_date) continue;   // not active → nothing to chase
-      if (daysUntil(g.end_date) <= 60) stillOpen.add(g.id);
+      if (daysUntil(g.end_date) <= 60) keep("guarantee", g.id);
     }
   }
 
@@ -64,7 +71,7 @@ export async function reconcileAlerts(supabase: SupabaseClient): Promise<{ resol
       .select("id,next_inspection_date").in("id", safetyIds);
     for (const s of (insp ?? []) as any[]) {
       if (!s.next_inspection_date) continue;
-      if (daysUntil(s.next_inspection_date) <= 60) stillOpen.add(s.id);
+      if (daysUntil(s.next_inspection_date) <= 60) keep("safety", s.id);
     }
   }
 
@@ -77,7 +84,7 @@ export async function reconcileAlerts(supabase: SupabaseClient): Promise<{ resol
       if (!c.end_date) continue;
       if (["active", "expiring", "extended"].indexOf(c.status) === -1) continue;  // ended → stop chasing
       const d = daysUntil(c.end_date);
-      if (d >= 0 && d <= 90) stillOpen.add(c.id);
+      if (d >= 0 && d <= 90) keep("contract", c.id);
     }
   }
 
@@ -91,7 +98,8 @@ export async function reconcileAlerts(supabase: SupabaseClient): Promise<{ resol
     for (const o of (opts ?? []) as any[]) {
       if (o.is_exercised) continue;
       if (["exercised", "declined", "expired"].indexOf(o.status) !== -1) continue;
-      stillOpen.add(o.id);
+      // Both spellings live in the data and point at the same row.
+      keep("option", o.id); keep("contract_option", o.id);
     }
   }
 
@@ -103,7 +111,7 @@ export async function reconcileAlerts(supabase: SupabaseClient): Promise<{ resol
     for (const c of (cs ?? []) as any[]) {
       if (c.mgmt_protection_reconciled_at) continue;
       if (!c.mgmt_protection_type || c.mgmt_protection_type === "none") continue;
-      stillOpen.add(c.id);
+      keep("mgmt_protection", c.id);
     }
   }
 
@@ -117,7 +125,7 @@ export async function reconcileAlerts(supabase: SupabaseClient): Promise<{ resol
         .select("id,end_date,status").in("id", insuranceIds);
       for (const x of (rows ?? []) as any[]) {
         if (x.status !== "active" || !x.end_date) continue;
-        if (daysUntil(x.end_date) <= 60) stillOpen.add(x.id);
+        if (daysUntil(x.end_date) <= 60) keep("insurance", x.id);
       }
     }
     // (b) "no certificate at all" alerts, keyed by the contract. Mirrors the
@@ -143,7 +151,7 @@ export async function reconcileAlerts(supabase: SupabaseClient): Promise<{ resol
         // Contract no longer active → nothing to chase.
         if (["active", "expiring", "extended"].indexOf(c.status) === -1) continue;
         if (covered.has(key(c))) continue;
-        stillOpen.add(c.id);
+        keep("insurance", c.id);
       }
     }
   }
@@ -161,7 +169,7 @@ export async function reconcileAlerts(supabase: SupabaseClient): Promise<{ resol
     if (OWNED.indexOf(a.entity_type) === -1) continue;
     if (a.alert_type && NOTICES.indexOf(a.alert_type) !== -1) continue;
     if (!a.entity_id) continue;
-    if (stillOpen.has(a.entity_id)) continue;
+    if (stillOpen.has(a.entity_type + ":" + a.entity_id)) continue;
     toResolve.push(a.id);
   }
 
