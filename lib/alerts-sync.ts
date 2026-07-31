@@ -4,6 +4,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { mgmtProtectionFromRow, protectionEndDate, describeMgmtProtection } from "@/lib/mgmt-protection";
 import { reconcileAlerts } from "@/lib/alerts-reconcile";
+import { representativeGuaranteeIds } from "@/lib/guarantee-dedupe";
 
 export interface NewAlert {
   title: string;
@@ -192,9 +193,13 @@ export async function runAlertSync(supabase: SupabaseClient): Promise<{ created:
   // 2. Guarantees — expiring soon AND already expired-but-not-renewed (the
   //    old `days < 0 → skip` silently dropped exactly the case that matters
   //    most: a guarantee that lapsed and was never renewed).
-  const { data: guarantees } = await supabase.from("guarantees").select("id,end_date,contract_id,contracts(property_id,tenants(name))").eq("status", "active");
+  const { data: guarantees } = await supabase.from("guarantees").select("id,end_date,contract_id,guarantee_type,amount_actual,amount_required,created_at,contracts(property_id,parent_contract_id,tenants(name))").eq("status", "active");
+  // The same guarantee is usually recorded on the contract AND on its amendment;
+  // alert once for the instrument, not once per row.
+  const gReps = representativeGuaranteeIds((guarantees ?? []) as any[]);
   for (const g of (guarantees ?? []) as any[]) {
     if (!g.end_date) continue;
+    if (!gReps.has(g.id)) continue;
     const days = daysUntil(g.end_date);
     if (days > 60) continue;
     if (await hasOpen(g.id, "guarantee")) continue;

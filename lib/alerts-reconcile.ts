@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { representativeGuaranteeIds } from "@/lib/guarantee-dedupe";
 
 // The alert sync only ever CREATED alerts. Nothing closed one whose condition
 // had since been fixed, so a paid debt, a renewed guarantee or a certificate
@@ -57,9 +58,14 @@ export async function reconcileAlerts(supabase: SupabaseClient): Promise<{ resol
   const guaranteeIds = idsFor("guarantee");
   if (guaranteeIds.length > 0) {
     const { data: gs } = await supabase.from("guarantees")
-      .select("id,end_date,status").in("id", guaranteeIds);
+      .select("id,end_date,status,contract_id,guarantee_type,amount_actual,amount_required,created_at,contracts(parent_contract_id)")
+      .in("id", guaranteeIds);
+    // Mirrors the creation rule: one alert per physical guarantee, so a second
+    // row recording the same instrument on an amendment closes as redundant.
+    const gReps = representativeGuaranteeIds((gs ?? []) as any[]);
     for (const g of (gs ?? []) as any[]) {
       if (g.status !== "active" || !g.end_date) continue;   // not active → nothing to chase
+      if (!gReps.has(g.id)) continue;                       // duplicate of another row
       if (daysUntil(g.end_date) <= 60) keep("guarantee", g.id);
     }
   }
