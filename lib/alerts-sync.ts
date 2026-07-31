@@ -5,6 +5,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { mgmtProtectionFromRow, protectionEndDate, describeMgmtProtection } from "@/lib/mgmt-protection";
 import { reconcileAlerts } from "@/lib/alerts-reconcile";
 import { representativeGuaranteeIds } from "@/lib/guarantee-dedupe";
+import { contractExpiryVerdict, contractExpiryTitle } from "@/lib/contract-expiry";
 
 export interface NewAlert {
   title: string;
@@ -98,13 +99,41 @@ export async function runAlertSync(supabase: SupabaseClient): Promise<{ created:
   const { data: contracts } = await supabase.from("contracts")
     .select("id,property_id,end_date,is_amendment,parent_contract_id,tenant_id,tenants(name),properties(name),contract_options(id,status,is_exercised,start_date,end_date,notice_days_before_end,notice_type,option_number)")
     .in("status", ["active", "expiring", "extended"]);
+  // A contract and its amendments are ONE tenancy: they share an end date and
+  // between them hold the options. Alerting per row put the same expiry on the
+  // screen three times for a tenant with two amendments, so the family is
+  // resolved first and only the base row carries the alert — with the family's
+  // latest end date and the options pooled from every row.
+  const famEnd: Record<string, string> = {};
+  const famOptions: Record<string, any[]> = {};
   for (const c of (contracts ?? []) as any[]) {
-    if (c.end_date) {
-      const days = daysUntil(c.end_date);
-      if (days >= 0 && days <= 90) {
+    const fam = c.parent_contract_id || c.id;
+    if (c.end_date && (!famEnd[fam] || String(c.end_date) > famEnd[fam])) famEnd[fam] = String(c.end_date).slice(0, 10);
+    famOptions[fam] = (famOptions[fam] || []).concat(c.contract_options ?? []);
+  }
+
+  for (const c of (contracts ?? []) as any[]) {
+    // Contract end. With a live option this is a short heads-up; with no option
+    // left the end date IS the vacating date and needs a year's runway. One
+    // alert either way, updated in place so the countdown stays true.
+    if (!c.is_amendment) {
+      const fam = c.id;
+      const v = contractExpiryVerdict({ contract: { end_date: famEnd[fam] || c.end_date }, options: famOptions[fam] ?? [] });
+      if (v.applies) {
         const label = (c.tenants?.name ?? "") + " — " + (c.properties?.name ?? "");
-        if (!(await hasOpen(c.id, "contract"))) {
-          await add({ title: `חוזה פוגה ב-${days} ימים: ${label}`, severity: days <= 30 ? "urgent" : days <= 60 ? "warning" : "info", entity_type: "contract", entity_id: c.id, property_id: c.property_id ?? null, due_date: c.end_date, status: "open" });
+        const title = contractExpiryTitle(v, label);
+        const alertType = v.vacating ? "contract_vacating" : "contract_expiring";
+        const { data: exist } = await supabase.from("alerts")
+          .select("id,severity").eq("entity_id", c.id).eq("entity_type", "contract")
+          .in("alert_type", ["contract_vacating", "contract_expiring"])
+          .eq("is_resolved", false).limit(1);
+        if (exist && exist.length) {
+          const prev = exist[0] as any;
+          const patch: any = { title, severity: v.severity, due_date: famEnd[fam] || c.end_date, alert_type: alertType };
+          if (prev.severity !== v.severity) patch.read_at = null;   // escalated → unread again
+          await supabase.from("alerts").update(patch).eq("id", prev.id);
+        } else if (!(await hasOpen(c.id, "contract"))) {
+          await add({ title, severity: v.severity, alert_type: alertType, entity_type: "contract", entity_id: c.id, property_id: c.property_id ?? null, due_date: famEnd[fam] || c.end_date, status: "open" });
         }
       }
     }

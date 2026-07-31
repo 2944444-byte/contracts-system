@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { representativeGuaranteeIds } from "@/lib/guarantee-dedupe";
+import { contractExpiryVerdict } from "@/lib/contract-expiry";
 
 // The alert sync only ever CREATED alerts. Nothing closed one whose condition
 // had since been fixed, so a paid debt, a renewed guarantee or a certificate
@@ -85,12 +86,26 @@ export async function reconcileAlerts(supabase: SupabaseClient): Promise<{ resol
   const contractIds = idsFor("contract");
   if (contractIds.length > 0) {
     const { data: cs } = await supabase.from("contracts")
-      .select("id,end_date,status").in("id", contractIds);
+      .select("id,end_date,status,contract_options(id,status,is_exercised)").in("id", contractIds);
+    // The alert sits on the base contract but the tenancy is base + amendments:
+    // read the family's latest end date and pooled options, exactly as the
+    // creator does, so the two never disagree about whether it still holds.
+    const { data: kids } = await supabase.from("contracts")
+      .select("id,parent_contract_id,end_date,contract_options(id,status,is_exercised)")
+      .in("parent_contract_id", contractIds).eq("is_amendment", true);
     for (const c of (cs ?? []) as any[]) {
-      if (!c.end_date) continue;
       if (["active", "expiring", "extended"].indexOf(c.status) === -1) continue;  // ended → stop chasing
-      const d = daysUntil(c.end_date);
-      if (d >= 0 && d <= 90) keep("contract", c.id);
+      var famEnd = c.end_date ? String(c.end_date).slice(0, 10) : "";
+      var famOpts = (c.contract_options ?? []).slice();
+      for (const k of ((kids ?? []) as any[])) {
+        if (k.parent_contract_id !== c.id) continue;
+        if (k.end_date && String(k.end_date).slice(0, 10) > famEnd) famEnd = String(k.end_date).slice(0, 10);
+        famOpts = famOpts.concat(k.contract_options ?? []);
+      }
+      if (!famEnd) continue;
+      // Same verdict the creator used — including the year-long vacating window,
+      // otherwise this pass would close a vacating alert the moment it appeared.
+      if (contractExpiryVerdict({ contract: { end_date: famEnd }, options: famOpts }).applies) keep("contract", c.id);
     }
   }
 
