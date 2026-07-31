@@ -237,6 +237,15 @@ export default function InsurancesPage() {
     }
   }
 
+  // After a building policy with a premium is saved, offer to bill the tenants
+  // for their share right away. The same handoff is available later from the
+  // row's "צור חיוב" button, so declining here loses nothing.
+  const [billPrompt, setBillPrompt] = useState<any>(null);
+
+  function billingLink(propertyId: string, year: number) {
+    return "/billing?tab=insurance&property=" + encodeURIComponent(propertyId) + "&year=" + year;
+  }
+
   async function handleSave() {
     if (!fRefId) { alert("חובה: " + (activeTab==="building"?"נכס":"חוזה")); return; }
     setSaving(true);
@@ -289,7 +298,17 @@ export default function InsurancesPage() {
         await supabase.from(table).update(payload).eq("id", editingId);
         await logAudit({ entity_type:"insurance", entity_id:editingId, action:"update" });
       }
+      // Ask about billing the tenants only where there is something to split:
+      // a building policy carrying a premium.
+      var premiumNum = fPremium ? Number(fPremium) : 0;
+      var wasNew = isNew;
+      var savedPropId = fRefId;
+      var savedYear = fStartDate ? new Date(fStartDate).getFullYear() : new Date().getFullYear();
       setEditingId(""); await loadAll();
+      if (activeTab === "building" && premiumNum > 0) {
+        var propName = (properties.find(function(pr:any){ return pr.id === savedPropId; }) || {}).name || "";
+        setBillPrompt({ propertyId: savedPropId, propertyName: propName, premium: premiumNum, year: savedYear, isNew: wasNew });
+      }
     } catch(e:any) { alert("שגיאה: "+e?.message); }
     finally { setSaving(false); }
   }
@@ -531,6 +550,35 @@ export default function InsurancesPage() {
 
   return (
     <div dir="rtl">
+      {/* Straight after a building policy with a premium is saved: offer to
+          bill the tenants for their share. Declining is safe — the same
+          handoff sits on every building row ("צור חיוב"). */}
+      {billPrompt && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={function(){setBillPrompt(null);}}>
+          <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6" onClick={function(e:any){e.stopPropagation();}}>
+            <div className="text-lg font-bold text-slate-800 mb-1">💸 להוציא חיובי ביטוח לשוכרים?</div>
+            <div className="text-sm text-slate-600 leading-relaxed mb-4">
+              נשמרה פוליסת מבנה{billPrompt.propertyName ? " ל" + billPrompt.propertyName : ""} בפרמיה של {fmtMoney(billPrompt.premium)} לשנת {billPrompt.year}.
+              <br />
+              ניתן לחלק את הפרמיה בין השוכרים (פרו-רייט לפי מ&quot;ר-ימים), ליצור חיובים ומכתבי חיוב — עכשיו או בכל שלב מאוחר יותר.
+            </div>
+            <div className="flex gap-2 flex-wrap">
+              <a href={billingLink(billPrompt.propertyId, billPrompt.year)}
+                className="flex-1 text-center rounded-lg bg-emerald-600 text-white px-4 py-2 text-sm font-semibold hover:bg-emerald-700">
+                כן — חשב ושלח עכשיו
+              </a>
+              <button onClick={function(){setBillPrompt(null);}}
+                className="flex-1 rounded-lg border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50">
+                לא — אחר כך
+              </button>
+            </div>
+            <div className="text-[11px] text-slate-400 mt-3 text-center">
+              אחר כך: מסך הביטוחים ← שורת הפוליסה ← &quot;💸 צור חיוב&quot;
+            </div>
+          </div>
+        </div>
+      )}
+
       <PageHero title="ביטוחים" icon="🛡️" tone="blue" actionLabel="+ ביטוח חדש" onAction={function(){openNew();}}
         subtitle={<>
           {active.length} פעילים
@@ -760,12 +808,12 @@ export default function InsurancesPage() {
                           var n = insChargeCountFor(ins.property_id, yrs);
                           if (n > 0) {
                             return (
-                              <a href="/billing" title={"כבר נוצרו " + n + " חיובי ביטוח לנכס לשנת " + yrs.join("/") + " — לחץ לצפייה/תיקון. אין צורך ליצור שוב (מניעת כפילות)."}
+                              <a href={billingLink(ins.property_id, yrs[0])} title={"כבר נוצרו " + n + " חיובי ביטוח לנכס לשנת " + yrs.join("/") + " — לחץ לצפייה/תיקון. אין צורך ליצור שוב (מניעת כפילות)."}
                                 className="text-xs border border-green-300 bg-green-100 rounded px-2 py-1 text-green-800 font-semibold hover:bg-green-200">✓ חיוב נוצר ({n}) · תיקון</a>
                             );
                           }
                           return (
-                            <a href="/billing" title={"עבור למסך חיובים ליצירת חיוב ביטוח לדיירים (פרו-רייט לפי מ\"ר-ימים)"}
+                            <a href={billingLink(ins.property_id, yrs[0])} title={"עבור למסך חיובים ליצירת חיוב ביטוח לדיירים (פרו-רייט לפי מ\"ר-ימים)"}
                               className="text-xs border border-emerald-200 bg-emerald-50 rounded px-2 py-1 text-emerald-700 hover:bg-emerald-100">💸 צור חיוב</a>
                           );
                         })()}

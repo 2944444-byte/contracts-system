@@ -47,6 +47,18 @@ interface UseTypeRow { useType: string; totalSqm: number; rate: number; annual: 
 
 export default function BillingPage() {
   const [activeTab, setActiveTab] = useState<Tab>("management");
+  // Deep link from another screen, e.g. the insurances screen handing off a
+  // freshly entered policy: /billing?tab=insurance&property=<id>&year=<yyyy>
+  const [linkPropId, setLinkPropId] = useState("");
+  const [linkYear, setLinkYear] = useState<number | undefined>(undefined);
+  useEffect(function () {
+    if (typeof window === "undefined") return;
+    var q = new URLSearchParams(window.location.search);
+    var t = q.get("tab");
+    if (t && ["management","insurance","waste","advances","saved_advances","cpi_diff"].indexOf(t) !== -1) setActiveTab(t as Tab);
+    if (q.get("property")) setLinkPropId(q.get("property") as string);
+    if (q.get("year")) setLinkYear(Number(q.get("year")) || undefined);
+  }, []);
 
   // shared
   const [properties, setProperties] = useState<any[]>([]);
@@ -105,7 +117,7 @@ export default function BillingPage() {
       ) : (
         <>
           {activeTab === "management" && <ManagementTab properties={internalProps} allProperties={properties} />}
-          {activeTab === "insurance" && <InsuranceTab properties={filteredProperties} />}
+          {activeTab === "insurance" && <InsuranceTab properties={filteredProperties} initialPropId={linkPropId} initialYear={linkYear} />}
           {activeTab === "waste" && <WasteTab properties={filteredProperties} />}
           {activeTab === "advances" && <AdvancesTab properties={filteredProperties} />}
           {activeTab === "saved_advances" && <SavedAdvancesTab properties={filteredProperties} />}
@@ -1057,10 +1069,13 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
 /* ═══════════════════════════════════════════════════════════
    Tab 2 — Insurance
    ═══════════════════════════════════════════════════════════ */
-function InsuranceTab({ properties }: { properties: any[] }) {
+function InsuranceTab({ properties, initialPropId, initialYear }: { properties: any[]; initialPropId?: string; initialYear?: number }) {
   const currentYear = new Date().getFullYear();
-  const [propId, setPropId] = useState("");
-  const [year, setYear] = useState(currentYear);
+  const [propId, setPropId] = useState(initialPropId || "");
+  const [year, setYear] = useState(initialYear || currentYear);
+  // A deep link can arrive after the first render (properties load async).
+  useEffect(function () { if (initialPropId) setPropId(initialPropId); }, [initialPropId]);
+  useEffect(function () { if (initialYear) setYear(initialYear); }, [initialYear]);
   const [policy, setPolicy] = useState<any>(null);
   const [results, setResults] = useState<InsResult[]>([]);
   const [computing, setComputing] = useState(false);
