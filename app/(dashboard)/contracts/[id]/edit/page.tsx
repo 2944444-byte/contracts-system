@@ -2358,6 +2358,10 @@ export default function ContractEditPage() {
                     value={additionalGuarantees}
                     onChange={setAdditionalGuarantees}
                     inputClass={ic}
+                    monthlyRent={guaranteeMonthlyRent}
+                    mgmtFeeMonthly={mgmtFeeMonthly}
+                    vatPct={vatType === "taxable" ? currentVatPct : 0}
+                    rentLabel={rentType === "revenue_pct" ? 'שכ"ד מינימום' : 'שכ"ד'}
                   />
                 </div>
               </div>

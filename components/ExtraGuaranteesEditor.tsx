@@ -1,4 +1,5 @@
 "use client";
+import { useEffect, useRef, useState } from "react";
 
 // Additional securities on a contract (e.g. a promissory note alongside a bank
 // guarantee). Each one is a full guarantee row — amount, issuer, expiry,
@@ -8,6 +9,12 @@
 export type ExtraGuarantee = {
   id?: string;   // existing guarantees row — updated in place, never re-created
   type: string;
+  // Every security stands on its own basis: a promissory note for six months'
+  // rent next to a bank guarantee for three is the normal case, so the months
+  // and the management-fee choice belong to the security, not the contract.
+  calc_method?: "months_based" | "fixed_amount";
+  months?: string;
+  includes_mgmt?: boolean;
   amount_required: string;
   amount_actual: string;
   bank: string;
@@ -32,7 +39,8 @@ export const NO_EXPIRY_TYPES = ["promissory_note", "cash"];
 
 export function emptyExtraGuarantee(type: string): ExtraGuarantee {
   return {
-    type: type, amount_required: "", amount_actual: "", bank: "",
+    type: type, calc_method: "months_based", months: "3", includes_mgmt: true,
+    amount_required: "", amount_actual: "", bank: "",
     reference_number: "", end_date: "", document_url: "", notes: "", guarantors: [],
   };
 }
@@ -42,6 +50,9 @@ export function extraGuaranteeFromRow(g: any): ExtraGuarantee {
   return {
     id: g.id,
     type: g.guarantee_type,
+    calc_method: g.deposit_calc_method === "fixed_amount" ? "fixed_amount" : (g.deposit_months != null ? "months_based" : "fixed_amount"),
+    months: g.deposit_months != null ? String(g.deposit_months) : "",
+    includes_mgmt: g.deposit_includes_mgmt !== false,
     amount_required: g.amount_required != null ? String(g.amount_required) : "",
     amount_actual: g.amount_actual != null ? String(g.amount_actual) : "",
     bank: g.bank ?? "",
@@ -70,6 +81,9 @@ export function extraGuaranteeToRow(e: ExtraGuarantee, contractId: string): Reco
     document_url: e.document_url || null,
     notes: e.notes || null,
     guarantors: e.type === "promissory_note" && validGuarantors.length > 0 ? validGuarantors : null,
+    deposit_calc_method: e.calc_method || "fixed_amount",
+    deposit_months: e.calc_method === "months_based" && e.months ? Number(e.months) : null,
+    deposit_includes_mgmt: e.calc_method === "months_based" ? !!e.includes_mgmt : null,
   };
 }
 
@@ -77,13 +91,45 @@ export default function ExtraGuaranteesEditor(props: {
   value: ExtraGuarantee[];
   onChange: (next: ExtraGuarantee[]) => void;
   inputClass?: string;
+  // For the per-security calculator. Same figures the primary security uses.
+  monthlyRent?: number;
+  mgmtFeeMonthly?: number;
+  vatPct?: number;
+  rentLabel?: string;      // e.g. "שכ״ד מינימום" on a turnover lease
 }) {
   const list = props.value ?? [];
   const ic = props.inputClass ?? "w-full rounded-lg border border-slate-200 px-3 py-2 text-sm";
+  const rent = Number(props.monthlyRent) || 0;
+  const mgmt = Number(props.mgmtFeeMonthly) || 0;
+  const vat = Number(props.vatPct) || 0;
+
+  // A newly added security used to appear at the bottom of a long form, out of
+  // view — it read as "nothing happened". It is added FIRST, highlighted, and
+  // scrolled to.
+  const [justAdded, setJustAdded] = useState(-1);
+  const topRef = useRef<HTMLDivElement | null>(null);
+  useEffect(function () {
+    if (justAdded < 0) return;
+    if (topRef.current && topRef.current.scrollIntoView) {
+      topRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+    const t = setTimeout(function () { setJustAdded(-1); }, 2500);
+    return function () { clearTimeout(t); };
+  }, [justAdded]);
+
+  function amountFor(e: ExtraGuarantee): number {
+    if (e.calc_method !== "months_based") return Number(e.amount_required) || 0;
+    const m = Number(e.months) || 0;
+    if (m <= 0) return 0;
+    return Math.round((rent + (e.includes_mgmt ? mgmt : 0)) * m * (1 + vat / 100));
+  }
 
   // Clicking a type ADDS a security — a contract can legitimately hold two of
   // the same kind (e.g. two bank guarantees). Removal is per card.
-  function add(type: string) { props.onChange(list.concat([emptyExtraGuarantee(type)])); }
+  function add(type: string) {
+    props.onChange([emptyExtraGuarantee(type)].concat(list));
+    setJustAdded(0);
+  }
   function remove(idx: number) { props.onChange(list.filter(function(_, i) { return i !== idx; })); }
   function patch(idx: number, p: Partial<ExtraGuarantee>) {
     props.onChange(list.map(function(x, i) { return i === idx ? { ...x, ...p } : x; }));
@@ -91,14 +137,24 @@ export default function ExtraGuaranteesEditor(props: {
 
   return (
     <div className="rounded-xl border border-slate-200 p-3">
-      <div className="text-xs font-bold text-slate-700 mb-2">ביטחונות נוספים בהסכם (אופציונלי)</div>
+      <div className="flex items-center justify-between mb-2">
+        <div className="text-xs font-bold text-slate-700">ביטחונות נוספים בהסכם (אופציונלי)</div>
+        {list.length > 0 && (
+          <div className="text-[11px] font-semibold text-blue-700">{list.length} ביטחונות נוספים</div>
+        )}
+      </div>
+      <div className="text-[11px] text-slate-500 mb-2">
+        לחיצה על סוג מוסיפה ביטחון נוסף. לכל ביטחון סכום ותנאים משלו — למשל שטר חוב ל-6 חודשים וערבות בנקאית ל-3.
+      </div>
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
         {GUARANTEE_TYPE_LIST.map(function(t) {
           const count = list.filter(function(x) { return x.type === t.v; }).length;
           return (
             <button key={t.v} type="button" onClick={function() { add(t.v); }}
               className={"rounded-lg border p-2 text-center text-xs " + (count > 0 ? "border-blue-500 bg-blue-50 text-blue-700 font-semibold" : "border-slate-200 text-slate-600 hover:bg-slate-50")}>
-              <div>{t.icon}</div><div>+ {t.l}{count > 0 ? " (" + count + ")" : ""}</div>
+              <div>{t.icon}</div>
+              <div>+ {t.l}</div>
+              {count > 0 && <div className="mt-0.5 inline-block rounded-full bg-blue-600 text-white px-1.5 text-[10px] font-bold">{count} בהסכם</div>}
             </button>
           );
         })}
@@ -111,12 +167,61 @@ export default function ExtraGuaranteesEditor(props: {
           {list.map(function(e, idx) {
             const meta = GUARANTEE_TYPE_LIST.find(function(t) { return t.v === e.type; });
             const noExpiry = NO_EXPIRY_TYPES.indexOf(e.type) !== -1;
+            const sameType = list.filter(function(x) { return x.type === e.type; });
+            const ordinal = sameType.length > 1 ? " #" + (sameType.indexOf(e) + 1) : "";
+            const isNew = idx === justAdded;
             return (
-              <div key={idx} className="rounded-lg border border-blue-200 bg-blue-50/30 p-3 space-y-2">
+              <div key={idx} ref={idx === 0 ? topRef : undefined}
+                className={"rounded-lg border p-3 space-y-2 transition-all " +
+                  (isNew ? "border-green-400 bg-green-50 ring-2 ring-green-300" : "border-blue-200 bg-blue-50/30")}>
                 <div className="flex items-center justify-between">
-                  <div className="text-xs font-bold text-blue-800">{meta?.icon} {meta?.l || e.type}</div>
+                  <div className="text-xs font-bold text-blue-800">
+                    {meta?.icon} {meta?.l || e.type}{ordinal}
+                    {isNew && <span className="mr-2 rounded bg-green-600 text-white px-1.5 py-0.5 text-[10px]">נוסף עכשיו — מלא את הפרטים</span>}
+                  </div>
                   <button type="button" onClick={function() { remove(idx); }}
                     className="text-xs text-red-500 hover:text-red-700">הסר</button>
+                </div>
+
+                {/* Its own calculation, independent of every other security. */}
+                <div className="rounded-lg border border-slate-200 bg-white p-2 space-y-2">
+                  <div className="flex gap-1">
+                    <button type="button" onClick={function(){ patch(idx, { calc_method: "months_based" }); }}
+                      className={"rounded border px-2 py-1 text-[11px] " + (e.calc_method === "months_based" ? "border-blue-500 bg-blue-50 font-bold text-blue-700" : "border-slate-200 text-slate-500")}>
+                      לפי חודשי שכ&quot;ד
+                    </button>
+                    <button type="button" onClick={function(){ patch(idx, { calc_method: "fixed_amount" }); }}
+                      className={"rounded border px-2 py-1 text-[11px] " + (e.calc_method !== "months_based" ? "border-blue-500 bg-blue-50 font-bold text-blue-700" : "border-slate-200 text-slate-500")}>
+                      סכום קבוע
+                    </button>
+                  </div>
+                  {e.calc_method === "months_based" && (
+                    <div className="flex items-end gap-2 flex-wrap">
+                      <div className="w-24">
+                        <label className="mb-1 block text-[11px] text-slate-500">מספר חודשים</label>
+                        <input type="number" min="1" value={e.months ?? ""}
+                          onChange={function(ev){ patch(idx, { months: ev.target.value, amount_required: String(amountFor({ ...e, months: ev.target.value })) }); }}
+                          className={ic} />
+                      </div>
+                      <label className="flex items-center gap-1.5 text-[11px] text-slate-700 pb-2">
+                        <input type="checkbox" checked={!!e.includes_mgmt}
+                          onChange={function(ev){ patch(idx, { includes_mgmt: ev.target.checked, amount_required: String(amountFor({ ...e, includes_mgmt: ev.target.checked })) }); }}
+                          className="w-3.5 h-3.5" />
+                        כולל דמי ניהול
+                      </label>
+                      <div className="flex-1 min-w-[140px] rounded bg-green-50 border border-green-200 px-2 py-1.5 text-right">
+                        <span className="text-[11px] text-green-700">סכום מחושב: </span>
+                        <b className="text-sm text-green-800">₪{amountFor(e).toLocaleString("he-IL")}</b>
+                      </div>
+                    </div>
+                  )}
+                  {e.calc_method === "months_based" && (
+                    <div className="text-[10px] text-slate-500">
+                      {e.months || 0} × (₪{rent.toLocaleString("he-IL")} {props.rentLabel || 'שכ"ד'}
+                      {e.includes_mgmt && mgmt > 0 ? " + ₪" + mgmt.toLocaleString("he-IL") + " דמי ניהול" : ""})
+                      {vat > 0 ? ' × מע"מ ' + vat + "%" : ""}
+                    </div>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-2 gap-2">

@@ -3324,6 +3324,10 @@ export default function ContractsNewPage() {
                   value={additionalGuarantees}
                   onChange={setAdditionalGuarantees}
                   inputClass={ic}
+                  monthlyRent={guaranteeMonthlyRent}
+                  mgmtFeeMonthly={mgmtFeeMonthly}
+                  vatPct={vatType === "taxable" ? currentVatPct : 0}
+                  rentLabel={rentType === "revenue_pct" ? 'שכ"ד מינימום' : 'שכ"ד'}
                 />
 
                 {/* Everything the contract will actually be secured by, in one
