@@ -298,7 +298,7 @@ export default function ContractsPage() {
   useEffect(function() {
     if (!selContract) { setPriceTiers([]); setPriceTimeline([]); return; }
     supabase.from("contract_price_tiers").select("*, spaces(space_name)")
-      .eq("contract_id", selContract.id).order("tier_number")
+      .eq("contract_id", selContract.id).is("option_id", null).order("tier_number")
       .then(function({ data: tiers }) {
         setRawTiersWithSpace(tiers ?? []);
         var loadedTiers: PriceTier[] = (tiers ?? []).map(function(t: any) {
@@ -313,12 +313,33 @@ export default function ContractsPage() {
             notes: t.notes ?? "",
           };
         });
+        // Same fallback as the edit screen: contracts whose tier rows failed to
+        // save still carry the full schedule on contracts.increase_steps.
+        if (loadedTiers.length === 0 && Array.isArray((selContract as any).increase_steps)) {
+          loadedTiers = ((selContract as any).increase_steps as any[]).map(function(t: any) {
+            return {
+              increase_type: t.increase_type ?? "pct",
+              increase_value: Number(t.increase_value) || 0,
+              from_year: t.from_year ?? 1,
+              to_year: t.to_year ?? 3,
+              is_recurring: t.is_recurring ?? false,
+              recurring_every_years: t.recurring_every_years ?? (t.is_recurring ? 1 : null),
+              calculated_rent_per_sqm: null,
+              notes: t.notes ?? "",
+            };
+          });
+        }
         setPriceTiers(loadedTiers);
         if (selContract.start_date && selContract.end_date) {
           var tl = buildPriceTimeline({
             contractStart: selContract.start_date,
             contractEnd: selContract.end_date,
-            baseRentPerSqm: Number(selContract.rent_per_sqm) || 0,
+            // A turnover lease has no rent_per_sqm — what steps over the years
+            // is the MINIMUM, so that is the figure the timeline is built on.
+            // Reading the empty column showed every period as ₪0.00.
+            baseRentPerSqm: Number(selContract.rent_per_sqm)
+              || Number(selContract.min_rent_per_sqm)
+              || 0,
             mainTiers: loadedTiers,
             options: (selContract.contract_options ?? []).map(function(o: any) {
               return { ...o, price_schedule_type: o.price_schedule_type || "inherit", price_tiers: o.price_tiers || [] };
@@ -1050,7 +1071,10 @@ export default function ContractsPage() {
                 else mon += (Number(cs.price_per_sqm) || Number(c.rent_per_sqm) || 0) * (cs.spaces?.area || 0);
               });
             }
+            // A turnover lease has no per-sqm rent — showing ₪0.00/חודש made it
+            // look like it collects nothing. Fall back to its guaranteed floor.
             if (mon === 0) mon = (c.rent_per_sqm??0)*(c.charged_area??0);
+            if (mon === 0) mon = (Number(c.min_rent_per_sqm)||0)*(Number(c.charged_area)||0) || (Number(c.minimum_rent)||0);
             mon += (c.investment_addition??0);
             const rem  = cEffEnd ? yearsMonthsLeft(cEffEnd) : null;
             const isSel = selected===c.id;
@@ -1071,11 +1095,29 @@ export default function ContractsPage() {
                 </div>
                 <div className="flex items-center justify-between mt-1.5">
                   <span className="text-xs font-semibold text-green-700">{fmtMoney(mon)}/חודש</span>
-                  {rem && !rem.isExpired && (
-                    <span className={"text-xs font-semibold " + (rem.years < 1 ? "text-red-600" : rem.years < 2 ? "text-yellow-600" : "text-slate-500")}>
-                      {rem.text}
-                    </span>
-                  )}
+                  {(function(){
+                    // A contract that hasn't started yet has no "time left" —
+                    // showing 7 שנים ו-1 חודש (the gap from today) read as if
+                    // that were the agreed term. Show the term itself.
+                    var notStarted = c.start_date && new Date(c.start_date) > new Date();
+                    if (notStarted) {
+                      var pv = Number(c.lease_period_value) || 0;
+                      var yrs = c.lease_period_unit === "years" ? pv : (pv % 12 === 0 ? pv / 12 : 0);
+                      var termTxt = yrs > 0 ? yrs + " שנים" : (pv > 0 ? pv + " חודשים" : "");
+                      var fromTxt = c.actual_handover_date ? "מהמסירה" : (c.planned_handover_date ? "ממועד המסירה" : "מתחילת השכירות");
+                      return termTxt ? (
+                        <span className="text-xs font-semibold text-slate-500" title={"טרם החל — תחילת שכירות " + new Date(c.start_date).toLocaleDateString("he-IL")}>
+                          {termTxt} {fromTxt}
+                        </span>
+                      ) : null;
+                    }
+                    return rem && !rem.isExpired ? (
+                      <span className={"text-xs font-semibold " + (rem.years < 1 ? "text-red-600" : rem.years < 2 ? "text-yellow-600" : "text-slate-500")}
+                        title="הזמן שנותר עד תום החוזה">
+                        נותרו {rem.text}
+                      </span>
+                    ) : null;
+                  })()}
                   {rem?.isExpired && <span className="text-xs font-bold text-red-600">פג!</span>}
                 </div>
               </div>
@@ -1453,7 +1495,15 @@ export default function ContractsPage() {
                   // Standard timeline (contract-level)
                   if (priceTimeline.length <= 1) return null;
                   return <div className="rounded-lg border border-blue-200 bg-blue-50/30 p-3 mb-3">
-                    <div className="text-xs font-bold text-blue-800 mb-2">📊 ציר זמן מחירים</div>
+                    <div className="text-xs font-bold text-blue-800 mb-2">
+                      📊 {selContract.rent_type === "revenue_pct" ? 'ציר זמן שכ"ד מינימום' : "ציר זמן מחירים"}
+                    </div>
+                    {selContract.rent_type === "revenue_pct" && (
+                      <div className="text-[11px] text-blue-700 mb-2 leading-relaxed">
+                        בחוזה אחוז-מפדיון הסכומים כאן הם ה<b>מינימום</b> למ&quot;ר לחודש (הרצפה). שכ&quot;ד בפועל = הגבוה מבין
+                        {" "}{Number(selContract.revenue_pct) || 0}% מהפדיון לבין המינימום.
+                      </div>
+                    )}
                     <table className="w-full text-[10px]">
                       <thead>
                         <tr className="text-blue-600 border-b border-blue-200">
@@ -2043,7 +2093,7 @@ export default function ContractsPage() {
                               <div>קפיצת מחיר: +{opt.rent_increase_pct}%</div>
                             )}
                             {opt.rent_mechanism === "new_value" && opt.new_rent_value && (
-                              <div>מחיר חדש: {fmtMoney(opt.new_rent_value)}/מ&quot;ר</div>
+                              <div>{selContract.rent_type === "revenue_pct" ? "מינימום חדש" : "מחיר חדש"}: {fmtMoney(opt.new_rent_value)}/מ&quot;ר</div>
                             )}
                             {noticeDate && (
                               <div className={"font-semibold " + (noticePassed && !isExercised ? "text-red-600" : "text-slate-600")}>
