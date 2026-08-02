@@ -88,12 +88,17 @@ export async function applyLateOpeningCharge(params: {
     (contract.actual_opening_date ? " · נפתח " + new Date(contract.actual_opening_date).toLocaleDateString("he-IL") : " · טרם נפתח") +
     (contract.late_opening_penalty_notes ? " · " + contract.late_opening_penalty_notes : "");
 
+  // Column names follow the charges table exactly: base_amount (not "amount"),
+  // and vat_type alongside the VAT figure — the same shape the option penalty
+  // uses, so both land in the payments screen identically.
   const { data, error } = await supabase.from("charges").insert({
     contract_id: contract.id,
     charge_type: "late_opening_penalty",
-    amount: preview.amount,
+    description: "קנס אי-פתיחת המושכר במועד",
+    base_amount: preview.amount,
     vat_amount: preview.vatAmount,
     total_amount: preview.total,
+    vat_type: preview.vatPct > 0 ? "taxable" : "exempt",
     due_date: preview.dueDate,
     status: "pending",
     notes,
