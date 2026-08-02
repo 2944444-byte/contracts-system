@@ -16,6 +16,8 @@ import { previewOptionDecline, applyOptionDecline } from '@/lib/option-decline';
 import { baseIndexRuleFromRow, describeBaseIndexRule, baseIndexPending, resolveBaseIndexMonth } from '@/lib/base-index-rule';
 import { pctTiersFromRow, describePctTiers } from '@/lib/revenue-pct-steps';
 import { guaranteeGaps, describeGaps } from '@/lib/guarantee-status';
+import { graceWindow, describeGrace, lateOpeningPenalty } from '@/lib/store-opening';
+import { previewLateOpeningCharge, applyLateOpeningCharge } from '@/lib/late-opening-charge';
 import { mgmtProtectionFromRow, describeMgmtProtection } from '@/lib/mgmt-protection';
 // CPI + price timeline
 
@@ -137,6 +139,12 @@ export default function ContractsPage() {
   const [showHandover, setShowHandover] = useState(false);
   const [handoverDate, setHandoverDate] = useState("");
   const [handoverSaving, setHandoverSaving] = useState(false);
+  // Recording the store opening — the milestone the lease clock really starts on.
+  const [showOpening, setShowOpening] = useState(false);
+  const [openingDate, setOpeningDate] = useState("");
+  const [openingSaving, setOpeningSaving] = useState(false);
+  const [penPreview, setPenPreview] = useState<any>(null);
+  const [penWorking, setPenWorking] = useState(false);
   const [amendType, setAmendType] = useState<string|null>(null);
   const [amendDate, setAmendDate] = useState(new Date().toISOString().split("T")[0]);
   const [amendNotes, setAmendNotes] = useState("");
@@ -1173,6 +1181,22 @@ export default function ContractsPage() {
                         {selContract.actual_handover_date
                           ? "📦 נמסר " + new Date(selContract.actual_handover_date).toLocaleDateString("he-IL")
                           : "📦 הזן מסירה בפועל"}
+                      </button>
+                    )}
+                    {/* Retail: the lease clock starts when the store opens, and
+                        the opening also cuts the fit-out grace short. */}
+                    {(selContract.planned_opening_date || selContract.actual_opening_date || Number(selContract.grace_months) > 0) && (
+                      <button onClick={function(){
+                          setOpeningDate((selContract.actual_opening_date || selContract.planned_opening_date || "").slice(0,10));
+                          setShowOpening(true);
+                        }}
+                        className={"rounded-lg border px-3 py-1.5 text-xs font-semibold " + (selContract.actual_opening_date
+                          ? "border-green-200 bg-green-50 text-green-700 hover:bg-green-100"
+                          : "border-indigo-300 bg-indigo-50 text-indigo-800 hover:bg-indigo-100")}
+                        title="מועד פתיחת המושכר — עוצר את הגרייס ומתחיל את חיוב שכ״ד">
+                        {selContract.actual_opening_date
+                          ? "🏬 נפתח " + new Date(selContract.actual_opening_date).toLocaleDateString("he-IL")
+                          : "🏬 פתיחת המושכר"}
                       </button>
                     )}
                     {selContract.document_url && (
@@ -2243,6 +2267,106 @@ export default function ContractsPage() {
       {/* Record the actual handover. Everything downstream — the lease term, the
           rent steps' contract years, a derived base index — hangs off this date,
           so it is applied in one place rather than edited field by field. */}
+      {/* Record the store opening, and raise the late-opening penalty if the
+          contract carries one. Both in one place, because they are the same
+          moment in the lease. */}
+      {showOpening && selContract && (function(){
+        var draft = { ...selContract, actual_opening_date: openingDate || null };
+        var g = graceWindow({ contract: draft });
+        var pen = lateOpeningPenalty({ contract: draft, monthlyRent: displayRent });
+        var hasPenTerm = selContract.late_opening_penalty_type && selContract.late_opening_penalty_type !== "none";
+        return (
+          <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={function(){ if(!openingSaving) { setShowOpening(false); setPenPreview(null); } }}>
+            <div className="bg-white rounded-2xl shadow-xl max-w-lg w-full p-6" dir="rtl" onClick={function(e:any){e.stopPropagation();}}>
+              <div className="text-lg font-bold text-slate-800 mb-1">🏬 פתיחת המושכר</div>
+              <div className="text-xs text-slate-500 mb-4">
+                {selContract.tenants?.name} — {selContract.properties?.name}
+                {selContract.planned_opening_date && <span> · יעד פתיחה: {new Date(selContract.planned_opening_date).toLocaleDateString("he-IL")}</span>}
+              </div>
+
+              <label className="mb-1 block text-xs font-semibold text-slate-700">מועד הפתיחה בפועל</label>
+              <input type="date" value={openingDate} onChange={function(e){setOpeningDate(e.target.value); setPenPreview(null);}}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm mb-3" />
+
+              {g.applies && (
+                <div className="rounded-lg bg-indigo-50 border border-indigo-200 p-3 text-xs text-indigo-900 space-y-1 mb-3">
+                  <div className="font-bold">{describeGrace(g)}</div>
+                  {g.end && <div>חיוב שכ&quot;ד מתחיל: <b>{g.end.toLocaleDateString("he-IL")}</b></div>}
+                </div>
+              )}
+
+              {hasPenTerm && (
+                <div className={"rounded-lg border p-3 text-xs mb-3 " + (pen.applies ? "border-rose-300 bg-rose-50 text-rose-900" : "border-slate-200 bg-slate-50 text-slate-600")}>
+                  <div className="font-bold mb-0.5">⏰ קנס אי-פתיחה במועד</div>
+                  {pen.applies
+                    ? <div>איחור {pen.lateDays} ימים · לחיוב {pen.chargeableDays} ימים · <b>₪{pen.amount.toLocaleString("he-IL")}</b> ({pen.basis})</div>
+                    : <div>אין קנס לחיוב במועד זה.</div>}
+                  {penPreview && (
+                    <div className="mt-2 rounded bg-white border border-rose-200 p-2">
+                      {penPreview.ok
+                        ? <div>
+                            לחיוב: ₪{penPreview.amount.toLocaleString("he-IL")}
+                            {penPreview.vatAmount > 0 ? " + מע\"מ ₪" + penPreview.vatAmount.toLocaleString("he-IL") : ""}
+                            {" = "}<b>₪{penPreview.total.toLocaleString("he-IL")}</b> · לתשלום עד {new Date(penPreview.dueDate).toLocaleDateString("he-IL")}
+                            {penPreview.alreadyCharged && <div className="text-amber-700 font-semibold">⚠ כבר קיים חיוב קנס לחוזה זה</div>}
+                          </div>
+                        : <div className="text-slate-600">{penPreview.reason}</div>}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="flex gap-2 flex-wrap">
+                <button disabled={!openingDate || openingSaving}
+                  onClick={async function(){
+                    setOpeningSaving(true);
+                    try {
+                      var { error } = await supabase.from("contracts").update({ actual_opening_date: openingDate }).eq("id", selContract.id);
+                      if (error) throw new Error(error.message);
+                      await logAudit({ entity_type:"contract", entity_id:selContract.id, action:"store_opening" });
+                      setShowOpening(false); setPenPreview(null);
+                      await loadContracts();
+                    } catch(e:any) { alert("שגיאה: " + e?.message); }
+                    finally { setOpeningSaving(false); }
+                  }}
+                  className="flex-1 rounded-lg bg-green-600 text-white px-4 py-2 text-sm font-bold hover:bg-green-700 disabled:opacity-50">
+                  {openingSaving ? "⏳ שומר..." : "✓ אשר פתיחה"}
+                </button>
+                {hasPenTerm && pen.applies && (
+                  <button disabled={penWorking}
+                    onClick={async function(){
+                      setPenWorking(true);
+                      try {
+                        if (!penPreview) {
+                          var pv = await previewLateOpeningCharge({
+                            supabase, contract: draft, monthlyRent: displayRent, vatPct: Math.round(vatPct * 100),
+                          });
+                          setPenPreview(pv);
+                        } else if (penPreview.ok) {
+                          if (penPreview.alreadyCharged && !confirm("כבר קיים חיוב קנס לחוזה זה. ליצור חיוב נוסף?")) { setPenWorking(false); return; }
+                          var res = await applyLateOpeningCharge({ supabase, contract: draft, preview: penPreview });
+                          if (!res.ok) throw new Error(res.error);
+                          alert("✅ נוצר חיוב קנס על סך ₪" + penPreview.total.toLocaleString("he-IL"));
+                          setPenPreview(null);
+                        }
+                      } catch(e:any) { alert("שגיאה: " + e?.message); }
+                      finally { setPenWorking(false); }
+                    }}
+                    className="rounded-lg border border-rose-300 bg-rose-50 px-4 py-2 text-sm font-bold text-rose-700 hover:bg-rose-100 disabled:opacity-50">
+                    {penWorking ? "⏳..." : penPreview?.ok ? "צור חיוב קנס" : "חשב קנס"}
+                  </button>
+                )}
+                <button onClick={function(){setShowOpening(false); setPenPreview(null);}} disabled={openingSaving}
+                  className="rounded-lg border border-slate-300 px-4 py-2 text-sm text-slate-600 hover:bg-slate-50">ביטול</button>
+              </div>
+              <div className="text-[11px] text-slate-400 mt-3">
+                אישור הפתיחה עוצר את הגרייס (אם כך סוכם) ומתחיל את חיוב שכ&quot;ד מאותו מועד.
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {showHandover && selContract && (function(){
         var planned = (selContract.planned_handover_date || "").slice(0,10);
         var prevStart = (selContract.start_date || "").slice(0,10);

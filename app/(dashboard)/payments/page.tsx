@@ -22,6 +22,7 @@ const CHARGE_TYPES = [
   { v: "cpi_diff",    l: "הפרשי הצמדה",       icon: "📊" },
   { v: "waste",       l: "פינוי אשפה",        icon: "🗑" },
   { v: "option_penalty", l: "פיצוי אי מימוש אופציה", icon: "⚖️" },
+  { v: "late_opening_penalty", l: "קנס אי-פתיחת המושכר", icon: "⏰" },
   { v: "investment_clawback", l: "החזר השקעות ביציאה מוקדמת", icon: "↩️" },
   { v: "revenue_settlement", l: "התחשבנות פדיון", icon: "⚖️" },
   { v: "other",       l: "אחר",               icon: "📋" },

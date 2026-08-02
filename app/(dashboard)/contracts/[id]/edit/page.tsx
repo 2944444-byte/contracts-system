@@ -1,5 +1,6 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
+import { graceWindow, describeGrace, lateOpeningPenalty } from "@/lib/store-opening";
 import { guaranteedMonthlyRent } from "@/lib/guarantee-base";
 import RevenuePctTiersEditor from "@/components/RevenuePctTiersEditor";
 import { RevenuePctTier, pctTiersFromRow } from "@/lib/revenue-pct-steps";
@@ -175,6 +176,15 @@ export default function ContractEditPage() {
   const [graceMonths, setGraceMonths] = useState("3");
   const [graceType, setGraceType] = useState("full");
   const [graceDiscountPct, setGraceDiscountPct] = useState("50");
+  // Retail: fit-out window and the store opening that ends it.
+  const [plannedOpening, setPlannedOpening] = useState("");
+  const [actualOpening, setActualOpening] = useState("");
+  const [graceEndsOnOpening, setGraceEndsOnOpening] = useState(true);
+  const [graceMgmtDiscount, setGraceMgmtDiscount] = useState("");
+  const [latePenType, setLatePenType] = useState("none");
+  const [latePenValue, setLatePenValue] = useState("");
+  const [latePenGraceDays, setLatePenGraceDays] = useState("0");
+  const [latePenNotes, setLatePenNotes] = useState("");
   const [hasIncrease, setHasIncrease] = useState(false);
   const [increaseMode, setIncreaseMode] = useState<"unified" | "per_unit">("unified");
   const [perUnitTiers, setPerUnitTiers] = useState<Record<string, PriceTier[]>>({});
@@ -416,6 +426,12 @@ export default function ContractEditPage() {
       setLeasePeriodValue(12);
       setLeasePeriodUnit("months");
     }
+    setPlannedOpening(c.planned_opening_date?.split("T")[0] ?? "");
+    setActualOpening(c.actual_opening_date?.split("T")[0] ?? "");
+    setLatePenType(c.late_opening_penalty_type || "none");
+    setLatePenValue(c.late_opening_penalty_value != null ? String(c.late_opening_penalty_value) : "");
+    setLatePenGraceDays(c.late_opening_grace_days != null ? String(c.late_opening_grace_days) : "0");
+    setLatePenNotes(c.late_opening_penalty_notes ?? "");
     setRentType(c.rent_type === "revenue_pct" ? "revenue_pct" : "fixed");
     setRevenuePct(c.revenue_pct?.toString() ?? "");
     // Whichever column holds the floor decides how the field is shown, so a
@@ -450,6 +466,8 @@ export default function ContractEditPage() {
       setGraceMonths(c.grace_months.toString());
       setGraceType(c.grace_type ?? "full");
       setGraceDiscountPct(c.grace_discount_pct?.toString() ?? "50");
+    setGraceMgmtDiscount(c.grace_mgmt_discount_pct != null ? String(c.grace_mgmt_discount_pct) : "");
+    setGraceEndsOnOpening(c.grace_ends_on_opening !== false);
     }
     // Load price tiers — from latest amendment if exists, else from contract
     var tiersContractId = id;
@@ -763,7 +781,15 @@ export default function ContractEditPage() {
       };
 
       // Grace
+      updatePayload.planned_opening_date = plannedOpening || null;
+      updatePayload.actual_opening_date = actualOpening || null;
+      updatePayload.late_opening_penalty_type = latePenType === "none" ? null : latePenType;
+      updatePayload.late_opening_penalty_value = latePenType === "none" ? null : (Number(latePenValue) || null);
+      updatePayload.late_opening_grace_days = latePenType === "none" ? null : (Number(latePenGraceDays) || 0);
+      updatePayload.late_opening_penalty_notes = latePenType === "none" ? null : (latePenNotes || null);
       if (hasGrace) {
+        updatePayload.grace_ends_on_opening = graceEndsOnOpening;
+        updatePayload.grace_mgmt_discount_pct = graceMgmtDiscount === "" ? null : (Number(graceMgmtDiscount) || 0);
         updatePayload.grace_months = Number(graceMonths) || null;
         updatePayload.grace_type = graceType;
         updatePayload.grace_discount_pct = graceType === "partial" ? Number(graceDiscountPct) || null : null;
@@ -1543,10 +1569,90 @@ export default function ContractEditPage() {
                   </div>
                   {graceType === "partial" && (
                     <div>
-                      <label className="mb-1 block text-xs font-semibold text-slate-700">אחוז הנחה בגרייס (%)</label>
+                      <label className="mb-1 block text-xs font-semibold text-slate-700">אחוז הנחה בשכ&quot;ד בגרייס (%)</label>
                       <input type="number" min="1" max="99" value={graceDiscountPct} onChange={(e) => setGraceDiscountPct(e.target.value)} className={ic} />
                     </div>
                   )}
+
+                  <div className="rounded-lg border border-indigo-200 bg-indigo-50/40 p-3 space-y-2">
+                    <div className="text-xs font-bold text-indigo-800">🏬 פתיחת המושכר (חוזי חנויות)</div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="mb-1 block text-[11px] font-semibold text-slate-700">יעד פתיחת המושכר</label>
+                        <input type="date" value={plannedOpening} onChange={(e) => setPlannedOpening(e.target.value)} className={ic} />
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-[11px] font-semibold text-slate-700">פתיחה בפועל</label>
+                        <input type="date" value={actualOpening} onChange={(e) => setActualOpening(e.target.value)} className={ic} />
+                      </div>
+                    </div>
+                    <label className="flex items-start gap-2 text-[11px] text-slate-700">
+                      <input type="checkbox" checked={graceEndsOnOpening} onChange={(e) => setGraceEndsOnOpening(e.target.checked)} className="w-3.5 h-3.5 mt-0.5" />
+                      <span>פתיחת המושכר מקצרת את הגרייס
+                        <span className="block text-slate-500">בטל אם הגרייס נמשך לתקופתו המלאה גם אחרי הפתיחה.</span>
+                      </span>
+                    </label>
+                  </div>
+
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-slate-700">הנחה בדמי ניהול בגרייס (%) — ריק = ללא שינוי</label>
+                    <input type="number" min="0" max="100" value={graceMgmtDiscount} placeholder="למשל 50"
+                      onChange={(e) => setGraceMgmtDiscount(e.target.value)} className={ic} />
+                  </div>
+
+                  <div className="rounded-lg border border-rose-200 bg-rose-50/40 p-3 space-y-2">
+                    <div className="text-xs font-bold text-rose-800">⏰ קנס על אי-פתיחה במועד (אופציונלי)</div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="mb-1 block text-[11px] font-semibold text-slate-700">סוג הקנס</label>
+                        <select value={latePenType} onChange={(e) => setLatePenType(e.target.value)} className={ic}>
+                          <option value="none">ללא קנס</option>
+                          <option value="daily_amount">סכום קבוע לכל יום איחור</option>
+                          <option value="daily_pct_rent">אחוז משכ&quot;ד יומי לכל יום איחור</option>
+                          <option value="fixed">סכום חד-פעמי</option>
+                        </select>
+                      </div>
+                      {latePenType !== "none" && (<>
+                        <div>
+                          <label className="mb-1 block text-[11px] font-semibold text-slate-700">{latePenType === "daily_pct_rent" ? "אחוז (%)" : "סכום (₪)"}</label>
+                          <input type="number" step="0.01" value={latePenValue} onChange={(e) => setLatePenValue(e.target.value)} className={ic} />
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-[11px] font-semibold text-slate-700">ימי חסד</label>
+                          <input type="number" min="0" value={latePenGraceDays} onChange={(e) => setLatePenGraceDays(e.target.value)} className={ic} />
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-[11px] font-semibold text-slate-700">הערות</label>
+                          <input type="text" value={latePenNotes} onChange={(e) => setLatePenNotes(e.target.value)} className={ic} />
+                        </div>
+                      </>)}
+                    </div>
+                  </div>
+
+                  {(function(){
+                    var draft = {
+                      grace_months: Number(graceMonths) || 0, grace_type: graceType,
+                      grace_discount_pct: Number(graceDiscountPct) || 0,
+                      grace_mgmt_discount_pct: graceMgmtDiscount === "" ? null : Number(graceMgmtDiscount),
+                      grace_ends_on_opening: graceEndsOnOpening,
+                      actual_handover_date: actualHandover || null, planned_handover_date: plannedHandover || null,
+                      start_date: startDate || null,
+                      planned_opening_date: plannedOpening || null, actual_opening_date: actualOpening || null,
+                      late_opening_penalty_type: latePenType === "none" ? null : latePenType,
+                      late_opening_penalty_value: Number(latePenValue) || 0,
+                      late_opening_grace_days: Number(latePenGraceDays) || 0,
+                    };
+                    var g = graceWindow({ contract: draft });
+                    if (!g.applies) return null;
+                    var pen = lateOpeningPenalty({ contract: draft, monthlyRent: guaranteeMonthlyRent });
+                    return (
+                      <div className="rounded-lg bg-indigo-50 border border-indigo-200 p-3 text-xs text-indigo-900 space-y-1">
+                        <div className="font-bold">📅 {describeGrace(g)}</div>
+                        {g.end && <div>חיוב שכ&quot;ד מתחיל: <b>{g.end.toLocaleDateString("he-IL")}</b></div>}
+                        {pen.applies && <div className="text-rose-700 font-semibold">⏰ קנס אי-פתיחה: ₪{pen.amount.toLocaleString("he-IL")} · {pen.basis}</div>}
+                      </div>
+                    );
+                  })()}
                 </div>
               )}
             </div>
