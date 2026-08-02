@@ -10,6 +10,17 @@ import { getScopeIds, scopeRows } from '@/lib/permissions';
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
+// Policies rarely run Jan–Dec (1.8.26–31.7.27). Every label is derived from the
+// policy's own dates so "שנת 2026" can't stand for a period it doesn't match.
+function policyPeriod(ins: any): string {
+  if (!ins?.start_date || !ins?.end_date) return "—";
+  var y1 = new Date(ins.start_date).getFullYear(), y2 = new Date(ins.end_date).getFullYear();
+  return y1 === y2 ? String(y1) : y1 + "–" + y2;
+}
+function policyDates(ins: any): string {
+  if (!ins?.start_date || !ins?.end_date) return "—";
+  return fmtDate(ins.start_date) + " – " + fmtDate(ins.end_date);
+}
 function daysLeft(d: string) { return Math.ceil((new Date(d).getTime()-Date.now())/86400000); }
 function fmtMoney(n: number) { return n ? "₪"+Number(n).toLocaleString("he-IL",{minimumFractionDigits:0,maximumFractionDigits:0}) : "—"; }
 
@@ -201,7 +212,7 @@ export default function InsurancesPage() {
   }
 
   function openNew(prefillRefId?: string) {
-    setIsNew(true); setEditingId("new");
+    setIsNew(true); setEditingId("new"); setRenewFrom(null);
     setFRefId(prefillRefId || ""); setFInsurer(""); setFPolicyNum(""); setFCoverage("");
     setFPremium(""); setFDeductible(""); setFStartDate(""); setFEndDate("");
     setFStatus("active"); setFNotes(""); setFDocUrl(""); setFCovTypes([]); setFCovLimits({});
@@ -209,7 +220,44 @@ export default function InsurancesPage() {
     if (fileRef.current) fileRef.current.value = "";
   }
 
+  // Renewing must not overwrite the policy that just ended — the premium
+  // history is the point. This opens a NEW policy pre-filled from the old one,
+  // with the period rolled forward a year; on save the old row is marked
+  // expired and linked as the predecessor.
+  const [renewFrom, setRenewFrom] = useState<any>(null);
+  // Premium tracking across the years — the reason renewals must not overwrite.
+  const [historyOf, setHistoryOf] = useState<any>(null);
+  function openRenew(ins: any) {
+    var addYear = function (d: string, days: number) {
+      if (!d) return "";
+      var x = new Date(d); x.setFullYear(x.getFullYear() + 1); x.setDate(x.getDate() + days);
+      return x.toISOString().slice(0, 10);
+    };
+    setIsNew(true); setEditingId("new");
+    setRenewFrom(ins);
+    setFRefId(ins.property_id ?? ins.contract_id ?? "");
+    setFInsurer(insurerOf(ins) === "—" ? "" : insurerOf(ins));
+    setFPolicyNum("");                       // a renewal gets a new policy number
+    setFCoverage(ins.coverage_amount?.toString() ?? "");
+    setFPremium("");                         // and its own premium — the figure being tracked
+    setFDeductible(ins.deductible?.toString() ?? "");
+    // The new cover starts the day after the old one ends, keeping the same
+    // anniversary (1.8–31.7 stays 1.8–31.7).
+    setFStartDate(ins.end_date ? new Date(new Date(ins.end_date).getTime() + 86400000).toISOString().slice(0, 10) : "");
+    setFEndDate(ins.end_date ? addYear(ins.end_date, 0) : "");
+    setFStatus("active"); setFNotes(""); setFDocUrl("");
+    var limits = (ins.coverage_limits && typeof ins.coverage_limits === "object") ? ins.coverage_limits : {};
+    var types = Array.isArray(ins.coverage_types) ? ins.coverage_types.slice() : [];
+    Object.keys(limits).forEach(function (k) { if (!types.includes(k)) types.push(k); });
+    var limStr: Record<string, string> = {};
+    Object.keys(limits).forEach(function (k) { limStr[k] = limits[k] ? String(limits[k]) : ""; });
+    setFCovTypes(types); setFCovLimits(limStr);
+    setDocExtractMsg("");
+    if (fileRef.current) fileRef.current.value = "";
+  }
+
   function openEdit(ins: any) {
+    setRenewFrom(null);
     setIsNew(false); setEditingId(ins.id);
     setFRefId(ins.property_id ?? ins.contract_id ?? "");
     setFInsurer(insurerOf(ins)==="—"?"":insurerOf(ins)); setFPolicyNum(ins.policy_number??"");
@@ -290,10 +338,16 @@ export default function InsurancesPage() {
       }
 
       if (isNew) {
+        if (renewFrom?.id) payload.previous_policy_id = renewFrom.id;
         const { data, error: ie } = await supabase.from(table).insert(payload).select().single();
         if (ie) throw new Error(ie.message);
         if (!data?.id) throw new Error("שגיאה בשמירה");
-        await logAudit({ entity_type:"insurance", entity_id:data.id, action:"create" });
+        // The predecessor stays as the record of its own period — only its
+        // status changes, so the premium history survives the renewal.
+        if (renewFrom?.id) {
+          await supabase.from(table).update({ status: "expired" }).eq("id", renewFrom.id);
+        }
+        await logAudit({ entity_type:"insurance", entity_id:data.id, action: renewFrom?.id ? "renew" : "create" });
       } else {
         await supabase.from(table).update(payload).eq("id", editingId);
         await logAudit({ entity_type:"insurance", entity_id:editingId, action:"update" });
@@ -579,6 +633,71 @@ export default function InsurancesPage() {
         </div>
       )}
 
+      {/* Premium history — the whole point of keeping a renewed policy rather
+          than overwriting it. */}
+      {historyOf && (function(){
+        var keyOf = function(x: any){ return activeTab === "building" ? x.property_id : x.contract_id; };
+        var rows = allList.filter(function(x: any){ return keyOf(x) === keyOf(historyOf); })
+          .slice().sort(function(a: any,b: any){
+            return new Date(b.start_date || 0).getTime() - new Date(a.start_date || 0).getTime();
+          });
+        var name = activeTab === "building"
+          ? (historyOf.properties?.name || "")
+          : (historyOf.contracts?.tenants?.name || "");
+        return (
+          <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={function(){setHistoryOf(null);}}>
+            <div className="bg-white rounded-2xl shadow-xl max-w-2xl w-full p-6 max-h-[80vh] overflow-auto" onClick={function(e:any){e.stopPropagation();}}>
+              <div className="flex items-center justify-between mb-3">
+                <div className="text-lg font-bold text-slate-800">📊 היסטוריית פוליסות ופרמיות</div>
+                <button onClick={function(){setHistoryOf(null);}} className="text-slate-400 hover:text-slate-600 text-xl">×</button>
+              </div>
+              <div className="text-sm text-slate-500 mb-3">{name}</div>
+              {rows.length === 0 ? (
+                <div className="text-sm text-slate-400">אין פוליסות</div>
+              ) : (
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50 text-xs">
+                    <tr>
+                      <th className="px-3 py-2 text-right font-semibold text-slate-700">תקופת ביטוח</th>
+                      <th className="px-3 py-2 text-right font-semibold text-slate-700">תאריכים מדויקים</th>
+                      <th className="px-3 py-2 text-right font-semibold text-slate-700">מבטח / פוליסה</th>
+                      <th className="px-3 py-2 text-right font-semibold text-slate-700">פרמיה</th>
+                      <th className="px-3 py-2 text-right font-semibold text-slate-700">שינוי</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map(function(x: any, i: number){
+                      var prem = Number(x.annual_premium ?? x.total_premium) || 0;
+                      var prev = rows[i+1] ? (Number(rows[i+1].annual_premium ?? rows[i+1].total_premium) || 0) : 0;
+                      var pct = prev > 0 ? ((prem - prev) / prev) * 100 : null;
+                      return (
+                        <tr key={x.id} className="border-t border-slate-100">
+                          <td className="px-3 py-2 font-semibold text-slate-800">
+                            {policyPeriod(x)}
+                            {x.status !== "active" && <span className="mr-1 text-[10px] text-slate-400">(הסתיימה)</span>}
+                          </td>
+                          <td className="px-3 py-2 text-slate-600 text-xs">{policyDates(x)}</td>
+                          <td className="px-3 py-2 text-slate-600 text-xs">
+                            {insurerOf(x)}{x.policy_number ? " · " + x.policy_number : ""}
+                          </td>
+                          <td className="px-3 py-2 font-bold text-slate-800">{fmtMoney(prem)}</td>
+                          <td className={"px-3 py-2 font-semibold " + (pct == null ? "text-slate-400" : pct > 0 ? "text-red-600" : "text-green-600")}>
+                            {pct == null ? "—" : (pct > 0 ? "+" : "") + pct.toFixed(1) + "%"}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+              <div className="text-[11px] text-slate-400 mt-3">
+                כל חידוש נשמר כפוליסה נפרדת. &quot;✏️ ערוך&quot; מתקן פוליסה קיימת; &quot;🔄 חידוש&quot; פותח תקופה חדשה ושומר את הקודמת.
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       <PageHero title="ביטוחים" icon="🛡️" tone="blue" actionLabel="+ ביטוח חדש" onAction={function(){openNew();}}
         subtitle={<>
           {active.length} פעילים
@@ -802,7 +921,13 @@ export default function InsurancesPage() {
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex gap-1 flex-wrap">
-                        <button onClick={function(){openEdit(ins);}} title="ערוך פרטי ביטוח" className="text-xs border border-slate-200 rounded px-2 py-1 text-slate-600 hover:bg-slate-50">✏️ ערוך</button>
+                        <button onClick={function(){openEdit(ins);}} title="ערוך פרטי ביטוח (מתקן את הפוליסה הקיימת — לא לחידוש)" className="text-xs border border-slate-200 rounded px-2 py-1 text-slate-600 hover:bg-slate-50">✏️ ערוך</button>
+                        <button onClick={function(){openRenew(ins);}}
+                          title="חידוש — נוצרת פוליסה חדשה לתקופה הבאה, והפוליסה הנוכחית נשמרת כהיסטוריה עם הפרמיה ששולמה"
+                          className="text-xs border border-indigo-200 bg-indigo-50 rounded px-2 py-1 text-indigo-700 font-semibold hover:bg-indigo-100">🔄 חידוש</button>
+                        <button onClick={function(){setHistoryOf(ins);}}
+                          title="כל הפוליסות שהיו לנכס/לחוזה — תקופות ופרמיות לאורך השנים"
+                          className="text-xs border border-slate-200 rounded px-2 py-1 text-slate-600 hover:bg-slate-50">📊 היסטוריה</button>
                         {activeTab==="building" && (function(){
                           var yrs = policyYears(ins);
                           var n = insChargeCountFor(ins.property_id, yrs);

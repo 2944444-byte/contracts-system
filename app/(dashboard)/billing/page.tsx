@@ -1211,15 +1211,41 @@ function InsuranceTab({ properties, initialPropId, initialYear }: { properties: 
     loadInsurance();
   }, [propId, year]);
 
+  // A policy rarely runs Jan–Dec (רם און: 1.8.26–31.7.27). Naming the charge
+  // "ביטוח שנת 2026" hid which cover was actually billed, so every label is
+  // derived from the policy's own dates.
+  function policyPeriodLabel(pol: any, fallbackYear: number): string {
+    if (!pol?.start_date || !pol?.end_date) return String(fallbackYear);
+    const s0 = new Date(pol.start_date), e0 = new Date(pol.end_date);
+    const y1 = s0.getFullYear(), y2 = e0.getFullYear();
+    return y1 === y2 ? String(y1) : y1 + "–" + y2;
+  }
+  function policyDatesLabel(pol: any): string {
+    if (!pol?.start_date || !pol?.end_date) return "";
+    return new Date(pol.start_date).toLocaleDateString("he-IL") + " – " + new Date(pol.end_date).toLocaleDateString("he-IL");
+  }
+
   async function loadInsurance() {
+    // A policy year is the POLICY's year, not the calendar's — 1.8.2026–31.7.2027
+    // is "insurance year 2026". Expired policies are included so a past year can
+    // still be billed and re-checked; the row is picked by the year its cover
+    // STARTS in, falling back to any policy covering that year, then to the
+    // latest active one.
     const { data } = await supabase
       .from("insurances_building")
       .select("*")
       .eq("property_id", propId)
-      .eq("status", "active")
-      .order("end_date", { ascending: false })
-      .limit(1);
-    setPolicy(data?.[0] ?? null);
+      .order("start_date", { ascending: false });
+    const all = data ?? [];
+    const byStartYear = all.find(function (x: any) {
+      return x.start_date && new Date(x.start_date).getFullYear() === year;
+    });
+    const covering = all.find(function (x: any) {
+      if (!x.start_date || !x.end_date) return false;
+      return new Date(x.start_date).getFullYear() <= year && new Date(x.end_date).getFullYear() >= year;
+    });
+    const activeLatest = all.find(function (x: any) { return x.status === "active"; });
+    setPolicy(byStartYear ?? covering ?? activeLatest ?? null);
     setResults([]);
     loadExistingCharges();
   }
@@ -1632,7 +1658,9 @@ function InsuranceTab({ properties, initialPropId, initialYear }: { properties: 
       for (const r of effective) {
         idx++;
         setProgress({ current: idx, total: effective.length, label: (willFix ? "מתקן: " : "יוצר: ") + r.tenantName, startedAt: Date.now() });
-        var baseNotes = "חיוב ביטוח מבנה " + year + (r.isPartialPeriod ? " (תקופה חלקית: " + r.daysInPolicy + "/" + r.policyDays + " ימים)" : "");
+        var baseNotes = "חיוב ביטוח מבנה " + policyPeriodLabel(policy, year) +
+          (policyDatesLabel(policy) ? " (" + policyDatesLabel(policy) + ")" : "") +
+          (r.isPartialPeriod ? " · תקופה חלקית: " + r.daysInPolicy + "/" + r.policyDays + " ימים" : "");
         var v = applyVat(r.charge, vatMap[r.contractId] === "taxable", vatPct);
         var ex = byContract[r.contractId];
         // Locked: a paid charge keeps the VAT it was settled at.
@@ -1727,9 +1755,13 @@ function InsuranceTab({ properties, initialPropId, initialYear }: { properties: 
         var areaTxt = r.areaRange ? r.areaRange + " מ\"ר (השתנה במהלך השנה)" : r.area.toLocaleString("he-IL") + " מ\"ר";
 
         var body = "לכבוד\n" + r.tenantName + "\n\nשלום רב,\n\n";
-        body += "הנדון: " + (item.mode === "correct" ? "מכתב תיקון — " : "") + "חיוב ביטוח מבנה לשנת " + year + "\n\n";
+        var polPeriod = policyPeriodLabel(policy, year);
+        var polDates = policyDatesLabel(policy);
+        body += "הנדון: " + (item.mode === "correct" ? "מכתב תיקון — " : "") + "חיוב ביטוח מבנה לתקופת הביטוח " + polPeriod + "\n\n";
         if (item.mode === "correct") body += "מכתב זה מהווה תיקון למכתב חיוב הביטוח שנשלח אליכם. סיבת התיקון: " + correctionReason + "\n\n";
-        body += "בהתאם להוראות הסכם השכירות, הרינו להעביר אליכם את חלקכם היחסי בעלות ביטוח המבנה לשנת " + year + ", המחושב לפי שטח היחידות שבחזקתכם מתוך כלל שטח הנכס:\n\n";
+        body += "בהתאם להוראות הסכם השכירות, הרינו להעביר אליכם את חלקכם היחסי בעלות ביטוח המבנה, המחושב לפי שטח היחידות שבחזקתכם מתוך כלל שטח הנכס:\n\n";
+        if (polDates) body += "תקופת הביטוח: " + polDates + "\n";
+        if (policy?.policy_number) body += "מספר פוליסה: " + policy.policy_number + (policy?.insurer ? " · " + policy.insurer : "") + "\n";
         if (unitsTxt) body += "יחידות: " + unitsTxt + "\n";
         body += "שטח מושכר: " + areaTxt + "\n";
         if (r.isPartialPeriod) body += "תקופת כיסוי: " + r.daysInPolicy + " מתוך " + r.policyDays + " ימים\n";
@@ -1743,7 +1775,7 @@ function InsuranceTab({ properties, initialPropId, initialYear }: { properties: 
 
         if (item.mode === "replace") {
           var { error: upErr } = await supabase.from("letters").update({
-            title: "חיוב ביטוח מבנה " + year,
+            title: "חיוב ביטוח מבנה " + polPeriod,
             content_json: letterContent(body, ci, { year: year, tenant: r.tenantName }),
             status: "ready", sent_at: null, sent_to: null,
           }).eq("id", item.ex.id);
@@ -1752,7 +1784,7 @@ function InsuranceTab({ properties, initialPropId, initialYear }: { properties: 
         } else if (item.mode === "correct") {
           var { error: cErr } = await supabase.from("letters").insert({
             contract_id: r.contractId, property_id: propId, letter_type: "notice",
-            title: "מכתב תיקון — חיוב ביטוח מבנה " + year,
+            title: "מכתב תיקון — חיוב ביטוח מבנה " + polPeriod,
             content_json: letterContent(body, ci, { year: year, tenant: r.tenantName, corrected: true, correctedAt: today, correctionReason: correctionReason }),
             status: "ready", billing_year: year, billing_type: "insurance",
           });
@@ -1761,7 +1793,7 @@ function InsuranceTab({ properties, initialPropId, initialYear }: { properties: 
         } else {
           var { error: insErr } = await supabase.from("letters").insert({
             contract_id: r.contractId, property_id: propId, letter_type: "notice",
-            title: "חיוב ביטוח מבנה " + year,
+            title: "חיוב ביטוח מבנה " + polPeriod,
             content_json: letterContent(body, ci, { year: year, tenant: r.tenantName }),
             status: "ready", billing_year: year, billing_type: "insurance",
           });
@@ -1792,14 +1824,27 @@ function InsuranceTab({ properties, initialPropId, initialYear }: { properties: 
             </select>
           </div>
           <div>
-            <label className="mb-1 block text-xs font-semibold text-slate-700">{"שנה"}</label>
+            <label className="mb-1 block text-xs font-semibold text-slate-700">{"שנת ביטוח"}</label>
             <input type="number" value={year} onChange={function (e) { setYear(Number(e.target.value)); }} className={ic} />
+            <div className="text-[11px] text-slate-500 mt-0.5">
+              לפי השנה שבה מתחילה תקופת הביטוח — לא לפי שנה קלנדרית
+            </div>
           </div>
         </div>
 
         {policy ? (
           <div className="rounded-lg bg-green-50 border border-green-200 p-4 mb-4">
-            <div className="text-sm font-bold text-green-800 mb-2">{"פוליסה פעילה"}</div>
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-sm font-bold text-green-800">
+                {"פוליסה לתקופת הביטוח "}{policyPeriodLabel(policy, year)}
+              </div>
+              <div className={"text-[11px] px-2 py-0.5 rounded-full font-semibold " + (policy.status === "active" ? "bg-green-200 text-green-900" : "bg-slate-200 text-slate-600")}>
+                {policy.status === "active" ? "פעילה" : "פוליסה קודמת — לצורכי חיוב היסטורי"}
+              </div>
+            </div>
+            <div className="text-xs text-green-800 mb-2 font-semibold">
+              {"תקופת הכיסוי המדויקת: "}{policyDatesLabel(policy)}
+            </div>
             <div className="grid grid-cols-2 gap-3 text-sm">
               <div className="flex justify-between"><span className="text-green-700">{"מבטח"}</span><span className="font-semibold">{policy.insurer_name ?? "—"}</span></div>
               <div className="flex justify-between"><span className="text-green-700">{"מספר פוליסה"}</span><span className="font-semibold font-mono">{policy.policy_number ?? "—"}</span></div>
@@ -1920,9 +1965,12 @@ function InsuranceTab({ properties, initialPropId, initialYear }: { properties: 
                 <tbody>
                   {displayResults.map(function (r) {
                     var areaCell = r.areaRange || r.area.toLocaleString("he-IL");
+                    // The exact dates, not just a day count — the policy period
+                    // is rarely a calendar year and the table is what gets checked.
                     var periodCell = r.daysInPolicy === r.policyDays
-                      ? "כל התקופה"
-                      : r.daysInPolicy + "/" + r.policyDays + " ימים";
+                      ? "כל התקופה · " + policyDatesLabel(policy)
+                      : r.daysInPolicy + "/" + r.policyDays + " ימים · " +
+                        new Date(r.contractStart).toLocaleDateString("he-IL") + " – " + new Date(r.contractEnd).toLocaleDateString("he-IL");
                     var taxable = vatTypeMap[r.contractId] === "taxable";
                     var vatAmt = taxable ? r.charge * vatPct : 0;
                     return (
