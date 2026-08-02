@@ -227,6 +227,11 @@ export default function ContractsNewPage() {
   const [graceDiscountPct, setGraceDiscountPct] = useState("50");
   // Retail: the fit-out window and the store opening that ends it.
   const [plannedOpening, setPlannedOpening] = useState("");
+  // The target opening is normally the end of the fit-out grace: the contract is
+  // signed before handover, the grace runs from handover, and the store is due
+  // to open when it ends. Derived automatically until the manager sets a
+  // different target — from then on it is theirs.
+  const [plannedOpeningTouched, setPlannedOpeningTouched] = useState(false);
   const [actualOpening, setActualOpening] = useState("");
   const [graceEndsOnOpening, setGraceEndsOnOpening] = useState(true);
   const [graceMgmtDiscount, setGraceMgmtDiscount] = useState("");
@@ -316,6 +321,22 @@ export default function ContractsNewPage() {
       if (needsUpdate) setExtensionOptions(updated);
     }
   }, [endDate, extensionOptions.length, ...extensionOptions.map((o) => o.duration_years || o.duration_months)]);
+
+  // Target opening = handover + grace, unless deliberately overridden.
+  useEffect(function () {
+    if (plannedOpeningTouched) return;
+    if (!hasGrace) return;
+    var base = actualHandover || plannedHandover || startDate;
+    var months = Number(graceMonths) || 0;
+    if (!base || months <= 0) return;
+    var d0 = new Date(base);
+    var day = d0.getDate();
+    var shifted = new Date(d0.getFullYear(), d0.getMonth() + months, 1);
+    var last = new Date(shifted.getFullYear(), shifted.getMonth() + 1, 0).getDate();
+    shifted.setDate(Math.min(day, last));
+    var iso = shifted.getFullYear() + "-" + String(shifted.getMonth() + 1).padStart(2, "0") + "-" + String(shifted.getDate()).padStart(2, "0");
+    if (iso !== plannedOpening) setPlannedOpening(iso);
+  }, [hasGrace, graceMonths, actualHandover, plannedHandover, startDate, plannedOpeningTouched]);
 
   // === Auto-calculate deposit ===
   const baseRent =
@@ -2365,13 +2386,23 @@ export default function ContractsNewPage() {
                   <div className="rounded-lg border border-indigo-200 bg-indigo-50/40 p-3 space-y-2">
                     <div className="text-xs font-bold text-indigo-800">🏬 פתיחת המושכר (חוזי חנויות)</div>
                     <div className="text-[11px] text-indigo-700 leading-relaxed">
-                      תקופת העבודות היא בין המסירה לפתיחת המושכר. הגרייס נעצר במוקדם מבין השניים —
-                      פתיחת המושכר או תום תקופת הגרייס. אם הגרייס נגמר והמושכר טרם נפתח, החיוב ותקופת ההסכם מתחילים לזוז.
+                      החוזה נחתם לפני המסירה. תקופת העבודות מתחילה במסירה, ויעד הפתיחה הוא בדרך כלל
+                      סופה — לכן הוא מחושב לבד ממועד המסירה + חודשי הגרייס, וניתן לשנותו אם סוכם יעד אחר.
+                      הגרייס נעצר במוקדם מבין השניים: פתיחת המושכר או תום תקופת הגרייס. אם הגרייס נגמר
+                      והמושכר טרם נפתח, החיוב ותקופת ההסכם מתחילים לזוז.
                     </div>
                     <div className="grid grid-cols-2 gap-3">
                       <div>
-                        <label className="mb-1 block text-[11px] font-semibold text-slate-700">יעד פתיחת המושכר</label>
-                        <input type="date" value={plannedOpening} onChange={(e) => setPlannedOpening(e.target.value)} className={ic} />
+                        <label className="mb-1 block text-[11px] font-semibold text-slate-700">
+                          יעד פתיחת המושכר
+                          {!plannedOpeningTouched && <span className="mr-1 text-[10px] font-normal text-indigo-500">(מחושב מסוף הגרייס)</span>}
+                        </label>
+                        <input type="date" value={plannedOpening}
+                          onChange={(e) => { setPlannedOpeningTouched(true); setPlannedOpening(e.target.value); }} className={ic} />
+                        {plannedOpeningTouched && (
+                          <button type="button" onClick={() => setPlannedOpeningTouched(false)}
+                            className="mt-1 text-[10px] text-indigo-600 hover:underline">↺ חזור לחישוב מסוף הגרייס</button>
+                        )}
                       </div>
                       <div>
                         <label className="mb-1 block text-[11px] font-semibold text-slate-700">פתיחה בפועל</label>
