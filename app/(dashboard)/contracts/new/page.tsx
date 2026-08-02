@@ -1,5 +1,6 @@
 "use client";
 import { useState, useEffect, Suspense } from "react";
+import { graceWindow, describeGrace, lateOpeningPenalty } from "@/lib/store-opening";
 import { guaranteedMonthlyRent } from "@/lib/guarantee-base";
 import RevenuePctTiersEditor from "@/components/RevenuePctTiersEditor";
 import { RevenuePctTier, pctTiersFromRow, describePctTiers } from "@/lib/revenue-pct-steps";
@@ -224,6 +225,15 @@ export default function ContractsNewPage() {
   const [graceMonths, setGraceMonths] = useState("3");
   const [graceType, setGraceType] = useState("full");
   const [graceDiscountPct, setGraceDiscountPct] = useState("50");
+  // Retail: the fit-out window and the store opening that ends it.
+  const [plannedOpening, setPlannedOpening] = useState("");
+  const [actualOpening, setActualOpening] = useState("");
+  const [graceEndsOnOpening, setGraceEndsOnOpening] = useState(true);
+  const [graceMgmtDiscount, setGraceMgmtDiscount] = useState("");
+  const [latePenType, setLatePenType] = useState("none");
+  const [latePenValue, setLatePenValue] = useState("");
+  const [latePenGraceDays, setLatePenGraceDays] = useState("0");
+  const [latePenNotes, setLatePenNotes] = useState("");
   const [hasIncrease, setHasIncrease] = useState(false);
   const [increaseMode, setIncreaseMode] = useState<"unified" | "per_unit">("unified");
   const [perUnitTiers, setPerUnitTiers] = useState<Record<string, PriceTier[]>>({});
@@ -939,9 +949,17 @@ export default function ContractsNewPage() {
       }
 
       // Grace
+      insertPayload.planned_opening_date = plannedOpening || null;
+      insertPayload.actual_opening_date = actualOpening || null;
+      insertPayload.late_opening_penalty_type = latePenType === "none" ? null : latePenType;
+      insertPayload.late_opening_penalty_value = latePenType === "none" ? null : (Number(latePenValue) || null);
+      insertPayload.late_opening_grace_days = latePenType === "none" ? null : (Number(latePenGraceDays) || 0);
+      insertPayload.late_opening_penalty_notes = latePenType === "none" ? null : (latePenNotes || null);
       if (hasGrace) {
         insertPayload.grace_months = Number(graceMonths) || null;
         insertPayload.grace_type = graceType;
+        insertPayload.grace_ends_on_opening = graceEndsOnOpening;
+        insertPayload.grace_mgmt_discount_pct = graceMgmtDiscount === "" ? null : (Number(graceMgmtDiscount) || 0);
         insertPayload.grace_discount_pct =
           graceType === "partial" ? Number(graceDiscountPct) || null : null;
       }
@@ -2342,10 +2360,90 @@ export default function ContractsNewPage() {
                       </select>
                     </div>
                   </div>
+                  {/* Retail: the fit-out window runs from handover to opening.
+                      Whichever comes first ends the grace. */}
+                  <div className="rounded-lg border border-indigo-200 bg-indigo-50/40 p-3 space-y-2">
+                    <div className="text-xs font-bold text-indigo-800">🏬 פתיחת המושכר (חוזי חנויות)</div>
+                    <div className="text-[11px] text-indigo-700 leading-relaxed">
+                      תקופת העבודות היא בין המסירה לפתיחת המושכר. הגרייס נעצר במוקדם מבין השניים —
+                      פתיחת המושכר או תום תקופת הגרייס. אם הגרייס נגמר והמושכר טרם נפתח, החיוב ותקופת ההסכם מתחילים לזוז.
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="mb-1 block text-[11px] font-semibold text-slate-700">יעד פתיחת המושכר</label>
+                        <input type="date" value={plannedOpening} onChange={(e) => setPlannedOpening(e.target.value)} className={ic} />
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-[11px] font-semibold text-slate-700">פתיחה בפועל</label>
+                        <input type="date" value={actualOpening} onChange={(e) => setActualOpening(e.target.value)} className={ic} />
+                      </div>
+                    </div>
+                    <label className="flex items-start gap-2 text-[11px] text-slate-700">
+                      <input type="checkbox" checked={graceEndsOnOpening}
+                        onChange={(e) => setGraceEndsOnOpening(e.target.checked)} className="w-3.5 h-3.5 mt-0.5" />
+                      <span>
+                        פתיחת המושכר מקצרת את הגרייס
+                        <span className="block text-slate-500">
+                          בטל אם סוכם שהגרייס נמשך לתקופתו המלאה גם אחרי הפתיחה. תקופת ההסכם ממשיכה כרגיל בשני המקרים.
+                        </span>
+                      </span>
+                    </label>
+                  </div>
+
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-slate-700">
+                      הנחה בדמי ניהול בתקופת הגרייס (%) — ריק = ללא שינוי
+                    </label>
+                    <input type="number" min="0" max="100" value={graceMgmtDiscount} placeholder="למשל 50"
+                      onChange={(e) => setGraceMgmtDiscount(e.target.value)} className={ic} />
+                    <div className="text-[11px] text-slate-500 mt-0.5">
+                      50 = מחצית מדמי הניהול בתקופת הגרייס · 100 = פטור מלא
+                    </div>
+                  </div>
+
+                  {/* Optional — most contracts carry no penalty at all. */}
+                  <div className="rounded-lg border border-rose-200 bg-rose-50/40 p-3 space-y-2">
+                    <div className="text-xs font-bold text-rose-800">⏰ קנס על אי-פתיחה במועד (אופציונלי)</div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="mb-1 block text-[11px] font-semibold text-slate-700">סוג הקנס</label>
+                        <select value={latePenType} onChange={(e) => setLatePenType(e.target.value)} className={ic}>
+                          <option value="none">ללא קנס</option>
+                          <option value="daily_amount">סכום קבוע לכל יום איחור</option>
+                          <option value="daily_pct_rent">אחוז משכ&quot;ד יומי לכל יום איחור</option>
+                          <option value="fixed">סכום חד-פעמי</option>
+                        </select>
+                      </div>
+                      {latePenType !== "none" && (
+                        <div>
+                          <label className="mb-1 block text-[11px] font-semibold text-slate-700">
+                            {latePenType === "daily_pct_rent" ? "אחוז (%)" : "סכום (₪)"}
+                          </label>
+                          <input type="number" step="0.01" value={latePenValue}
+                            onChange={(e) => setLatePenValue(e.target.value)} className={ic} />
+                        </div>
+                      )}
+                      {latePenType !== "none" && (
+                        <div>
+                          <label className="mb-1 block text-[11px] font-semibold text-slate-700">ימי חסד לפני שהקנס מתחיל</label>
+                          <input type="number" min="0" value={latePenGraceDays}
+                            onChange={(e) => setLatePenGraceDays(e.target.value)} className={ic} />
+                        </div>
+                      )}
+                      {latePenType !== "none" && (
+                        <div>
+                          <label className="mb-1 block text-[11px] font-semibold text-slate-700">הערות</label>
+                          <input type="text" value={latePenNotes}
+                            onChange={(e) => setLatePenNotes(e.target.value)} className={ic} />
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
                   {graceType === "partial" && (
                     <div>
                       <label className="mb-1 block text-xs font-semibold text-slate-700">
-                        אחוז הנחה בגרייס (%)
+                        אחוז הנחה בשכ&quot;ד בגרייס (%)
                       </label>
                       <input
                         type="number"
@@ -2357,6 +2455,40 @@ export default function ContractsNewPage() {
                       />
                     </div>
                   )}
+                  {/* What the dates actually produce — computed by the same
+                      function the billing uses, so the form can't promise
+                      something the calculation won't do. */}
+                  {(function(){
+                    var draft = {
+                      grace_months: Number(graceMonths) || 0, grace_type: graceType,
+                      grace_discount_pct: Number(graceDiscountPct) || 0,
+                      grace_mgmt_discount_pct: graceMgmtDiscount === "" ? null : Number(graceMgmtDiscount),
+                      grace_ends_on_opening: graceEndsOnOpening,
+                      actual_handover_date: actualHandover || null, planned_handover_date: plannedHandover || null,
+                      start_date: startDate || null,
+                      planned_opening_date: plannedOpening || null, actual_opening_date: actualOpening || null,
+                      late_opening_penalty_type: latePenType === "none" ? null : latePenType,
+                      late_opening_penalty_value: Number(latePenValue) || 0,
+                      late_opening_grace_days: Number(latePenGraceDays) || 0,
+                    };
+                    var g = graceWindow({ contract: draft });
+                    if (!g.applies) return null;
+                    var pen = lateOpeningPenalty({ contract: draft, monthlyRent: guaranteeMonthlyRent });
+                    return (
+                      <div className="rounded-lg bg-indigo-50 border border-indigo-200 p-3 text-xs text-indigo-900 space-y-1">
+                        <div className="font-bold">📅 {describeGrace(g)}</div>
+                        {g.start && <div>תקופת עבודות מ-{g.start.toLocaleDateString("he-IL")}</div>}
+                        {g.end && <div>חיוב שכ&quot;ד מתחיל: <b>{g.end.toLocaleDateString("he-IL")}</b></div>}
+                        {graceMgmtDiscount !== "" && <div>דמי ניהול בגרייס: {100 - (Number(graceMgmtDiscount) || 0)}% מהרגיל</div>}
+                        {pen.applies && (
+                          <div className="text-rose-700 font-semibold">
+                            ⏰ קנס אי-פתיחה: ₪{pen.amount.toLocaleString("he-IL")} · {pen.basis}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+
                   <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-700">
                     גרייס: {graceMonths} חודשים |{" "}
                     {GRACE_TYPES.find((g) => g.v === graceType)?.l}

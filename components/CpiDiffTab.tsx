@@ -1,5 +1,6 @@
 "use client";
 import React, { useState } from "react";
+import { graceFactorsFor } from "@/lib/store-opening";
 import { supabase } from "@/lib/supabase";
 import { logAudit } from "@/lib/audit-log";
 import { fetchCpiAdjusted, fetchHighestChainedCpi, fetchCpiAdjustedWithRetry, fetchHighestChainedCpiWithRetry } from "@/lib/cpi-server";
@@ -166,7 +167,7 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
     setProgress({ current: 0, total: 0, label: "טוען נתוני חוזים...", startedAt: calcStart });
     try {
       var { data: contracts } = await supabase.from("contracts")
-        .select("id, rent_per_sqm, charged_area, investment_addition, payment_method, payment_frequency, vat_type, indexation_method, index_mechanism, index_base_date, index_base_value, start_date, end_date, is_amendment, grace_months, grace_type, grace_discount_pct, rent_type, minimum_rent, mgmt_included_in_revenue, tenants(name), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area))")
+        .select("id, rent_per_sqm, charged_area, investment_addition, payment_method, payment_frequency, vat_type, indexation_method, index_mechanism, index_base_date, index_base_value, start_date, end_date, is_amendment, grace_months, grace_days, grace_type, grace_discount_pct, grace_mgmt_discount_pct, grace_ends_on_opening, planned_handover_date, actual_handover_date, planned_opening_date, actual_opening_date, rent_type, minimum_rent, mgmt_included_in_revenue, tenants(name), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area))")
         .eq("property_id", propId)
         .in("status", ["active", "extended"])
         .eq("is_amendment", false);
@@ -408,21 +409,13 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
         }
         var graceDiscountPct = Number(c.grace_discount_pct) || 0;
 
+        // One grace implementation for the whole system (lib/store-opening.ts):
+        // it knows the fit-out window, that the store opening can cut the grace
+        // short, and the management-fee discount. Behaviour for a contract with
+        // no opening milestone is identical to what this block did before.
         var graceFactors = function(pStart: Date, pEnd: Date): { rentFactor: number; mgmtFactor: number } {
-          if (!graceEndDate || pStart >= graceEndDate) return { rentFactor: 1, mgmtFactor: 1 };
-          var totalMs = pEnd.getTime() - pStart.getTime();
-          if (totalMs <= 0) return { rentFactor: 1, mgmtFactor: 1 };
-          var graceMs = Math.min(graceEndDate.getTime(), pEnd.getTime()) - pStart.getTime();
-          if (graceMs <= 0) return { rentFactor: 1, mgmtFactor: 1 };
-          var graceRatio = graceMs / totalMs;
-          var normalRatio = 1 - graceRatio;
-          if (c.grace_type === "full") return { rentFactor: normalRatio, mgmtFactor: normalRatio };
-          if (c.grace_type === "rent_only") return { rentFactor: normalRatio, mgmtFactor: 1 };
-          if (c.grace_type === "partial") {
-            var discountFactor = 1 - (graceDiscountPct / 100);
-            return { rentFactor: normalRatio + graceRatio * discountFactor, mgmtFactor: 1 };
-          }
-          return { rentFactor: 1, mgmtFactor: 1 };
+          var f = graceFactorsFor({ contract: c, periodStart: pStart, periodEnd: pEnd });
+          return { rentFactor: f.rentFactor, mgmtFactor: f.mgmtFactor };
         };
 
         var periods: CpiDiffRow["periods"] = [];

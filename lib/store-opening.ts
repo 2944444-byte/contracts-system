@@ -26,10 +26,18 @@ export type GraceWindow = {
   lateDays: number;          // days beyond the grace (0 when opened in time)
 };
 
+// A date-only value must land on LOCAL midnight. `new Date("2025-01-01")`
+// parses as UTC, which in Israel is 02:00/03:00 local — enough to make a full
+// grace month come out as 99.7% and shift day counts by one.
 function d(v: any): Date | null {
   if (!v) return null;
+  if (typeof v === "string") {
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(v);
+    if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  }
   const x = new Date(v);
-  return isNaN(x.getTime()) ? null : x;
+  if (isNaN(x.getTime())) return null;
+  return new Date(x.getFullYear(), x.getMonth(), x.getDate());
 }
 
 function addMonths(base: Date, months: number): Date {
@@ -120,10 +128,15 @@ export function graceFactorsFor(params: {
   const plain = { rentFactor: 1, mgmtFactor: 1, graceRatio: 0 };
   if (!g.applies || !g.end) return plain;
 
-  const total = params.periodEnd.getTime() - params.periodStart.getTime();
+  // Compare on day boundaries only — a stray hour must not turn a fully-free
+  // month into 99.7% free.
+  const pS = new Date(params.periodStart.getFullYear(), params.periodStart.getMonth(), params.periodStart.getDate());
+  const pE = new Date(params.periodEnd.getFullYear(), params.periodEnd.getMonth(), params.periodEnd.getDate());
+  const total = pE.getTime() - pS.getTime();
   if (total <= 0) return plain;
-  const from = Math.max(params.periodStart.getTime(), g.start ? g.start.getTime() : params.periodStart.getTime());
-  const covered = Math.min(g.end.getTime(), params.periodEnd.getTime()) - from;
+  // The grace covers from the START of the period: fit-out that began earlier
+  // still covers this period, and the old behaviour never clipped at g.start.
+  const covered = Math.min(g.end.getTime(), pE.getTime()) - pS.getTime();
   if (covered <= 0) return plain;
 
   const graceRatio = Math.min(1, covered / total);
