@@ -15,6 +15,7 @@ import { penaltyTermsFromRow, hasPenalty, describePenaltyTerms, contractArea, pe
 import { previewOptionDecline, applyOptionDecline } from '@/lib/option-decline';
 import { baseIndexRuleFromRow, describeBaseIndexRule, baseIndexPending, resolveBaseIndexMonth } from '@/lib/base-index-rule';
 import { pctTiersFromRow, describePctTiers } from '@/lib/revenue-pct-steps';
+import { guaranteeGaps, describeGaps } from '@/lib/guarantee-status';
 import { mgmtProtectionFromRow, describeMgmtProtection } from '@/lib/mgmt-protection';
 // CPI + price timeline
 
@@ -2174,16 +2175,27 @@ export default function ContractsPage() {
                       const diff = (g.amount_actual??0) - (g.amount_required??0);
                       const isExpired = g.end_date && new Date(g.end_date) < new Date();
                       const daysToExpiry = g.end_date ? Math.ceil((new Date(g.end_date).getTime() - Date.now()) / 86400000) : null;
-                      const GTYPE: Record<string,string> = { bank:"🏦 בנקאית", check:"📝 שיקים", cash:"💵 מזומן", insurance:"🛡️ ביטוח", personal:"👤 אישית" };
+                      const GTYPE: Record<string,string> = { bank:"🏦 בנקאית", promissory_note:"📜 שטר חוב", check:"📝 שיקים", cash:"💵 מזומן", insurance:"🛡️ ביטוח", personal:"👤 אישית" };
+                      // "Required by the contract" is not "in our hands": a row with
+                      // nothing received, no expiry and no document was showing as
+                      // valid. The badge now reflects what is actually missing.
+                      const gaps = guaranteeGaps(g);
+                      const blocking = gaps.filter(function(x:any){ return x.blocking; });
+                      const notInPlace = blocking.length > 0;
                       return (
-                        <div key={g.id} className={"rounded-lg border p-2.5 " + (isExpired ? "border-red-300 bg-red-50" : g.status !== "active" ? "border-slate-200 bg-slate-50" : "border-green-200 bg-green-50/30")}>
+                        <div key={g.id} className={"rounded-lg border p-2.5 " + (isExpired || notInPlace ? "border-red-300 bg-red-50" : g.status !== "active" ? "border-slate-200 bg-slate-50" : gaps.length > 0 ? "border-amber-300 bg-amber-50" : "border-green-200 bg-green-50/30")}>
                           <div className="flex items-center justify-between mb-1">
                             <span className="text-xs font-bold text-slate-700">{GTYPE[g.guarantee_type] ?? g.guarantee_type}</span>
                             <span className={"text-xs px-2 py-0.5 rounded-full font-semibold " +
-                              (isExpired ? "bg-red-100 text-red-700" : g.status === "active" ? "bg-green-100 text-green-700" : "bg-slate-100 text-slate-500")}>
-                              {isExpired ? "⚠️ לא בתוקף" : g.status === "active" ? "✓ בתוקף" : "לא פעיל"}
+                              (notInPlace ? "bg-red-100 text-red-700" : g.status !== "active" ? "bg-slate-100 text-slate-500" : gaps.length > 0 ? "bg-amber-100 text-amber-800" : "bg-green-100 text-green-700")}>
+                              {notInPlace ? "⚠️ לא בתוקף" : g.status !== "active" ? "לא פעיל" : gaps.length > 0 ? "⚠ חסרים פרטים" : "✓ בתוקף"}
                             </span>
                           </div>
+                          {gaps.length > 0 && (
+                            <div className={"rounded px-2 py-1 mb-1 text-[11px] font-semibold " + (notInPlace ? "bg-red-100 text-red-800" : "bg-amber-100 text-amber-800")}>
+                              {describeGaps(gaps)}
+                            </div>
+                          )}
                           <div className="grid grid-cols-2 gap-1 text-xs text-slate-600">
                             <div className="flex justify-between">
                               <span className="text-slate-400">נדרש:</span>

@@ -7,6 +7,7 @@ import { reconcileAlerts } from "@/lib/alerts-reconcile";
 import { representativeGuaranteeIds } from "@/lib/guarantee-dedupe";
 import { contractExpiryVerdict, contractExpiryTitle } from "@/lib/contract-expiry";
 import { handoverPendingVerdict, handoverPendingTitle, handoverPendingMessage } from "@/lib/handover-pending";
+import { guaranteeGaps, describeGaps, guaranteeTypeLabel } from "@/lib/guarantee-status";
 
 export interface NewAlert {
   title: string;
@@ -255,13 +256,46 @@ export async function runAlertSync(supabase: SupabaseClient): Promise<{ created:
   // 2. Guarantees — expiring soon AND already expired-but-not-renewed (the
   //    old `days < 0 → skip` silently dropped exactly the case that matters
   //    most: a guarantee that lapsed and was never renewed).
-  const { data: guarantees } = await supabase.from("guarantees").select("id,end_date,contract_id,guarantee_type,amount_actual,amount_required,created_at,contracts(property_id,parent_contract_id,tenants(name))").eq("status", "active");
+  const { data: guarantees } = await supabase.from("guarantees").select("id,end_date,contract_id,guarantee_type,amount_actual,amount_required,bank,document_url,documents,status,created_at,contracts(property_id,parent_contract_id,tenants(name))").eq("status", "active");
   // The same guarantee is usually recorded on the contract AND on its amendment;
   // alert once for the instrument, not once per row.
   const gReps = representativeGuaranteeIds((guarantees ?? []) as any[]);
   for (const g of (guarantees ?? []) as any[]) {
-    if (!g.end_date) continue;
     if (!gReps.has(g.id)) continue;
+
+    // A security the contract requires but that never actually arrived: no
+    // amount in hand, no expiry, no document. The row exists, so the screens
+    // showed a valid guarantee — this is the alert that says otherwise.
+    {
+      const gaps = guaranteeGaps(g);
+      const blocking = gaps.filter(function (x: any) { return x.blocking; });
+      const gLabel = guaranteeTypeLabel(g.guarantee_type) + " — " + (g.contracts?.tenants?.name ?? "");
+      const { data: mExist } = await supabase.from("alerts")
+        .select("id,severity").eq("entity_id", g.id).eq("entity_type", "guarantee")
+        .eq("alert_type", "guarantee_missing").eq("is_resolved", false).limit(1);
+      if (gaps.length > 0) {
+        const sev = blocking.length > 0 ? "urgent" : "warning";
+        const title = blocking.length > 0
+          ? `ביטחון לא בתוקף: ${gLabel}`
+          : `חסרים פרטים בביטחון: ${gLabel}`;
+        const message = describeGaps(gaps) +
+          (Number(g.amount_required) > 0 ? ` · נדרש ₪${Number(g.amount_required).toLocaleString("he-IL")}` : "");
+        if (mExist && mExist.length) {
+          const prev = mExist[0] as any;
+          const patch: any = { title, message, severity: sev };
+          if (prev.severity !== sev) patch.read_at = null;
+          await supabase.from("alerts").update(patch).eq("id", prev.id);
+        } else {
+          await add({
+            title, message, severity: sev, alert_type: "guarantee_missing",
+            entity_type: "guarantee", entity_id: g.id, contract_id: g.contract_id ?? null,
+            property_id: g.contracts?.property_id ?? null, due_date: g.end_date ?? null,
+          });
+        }
+      }
+    }
+
+    if (!g.end_date) continue;
     const days = daysUntil(g.end_date);
     if (days > 60) continue;
     if (await hasOpen(g.id, "guarantee")) continue;

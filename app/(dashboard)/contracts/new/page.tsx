@@ -1100,6 +1100,11 @@ export default function ContractsNewPage() {
           end_date: noExpiry ? null : (guaranteeEnd || null),
           document_url: guaranteeDocUrl || null,
           guarantors: guaranteeType === "promissory_note" && validGuarantors.length > 0 ? validGuarantors : null,
+          // Keep how the amount was derived, exactly as the additional
+          // securities do — otherwise this one reopens without its basis.
+          deposit_calc_method: depositCalcMethod,
+          deposit_months: depositCalcMethod === "months_based" ? depositMonths : null,
+          deposit_includes_mgmt: depositCalcMethod === "months_based" ? depositIncludesMgmt : null,
           status: "active",
         });
       }

@@ -919,6 +919,9 @@ export default function ContractEditPage() {
             amount_actual: guaranteeActual ? Number(guaranteeActual) : null,
             bank: guaranteeBank || null,
             end_date: noExp ? null : (guaranteeEnd || null),
+            deposit_calc_method: depositCalcMethod,
+            deposit_months: depositCalcMethod === "months_based" ? depositMonths : null,
+            deposit_includes_mgmt: depositCalcMethod === "months_based" ? depositIncludesMgmt : null,
           };
           if (guaranteeId) {
             await supabase.from("guarantees").update(primaryRow).eq("id", guaranteeId);

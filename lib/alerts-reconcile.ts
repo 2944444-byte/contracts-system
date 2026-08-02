@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { representativeGuaranteeIds } from "@/lib/guarantee-dedupe";
 import { contractExpiryVerdict } from "@/lib/contract-expiry";
 import { handoverPendingVerdict } from "@/lib/handover-pending";
+import { guaranteeGaps } from "@/lib/guarantee-status";
 
 // The alert sync only ever CREATED alerts. Nothing closed one whose condition
 // had since been fixed, so a paid debt, a renewed guarantee or a certificate
@@ -60,15 +61,18 @@ export async function reconcileAlerts(supabase: SupabaseClient): Promise<{ resol
   const guaranteeIds = idsFor("guarantee");
   if (guaranteeIds.length > 0) {
     const { data: gs } = await supabase.from("guarantees")
-      .select("id,end_date,status,contract_id,guarantee_type,amount_actual,amount_required,created_at,contracts(parent_contract_id)")
+      .select("id,end_date,status,contract_id,guarantee_type,amount_actual,amount_required,bank,document_url,documents,created_at,contracts(parent_contract_id)")
       .in("id", guaranteeIds);
     // Mirrors the creation rule: one alert per physical guarantee, so a second
     // row recording the same instrument on an amendment closes as redundant.
     const gReps = representativeGuaranteeIds((gs ?? []) as any[]);
     for (const g of (gs ?? []) as any[]) {
-      if (g.status !== "active" || !g.end_date) continue;   // not active → nothing to chase
+      if (g.status !== "active") continue;                  // returned/forfeited → nothing to chase
       if (!gReps.has(g.id)) continue;                       // duplicate of another row
-      if (daysUntil(g.end_date) <= 60) keep("guarantee", g.id);
+      // "Not actually in place" is its own condition on the same entity_type —
+      // tested separately so clearing one can't close the other.
+      if (guaranteeGaps(g).length > 0) keep("guarantee:guarantee_missing", g.id);
+      if (g.end_date && daysUntil(g.end_date) <= 60) keep("guarantee", g.id);
     }
   }
 
@@ -199,7 +203,9 @@ export async function reconcileAlerts(supabase: SupabaseClient): Promise<{ resol
     // includes it — otherwise one condition falling away would close the other.
     const key = a.entity_type === "contract" && a.alert_type === "handover_pending"
       ? "contract:handover_pending:" + a.entity_id
-      : a.entity_type + ":" + a.entity_id;
+      : a.entity_type === "guarantee" && a.alert_type === "guarantee_missing"
+        ? "guarantee:guarantee_missing:" + a.entity_id
+        : a.entity_type + ":" + a.entity_id;
     if (stillOpen.has(key)) continue;
     toResolve.push(a.id);
   }
