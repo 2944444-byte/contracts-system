@@ -271,8 +271,10 @@ export default function PaymentsPage() {
 
     var ch = scopeRows(chargesRes.data || [], scope, function(c: any){ return c.contracts?.property_id; });
     var concByCharge: Record<string, any[]> = {};
+    var concByAdvance: Record<string, any[]> = {};
     ((concRes as any).data || []).forEach(function(x: any) {
       if (x.charge_id) (concByCharge[x.charge_id] = concByCharge[x.charge_id] || []).push(x);
+      if (x.advance_id) (concByAdvance[x.advance_id] = concByAdvance[x.advance_id] || []).push(x);
     });
     // Keep BOTH paid and unpaid advances — paid ones still need to appear
     // on this screen so the שולמו KPI reflects collected rent. Only waived
@@ -513,6 +515,26 @@ export default function PaymentsPage() {
         dueDate: ck.checkDate,
         status: allPaid ? "paid" : "pending",
         createdAt: ck.checkDate,
+        // Concessions on the cheque's advance rows, netted the same way a
+        // charge is — including the legacy `waived` flag, which is treated as a
+        // full waiver so nothing recorded before this feature is lost.
+        concessions: ck.rows.reduce(function(acc: any[], r: any) {
+          var own = concByAdvance[r.id] || [];
+          if (own.length === 0 && r.waived) {
+            own = [{ status: "active", total_amount: Number(r.total_with_vat) || 0, method: "full", reason_code: "other", reason_notes: "ויתור שנרשם לפני מנגנון הוויתורים" }];
+          }
+          return acc.concat(own);
+        }, []),
+        waived: waivedTotalFor(ck.rows.reduce(function(acc: any[], r: any) {
+          var own = concByAdvance[r.id] || [];
+          if (own.length === 0 && r.waived) own = [{ status: "active", total_amount: Number(r.total_with_vat) || 0 }];
+          return acc.concat(own);
+        }, [])),
+        balance: Math.max(0, Math.round((totalWith - waivedTotalFor(ck.rows.reduce(function(acc: any[], r: any) {
+          var own = concByAdvance[r.id] || [];
+          if (own.length === 0 && r.waived) own = [{ status: "active", total_amount: Number(r.total_with_vat) || 0 }];
+          return acc.concat(own);
+        }, []))) * 100) / 100),
         underlyingAdvanceIds: ck.rows.map(function(r) { return r.id; }),
         unitsBreakdown: ck.rows.map(function(r) {
           return { name: r.space_name || "—", amount: Number(r.total_with_vat) || 0, period: r.period || "" };
@@ -598,6 +620,13 @@ export default function PaymentsPage() {
         itemBase: Number(concFor.baseAmount) || 0,
         itemVat: Number(concFor.vatAmount) || 0,
       });
+      if (concFor.source === "rent_check") {
+        await saveAdvanceConcession(concFor);
+        await logAudit({ entity_type: "contract", entity_id: concFor.contractId, action: "concession_advance" });
+        setConcFor(null);
+        await loadAll();
+        return;
+      }
       if (v.total <= 0) throw new Error("סכום הוויתור אינו יכול להיות אפס");
       var { data: au } = await supabase.auth.getUser();
       var { error } = await supabase.from("concessions").insert({
@@ -618,6 +647,40 @@ export default function PaymentsPage() {
       await loadAll();
     } catch (e: any) { alert("שגיאה: " + e?.message); }
     finally { setCSaving(false); }
+  }
+
+  // A rent cheque row aggregates several advance rows. A concession on it is
+  // recorded per advance, so the report and the balance stay accurate per unit.
+  async function saveAdvanceConcession(r: any) {
+    var ids: string[] = r.underlyingAdvanceIds || [];
+    if (ids.length === 0) throw new Error("לא נמצאו שורות מקדמה לוויתור");
+    var { data: advs, error: aErr } = await supabase.from("advance_payments")
+      .select("id, total_before_vat, vat_amount, total_with_vat").in("id", ids);
+    if (aErr) throw new Error(aErr.message);
+    var { data: au } = await supabase.auth.getUser();
+    var rows: any[] = [];
+    (advs || []).forEach(function(a: any) {
+      var v = concessionValue({
+        method: cMethod,
+        percent: Number(cPercent) || 0,
+        // A fixed sum is split across the cheque's units in proportion.
+        amount: (Number(cAmount) || 0) * ((Number(a.total_before_vat) || 0) / Math.max(1, Number(r.baseAmount) || 1)),
+        itemBase: Number(a.total_before_vat) || 0,
+        itemVat: Number(a.vat_amount) || 0,
+      });
+      if (v.total <= 0) return;
+      rows.push({
+        scope: "advance", advance_id: a.id, contract_id: r.contractId,
+        method: cMethod, percent: cMethod === "percent" ? Number(cPercent) || 0 : null,
+        base_amount: v.base, vat_amount: v.vat, total_amount: v.total,
+        reason_code: cReason, reason_notes: cNotes.trim(),
+        installments: Number(cInstallments) > 1 ? Number(cInstallments) : null,
+        granted_by: au?.user?.id ?? null,
+      });
+    });
+    if (rows.length === 0) throw new Error("סכום הוויתור אינו יכול להיות אפס");
+    var { error } = await supabase.from("concessions").insert(rows);
+    if (error) throw new Error(error.message);
   }
 
   async function markPaid(id: string) {
@@ -1195,7 +1258,7 @@ export default function PaymentsPage() {
                                   {r.status !== "paid" && r.source === "revenue" && (
                                     <button onClick={function() { markRevenuePaid(r); }} className="text-xs bg-green-600 text-white px-2 py-1 rounded font-semibold" title="סמן שכ&quot;ד פידיון כשולם">₪ שולם</button>
                                   )}
-                                  {mayGrant && r.source === "charge" && r.status !== "paid" && Number(r.balance) > 0 && (
+                                  {mayGrant && (r.source === "charge" || r.source === "rent_check") && r.status !== "paid" && Number(r.balance) > 0 && (
                                     <button onClick={function() { openConcession(r); }}
                                       className="text-xs border border-emerald-200 bg-emerald-50 rounded px-2 py-1 text-emerald-700 hover:bg-emerald-100"
                                       title="ויתור מלא או חלקי על החיוב — לא יירשם כחוב של השוכר">🤝 ויתור</button>
