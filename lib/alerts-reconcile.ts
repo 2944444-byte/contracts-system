@@ -5,6 +5,7 @@ import { handoverPendingVerdict } from "@/lib/handover-pending";
 import { guaranteeGaps } from "@/lib/guarantee-status";
 import { lateOpeningPenalty } from "@/lib/store-opening";
 import { guaranteedMonthlyRent } from "@/lib/guarantee-base";
+import { chargeBalance } from "@/lib/concessions";
 
 // The alert sync only ever CREATED alerts. Nothing closed one whose condition
 // had since been fixed, so a paid debt, a renewed guarantee or a certificate
@@ -51,12 +52,26 @@ export async function reconcileAlerts(supabase: SupabaseClient): Promise<{ resol
   const arrearsIds = idsFor("arrears");
   if (arrearsIds.length > 0) {
     const { data: overdue } = await supabase.from("charges")
-      .select("contract_id")
+      .select("id,contract_id,total_amount,status")
       .in("contract_id", arrearsIds)
       .neq("status", "paid")
       .not("due_date", "is", null)
       .lt("due_date", todayStr);
-    for (const ch of (overdue ?? []) as any[]) keep("arrears", ch.contract_id);
+    // Same rule the creator uses: a charge settled by a concession is no longer
+    // a debt, so an arrears alert covering only such charges must close.
+    const odIds = ((overdue ?? []) as any[]).map(function (x: any) { return x.id; });
+    const concBy: Record<string, any[]> = {};
+    if (odIds.length > 0) {
+      const { data: concs } = await supabase.from("concessions")
+        .select("charge_id,total_amount,status").in("charge_id", odIds).eq("status", "active");
+      for (const x of ((concs ?? []) as any[])) {
+        if (x.charge_id) (concBy[x.charge_id] = concBy[x.charge_id] || []).push(x);
+      }
+    }
+    for (const ch of (overdue ?? []) as any[]) {
+      if (chargeBalance(ch, concBy[ch.id]) <= 0.005) continue;
+      keep("arrears", ch.contract_id);
+    }
   }
 
   // ── Guarantees: resolved when renewed (or no longer active) ──

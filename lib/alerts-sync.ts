@@ -10,6 +10,7 @@ import { handoverPendingVerdict, handoverPendingTitle, handoverPendingMessage } 
 import { guaranteeGaps, describeGaps, guaranteeTypeLabel } from "@/lib/guarantee-status";
 import { graceWindow, lateOpeningPenalty } from "@/lib/store-opening";
 import { guaranteedMonthlyRent } from "@/lib/guarantee-base";
+import { chargeBalance } from "@/lib/concessions";
 
 export interface NewAlert {
   title: string;
@@ -433,12 +434,27 @@ export async function runAlertSync(supabase: SupabaseClient): Promise<{ created:
     .neq("status", "paid")
     .not("due_date", "is", null)
     .lt("due_date", todayStr);
+  // A waived amount is not a debt. Without this the tenant kept being chased for
+  // money the landlord decided to give up, and a fully-waived charge produced an
+  // arrears alert that could never be satisfied.
+  const overdueIds = ((overdue ?? []) as any[]).map(function (x: any) { return x.id; });
+  const concByCharge: Record<string, any[]> = {};
+  if (overdueIds.length > 0) {
+    const { data: concs } = await supabase.from("concessions")
+      .select("charge_id,total_amount,status").in("charge_id", overdueIds).eq("status", "active");
+    for (const x of ((concs ?? []) as any[])) {
+      if (x.charge_id) (concByCharge[x.charge_id] = concByCharge[x.charge_id] || []).push(x);
+    }
+  }
+
   const byContractArrears: Record<string, { tenant: string; propertyId: string | null; count: number; sum: number; oldest: string }> = {};
   for (const ch of (overdue ?? []) as any[]) {
     if (!ch.contract_id) continue;
+    const balance = chargeBalance(ch, concByCharge[ch.id]);
+    if (balance <= 0.005) continue;                 // settled by a concession
     const cur = byContractArrears[ch.contract_id] || { tenant: ch.contracts?.tenants?.name ?? "", propertyId: ch.contracts?.property_id ?? null, count: 0, sum: 0, oldest: ch.due_date };
     cur.count++;
-    cur.sum += Number(ch.total_amount) || 0;
+    cur.sum += balance;
     if (ch.due_date < cur.oldest) cur.oldest = ch.due_date;
     byContractArrears[ch.contract_id] = cur;
   }

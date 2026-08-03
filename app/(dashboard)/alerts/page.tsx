@@ -11,6 +11,7 @@ import { previewOptionDecline, applyOptionDecline } from '@/lib/option-decline';
 import { reconcileAlerts } from '@/lib/alerts-reconcile';
 import { graceWindow, lateOpeningPenalty } from '@/lib/store-opening';
 import { guaranteedMonthlyRent } from '@/lib/guarantee-base';
+import { chargeBalance } from '@/lib/concessions';
 
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
 function daysLeft(d: string) { return Math.ceil((new Date(d).getTime()-Date.now())/86400000); }
@@ -115,9 +116,19 @@ export default function AlertsPage() {
     // Total money in arrears — computed live from charges (the source), not
     // from alert titles.
     var todayStr = new Date().toISOString().split("T")[0];
-    const { data: od } = await supabase.from("charges").select("total_amount, contracts!charges_contract_id_fkey(property_id)").neq("status","paid").not("due_date","is",null).lt("due_date", todayStr);
+    const { data: od } = await supabase.from("charges").select("id, total_amount, status, contracts!charges_contract_id_fkey(property_id)").neq("status","paid").not("due_date","is",null).lt("due_date", todayStr);
     var rows = scopeRows(od ?? [], scope, function(x: any){ return x.contracts?.property_id; });
-    setArrears({ count: rows.length, sum: rows.reduce(function(s: number, r: any){ return s + (Number(r.total_amount) || 0); }, 0) });
+    // Net of concessions — a waived charge is not arrears.
+    var odIds = rows.map(function(x: any){ return x.id; });
+    var concBy: Record<string, any[]> = {};
+    if (odIds.length > 0) {
+      const { data: cs } = await supabase.from("concessions")
+        .select("charge_id,total_amount,status").in("charge_id", odIds).eq("status", "active");
+      (cs ?? []).forEach(function(x: any){ if (x.charge_id) (concBy[x.charge_id] = concBy[x.charge_id] || []).push(x); });
+    }
+    var outstanding = rows.map(function(r: any){ return { r: r, bal: chargeBalance(r, concBy[r.id]) }; })
+      .filter(function(x: any){ return x.bal > 0.005; });
+    setArrears({ count: outstanding.length, sum: outstanding.reduce(function(s: number, x: any){ return s + x.bal; }, 0) });
   }
 
   async function closeAlert(id: string) {

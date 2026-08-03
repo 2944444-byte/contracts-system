@@ -759,13 +759,17 @@ export default function PaymentsPage() {
   });
   var monthKeys = Object.keys(byMonth).sort();
 
-  // KPIs
-  var totalPending  = rows.filter(function(r) { return r.status === "pending"; }).reduce(function(s, r) { return s + r.totalAmount; }, 0);
-  var totalApproved = rows.filter(function(r) { return r.status === "approved"; }).reduce(function(s, r) { return s + r.totalAmount; }, 0);
+  // KPIs. Anything still OWED is counted net of concessions — a waived amount is
+  // not a debt, so it must not inflate "לתשלום" or "באיחור". What was already
+  // paid keeps its own figure.
+  var owed = function(r: any) { return r.balance != null ? Number(r.balance) : r.totalAmount; };
+  var stillOwed = function(r: any) { return owed(r) > 0.005; };
+  var totalPending  = rows.filter(function(r) { return r.status === "pending"; }).reduce(function(s, r) { return s + owed(r); }, 0);
+  var totalApproved = rows.filter(function(r) { return r.status === "approved"; }).reduce(function(s, r) { return s + owed(r); }, 0);
   var totalPaid     = rows.filter(function(r) { return r.status === "paid"; }).reduce(function(s, r) { return s + r.totalAmount; }, 0);
-  var totalOverdue  = rows.filter(function(r) { return isOverdueRow(r); }).reduce(function(s, r) { return s + r.totalAmount; }, 0);
+  var totalOverdue  = rows.filter(function(r) { return isOverdueRow(r) && stillOwed(r); }).reduce(function(s, r) { return s + owed(r); }, 0);
   var pendingCount  = rows.filter(function(r) { return r.status === "pending"; }).length;
-  var overdueCount  = rows.filter(function(r) { return isOverdueRow(r); }).length;
+  var overdueCount  = rows.filter(function(r) { return isOverdueRow(r) && stillOwed(r); }).length;
 
   // Per-tenant balance for the bottom summary
   var balanceByTenant: Record<string, number> = {};
