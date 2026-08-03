@@ -8,6 +8,8 @@ import { representativeGuaranteeIds } from "@/lib/guarantee-dedupe";
 import { contractExpiryVerdict, contractExpiryTitle } from "@/lib/contract-expiry";
 import { handoverPendingVerdict, handoverPendingTitle, handoverPendingMessage } from "@/lib/handover-pending";
 import { guaranteeGaps, describeGaps, guaranteeTypeLabel } from "@/lib/guarantee-status";
+import { graceWindow, lateOpeningPenalty } from "@/lib/store-opening";
+import { guaranteedMonthlyRent } from "@/lib/guarantee-base";
 
 export interface NewAlert {
   title: string;
@@ -99,7 +101,7 @@ export async function runAlertSync(supabase: SupabaseClient): Promise<{ created:
 
   // 1. Contracts expiring + options
   const { data: contracts } = await supabase.from("contracts")
-    .select("id,property_id,end_date,status,is_amendment,parent_contract_id,tenant_id,planned_handover_date,actual_handover_date,tenants(name),properties(name),contract_options(id,status,is_exercised,start_date,end_date,notice_days_before_end,notice_type,option_number)")
+    .select("id,property_id,end_date,status,is_amendment,parent_contract_id,tenant_id,planned_handover_date,actual_handover_date,planned_opening_date,actual_opening_date,grace_months,grace_days,grace_type,grace_ends_on_opening,late_opening_penalty_type,late_opening_penalty_value,late_opening_grace_days,late_opening_penalty_notes,rent_type,rent_per_sqm,min_rent_per_sqm,minimum_rent,charged_area,investment_addition,start_date,tenants(name),properties(name),contract_options(id,status,is_exercised,start_date,end_date,notice_days_before_end,notice_type,option_number)")
     .in("status", ["active", "expiring", "extended", "upcoming"]);
   // A contract and its amendments are ONE tenancy: they share an end date and
   // between them hold the options. Alerting per row put the same expiry on the
@@ -166,6 +168,50 @@ export async function runAlertSync(supabase: SupabaseClient): Promise<{ created:
             title, message, severity: hv.severity, alert_type: "handover_pending",
             entity_type: "contract", entity_id: c.id, contract_id: c.id,
             property_id: c.property_id ?? null, due_date: String(c.planned_handover_date).slice(0, 10),
+          });
+        }
+      }
+    }
+
+    // Store opened late and the lease carries a penalty. Without this the
+    // penalty existed only inside the contract screen — if nobody opened that
+    // one contract, money the tenant owes was simply never noticed. The alert
+    // closes itself once the charge is raised or the store opens in time.
+    if (c.late_opening_penalty_type && c.late_opening_penalty_type !== "none") {
+      const monthlyRent = guaranteedMonthlyRent({
+        rentType: c.rent_type, rentPerSqm: c.rent_per_sqm, area: c.charged_area,
+        investmentAddition: c.investment_addition,
+        minimumRent: c.min_rent_per_sqm || c.minimum_rent,
+        minRentBasis: c.min_rent_per_sqm ? "per_sqm" : "monthly",
+      });
+      const pen = lateOpeningPenalty({ contract: c, monthlyRent });
+      const gw = graceWindow({ contract: c });
+      // Already billed? Then it is handled — the charge takes over from here.
+      const { data: penCharge } = await supabase.from("charges")
+        .select("id").eq("contract_id", c.id).eq("charge_type", "late_opening_penalty").limit(1);
+      const billed = !!(penCharge && penCharge.length);
+
+      const { data: lExist } = await supabase.from("alerts")
+        .select("id,severity").eq("entity_id", c.id).eq("entity_type", "contract")
+        .eq("alert_type", "late_opening_penalty").eq("is_resolved", false).limit(1);
+
+      if (pen.applies && !billed) {
+        const label = (c.tenants?.name ?? "") + " — " + (c.properties?.name ?? "");
+        const title = `קנס אי-פתיחת המושכר — ${pen.lateDays} ימי איחור: ${label}`;
+        const message =
+          `תום תקופת העבודות: ${gw.end ? gw.end.toLocaleDateString("he-IL") : "—"}` +
+          (c.actual_opening_date ? ` · נפתח ${new Date(c.actual_opening_date).toLocaleDateString("he-IL")}` : " · המושכר טרם נפתח") +
+          ` · ${pen.chargeableDays} ימים לחיוב · ₪${pen.amount.toLocaleString("he-IL")} (${pen.basis})` +
+          " · ניתן להפיק דרישת תשלום, או ליצור את החיוב ממסך החוזים ← 🏬 פתיחת המושכר.";
+        if (lExist && lExist.length) {
+          // The amount grows daily while the store stays shut — refresh it.
+          await supabase.from("alerts").update({ title, message, severity: "urgent" }).eq("id", (lExist[0] as any).id);
+        } else {
+          await add({
+            title, message, severity: "urgent", alert_type: "late_opening_penalty",
+            entity_type: "contract", entity_id: c.id, contract_id: c.id,
+            property_id: c.property_id ?? null,
+            due_date: gw.end ? gw.end.toISOString().slice(0, 10) : null,
           });
         }
       }

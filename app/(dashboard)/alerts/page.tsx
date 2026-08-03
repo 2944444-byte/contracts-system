@@ -9,6 +9,8 @@ import { loadCompanyInfo, letterContent } from '@/lib/letter-format';
 import { logAudit } from '@/lib/audit-log';
 import { previewOptionDecline, applyOptionDecline } from '@/lib/option-decline';
 import { reconcileAlerts } from '@/lib/alerts-reconcile';
+import { graceWindow, lateOpeningPenalty } from '@/lib/store-opening';
+import { guaranteedMonthlyRent } from '@/lib/guarantee-base';
 
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
 function daysLeft(d: string) { return Math.ceil((new Date(d).getTime()-Date.now())/86400000); }
@@ -33,10 +35,14 @@ const CATEGORIES = [
   { key: "insurance", icon: "🛡️", label: "ביטוחים",          letterTitle: "דרישה להמצאת אישור ביטוח" },
   { key: "safety",    icon: "🔒", label: "בטיחות ואש",       letterTitle: "דרישה להשלמת בדיקות בטיחות" },
   { key: "contract",  icon: "📄", label: "חוזים ואופציות",   letterTitle: "הודעה בנושא הסכם השכירות" },
+  { key: "late_opening", icon: "⏰", label: "איחור בפתיחת המושכר", letterTitle: "דרישת תשלום — פיצוי בגין איחור בפתיחת המושכר" },
   { key: "other",     icon: "🔔", label: "אחר",               letterTitle: "הודעה" },
 ];
 function categoryOf(a: any): string {
   var et = a.entity_type || "", at = a.alert_type || "";
+  // Checked before entity_type: this one shares entity_type 'contract' but is a
+  // payment demand, not a notice.
+  if (at === "late_opening_penalty") return "late_opening";
   if (et === "arrears" || at === "rent_arrears") return "arrears";
   if (et === "guarantee") return "guarantee";
   if (et === "insurance") return "insurance";
@@ -102,7 +108,7 @@ export default function AlertsPage() {
     try { await reconcileAlerts(supabase); } catch (e) { /* keep showing the list */ }
 
     // due_date ascending = AGING order: most-overdue first, then nearest deadlines.
-    const { data } = await supabase.from("alerts").select("*, contracts(property_id, tenants(name), properties(id,name))").order("due_date", {ascending: true, nullsFirst: false}).order("created_at",{ascending:false});
+    const { data } = await supabase.from("alerts").select("*, contracts(property_id, tenants(name), properties(id,name), start_date, planned_handover_date, actual_handover_date, planned_opening_date, actual_opening_date, grace_months, grace_days, grace_type, grace_ends_on_opening, late_opening_penalty_type, late_opening_penalty_value, late_opening_grace_days, late_opening_penalty_notes, vat_type, rent_type, rent_per_sqm, min_rent_per_sqm, minimum_rent, charged_area, investment_addition)").order("due_date", {ascending: true, nullsFirst: false}).order("created_at",{ascending:false});
     var scope = await getScopeIds();
     setAlerts(scopeRows(data??[], scope, function(a: any){ return a.property_id || a.contracts?.property_id; }));
     setLoading(false);
@@ -226,13 +232,56 @@ export default function AlertsPage() {
         p.push("");
         p.push("הנדון: " + title);
         p.push("");
-        p.push("בהתאם להוראות הסכם השכירות, נבקשכם לטפל בנושאים הבאים:");
-        p.push("");
-        group.forEach(function(a: any, i: number){
-          p.push((i + 1) + ". " + a.title + (a.due_date ? " (תאריך יעד: " + fmtDate(a.due_date) + ")" : ""));
-        });
-        p.push("");
-        p.push("נבקשכם להסדיר את האמור בתוך 14 יום ממועד קבלת מכתב זה.");
+
+        // A payment demand needs the derivation, not a bullet list: the tenant
+        // has to be able to check the sum. Recomputed from the contract terms
+        // rather than parsed out of the alert text.
+        var lateAlert = group.find(function(a: any){ return a.alert_type === "late_opening_penalty"; });
+        var lateC = lateAlert?.contracts;
+        var lateDone = false;
+        if (lateAlert && lateC) {
+          var mRent = guaranteedMonthlyRent({
+            rentType: lateC.rent_type, rentPerSqm: lateC.rent_per_sqm, area: lateC.charged_area,
+            investmentAddition: lateC.investment_addition,
+            minimumRent: lateC.min_rent_per_sqm || lateC.minimum_rent,
+            minRentBasis: lateC.min_rent_per_sqm ? "per_sqm" : "monthly",
+          });
+          var gw = graceWindow({ contract: lateC });
+          var pen = lateOpeningPenalty({ contract: lateC, monthlyRent: mRent });
+          if (pen.applies) {
+            var vatPct = lateC.vat_type === "taxable" ? 18 : 0;
+            var vatAmt = Math.round(pen.amount * (vatPct / 100) * 100) / 100;
+            var money = function(n: number){ return "₪" + n.toLocaleString("he-IL", {minimumFractionDigits:2, maximumFractionDigits:2}); };
+            p.push("בהתאם להוראות הסכם השכירות, המושכר היה אמור להיפתח לקהל בתום תקופת ההתארגנות והעבודות. להלן הפירוט:");
+            p.push("");
+            if (lateC.actual_handover_date) p.push("מועד מסירת המושכר: " + fmtDate(lateC.actual_handover_date));
+            if (gw.end) p.push("תום תקופת העבודות: " + fmtDate(gw.end.toISOString().slice(0,10)));
+            p.push("מועד פתיחת המושכר בפועל: " + (lateC.actual_opening_date ? fmtDate(lateC.actual_opening_date) : "טרם נפתח"));
+            p.push("ימי איחור: " + pen.lateDays);
+            if (Number(lateC.late_opening_grace_days) > 0) p.push("ימי חסד על פי ההסכם: " + lateC.late_opening_grace_days);
+            p.push("ימים לחיוב: " + pen.chargeableDays);
+            p.push("אופן החישוב: " + pen.basis);
+            p.push("");
+            p.push("סכום הפיצוי לפני מע\"מ: " + money(pen.amount));
+            if (vatAmt > 0) p.push("מע\"מ (" + vatPct + "%): " + money(vatAmt));
+            p.push("סה\"כ לתשלום: " + money(pen.amount + vatAmt));
+            if (lateC.late_opening_penalty_notes) { p.push(""); p.push("הערות: " + lateC.late_opening_penalty_notes); }
+            p.push("");
+            p.push("נבקשכם להסדיר את התשלום בתוך 30 יום ממועד קבלת מכתב זה.");
+            if (info.bankLine) p.push(info.bankLine);
+            lateDone = true;
+          }
+        }
+
+        if (!lateDone) {
+          p.push("בהתאם להוראות הסכם השכירות, נבקשכם לטפל בנושאים הבאים:");
+          p.push("");
+          group.forEach(function(a: any, i: number){
+            p.push((i + 1) + ". " + a.title + (a.due_date ? " (תאריך יעד: " + fmtDate(a.due_date) + ")" : ""));
+          });
+          p.push("");
+          p.push("נבקשכם להסדיר את האמור בתוך 14 יום ממועד קבלת מכתב זה.");
+        }
         p.push("");
         p.push("בכבוד רב ובברכה,");
         p.push("");

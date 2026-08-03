@@ -3,6 +3,8 @@ import { representativeGuaranteeIds } from "@/lib/guarantee-dedupe";
 import { contractExpiryVerdict } from "@/lib/contract-expiry";
 import { handoverPendingVerdict } from "@/lib/handover-pending";
 import { guaranteeGaps } from "@/lib/guarantee-status";
+import { lateOpeningPenalty } from "@/lib/store-opening";
+import { guaranteedMonthlyRent } from "@/lib/guarantee-base";
 
 // The alert sync only ever CREATED alerts. Nothing closed one whose condition
 // had since been fixed, so a paid debt, a renewed guarantee or a certificate
@@ -91,7 +93,13 @@ export async function reconcileAlerts(supabase: SupabaseClient): Promise<{ resol
   const contractIds = idsFor("contract");
   if (contractIds.length > 0) {
     const { data: cs } = await supabase.from("contracts")
-      .select("id,end_date,status,planned_handover_date,actual_handover_date,contract_options(id,status,is_exercised)").in("id", contractIds);
+      .select("id,end_date,status,planned_handover_date,actual_handover_date,planned_opening_date,actual_opening_date,grace_months,grace_days,grace_type,grace_ends_on_opening,late_opening_penalty_type,late_opening_penalty_value,late_opening_grace_days,rent_type,rent_per_sqm,min_rent_per_sqm,minimum_rent,charged_area,investment_addition,start_date,contract_options(id,status,is_exercised)").in("id", contractIds);
+    // Which of these already have the penalty billed — a raised charge closes
+    // the alert, since the money is now tracked as a debt like any other.
+    const { data: penCharges } = await supabase.from("charges")
+      .select("contract_id").eq("charge_type", "late_opening_penalty").in("contract_id", contractIds);
+    const billedSet = new Set<string>();
+    for (const x of ((penCharges ?? []) as any[])) if (x.contract_id) billedSet.add(x.contract_id);
     // The alert sits on the base contract but the tenancy is base + amendments:
     // read the family's latest end date and pooled options, exactly as the
     // creator does, so the two never disagree about whether it still holds.
@@ -102,6 +110,16 @@ export async function reconcileAlerts(supabase: SupabaseClient): Promise<{ resol
       // Handover confirmation is its own condition, on the same entity_type —
       // tested separately so one rule can't vouch for the other.
       if (handoverPendingVerdict({ contract: c }).applies) keep("contract:handover_pending", c.id);
+      // Late-opening penalty: still outstanding only while unbilled.
+      if (c.late_opening_penalty_type && c.late_opening_penalty_type !== "none" && !billedSet.has(c.id)) {
+        const mRent = guaranteedMonthlyRent({
+          rentType: c.rent_type, rentPerSqm: c.rent_per_sqm, area: c.charged_area,
+          investmentAddition: c.investment_addition,
+          minimumRent: c.min_rent_per_sqm || c.minimum_rent,
+          minRentBasis: c.min_rent_per_sqm ? "per_sqm" : "monthly",
+        });
+        if (lateOpeningPenalty({ contract: c, monthlyRent: mRent }).applies) keep("contract:late_opening_penalty", c.id);
+      }
       if (["active", "expiring", "extended"].indexOf(c.status) === -1) continue;  // ended → stop chasing
       var famEnd = c.end_date ? String(c.end_date).slice(0, 10) : "";
       var famOpts = (c.contract_options ?? []).slice();
@@ -203,6 +221,8 @@ export async function reconcileAlerts(supabase: SupabaseClient): Promise<{ resol
     // includes it — otherwise one condition falling away would close the other.
     const key = a.entity_type === "contract" && a.alert_type === "handover_pending"
       ? "contract:handover_pending:" + a.entity_id
+      : a.entity_type === "contract" && a.alert_type === "late_opening_penalty"
+        ? "contract:late_opening_penalty:" + a.entity_id
       : a.entity_type === "guarantee" && a.alert_type === "guarantee_missing"
         ? "guarantee:guarantee_missing:" + a.entity_id
         : a.entity_type + ":" + a.entity_id;
