@@ -1,6 +1,7 @@
 "use client";
 import React, { useState } from "react";
 import { graceFactorsFor } from "@/lib/store-opening";
+import { standingDiscount, applyStanding } from "@/lib/concessions";
 import { supabase } from "@/lib/supabase";
 import { logAudit } from "@/lib/audit-log";
 import { fetchCpiAdjusted, fetchHighestChainedCpi, fetchCpiAdjustedWithRetry, fetchHighestChainedCpiWithRetry } from "@/lib/cpi-server";
@@ -171,6 +172,19 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
         .eq("property_id", propId)
         .in("status", ["active", "extended"])
         .eq("is_amendment", false);
+
+      // Standing concessions apply as each period is computed, exactly like the
+      // grace — a discount agreed for a period must reach the rent itself, not
+      // wait to be waived off a charge afterwards.
+      var contractIds = (contracts ?? []).map(function(x: any){ return x.id; });
+      var concByContract: Record<string, any[]> = {};
+      if (contractIds.length > 0) {
+        var { data: concRows } = await supabase.from("concessions")
+          .select("*").eq("scope", "standing").eq("status", "active").in("contract_id", contractIds);
+        (concRows ?? []).forEach(function(x: any){
+          if (x.contract_id) (concByContract[x.contract_id] = concByContract[x.contract_id] || []).push(x);
+        });
+      }
 
       contracts = (contracts ?? []).filter(function(c: any) {
         if (c.payment_method !== "checks_advance") return false;
@@ -643,6 +657,17 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
             }, 0);
             actualPaid = userInput ? Number(userInput) : (savedTotalForPeriod > 0 ? savedTotalForPeriod : baseRentPeriodWithVat + basePeriodMgmt);
           }
+
+          // The period's own discount: rent and management are scoped
+          // separately, so "50% off rent" leaves management untouched.
+          var cList = concByContract[c.id] || [];
+          var dRent = standingDiscount({ concessions: cList, date: periodStart, kind: "rent" });
+          var dMgmt = standingDiscount({ concessions: cList, date: periodStart, kind: "mgmt" });
+          var rentAfterConc = applyStanding(indexedRent, dRent);
+          var mgmtAfterConc = applyStanding(mgmtAfterGrace, dMgmt);
+          var concDiscount = Math.round(((indexedRent - rentAfterConc) + (mgmtAfterGrace - mgmtAfterConc)) * 100) / 100;
+          indexedRent = rentAfterConc;
+          mgmtAfterGrace = mgmtAfterConc;
 
           var shouldPay = indexedRent + mgmtAfterGrace;
           var baseRentDisplay = hasSavedRent
