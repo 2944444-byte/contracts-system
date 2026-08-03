@@ -3,6 +3,7 @@ import { useState, useEffect } from "react";
 import { supabase } from '@/lib/supabase';
 import { PageHero } from '@/components/ui';
 import { getScopeIds, getCompanyScopeIds, getTenantScopeIds, scopeRows, scopeGroups } from '@/lib/permissions';
+import { REASON_LABELS, APPLIES_LABELS, describeConcession } from '@/lib/concessions';
 
 const TABS = [
   {id:"contracts",  label:"חוזים",       icon:"📄"},
@@ -11,6 +12,7 @@ const TABS = [
   {id:"properties", label:"נכסים",       icon:"🏢"},
   {id:"guarantees", label:"ערבויות",     icon:"🏦"},
   {id:"expiring",   label:"פוגים בקרוב", icon:"⚠️"},
+  {id:"concessions",label:"ויתורים והנחות", icon:"🤝"},
 ];
 
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
@@ -51,6 +53,14 @@ export default function ReportsPage() {
     } else if (t==="properties") {
       const { data: pr } = await supabase.from("properties").select("id,name,property_type,city,total_area,companies(company_name)").order("name");
       setData(scopeRows(pr ?? [], await getScopeIds(), function(x: any){ return x.id; }));
+    } else if (t==="concessions") {
+      // Everything given up in the selected year — what, to whom, why, by whom,
+      // and whether it was later withdrawn.
+      const { data: cn } = await supabase.from("concessions")
+        .select("*, contracts(property_id, tenants(name), properties(name))")
+        .gte("granted_at", filterYear+"-01-01").lt("granted_at", (filterYear+1)+"-01-01")
+        .order("granted_at", { ascending: false });
+      setData(scopeRows(cn ?? [], await getScopeIds(), function(x: any){ return x.property_id || x.contracts?.property_id; }));
     } else if (t==="guarantees") {
       const { data: g } = await supabase.from("guarantees")
         .select("id,guarantee_type,amount_required,amount_actual,status,end_date,contracts(property_id,tenants(name),properties(name))")
@@ -82,6 +92,19 @@ export default function ReportsPage() {
       csvDownload("שוכרים.csv",
         data.map(function(t){return[t.name,t.company_name,t.id_number,t.phone,t.email,t.address]}),
         ["שם","חברה","חפ","טלפון","אימייל","כתובת"]);
+    } else if (tab==="concessions") {
+      csvDownload(`ויתורים_${filterYear}.csv`,
+        data.map(function(x){return[
+          x.contracts?.tenants?.name, x.contracts?.properties?.name,
+          fmtDate(x.granted_at), x.scope==="standing"?"הנחה לתקופה":"ויתור על חיוב",
+          x.scope==="standing" ? ((APPLIES_LABELS as any)[x.applies_to] || "") : "",
+          x.method==="full"?"מלא":x.method==="percent"?(x.percent+"%"):"סכום",
+          Math.round(x.base_amount??0), Math.round(x.vat_amount??0), Math.round(x.total_amount??0),
+          (REASON_LABELS as any)[x.reason_code] || x.reason_code, x.reason_notes,
+          x.period_start?fmtDate(x.period_start):"", x.period_end?fmtDate(x.period_end):"",
+          x.status==="cancelled"?"בוטל":"פעיל", x.cancel_reason || "",
+        ]}),
+        ["שוכר","נכס","תאריך מתן","סוג","היקף","שיטה","קרן","מעמ","סהכ","סיבה","נימוק","מתאריך","עד תאריך","סטטוס","סיבת ביטול"]);
     } else if (tab==="guarantees") {
       csvDownload("ערבויות.csv",
         data.map(function(g){const diff=(g.amount_actual??0)-(g.amount_required??0);return[g.contracts?.tenants?.name,g.contracts?.properties?.name,g.guarantee_type,Math.round(g.amount_required??0),Math.round(g.amount_actual??0),diff>=0?"תקין":"-₪"+Math.abs(diff),g.status,fmtDate(g.end_date)]}),
@@ -102,7 +125,7 @@ export default function ReportsPage() {
       <PageHero title="דוחות" icon="📑" tone="slate" subtitle="ייצוא נתונים ל-CSV"
         actions={
           <div className="flex gap-2 items-center">
-            {tab==="payments" && (
+            {(tab==="payments" || tab==="concessions") && (
               <select value={filterYear} onChange={function(e){setFilterYear(Number(e.target.value));}}
                 className="rounded-xl bg-white/15 backdrop-blur border border-white/25 text-white px-3 py-2 text-sm [&>option]:text-slate-800">
                 {[2023,2024,2025,2026].map(function(y){return <option key={y} value={y}>{y}</option>;})}
@@ -132,7 +155,25 @@ export default function ReportsPage() {
         <div className="flex items-center justify-center gap-2 py-12 text-slate-400 text-sm"><span className="inline-block w-4 h-4 rounded-full border-2 border-slate-200 border-t-blue-600 animate-spin" aria-label="loading"></span>טוען...</div>
       ) : (
         <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-          <div className="px-5 py-2.5 border-b border-slate-100 text-xs text-slate-400">{activeData.length} רשומות</div>
+          <div className="px-5 py-2.5 border-b border-slate-100 text-xs text-slate-400 flex items-center justify-between flex-wrap gap-2">
+            <span>{activeData.length} רשומות</span>
+            {tab==="concessions" && (function(){
+              var live = activeData.filter(function(x: any){ return x.status !== "cancelled"; });
+              var sum = live.reduce(function(a: number, x: any){ return a + (Number(x.total_amount) || 0); }, 0);
+              var byReason: Record<string, number> = {};
+              live.forEach(function(x: any){ byReason[x.reason_code] = (byReason[x.reason_code] || 0) + (Number(x.total_amount) || 0); });
+              return (
+                <span className="text-emerald-800 font-semibold">
+                  סה&quot;כ ויתורים {filterYear}: {fmtMoney(sum)}
+                  {Object.keys(byReason).length > 0 && (
+                    <span className="text-slate-500 font-normal mr-2">
+                      ({Object.keys(byReason).map(function(k){ return ((REASON_LABELS as any)[k] || k) + " " + fmtMoney(byReason[k]); }).join(" · ")})
+                    </span>
+                  )}
+                </span>
+              );
+            })()}
+          </div>
           <div className="overflow-x-auto">
             <table className="w-full text-right text-sm">
               <thead className="bg-slate-50 border-b text-xs text-slate-600">
@@ -141,6 +182,7 @@ export default function ReportsPage() {
                   {tab==="payments" && <><th className="px-4 py-2.5 font-semibold">שוכר/נכס</th><th className="px-4 py-2.5 font-semibold">תאריך</th><th className="px-4 py-2.5 font-semibold">בסיס</th><th className="px-4 py-2.5 font-semibold">מע"מ</th><th className="px-4 py-2.5 font-semibold">סה"כ</th><th className="px-4 py-2.5 font-semibold">סטטוס</th></>}
                   {tab==="tenants" && <><th className="px-4 py-2.5 font-semibold">שם</th><th className="px-4 py-2.5 font-semibold">חברה</th><th className="px-4 py-2.5 font-semibold">ח.פ</th><th className="px-4 py-2.5 font-semibold">טלפון</th><th className="px-4 py-2.5 font-semibold">אימייל</th></>}
                   {tab==="properties" && <><th className="px-4 py-2.5 font-semibold">שם</th><th className="px-4 py-2.5 font-semibold">חברה</th><th className="px-4 py-2.5 font-semibold">עיר</th><th className="px-4 py-2.5 font-semibold">שטח</th></>}
+                  {tab==="concessions" && <><th className="px-4 py-2.5 font-semibold">שוכר/נכס</th><th className="px-4 py-2.5 font-semibold">תאריך</th><th className="px-4 py-2.5 font-semibold">מה ניתן</th><th className="px-4 py-2.5 font-semibold">סיבה</th><th className="px-4 py-2.5 font-semibold">סכום</th><th className="px-4 py-2.5 font-semibold">סטטוס</th></>}
                   {tab==="guarantees" && <><th className="px-4 py-2.5 font-semibold">שוכר</th><th className="px-4 py-2.5 font-semibold">סוג</th><th className="px-4 py-2.5 font-semibold">נדרש</th><th className="px-4 py-2.5 font-semibold">בפועל</th><th className="px-4 py-2.5 font-semibold">פער</th><th className="px-4 py-2.5 font-semibold">תוקף</th><th className="px-4 py-2.5 font-semibold">סטטוס</th></>}
                 </tr>
               </thead>
@@ -154,6 +196,17 @@ export default function ReportsPage() {
                   if (tab==="payments") return <tr key={row.id} className="border-t border-slate-100 hover:bg-slate-50"><td className="px-4 py-2.5"><div className="font-medium text-slate-800">{row.contracts?.tenants?.name}</div><div className="text-xs text-slate-400">{row.contracts?.properties?.name}</div></td><td className="px-4 py-2.5 text-xs text-slate-500">{fmtDate(row.billing_period_start)}</td><td className="px-4 py-2.5">{fmtMoney(row.base_amount)}</td><td className="px-4 py-2.5 text-slate-500">{fmtMoney(row.vat_amount)}</td><td className="px-4 py-2.5 font-bold">{fmtMoney(row.total_amount)}</td><td className="px-4 py-2.5"><StatusBadge s={row.status}/></td></tr>;
                   if (tab==="tenants") return <tr key={row.id} className="border-t border-slate-100 hover:bg-slate-50"><td className="px-4 py-2.5 font-semibold">{row.name}</td><td className="px-4 py-2.5 text-slate-500">{row.company_name}</td><td className="px-4 py-2.5 text-xs font-mono text-slate-400">{row.id_number}</td><td className="px-4 py-2.5 text-slate-500" dir="ltr">{row.phone}</td><td className="px-4 py-2.5 text-xs text-slate-400" dir="ltr">{row.email}</td></tr>;
                   if (tab==="properties") return <tr key={row.id} className="border-t border-slate-100 hover:bg-slate-50"><td className="px-4 py-2.5 font-semibold">{row.name}</td><td className="px-4 py-2.5 text-slate-500">{row.companies?.company_name}</td><td className="px-4 py-2.5 text-slate-500">{row.city}</td><td className="px-4 py-2.5 text-slate-500">{row.total_area?row.total_area+' מ"ר':"—"}</td></tr>;
+                  if (tab==="concessions") {
+                    var dead = row.status === "cancelled";
+                    return <tr key={row.id} className={"border-t border-slate-100 " + (dead ? "bg-slate-50 text-slate-400" : "hover:bg-slate-50")}>
+                      <td className="px-4 py-2.5"><div className="font-medium text-slate-800">{row.contracts?.tenants?.name}</div><div className="text-xs text-slate-400">{row.contracts?.properties?.name}</div></td>
+                      <td className="px-4 py-2.5 text-xs text-slate-500">{fmtDate(row.granted_at)}</td>
+                      <td className="px-4 py-2.5 text-xs">{describeConcession(row)}</td>
+                      <td className="px-4 py-2.5 text-xs text-slate-600">{row.reason_notes}</td>
+                      <td className={"px-4 py-2.5 font-bold " + (dead ? "line-through" : "text-emerald-700")}>{fmtMoney(row.total_amount)}</td>
+                      <td className="px-4 py-2.5"><span className={"text-xs px-2 py-0.5 rounded-full font-semibold " + (dead ? "bg-slate-200 text-slate-500" : "bg-emerald-100 text-emerald-700")}>{dead ? "בוטל" : "פעיל"}</span></td>
+                    </tr>;
+                  }
                   if (tab==="guarantees") { const diff=(row.amount_actual??0)-(row.amount_required??0); return <tr key={row.id} className={"border-t border-slate-100 "+(diff<0?"bg-red-50":"hover:bg-slate-50")}><td className="px-4 py-2.5"><div className="font-medium">{row.contracts?.tenants?.name}</div><div className="text-xs text-slate-400">{row.contracts?.properties?.name}</div></td><td className="px-4 py-2.5 text-slate-600">{row.guarantee_type}</td><td className="px-4 py-2.5">{fmtMoney(row.amount_required)}</td><td className="px-4 py-2.5 font-semibold">{fmtMoney(row.amount_actual)}</td><td className="px-4 py-2.5"><span className={diff<0?"text-red-600 font-bold":"text-green-600"}>{diff<0?"-₪"+Math.abs(diff).toLocaleString():"✓"}</span></td><td className="px-4 py-2.5 text-xs text-slate-400">{fmtDate(row.end_date)}</td><td className="px-4 py-2.5"><StatusBadge s={row.status}/></td></tr>; }
                   return null;
                 })}
