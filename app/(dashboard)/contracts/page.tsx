@@ -8,7 +8,7 @@ import { PageHero } from '@/components/ui';
 import { fetchCpiAdjusted, fetchHighestChainedCpi } from '@/lib/cpi-server';
 import { calcChainingCoefficient, formatPeriod } from '@/lib/cpi-utils';
 import { getVatPct } from '@/lib/vat';
-import { getScopeIds, scopeRows } from '@/lib/permissions';
+import { getScopeIds, scopeRows, getCurrentAccess } from '@/lib/permissions';
 import CalcProgress, { CalcProgressState } from '@/components/CalcProgress';
 import { buildPriceTimeline, calculateTierPreviews, buildSpaceRentSchedule, rentAtDate, type PriceTier } from '@/lib/contract-utils';
 import { penaltyTermsFromRow, hasPenalty, describePenaltyTerms, contractArea, penaltyMonths } from '@/lib/option-penalty';
@@ -16,6 +16,7 @@ import { previewOptionDecline, applyOptionDecline } from '@/lib/option-decline';
 import { baseIndexRuleFromRow, describeBaseIndexRule, baseIndexPending, resolveBaseIndexMonth } from '@/lib/base-index-rule';
 import { pctTiersFromRow, describePctTiers } from '@/lib/revenue-pct-steps';
 import { guaranteeGaps, describeGaps } from '@/lib/guarantee-status';
+import { canGrantConcessions, describeConcession, REASON_LABELS, APPLIES_LABELS } from '@/lib/concessions';
 import { graceWindow, describeGrace, lateOpeningPenalty } from '@/lib/store-opening';
 import { previewLateOpeningCharge, applyLateOpeningCharge } from '@/lib/late-opening-charge';
 import { mgmtProtectionFromRow, describeMgmtProtection } from '@/lib/mgmt-protection';
@@ -141,6 +142,19 @@ export default function ContractsPage() {
   const [handoverSaving, setHandoverSaving] = useState(false);
   // Recording the store opening — the milestone the lease clock really starts on.
   const [showOpening, setShowOpening] = useState(false);
+  // הנחות והסדרים ברמת החוזה
+  const [mayGrant, setMayGrant] = useState(false);
+  const [contractConcessions, setContractConcessions] = useState<any[]>([]);
+  const [showConc, setShowConc] = useState(false);
+  const [scApplies, setScApplies] = useState<"rent"|"mgmt"|"revenue_share"|"all">("rent");
+  const [scMethod, setScMethod] = useState<"full"|"percent"|"amount">("percent");
+  const [scPercent, setScPercent] = useState("50");
+  const [scAmount, setScAmount] = useState("");
+  const [scFrom, setScFrom] = useState("");
+  const [scTo, setScTo] = useState("");
+  const [scReason, setScReason] = useState("war");
+  const [scNotes, setScNotes] = useState("");
+  const [scSaving, setScSaving] = useState(false);
   const [openingDate, setOpeningDate] = useState("");
   const [openingSaving, setOpeningSaving] = useState(false);
   const [penPreview, setPenPreview] = useState<any>(null);
@@ -185,6 +199,63 @@ export default function ContractsPage() {
       if (sel) setSelected(sel);
     } catch (e) { /* SSR-safe no-op */ }
   }, []);
+
+  useEffect(function () {
+    getCurrentAccess().then(function (a) { setMayGrant(canGrantConcessions(a)); }).catch(function () {});
+  }, []);
+
+  // The contract's concessions — both the standing discounts and the ones
+  // granted on its individual charges, so the whole picture sits in one place.
+  useEffect(function () {
+    if (!selected) { setContractConcessions([]); return; }
+    supabase.from("concessions").select("*").eq("contract_id", selected)
+      .order("created_at", { ascending: false })
+      .then(function (r: any) { setContractConcessions(r.data || []); });
+  }, [selected]);
+
+  async function saveStandingConcession() {
+    if (!selContract) return;
+    if (!scNotes.trim()) { alert("נא להזין נימוק — הוא נשמר בתיק ומופיע בדוח הוויתורים."); return; }
+    if (!scFrom) { alert("נא להזין תאריך תחילה להנחה."); return; }
+    setScSaving(true);
+    try {
+      var { data: au } = await supabase.auth.getUser();
+      var { error } = await supabase.from("concessions").insert({
+        scope: "standing",
+        contract_id: selContract.id,
+        property_id: selContract.property_id ?? null,
+        applies_to: scApplies,
+        period_start: scFrom,
+        period_end: scTo || null,
+        method: scMethod,
+        percent: scMethod === "percent" ? Number(scPercent) || 0 : null,
+        base_amount: scMethod === "amount" ? Number(scAmount) || 0 : null,
+        reason_code: scReason,
+        reason_notes: scNotes.trim(),
+        granted_by: au?.user?.id ?? null,
+      });
+      if (error) throw new Error(error.message);
+      await logAudit({ entity_type: "contract", entity_id: selContract.id, action: "concession_standing" });
+      setShowConc(false); setScNotes("");
+      var { data } = await supabase.from("concessions").select("*").eq("contract_id", selContract.id).order("created_at", { ascending: false });
+      setContractConcessions(data || []);
+    } catch (e: any) { alert("שגיאה: " + e?.message); }
+    finally { setScSaving(false); }
+  }
+
+  async function cancelConcession(id: string) {
+    var why = prompt("סיבת ביטול ההנחה:");
+    if (why === null) return;
+    var { data: au } = await supabase.auth.getUser();
+    // Cancelled, never deleted — the file must keep showing that it was granted
+    // and then withdrawn.
+    await supabase.from("concessions").update({
+      status: "cancelled", cancelled_at: new Date().toISOString(),
+      cancelled_by: au?.user?.id ?? null, cancel_reason: why || null,
+    }).eq("id", id);
+    var { data } = await supabase.from("concessions").select("*").eq("contract_id", selected).order("created_at", { ascending: false });
+    setContractConcessions(data || []);
+  }
 
   async function loadContracts() {
     const { data } = await supabase.from("contracts")
@@ -1199,6 +1270,13 @@ export default function ContractsPage() {
                           : "🏬 פתיחת המושכר"}
                       </button>
                     )}
+                    {mayGrant && (
+                      <button onClick={function(){ setShowConc(true); }}
+                        className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
+                        title="הנחה לתקופה — למשל 50% משכ״ד לשלושה חודשים">
+                        🤝 הנחה לתקופה
+                      </button>
+                    )}
                     {selContract.document_url && (
                       <a href={selContract.document_url} target="_blank" rel="noopener noreferrer"
                         className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-600 hover:bg-blue-100">📄 צפה בחוזה</a>
@@ -1314,6 +1392,37 @@ export default function ContractsPage() {
                     <div className="text-xs text-slate-400">עד {fmtEndDate(effectiveEndDate, selContract.start_date)}</div>
                   </div>
                 </div>
+
+                {/* Concessions on this contract — standing discounts and waivers
+                    on individual charges, in one place, and reversible without
+                    deleting the record. */}
+                {contractConcessions.length > 0 && (
+                  <div className="rounded-lg border border-emerald-200 bg-emerald-50/40 p-3 mb-2">
+                    <div className="text-xs font-bold text-emerald-800 mb-1.5">
+                      🤝 ויתורים והנחות ({contractConcessions.filter(function(x:any){return x.status !== "cancelled";}).length} פעילים)
+                    </div>
+                    <div className="space-y-1">
+                      {contractConcessions.map(function(x: any) {
+                        var dead = x.status === "cancelled";
+                        return (
+                          <div key={x.id} className={"rounded px-2 py-1.5 text-[11px] flex items-start justify-between gap-2 " + (dead ? "bg-slate-100 text-slate-400" : "bg-white border border-emerald-100 text-slate-700")}>
+                            <div className="min-w-0">
+                              <div className={"font-semibold " + (dead ? "line-through" : "")}>
+                                {x.scope === "standing" ? "📅 " : "💳 "}{describeConcession(x)}
+                              </div>
+                              {x.reason_notes && <div className="text-slate-500">{x.reason_notes}</div>}
+                              {dead && x.cancel_reason && <div className="text-slate-400">בוטל: {x.cancel_reason}</div>}
+                            </div>
+                            {!dead && mayGrant && (
+                              <button onClick={function(){ cancelConcession(x.id); }}
+                                className="text-[10px] text-red-500 hover:text-red-700 shrink-0" title="ביטול ההנחה — הרשומה נשמרת">בטל</button>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
 
                 {/* Revenue-based rent display */}
                 {selContract.rent_type === "revenue_pct" && (
@@ -2270,6 +2379,83 @@ export default function ContractsPage() {
       {/* Record the store opening, and raise the late-opening penalty if the
           contract carries one. Both in one place, because they are the same
           moment in the lease. */}
+      {/* הנחה לתקופה — a contract-level discount applied to billing as it is
+          produced, rather than a waiver on a charge that already exists. */}
+      {showConc && selContract && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={function(){ if(!scSaving) setShowConc(false); }}>
+          <div className="bg-white rounded-2xl shadow-xl max-w-lg w-full p-6 max-h-[85vh] overflow-auto" dir="rtl" onClick={function(e:any){e.stopPropagation();}}>
+            <div className="text-lg font-bold text-slate-800 mb-1">🤝 הנחה לתקופה</div>
+            <div className="text-xs text-slate-500 mb-4">
+              {selContract.tenants?.name} — {selContract.properties?.name}
+            </div>
+
+            <label className="mb-1 block text-xs font-semibold text-slate-700">על מה חלה ההנחה</label>
+            <div className="flex gap-1 mb-3 flex-wrap">
+              <button type="button" onClick={function(){setScApplies("rent");}} className={"rounded border px-3 py-1.5 text-xs " + (scApplies==="rent"?"border-emerald-500 bg-emerald-50 font-bold text-emerald-700":"border-slate-200 text-slate-600")}>שכ&quot;ד</button>
+              <button type="button" onClick={function(){setScApplies("revenue_share");}} className={"rounded border px-3 py-1.5 text-xs " + (scApplies==="revenue_share"?"border-emerald-500 bg-emerald-50 font-bold text-emerald-700":"border-slate-200 text-slate-600")}>אחוז מהפדיון</button>
+              <button type="button" onClick={function(){setScApplies("mgmt");}} className={"rounded border px-3 py-1.5 text-xs " + (scApplies==="mgmt"?"border-emerald-500 bg-emerald-50 font-bold text-emerald-700":"border-slate-200 text-slate-600")}>דמי ניהול</button>
+              <button type="button" onClick={function(){setScApplies("all");}} className={"rounded border px-3 py-1.5 text-xs " + (scApplies==="all"?"border-emerald-500 bg-emerald-50 font-bold text-emerald-700":"border-slate-200 text-slate-600")}>הכל</button>
+            </div>
+
+            <label className="mb-1 block text-xs font-semibold text-slate-700">גובה ההנחה</label>
+            <div className="flex gap-1 mb-2 flex-wrap">
+              <button type="button" onClick={function(){setScMethod("percent");}} className={"rounded border px-3 py-1.5 text-xs " + (scMethod==="percent"?"border-emerald-500 bg-emerald-50 font-bold text-emerald-700":"border-slate-200 text-slate-600")}>אחוז</button>
+              <button type="button" onClick={function(){setScMethod("amount");}} className={"rounded border px-3 py-1.5 text-xs " + (scMethod==="amount"?"border-emerald-500 bg-emerald-50 font-bold text-emerald-700":"border-slate-200 text-slate-600")}>סכום קבוע לחודש</button>
+              <button type="button" onClick={function(){setScMethod("full");}} className={"rounded border px-3 py-1.5 text-xs " + (scMethod==="full"?"border-emerald-500 bg-emerald-50 font-bold text-emerald-700":"border-slate-200 text-slate-600")}>פטור מלא</button>
+            </div>
+            {scMethod === "percent" && (
+              <input type="number" min="1" max="100" value={scPercent} onChange={function(e){setScPercent(e.target.value);}}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm mb-3 text-right" placeholder="אחוז" />
+            )}
+            {scMethod === "amount" && (
+              <input type="number" step="0.01" value={scAmount} onChange={function(e){setScAmount(e.target.value);}}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm mb-3 text-right" placeholder='₪ לחודש (לפני מע"מ)' />
+            )}
+
+            <div className="grid grid-cols-2 gap-3 mb-3">
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">מתאריך</label>
+                <input type="date" value={scFrom} onChange={function(e){setScFrom(e.target.value);}} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">עד תאריך (ריק = ללא סיום)</label>
+                <input type="date" value={scTo} onChange={function(e){setScTo(e.target.value);}} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+              </div>
+            </div>
+
+            <label className="mb-1 block text-xs font-semibold text-slate-700">סיבה</label>
+            <select value={scReason} onChange={function(e){setScReason(e.target.value);}} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm mb-3">
+              <option value="war">מלחמה / מצב חירום</option>
+              <option value="covid">קורונה</option>
+              <option value="compensation">פיצוי לשוכר</option>
+              <option value="goodwill">מחווה מסחרית</option>
+              <option value="billing_error">טעות בחיוב</option>
+              <option value="dispute">פשרה במחלוקת</option>
+              <option value="other">אחר</option>
+            </select>
+
+            <label className="mb-1 block text-xs font-semibold text-slate-700">נימוק (חובה)</label>
+            <textarea value={scNotes} onChange={function(e){setScNotes(e.target.value);}} rows={2}
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm mb-3 text-right"
+              placeholder="ההסבר נשמר בתיק ומופיע בדוח הוויתורים" />
+
+            <div className="rounded-lg bg-emerald-50 border border-emerald-200 p-3 text-xs text-emerald-900 mb-4">
+              ההנחה תחול על החיוב בזמן שהוא מחושב, בתוך התקופה שהוגדרה בלבד. חיובים שכבר נוצרו אינם משתנים —
+              עליהם אפשר לוותר נקודתית ממסך החיובים.
+            </div>
+
+            <div className="flex gap-2">
+              <button disabled={scSaving} onClick={saveStandingConcession}
+                className="flex-1 rounded-lg bg-emerald-600 text-white px-4 py-2 text-sm font-bold hover:bg-emerald-700 disabled:opacity-50">
+                {scSaving ? "⏳ שומר..." : "✓ שמור הנחה"}
+              </button>
+              <button onClick={function(){setShowConc(false);}} disabled={scSaving}
+                className="rounded-lg border border-slate-300 px-4 py-2 text-sm text-slate-600 hover:bg-slate-50">ביטול</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showOpening && selContract && (function(){
         var draft = { ...selContract, actual_opening_date: openingDate || null };
         var g = graceWindow({ contract: draft });

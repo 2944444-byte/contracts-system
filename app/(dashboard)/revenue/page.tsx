@@ -1,5 +1,6 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
+import { standingDiscount, applyStanding, describeConcession } from "@/lib/concessions";
 import { revenuePctAtDate, pctTiersFromRow, describePctTiers } from "@/lib/revenue-pct-steps";
 import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit-log';
@@ -83,6 +84,8 @@ export default function RevenuePage() {
   // the signed figure — it rises with the contract's steps and stays linked to
   // the ORIGINAL base index.
   const [minTiers, setMinTiers] = useState<any[]>([]);
+  // contract_id → standing concessions in force (רק scope=standing פעילים)
+  const [concessionsByContract, setConcessionsByContract] = useState<Record<string, any[]>>({});
   const [minCpiByMonth, setMinCpiByMonth] = useState<Record<string, number>>({});
   // Periodic settlement (quarterly / half-yearly / yearly): each period restates
   // both sides to the index known on its settlement date and bills the gap.
@@ -383,10 +386,15 @@ export default function RevenuePage() {
     // The 12-month table reads from this in-memory set, filtered by selContractId.
     var yearStart = selYear + "-01-01";
     var yearEnd   = (selYear + 1) + "-01-01"; // exclusive — avoids the Feb-31 bug entirely
-    const [{ data: c }, { data: r }] = await Promise.all([
+    const [{ data: c }, { data: r }, { data: conc }] = await Promise.all([
       supabase.from("contracts").select("id,property_id,status,rent_type,revenue_pct,revenue_pct_tiers,min_rent_per_sqm,charged_area,rent_per_sqm,investment_addition,vat_type,mgmt_fee_per_sqm,mgmt_included_in_revenue,start_date,indexation_method,index_base_date,index_base_value,revenue_categories,revenue_minimum_advance,minimum_rent,revenue_protection_type,revenue_protection_months,revenue_protection_notes,contract_options(id,start_date,status,is_exercised,cancels_revenue_protection),tenants(name),properties(name)").in("status",["active","expiring","extended"]),
       supabase.from("revenue_reports").select("*,contracts(property_id,tenants(name),properties(name))").gte("report_month",yearStart).lt("report_month",yearEnd).order("report_month",{ascending:true}),
+      // Standing concessions apply as the rent is computed.
+      supabase.from("concessions").select("*").eq("scope","standing").eq("status","active"),
     ]);
+    var concMap: Record<string, any[]> = {};
+    (conc ?? []).forEach(function(x: any){ if (x.contract_id) (concMap[x.contract_id] = concMap[x.contract_id] || []).push(x); });
+    setConcessionsByContract(concMap);
     var scope = await getScopeIds();
     var scopedC = scopeRows(c??[], scope, function(x: any){ return x.property_id; });
     var revenueContracts = scopedC.filter(function(x){return x.rent_type==="revenue_based"||x.revenue_pct;});
@@ -472,7 +480,24 @@ export default function RevenuePage() {
     // neither way of entering it is silently ignored.
     const minMonthly    = Number(c.minimum_rent) || 0;
     const minRent       = Math.max(minCalc.amount, minMonthly);
-    const finalRent     = Math.max(rentFromRev, minRent);
+    const rentBeforeDisc = Math.max(rentFromRev, minRent);
+    // A standing concession (e.g. 50% off rent for three months of war) applies
+    // as the rent is computed, so it lands in the charge itself rather than
+    // needing a waiver afterwards. 'revenue_share' and 'rent' both cover a
+    // turnover lease — the tenant thinks of it as rent either way.
+    const discRent = standingDiscount({
+      concessions: concessionsByContract[contractId] || [],
+      date: periodDate || new Date(),
+      kind: "revenue_share",
+    });
+    const discRent2 = standingDiscount({
+      concessions: concessionsByContract[contractId] || [],
+      date: periodDate || new Date(),
+      kind: "rent",
+    });
+    const combined = { factor: discRent.factor * discRent2.factor, deduct: discRent.deduct + discRent2.deduct };
+    const finalRent     = applyStanding(rentBeforeDisc, combined);
+    const rentDiscount  = Math.round((rentBeforeDisc - finalRent) * 100) / 100;
     const vat           = c.vat_type==="taxable" ? finalRent*vatPctAt(vatRates, periodDate || new Date()) : 0;
     return {
       pct, effPct, split, mgmtMonthly, netGross,
@@ -480,6 +505,9 @@ export default function RevenuePage() {
       calcRent: consideration,        // alias used elsewhere
       rentFromRev,                    // consideration − mgmt (before min)
       minRent, minCalc, finalRent, vat,
+      rentBeforeDisc, rentDiscount,
+      concessionsApplied: combined.factor !== 1 || combined.deduct !== 0
+        ? (discRent.applied || []).concat(discRent2.applied || []) : [],
       total: finalRent + vat,
       area: area,
     };
