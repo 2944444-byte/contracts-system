@@ -27,6 +27,7 @@ export const PERMISSIONS: PermissionDef[] = [
   { key: "manage_insurance",  icon: "🛡️", label: "ניהול אישורי ביטוח",    desc: "העלאת תעודות ביטוח ומעקב תאימות" },
   { key: "manage_safety",     icon: "🔒", label: "ניהול בדיקות בטיחות",   desc: "העלאת אישורי בטיחות/אש ועדכון בדיקות" },
   { key: "manage_viewers",    icon: "👁", label: "הקמת משתמשי צפייה",     desc: "יצירת משתמשי צפייה בנכסים שבהרשאתו" },
+  { key: "grant_concessions", icon: "🤝", label: "מתן ויתורים והנחות",    desc: "ויתור מלא או חלקי על חיובים, הנחות לתקופה ופריסה לתשלומים" },
 ];
 
 // Quick-start presets for viewer users — common job profiles. Always editable

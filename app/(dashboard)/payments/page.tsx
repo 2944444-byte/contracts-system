@@ -1,10 +1,11 @@
 "use client";
 import React, { useState, useEffect, useRef } from "react";
+import { chargeBalance, waivedTotalFor, describeConcession, concessionValue, canGrantConcessions, REASON_LABELS, type ConcessionReason } from "@/lib/concessions";
 import { getVatRates, vatPctAt, getVatPctForDate, type VatRate } from "@/lib/vat";
 import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit-log';
 import { PageHero } from '@/components/ui';
-import { getScopeIds, scopeRows } from '@/lib/permissions';
+import { getScopeIds, scopeRows, getCurrentAccess } from '@/lib/permissions';
 import { reconcileAlerts } from '@/lib/alerts-reconcile';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
@@ -127,6 +128,10 @@ type Row = {
   dueDate: string | null;
   status: "pending" | "approved" | "paid";
   createdAt: string;
+  // Concessions granted on this row, and the balance they leave.
+  concessions?: any[];
+  waived?: number;
+  balance?: number;
   underlyingAdvanceIds?: string[];
   unitsBreakdown?: Array<{ name: string; amount: number; period: string }>;
   period?: string;
@@ -142,6 +147,16 @@ export default function PaymentsPage() {
   // Non-empty when a fetch failed — shown on screen so a broken query is never
   // mistaken for "no data".
   const [loadError, setLoadError] = useState("");
+  // ויתורים והסדרים
+  const [mayGrant, setMayGrant] = useState(false);
+  const [concFor, setConcFor] = useState<any>(null);
+  const [cMethod, setCMethod] = useState<"full"|"percent"|"amount">("full");
+  const [cPercent, setCPercent] = useState("50");
+  const [cAmount, setCAmount] = useState("");
+  const [cReason, setCReason] = useState<ConcessionReason>("goodwill");
+  const [cNotes, setCNotes] = useState("");
+  const [cInstallments, setCInstallments] = useState("");
+  const [cSaving, setCSaving] = useState(false);
   const [editingId, setEditingId] = useState("");
   const [saving,    setSaving]    = useState(false);
   // Full VAT-rate history — each charge uses the rate in effect for ITS period
@@ -201,7 +216,7 @@ export default function PaymentsPage() {
     var yearStart = filterYear + "-01-01";
     var yearEnd   = (filterYear + 1) + "-01-01";
 
-    const [chargesRes, contractsRes, advRes, revRes] = await Promise.all([
+    const [chargesRes, concRes, contractsRes, advRes, revRes] = await Promise.all([
       // Load all charges with a due_date in the selected year. Falls back to
       // billing_period_start when due_date is null (older data).
       supabase.from("charges")
@@ -213,6 +228,9 @@ export default function PaymentsPage() {
         .or("due_date.gte." + yearStart + ",billing_period_start.gte." + yearStart)
         .or("due_date.lt." + yearEnd + ",billing_period_start.lt." + yearEnd)
         .order("due_date", { ascending: true }),
+      // Concessions are read separately and matched in memory: a charge can
+      // carry several, and the balance every row shows is derived from them.
+      supabase.from("concessions").select("*").eq("status", "active"),
       supabase.from("contracts").select("id,property_id,vat_type,rent_type,revenue_pct,revenue_report_day,revenue_minimum_advance,minimum_rent,payment_method,start_date,end_date,rent_per_sqm,charged_area,investment_addition,is_amendment,tenants(name),properties(name)").in("status", ["active", "expiring", "extended"]),
       // Rent advances for the year (both paid + unpaid — paid ones still need
       // to show on this screen so שולמו KPI is honest)
@@ -252,6 +270,10 @@ export default function PaymentsPage() {
     else setLoadError("");
 
     var ch = scopeRows(chargesRes.data || [], scope, function(c: any){ return c.contracts?.property_id; });
+    var concByCharge: Record<string, any[]> = {};
+    ((concRes as any).data || []).forEach(function(x: any) {
+      if (x.charge_id) (concByCharge[x.charge_id] = concByCharge[x.charge_id] || []).push(x);
+    });
     // Keep BOTH paid and unpaid advances — paid ones still need to appear
     // on this screen so the שולמו KPI reflects collected rent. Only waived
     // advances are dropped entirely (they're explicitly cancelled).
@@ -279,6 +301,10 @@ export default function PaymentsPage() {
         baseAmount: Number(c.base_amount) || 0,
         vatAmount: Number(c.vat_amount) || 0,
         totalAmount: Number(c.total_amount) || 0,
+        // What is actually still owed once concessions are taken off.
+        concessions: concByCharge[c.id] || [],
+        waived: waivedTotalFor(concByCharge[c.id]),
+        balance: chargeBalance(c, concByCharge[c.id]),
         vatType: c.vat_type || "",
         dueDate: c.due_date,
         status: c.status || "pending",
@@ -550,6 +576,50 @@ export default function PaymentsPage() {
     await logAudit({ entity_type: "charge", entity_id: id, action: "approve" });
     await loadAll();
   }
+  useEffect(function () {
+    getCurrentAccess().then(function (a) { setMayGrant(canGrantConcessions(a)); }).catch(function () {});
+  }, []);
+
+  function openConcession(r: any) {
+    setConcFor(r);
+    setCMethod("full"); setCPercent("50"); setCAmount("");
+    setCReason("goodwill"); setCNotes(""); setCInstallments("");
+  }
+
+  async function saveConcession() {
+    if (!concFor) return;
+    if (!cNotes.trim()) { alert("נא להזין נימוק — הוא נשמר בתיק ומופיע בדוח הוויתורים."); return; }
+    setCSaving(true);
+    try {
+      var v = concessionValue({
+        method: cMethod,
+        percent: Number(cPercent) || 0,
+        amount: Number(cAmount) || 0,
+        itemBase: Number(concFor.baseAmount) || 0,
+        itemVat: Number(concFor.vatAmount) || 0,
+      });
+      if (v.total <= 0) throw new Error("סכום הוויתור אינו יכול להיות אפס");
+      var { data: au } = await supabase.auth.getUser();
+      var { error } = await supabase.from("concessions").insert({
+        scope: "charge",
+        charge_id: concFor.id,
+        contract_id: concFor.contractId,
+        method: cMethod,
+        percent: cMethod === "percent" ? Number(cPercent) || 0 : null,
+        base_amount: v.base, vat_amount: v.vat, total_amount: v.total,
+        reason_code: cReason,
+        reason_notes: cNotes.trim(),
+        installments: Number(cInstallments) > 1 ? Number(cInstallments) : null,
+        granted_by: au?.user?.id ?? null,
+      });
+      if (error) throw new Error(error.message);
+      await logAudit({ entity_type: "charge", entity_id: concFor.id, action: "concession" });
+      setConcFor(null);
+      await loadAll();
+    } catch (e: any) { alert("שגיאה: " + e?.message); }
+    finally { setCSaving(false); }
+  }
+
   async function markPaid(id: string) {
     await supabase.from("charges").update({ status: "paid", paid_at: new Date().toISOString() }).eq("id", id);
     // Settling a debt is exactly what an arrears alert was chasing — close it
@@ -734,6 +804,86 @@ export default function PaymentsPage() {
 
   return (
     <div dir="rtl">
+      {/* ויתור על חיוב — the charge itself is never edited; this records what
+          was given up, why, and by whom. */}
+      {concFor && (function () {
+        var v = concessionValue({
+          method: cMethod, percent: Number(cPercent) || 0, amount: Number(cAmount) || 0,
+          itemBase: Number(concFor.baseAmount) || 0, itemVat: Number(concFor.vatAmount) || 0,
+        });
+        var newBalance = Math.max(0, (Number(concFor.balance) || 0) - v.total);
+        return (
+          <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={function () { if (!cSaving) setConcFor(null); }}>
+            <div className="bg-white rounded-2xl shadow-xl max-w-lg w-full p-6 max-h-[85vh] overflow-auto" onClick={function (e: any) { e.stopPropagation(); }}>
+              <div className="text-lg font-bold text-slate-800 mb-1">🤝 ויתור / הסדר</div>
+              <div className="text-xs text-slate-500 mb-4">{concFor.tenantName} · {concFor.description} · חיוב {fmtMoney(concFor.totalAmount)}</div>
+
+              <label className="mb-1 block text-xs font-semibold text-slate-700">היקף הוויתור</label>
+              <div className="flex gap-1 mb-3 flex-wrap">
+                <button type="button" onClick={function () { setCMethod("full"); }}
+                  className={"rounded border px-3 py-1.5 text-xs " + (cMethod === "full" ? "border-emerald-500 bg-emerald-50 font-bold text-emerald-700" : "border-slate-200 text-slate-600")}>ויתור מלא</button>
+                <button type="button" onClick={function () { setCMethod("percent"); }}
+                  className={"rounded border px-3 py-1.5 text-xs " + (cMethod === "percent" ? "border-emerald-500 bg-emerald-50 font-bold text-emerald-700" : "border-slate-200 text-slate-600")}>אחוז</button>
+                <button type="button" onClick={function () { setCMethod("amount"); }}
+                  className={"rounded border px-3 py-1.5 text-xs " + (cMethod === "amount" ? "border-emerald-500 bg-emerald-50 font-bold text-emerald-700" : "border-slate-200 text-slate-600")}>סכום</button>
+              </div>
+
+              {cMethod === "percent" && (
+                <div className="mb-3">
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">אחוז הוויתור (%)</label>
+                  <input type="number" min="1" max="100" value={cPercent} onChange={function (e) { setCPercent(e.target.value); }} className={ic} />
+                </div>
+              )}
+              {cMethod === "amount" && (
+                <div className="mb-3">
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">סכום הוויתור לפני מע&quot;מ (₪)</label>
+                  <input type="number" step="0.01" value={cAmount} onChange={function (e) { setCAmount(e.target.value); }} className={ic} />
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-3 mb-3">
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">סיבה</label>
+                  <select value={cReason} onChange={function (e) { setCReason(e.target.value as any); }} className={ic}>
+                    <option value="war">מלחמה / מצב חירום</option>
+                    <option value="covid">קורונה</option>
+                    <option value="compensation">פיצוי לשוכר</option>
+                    <option value="goodwill">מחווה מסחרית</option>
+                    <option value="billing_error">טעות בחיוב</option>
+                    <option value="dispute">פשרה במחלוקת</option>
+                    <option value="other">אחר</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">פריסת היתרה (תשלומים)</label>
+                  <input type="number" min="0" value={cInstallments} placeholder="ריק = ללא פריסה"
+                    onChange={function (e) { setCInstallments(e.target.value); }} className={ic} />
+                </div>
+              </div>
+
+              <label className="mb-1 block text-xs font-semibold text-slate-700">נימוק (חובה)</label>
+              <textarea value={cNotes} onChange={function (e) { setCNotes(e.target.value); }} rows={2}
+                placeholder="ההסבר נשמר בתיק ומופיע בדוח הוויתורים" className={ic + " mb-3"} />
+
+              <div className="rounded-lg bg-emerald-50 border border-emerald-200 p-3 text-xs text-emerald-900 space-y-0.5 mb-4">
+                <div>ויתור: <b>{fmtMoney(v.base)}</b> + מע&quot;מ {fmtMoney(v.vat)} = <b>{fmtMoney(v.total)}</b></div>
+                <div>יתרה לתשלום אחרי הוויתור: <b>{fmtMoney(newBalance)}</b></div>
+                <div className="text-emerald-700">החיוב המקורי נשמר כפי שהוא — הסכום שוויתרנו עליו לא ייחשב כחוב של השוכר.</div>
+              </div>
+
+              <div className="flex gap-2">
+                <button disabled={cSaving || v.total <= 0} onClick={saveConcession}
+                  className="flex-1 rounded-lg bg-emerald-600 text-white px-4 py-2 text-sm font-bold hover:bg-emerald-700 disabled:opacity-50">
+                  {cSaving ? "⏳ שומר..." : "✓ אשר ויתור"}
+                </button>
+                <button onClick={function () { setConcFor(null); }} disabled={cSaving}
+                  className="rounded-lg border border-slate-300 px-4 py-2 text-sm text-slate-600 hover:bg-slate-50">ביטול</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       <PageHero title="חיובים" icon="💳" tone="emerald"
         subtitle={<>
           {rows.length} פריטים בשנת {filterYear}
@@ -997,8 +1147,21 @@ export default function PaymentsPage() {
                                 )}
                               </td>
                               <td className="px-4 py-2.5 font-bold text-slate-800 font-mono whitespace-nowrap">
-                                {fmtMoney(r.totalAmount)}
+                                {/* With a concession the demand and the balance
+                                    are different numbers, and both matter. */}
+                                {Number(r.waived) > 0 ? (
+                                  <>
+                                    <span className="line-through text-slate-400">{fmtMoney(r.totalAmount)}</span>
+                                    <div className="text-emerald-700">{fmtMoney(Number(r.balance) || 0)}</div>
+                                  </>
+                                ) : fmtMoney(r.totalAmount)}
                                 {r.vatAmount > 0 && <div className="text-[10px] text-slate-400 font-normal">בסיס {fmtMoney(r.baseAmount)} + מע&quot;מ {fmtMoney(r.vatAmount)}</div>}
+                                {Number(r.waived) > 0 && (
+                                  <div className="text-[10px] mt-0.5 rounded bg-emerald-50 border border-emerald-200 text-emerald-800 px-1.5 py-0.5 font-semibold inline-block"
+                                    title={(r.concessions || []).map(function(x: any){ return describeConcession(x) + (x.reason_notes ? " — " + x.reason_notes : ""); }).join("\n")}>
+                                    🤝 ויתור {fmtMoney(Number(r.waived) || 0)}
+                                  </div>
+                                )}
                               </td>
                               <td className="px-4 py-2.5 text-xs text-slate-500 whitespace-nowrap">
                                 {fmtDate(r.dueDate || "")}
@@ -1027,6 +1190,11 @@ export default function PaymentsPage() {
                                   )}
                                   {r.status !== "paid" && r.source === "revenue" && (
                                     <button onClick={function() { markRevenuePaid(r); }} className="text-xs bg-green-600 text-white px-2 py-1 rounded font-semibold" title="סמן שכ&quot;ד פידיון כשולם">₪ שולם</button>
+                                  )}
+                                  {mayGrant && r.source === "charge" && r.status !== "paid" && Number(r.balance) > 0 && (
+                                    <button onClick={function() { openConcession(r); }}
+                                      className="text-xs border border-emerald-200 bg-emerald-50 rounded px-2 py-1 text-emerald-700 hover:bg-emerald-100"
+                                      title="ויתור מלא או חלקי על החיוב — לא יירשם כחוב של השוכר">🤝 ויתור</button>
                                   )}
                                   <button onClick={function() { sendLetter(r); }} className="text-xs border border-amber-200 bg-amber-50 rounded px-2 py-1 text-amber-700 hover:bg-amber-100" title="צור טיוטת מכתב דרישה">📧</button>
                                   {r.source === "charge" && (

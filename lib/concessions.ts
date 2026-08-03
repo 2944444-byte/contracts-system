@@ -180,10 +180,13 @@ export function describeConcession(c: any): string {
   return parts.filter(Boolean).join(" · ");
 }
 
-// Permission to grant concessions. Admins always may; anyone else needs the
-// flag switched on for them in settings.
-export function canGrantConcessions(perm: { role?: string; permissions?: any } | null | undefined): boolean {
-  if (!perm) return false;
-  if (perm.role === "admin") return true;
-  return !!(perm.permissions && perm.permissions.can_grant_concessions);
+// Permission to grant concessions — the project's own registry key, so the
+// toggle appears with every other permission in settings rather than living in
+// a parallel scheme. Admins always may.
+export const CONCESSION_PERMISSION = "grant_concessions";
+
+export function canGrantConcessions(access: { role?: string; permissions?: Record<string, boolean> } | null | undefined): boolean {
+  if (!access) return false;
+  if (access.role === "admin") return true;
+  return !!(access.permissions && access.permissions[CONCESSION_PERMISSION]);
 }
