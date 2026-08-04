@@ -213,6 +213,15 @@ export default function ContractsNewPage() {
   // Recording an investment must not depend on there being a rent addition for
   // it — a landlord often funds fit-out with no monthly addition at all.
   const [hasTI, setHasTI] = useState(false);
+
+  // A <input type="date"> fires onChange on every keystroke, so a user typing
+  // 01/07/2026 passes through 0001-07-…, 0022-07-… and so on. Copying those
+  // into other fields is what produced contracts dated year 0022.
+  function plausibleDate(v: string): boolean {
+    if (!v) return false;
+    var y = Number(String(v).slice(0, 4));
+    return y >= 1900 && y <= 2200;
+  }
   const [revReportFreq, setRevReportFreq] = useState("monthly");
   const [revLateHigherIndex, setRevLateHigherIndex] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState("checks_advance");
@@ -228,6 +237,8 @@ export default function ContractsNewPage() {
   // Step 3 — Grace & Increase
   const [hasGrace, setHasGrace] = useState(false);
   const [graceMonths, setGraceMonths] = useState("3");
+  // Fit-out is often agreed in days ("90 ימי התארגנות"), not whole months.
+  const [graceUnit, setGraceUnit] = useState<"months"|"days">("months");
   const [graceType, setGraceType] = useState("full");
   const [graceDiscountPct, setGraceDiscountPct] = useState("50");
   // Retail: the fit-out window and the store opening that ends it.
@@ -332,16 +343,21 @@ export default function ContractsNewPage() {
     if (plannedOpeningTouched) return;
     if (!hasGrace) return;
     var base = actualHandover || plannedHandover || startDate;
-    var months = Number(graceMonths) || 0;
-    if (!base || months <= 0) return;
+    var amount = Number(graceMonths) || 0;
+    if (!plausibleDate(base) || amount <= 0) return;
     var d0 = new Date(base);
-    var day = d0.getDate();
-    var shifted = new Date(d0.getFullYear(), d0.getMonth() + months, 1);
-    var last = new Date(shifted.getFullYear(), shifted.getMonth() + 1, 0).getDate();
-    shifted.setDate(Math.min(day, last));
+    var shifted: Date;
+    if (graceUnit === "days") {
+      shifted = new Date(d0.getTime() + amount * 86400000);
+    } else {
+      var day = d0.getDate();
+      shifted = new Date(d0.getFullYear(), d0.getMonth() + amount, 1);
+      var last = new Date(shifted.getFullYear(), shifted.getMonth() + 1, 0).getDate();
+      shifted.setDate(Math.min(day, last));
+    }
     var iso = shifted.getFullYear() + "-" + String(shifted.getMonth() + 1).padStart(2, "0") + "-" + String(shifted.getDate()).padStart(2, "0");
     if (iso !== plannedOpening) setPlannedOpening(iso);
-  }, [hasGrace, graceMonths, actualHandover, plannedHandover, startDate, plannedOpeningTouched]);
+  }, [hasGrace, graceMonths, graceUnit, actualHandover, plannedHandover, startDate, plannedOpeningTouched]);
 
   // === Auto-calculate deposit ===
   const baseRent =
@@ -983,7 +999,8 @@ export default function ContractsNewPage() {
       insertPayload.late_opening_grace_days = latePenType === "none" ? null : (Number(latePenGraceDays) || 0);
       insertPayload.late_opening_penalty_notes = latePenType === "none" ? null : (latePenNotes || null);
       if (hasGrace) {
-        insertPayload.grace_months = Number(graceMonths) || null;
+        insertPayload.grace_months = graceUnit === "months" ? (Number(graceMonths) || null) : null;
+        insertPayload.grace_days   = graceUnit === "days"   ? (Number(graceMonths) || null) : null;
         insertPayload.grace_type = graceType;
         insertPayload.grace_ends_on_opening = graceEndsOnOpening;
         insertPayload.grace_mgmt_discount_pct = graceMgmtDiscount === "" ? null : (Number(graceMgmtDiscount) || 0);
@@ -1536,13 +1553,13 @@ export default function ContractsNewPage() {
                   <div>
                     <label className="mb-1 block text-[10px] font-semibold text-slate-600">יעד מסירה</label>
                     <input type="date" value={plannedHandover}
-                      onChange={(e) => { setPlannedHandover(e.target.value); if (e.target.value && !startDate && !actualHandover) setStartDate(e.target.value); }}
+                      onChange={(e) => { setPlannedHandover(e.target.value); if (plausibleDate(e.target.value) && !startDate && !actualHandover) setStartDate(e.target.value); }}
                       className={ic} />
                   </div>
                   <div>
                     <label className="mb-1 block text-[10px] font-semibold text-slate-600">מסירה בפועל</label>
                     <input type="date" value={actualHandover}
-                      onChange={(e) => { setActualHandover(e.target.value); if (e.target.value && !startDate) setStartDate(e.target.value); }}
+                      onChange={(e) => { setActualHandover(e.target.value); if (plausibleDate(e.target.value) && !startDate) setStartDate(e.target.value); }}
                       className={ic} />
                   </div>
                 </div>
@@ -2404,12 +2421,18 @@ export default function ContractsNewPage() {
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="mb-1 block text-xs font-semibold text-slate-700">
-                        מספר חודשי גרייס
+                        {graceUnit === "months" ? "מספר חודשי גרייס" : "מספר ימי גרייס"}
                       </label>
+                      <div className="flex gap-1 mb-1">
+                        <button type="button" onClick={() => setGraceUnit("months")}
+                          className={"rounded border px-2 py-1 text-[11px] " + (graceUnit === "months" ? "border-blue-500 bg-blue-50 font-bold text-blue-700" : "border-slate-200 text-slate-500")}>חודשים</button>
+                        <button type="button" onClick={() => setGraceUnit("days")}
+                          className={"rounded border px-2 py-1 text-[11px] " + (graceUnit === "days" ? "border-blue-500 bg-blue-50 font-bold text-blue-700" : "border-slate-200 text-slate-500")}>ימים</button>
+                      </div>
                       <input
                         type="number"
                         min="1"
-                        max="24"
+                        max={graceUnit === "months" ? 24 : 730}
                         value={graceMonths}
                         onChange={(e) => setGraceMonths(e.target.value)}
                         className={ic}
@@ -2546,7 +2569,9 @@ export default function ContractsNewPage() {
                       something the calculation won't do. */}
                   {(function(){
                     var draft = {
-                      grace_months: Number(graceMonths) || 0, grace_type: graceType,
+                      grace_months: graceUnit === "months" ? (Number(graceMonths) || 0) : 0,
+                      grace_days:   graceUnit === "days"   ? (Number(graceMonths) || 0) : 0,
+                      grace_type: graceType,
                       grace_discount_pct: Number(graceDiscountPct) || 0,
                       grace_mgmt_discount_pct: graceMgmtDiscount === "" ? null : Number(graceMgmtDiscount),
                       grace_ends_on_opening: graceEndsOnOpening,
@@ -2577,7 +2602,7 @@ export default function ContractsNewPage() {
 
                   {hasGrace && (
                   <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-700">
-                    גרייס: {graceMonths} חודשים |{" "}
+                    גרייס: {graceMonths} {graceUnit === "months" ? "חודשים" : "ימים"} |{" "}
                     {GRACE_TYPES.find((g) => g.v === graceType)?.l}
                     {graceType === "partial" && ` | ${graceDiscountPct}% הנחה`}
                     {" | "}שכ&quot;ד בגרייס:{" "}
@@ -3909,7 +3934,11 @@ export default function ContractsNewPage() {
                 contractStart: startDate,
                 contractEnd: endDate,
                 baseRentPerSqm: tlBase,
-                mainTiers: priceTiers,
+                // Only when step-rent is actually ON. Ticking the box creates a
+                // default tier; unticking it left that tier in state, and the
+                // summary drew "שנה 1 / שנים 2-3" for a contract with no steps
+                // at all — and inherited them into every option period.
+                mainTiers: hasIncrease ? priceTiers : [],
                 options: extensionOptions,
               });
               if (timeline.length === 0) return null;

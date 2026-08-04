@@ -12,6 +12,11 @@ export type ExtraGuarantee = {
   // Every security stands on its own basis: a promissory note for six months'
   // rent next to a bank guarantee for three is the normal case, so the months
   // and the management-fee choice belong to the security, not the contract.
+  // When the security is due — leases almost never require it at signing.
+  delivery_trigger?: string;
+  delivery_due_date?: string;
+  delivery_condition?: string;
+  delivered_at?: string;
   calc_method?: "months_based" | "fixed_amount";
   months?: string;
   includes_mgmt?: boolean;
@@ -39,7 +44,8 @@ export const NO_EXPIRY_TYPES = ["promissory_note", "cash"];
 
 export function emptyExtraGuarantee(type: string): ExtraGuarantee {
   return {
-    type: type, calc_method: "months_based", months: "3", includes_mgmt: true,
+    type: type, delivery_trigger: "signing", delivery_due_date: "", delivery_condition: "", delivered_at: "",
+    calc_method: "months_based", months: "3", includes_mgmt: true,
     amount_required: "", amount_actual: "", bank: "",
     reference_number: "", end_date: "", document_url: "", notes: "", guarantors: [],
   };
@@ -50,6 +56,10 @@ export function extraGuaranteeFromRow(g: any): ExtraGuarantee {
   return {
     id: g.id,
     type: g.guarantee_type,
+    delivery_trigger: g.delivery_trigger || "signing",
+    delivery_due_date: g.delivery_due_date ? String(g.delivery_due_date).slice(0, 10) : "",
+    delivery_condition: g.delivery_condition ?? "",
+    delivered_at: g.delivered_at ? String(g.delivered_at).slice(0, 10) : "",
     calc_method: g.deposit_calc_method === "fixed_amount" ? "fixed_amount" : (g.deposit_months != null ? "months_based" : "fixed_amount"),
     months: g.deposit_months != null ? String(g.deposit_months) : "",
     includes_mgmt: g.deposit_includes_mgmt !== false,
@@ -81,6 +91,10 @@ export function extraGuaranteeToRow(e: ExtraGuarantee, contractId: string): Reco
     document_url: e.document_url || null,
     notes: e.notes || null,
     guarantors: e.type === "promissory_note" && validGuarantors.length > 0 ? validGuarantors : null,
+    delivery_trigger: e.delivery_trigger || "signing",
+    delivery_due_date: e.delivery_due_date || null,
+    delivery_condition: e.delivery_condition || null,
+    delivered_at: e.delivered_at || null,
     deposit_calc_method: e.calc_method || "fixed_amount",
     deposit_months: e.calc_method === "months_based" && e.months ? Number(e.months) : null,
     deposit_includes_mgmt: e.calc_method === "months_based" ? !!e.includes_mgmt : null,
@@ -258,6 +272,50 @@ export default function ExtraGuaranteesEditor(props: {
                     <label className="mb-1 block text-[11px] font-semibold text-slate-700">קישור למסמך (URL)</label>
                     <input type="url" dir="ltr" value={e.document_url} placeholder="https://..."
                       onChange={function(ev) { patch(idx, { document_url: ev.target.value }); }} className={ic} />
+                  </div>
+                </div>
+
+                {/* When it is due. A security tied to a milestone is not
+                    overdue before that milestone arrives. */}
+                <div className="rounded-lg border border-amber-200 bg-amber-50/60 p-2 space-y-2">
+                  <div className="text-[11px] font-bold text-amber-800">📅 מועד המצאת הביטחון</div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="mb-1 block text-[11px] text-slate-600">יימסר</label>
+                      <select value={e.delivery_trigger || "signing"}
+                        onChange={function(ev){ patch(idx, { delivery_trigger: ev.target.value }); }} className={ic}>
+                        <option value="signing">במועד החתימה</option>
+                        <option value="handover">במועד מסירת המושכר</option>
+                        <option value="opening">במועד פתיחת המושכר</option>
+                        <option value="works_end">בסיום עבודות השוכר</option>
+                        <option value="works_start">בתחילת עבודות ההתאמה</option>
+                        <option value="permit">בקבלת היתר בנייה</option>
+                        <option value="custom_date">בתאריך מוגדר</option>
+                        <option value="other">לפי תנאי בהסכם</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-[11px] text-slate-600">
+                        {["custom_date","permit","works_start","other"].indexOf(e.delivery_trigger || "signing") !== -1
+                          ? "תאריך משוער / מוסכם" : "תאריך (אם ידוע)"}
+                      </label>
+                      <input type="date" value={e.delivery_due_date || ""}
+                        onChange={function(ev){ patch(idx, { delivery_due_date: ev.target.value }); }} className={ic} />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[11px] text-slate-600">התנאי כלשונו בהסכם</label>
+                    <input type="text" value={e.delivery_condition || ""}
+                      onChange={function(ev){ patch(idx, { delivery_condition: ev.target.value }); }}
+                      className={ic} placeholder="למשל: וכנגד תשלום השתתפות המשכיר" />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[11px] text-slate-600">התקבל בפועל בתאריך</label>
+                    <input type="date" value={e.delivered_at || ""}
+                      onChange={function(ev){ patch(idx, { delivered_at: ev.target.value }); }} className={ic} />
+                  </div>
+                  <div className="text-[10px] text-amber-700">
+                    עד המועד הזה הביטחון אינו נחשב חסר, וההתראה תיפתח רק כשהוא מגיע — עם התנאי שנרשם כאן.
                   </div>
                 </div>
 

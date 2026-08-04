@@ -1,3 +1,4 @@
+import { deliveryStatus } from "@/lib/guarantee-delivery";
 // "The contract requires a guarantee" and "the guarantee is in our hands" are
 // two different facts, and the system treated them as one.
 //
@@ -36,10 +37,19 @@ function hasDocument(g: any): boolean {
   return Array.isArray(docs) && docs.some(function (d: any) { return d && d.url; });
 }
 
-export function guaranteeGaps(g: any, today?: Date): GuaranteeGap[] {
+// `contract` is optional: without it the delivery milestone can't be resolved
+// and the old behaviour (due immediately) is kept.
+export function guaranteeGaps(g: any, today?: Date, contract?: any): GuaranteeGap[] {
   const out: GuaranteeGap[] = [];
   if (!g) return out;
-  if (g.status && g.status !== "active") return out;      // returned/forfeited — not chased
+  if (g.status && g.status !== "active") return out;
+
+  // Not due yet under the contract's own terms — "הערבות תמסר במועד הקבוע
+  // להשלמת עבודות השוכר". Chasing it now would be wrong.
+  if (contract && g.delivery_trigger && g.delivery_trigger !== "signing") {
+    const st = deliveryStatus({ guarantee: g, contract, today });
+    if (st.notYetDue) return out;
+  }
 
   const required = Number(g.amount_required) || 0;
   const actual = Number(g.amount_actual) || 0;

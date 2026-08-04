@@ -8,6 +8,7 @@ import { representativeGuaranteeIds } from "@/lib/guarantee-dedupe";
 import { contractExpiryVerdict, contractExpiryTitle } from "@/lib/contract-expiry";
 import { handoverPendingVerdict, handoverPendingTitle, handoverPendingMessage } from "@/lib/handover-pending";
 import { guaranteeGaps, describeGaps, guaranteeTypeLabel } from "@/lib/guarantee-status";
+import { deliveryStatus, describeDelivery } from "@/lib/guarantee-delivery";
 import { graceWindow, lateOpeningPenalty } from "@/lib/store-opening";
 import { guaranteedMonthlyRent } from "@/lib/guarantee-base";
 import { chargeBalance } from "@/lib/concessions";
@@ -303,7 +304,7 @@ export async function runAlertSync(supabase: SupabaseClient): Promise<{ created:
   // 2. Guarantees — expiring soon AND already expired-but-not-renewed (the
   //    old `days < 0 → skip` silently dropped exactly the case that matters
   //    most: a guarantee that lapsed and was never renewed).
-  const { data: guarantees } = await supabase.from("guarantees").select("id,end_date,contract_id,guarantee_type,amount_actual,amount_required,bank,document_url,documents,status,created_at,contracts(property_id,parent_contract_id,tenants(name))").eq("status", "active");
+  const { data: guarantees } = await supabase.from("guarantees").select("id,end_date,contract_id,guarantee_type,amount_actual,amount_required,bank,document_url,documents,status,created_at,delivery_trigger,delivery_due_date,delivery_condition,delivered_at,contracts(property_id,parent_contract_id,signing_date,start_date,planned_handover_date,actual_handover_date,planned_opening_date,actual_opening_date,grace_months,grace_days,grace_type,grace_ends_on_opening,tenants(name))").eq("status", "active");
   // The same guarantee is usually recorded on the contract AND on its amendment;
   // alert once for the instrument, not once per row.
   const gReps = representativeGuaranteeIds((guarantees ?? []) as any[]);
@@ -314,7 +315,10 @@ export async function runAlertSync(supabase: SupabaseClient): Promise<{ created:
     // amount in hand, no expiry, no document. The row exists, so the screens
     // showed a valid guarantee — this is the alert that says otherwise.
     {
-      const gaps = guaranteeGaps(g);
+      // A security due only at handover/opening/works-end is not missing before
+      // that milestone — the alert waits, then quotes the contract's own wording.
+      const gaps = guaranteeGaps(g, undefined, g.contracts);
+      const delivery = deliveryStatus({ guarantee: g, contract: g.contracts });
       const blocking = gaps.filter(function (x: any) { return x.blocking; });
       const gLabel = guaranteeTypeLabel(g.guarantee_type) + " — " + (g.contracts?.tenants?.name ?? "");
       const { data: mExist } = await supabase.from("alerts")
@@ -326,7 +330,8 @@ export async function runAlertSync(supabase: SupabaseClient): Promise<{ created:
           ? `ביטחון לא בתוקף: ${gLabel}`
           : `חסרים פרטים בביטחון: ${gLabel}`;
         const message = describeGaps(gaps) +
-          (Number(g.amount_required) > 0 ? ` · נדרש ₪${Number(g.amount_required).toLocaleString("he-IL")}` : "");
+          (Number(g.amount_required) > 0 ? ` · נדרש ₪${Number(g.amount_required).toLocaleString("he-IL")}` : "") +
+          " · " + describeDelivery(delivery, g);
         if (mExist && mExist.length) {
           const prev = mExist[0] as any;
           const patch: any = { title, message, severity: sev };

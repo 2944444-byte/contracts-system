@@ -78,7 +78,7 @@ export async function reconcileAlerts(supabase: SupabaseClient): Promise<{ resol
   const guaranteeIds = idsFor("guarantee");
   if (guaranteeIds.length > 0) {
     const { data: gs } = await supabase.from("guarantees")
-      .select("id,end_date,status,contract_id,guarantee_type,amount_actual,amount_required,bank,document_url,documents,created_at,contracts(parent_contract_id)")
+      .select("id,end_date,status,contract_id,guarantee_type,amount_actual,amount_required,bank,document_url,documents,created_at,delivery_trigger,delivery_due_date,delivered_at,contracts(parent_contract_id,signing_date,start_date,planned_handover_date,actual_handover_date,planned_opening_date,actual_opening_date,grace_months,grace_days,grace_type,grace_ends_on_opening)")
       .in("id", guaranteeIds);
     // Mirrors the creation rule: one alert per physical guarantee, so a second
     // row recording the same instrument on an amendment closes as redundant.
@@ -88,7 +88,7 @@ export async function reconcileAlerts(supabase: SupabaseClient): Promise<{ resol
       if (!gReps.has(g.id)) continue;                       // duplicate of another row
       // "Not actually in place" is its own condition on the same entity_type —
       // tested separately so clearing one can't close the other.
-      if (guaranteeGaps(g).length > 0) keep("guarantee:guarantee_missing", g.id);
+      if (guaranteeGaps(g, undefined, g.contracts).length > 0) keep("guarantee:guarantee_missing", g.id);
       if (g.end_date && daysUntil(g.end_date) <= 60) keep("guarantee", g.id);
     }
   }
