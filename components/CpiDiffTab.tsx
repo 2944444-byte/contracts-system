@@ -1,5 +1,6 @@
 "use client";
 import React, { useState } from "react";
+import { contractArea } from "@/lib/contract-area";
 import { graceFactorsFor } from "@/lib/store-opening";
 import { standingDiscount, applyStanding } from "@/lib/concessions";
 import { supabase } from "@/lib/supabase";
@@ -389,7 +390,7 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
         });
 
         if (startMonthly === 0) {
-          startMonthly = (Number(c.rent_per_sqm) || 0) * (Number(c.charged_area) || 0);
+          startMonthly = (Number(c.rent_per_sqm) || 0) * contractArea(c);
           rentBeforeAnniversary = startMonthly;
           rentAfterAnniversary = startMonthly;
         }

@@ -11,7 +11,8 @@ import { getVatPct } from '@/lib/vat';
 import { getScopeIds, scopeRows, getCurrentAccess } from '@/lib/permissions';
 import CalcProgress, { CalcProgressState } from '@/components/CalcProgress';
 import { buildPriceTimeline, calculateTierPreviews, buildSpaceRentSchedule, rentAtDate, type PriceTier } from '@/lib/contract-utils';
-import { penaltyTermsFromRow, hasPenalty, describePenaltyTerms, contractArea, penaltyMonths } from '@/lib/option-penalty';
+import { penaltyTermsFromRow, hasPenalty, describePenaltyTerms, penaltyMonths } from '@/lib/option-penalty';
+import { contractArea } from '@/lib/contract-area';
 import { previewOptionDecline, applyOptionDecline } from '@/lib/option-decline';
 import { baseIndexRuleFromRow, describeBaseIndexRule, baseIndexPending, resolveBaseIndexMonth } from '@/lib/base-index-rule';
 import { pctTiersFromRow, describePctTiers } from '@/lib/revenue-pct-steps';
@@ -521,8 +522,8 @@ export default function ContractsPage() {
     if (!baseDate) { resetCpi(); return; }
 
     // True rent = current step-rent + investment per sqm
-    const cpiInvestPerSqm = selContract.charged_area > 0 && selContract.investment_addition
-      ? Number(selContract.investment_addition) / Number(selContract.charged_area)
+    const cpiInvestPerSqm = contractArea(selContract) > 0 && selContract.investment_addition
+      ? Number(selContract.investment_addition) / contractArea(selContract)
       : 0;
     const totalRentPerSqm = currentRent + cpiInvestPerSqm;
 
@@ -950,7 +951,7 @@ export default function ContractsPage() {
       if (cs.charge_method === "fixed" && cs.fixed_rent) originalBaseRent += Number(cs.fixed_rent);
       else originalBaseRent += (Number(cs.price_per_sqm) || Number(selContract.rent_per_sqm) || 0) * (cs.spaces?.area || 0);
     });
-    if (originalBaseRent === 0) originalBaseRent = (Number(selContract.rent_per_sqm) || 0) * (Number(selContract.charged_area) || 0);
+    if (originalBaseRent === 0) originalBaseRent = (Number(selContract.rent_per_sqm) || 0) * contractArea(selContract);
   }
   // Step-rent multiplier: ratio of current year rent vs base rent.
   // NOTE: this is a contract-level, per-sqm, MULTIPLICATIVE ratio. It is kept
@@ -1022,7 +1023,7 @@ export default function ContractsPage() {
   // the KPIs read ₪0.00 for a contract that collects a guaranteed minimum. Fall
   // back to the floor — labelled as such in the box below.
   var revenueFloorMonthly = selContract?.rent_type === "revenue_pct"
-    ? (Number(selContract?.min_rent_per_sqm) || 0) * (Number(selContract?.charged_area) || 0) || (Number(selContract?.minimum_rent) || 0)
+    ? (Number(selContract?.min_rent_per_sqm) || 0) * contractArea(selContract) || (Number(selContract?.minimum_rent) || 0)
     : 0;
   var rentBeforeParking = cpiAdjustedRent > 0 ? cpiAdjustedRent : adjustedBaseRent > 0 ? adjustedBaseRent : (baseRent || revenueFloorMonthly);
   var displayRent = rentBeforeParking + parkingMonthlyTotal;
@@ -1164,8 +1165,8 @@ export default function ContractsPage() {
             }
             // A turnover lease has no per-sqm rent — showing ₪0.00/חודש made it
             // look like it collects nothing. Fall back to its guaranteed floor.
-            if (mon === 0) mon = (c.rent_per_sqm??0)*(c.charged_area??0);
-            if (mon === 0) mon = (Number(c.min_rent_per_sqm)||0)*(Number(c.charged_area)||0) || (Number(c.minimum_rent)||0);
+            if (mon === 0) mon = (Number(c.rent_per_sqm)||0)*contractArea(c);
+            if (mon === 0) mon = (Number(c.min_rent_per_sqm)||0)*contractArea(c) || (Number(c.minimum_rent)||0);
             mon += (c.investment_addition??0);
             const rem  = cEffEnd ? yearsMonthsLeft(cEffEnd) : null;
             const isSel = selected===c.id;
@@ -1442,8 +1443,8 @@ export default function ContractsPage() {
                           for a contract that has one. */}
                       {Number(selContract.min_rent_per_sqm) > 0
                         ? `מינימום: ${fmtMoney(Number(selContract.min_rent_per_sqm))}/מ"ר לחודש` +
-                          (Number(selContract.charged_area) > 0
-                            ? ` · ${fmtMoney(Number(selContract.min_rent_per_sqm) * Number(selContract.charged_area))}/חודש`
+                          (contractArea(selContract) > 0
+                            ? ` · ${fmtMoney(Number(selContract.min_rent_per_sqm) * contractArea(selContract))}/חודש`
                             : "")
                         : Number(selContract.minimum_rent) > 0
                           ? `מינימום: ${fmtMoney(Number(selContract.minimum_rent))}/חודש`
@@ -1560,7 +1561,7 @@ export default function ContractsPage() {
                       </div>
                       {/* Total monthly CPI-adjusted */}
                       <div className="rounded-lg bg-white border border-amber-200 p-2.5 text-center">
-                        <div className="text-lg font-black text-amber-900">₪{Math.round(cpiResult.adjustedRentPerSqm * (Number(selContract.charged_area) ?? 0)).toLocaleString()}</div>
+                        <div className="text-lg font-black text-amber-900">₪{Math.round(cpiResult.adjustedRentPerSqm * contractArea(selContract)).toLocaleString()}</div>
                         <div className="text-[10px] text-amber-600">סה&quot;כ שכ&quot;ד צמוד לחודש (לפני מע&quot;מ)</div>
                       </div>
                     </div>
@@ -1960,7 +1961,7 @@ export default function ContractsPage() {
                         if (cs.charge_method === "fixed" && cs.fixed_rent) amRent += Number(cs.fixed_rent);
                         else amRent += (Number(cs.price_per_sqm) || Number(am.rent_per_sqm) || 0) * (cs.spaces?.area || 0);
                       });
-                      if (amRent === 0) amRent = (Number(am.rent_per_sqm) || 0) * (Number(am.charged_area) || 0);
+                      if (amRent === 0) amRent = (Number(am.rent_per_sqm) || 0) * contractArea(am);
 
                       // Compare with PREVIOUS state (previous amendment or original contract)
                       var prevSpaces = amIdx > 0 && amendments[amIdx-1].contract_spaces?.length > 0
@@ -1977,7 +1978,7 @@ export default function ContractsPage() {
                         if (cs.charge_method === "fixed" && cs.fixed_rent) prevRent += Number(cs.fixed_rent);
                         else prevRent += (Number(cs.price_per_sqm) || Number(selContract.rent_per_sqm) || 0) * (cs.spaces?.area || 0);
                       });
-                      if (prevRent === 0) prevRent = (Number(selContract.rent_per_sqm) || 0) * (Number(selContract.charged_area) || 0);
+                      if (prevRent === 0) prevRent = (Number(selContract.rent_per_sqm) || 0) * contractArea(selContract);
 
                       return (
                         <div key={am.id} className="rounded-xl border border-yellow-300 bg-white p-4">

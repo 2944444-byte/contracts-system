@@ -91,15 +91,11 @@ export function penaltyMonths(terms: PenaltyTerms, contract: any, option: any): 
 // Leased area = sum of the contract's spaces. Accepts the contract_spaces shape
 // used across the app (`spaces(area)`), so a contract over several units is
 // charged on its full area rather than one unit's.
-export function contractArea(contract: any): number {
-  const rows = contract?.contract_spaces ?? [];
-  var total = 0;
-  for (const cs of rows) {
-    const a = Number(cs?.spaces?.area ?? cs?.area ?? 0);
-    if (a > 0) total += a;
-  }
-  return total;
-}
+// Area lives in lib/contract-area.ts now — one definition for the whole system.
+// Re-exported under the original name so existing imports keep working, and
+// deliberately the STRICT variant so the penalty figure is unchanged.
+import { contractAreaStrict } from "@/lib/contract-area";
+export { contractAreaStrict as contractArea };
 
 // Format a date as MM-DD-YYYY for the CBS calculator (day 15 → 16, since CBS
 // treats an index as "known" only from the 16th).
@@ -150,7 +146,7 @@ export async function computeOptionPenalty(params: {
 
   if (!hasPenalty(terms)) return { ...empty, error: "לא הוגדר פיצוי על אי מימוש עבור אופציה זו" };
 
-  const area = params.area != null ? params.area : contractArea(contract);
+  const area = params.area != null ? params.area : contractAreaStrict(contract);
   const months = terms.type === "per_sqm_month" ? penaltyMonths(terms, contract, option) : 0;
 
   var rawBase = 0;

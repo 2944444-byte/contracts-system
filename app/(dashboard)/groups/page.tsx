@@ -1,5 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
+import { contractArea } from "@/lib/contract-area";
 import { useRouter } from "next/navigation";
 import { supabase } from '@/lib/supabase';
 import { PageHero } from '@/components/ui';
@@ -20,7 +21,7 @@ function calcContractRent(c: any): number {
       else total += (Number(cs.price_per_sqm) || Number(c.rent_per_sqm) || 0) * (cs.spaces?.area || 0);
     });
   }
-  if (total === 0) total = (Number(c.rent_per_sqm) || 0) * (Number(c.charged_area) || 0);
+  if (total === 0) total = (Number(c.rent_per_sqm) || 0) * contractArea(c);
   return total + (Number(c.investment_addition) || 0);
 }
 

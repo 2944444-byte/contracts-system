@@ -1,5 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
+import { contractArea } from "@/lib/contract-area";
 import { supabase } from '@/lib/supabase';
 import { getVatRates, vatPctAt, type VatRate } from '@/lib/vat';
 import { PageHero } from '@/components/ui';
@@ -275,9 +276,9 @@ export default function CashflowPage() {
   // Avg rent/sqm — used to estimate potential income from vacant area
   function avgRentPerSqmPerMonth(): number {
     var matching = contracts.filter(contractMatchesFilter);
-    var totalArea = matching.reduce(function(s, c) { return s + (Number(c.charged_area) || 0); }, 0);
+    var totalArea = matching.reduce(function(s, c) { return s + contractArea(c); }, 0);
     var totalRent = matching.reduce(function(s, c) {
-      return s + (Number(c.rent_per_sqm) || 0) * (Number(c.charged_area) || 0);
+      return s + (Number(c.rent_per_sqm) || 0) * contractArea(c);
     }, 0);
     return totalArea > 0 ? totalRent / totalArea : 0;
   }
