@@ -208,6 +208,11 @@ export default function ContractsNewPage() {
   const [revCategories, setRevCategories] = useState<RevenueCategory[]>([]);
   const [revSettleFreq, setRevSettleFreq] = useState("monthly");
   const [revSettleDay, setRevSettleDay] = useState("15");
+  // מתי משולמת ההתחשבנות — לא רק בחודש שאחרי
+  const [revSettleTiming, setRevSettleTiming] = useState("next_month");
+  // Recording an investment must not depend on there being a rent addition for
+  // it — a landlord often funds fit-out with no monthly addition at all.
+  const [hasTI, setHasTI] = useState(false);
   const [revReportFreq, setRevReportFreq] = useState("monthly");
   const [revLateHigherIndex, setRevLateHigherIndex] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState("checks_advance");
@@ -930,6 +935,7 @@ export default function ContractsNewPage() {
         revenue_categories: rentType === "revenue_pct" ? revCategories.filter(function(c){ return c.name.trim(); }) : [],
         revenue_settlement_freq: rentType === "revenue_pct" ? revSettleFreq : "monthly",
         revenue_settlement_day: rentType === "revenue_pct" ? (Number(revSettleDay) || null) : null,
+        revenue_settlement_timing: rentType === "revenue_pct" ? revSettleTiming : null,
         revenue_report_freq: rentType === "revenue_pct" ? revReportFreq : "monthly",
         revenue_late_report_higher_index: rentType === "revenue_pct" ? revLateHigherIndex : false,
         mgmt_included_in_revenue: rentType === "revenue_pct" ? mgmtIncludedInRevenue : false,
@@ -1150,7 +1156,9 @@ export default function ContractsNewPage() {
 
       // Construction investment (השקעות בינוי) — store the itemised record +
       // reimbursement terms alongside the contract's monthly rent addition.
-      if (Number(investAdd) > 0 && (tiAmount || tiDescription)) {
+      // An investment is worth recording on its own — the monthly addition may
+      // legitimately be zero.
+      if (Number(tiAmount) > 0 || tiDescription || Number(investAdd) > 0) {
         await supabase.from("contract_ti").insert({
           contract_id: contract.id,
           ti_type: "one_time",
@@ -1697,7 +1705,24 @@ export default function ContractsNewPage() {
                     <div className="text-[11px] text-purple-500 mt-0.5">אינה חייבת לחפוף לתדירות תשלום שכ&quot;ד</div>
                   </div>
                   <div>
-                    <label className="mb-1 block text-xs font-semibold text-purple-700">יום עריכת ההתחשבנות (בחודש שאחרי)</label>
+                    <label className="mb-1 block text-xs font-semibold text-purple-700">מתי משולמת ההתחשבנות</label>
+                    <select value={revSettleTiming} onChange={(e) => setRevSettleTiming(e.target.value)} className={ic}>
+                      <option value="next_month">בחודש שאחרי תום התקופה</option>
+                      <option value="same_month">בחודש הדיווח עצמו</option>
+                      <option value="with_report">יחד עם הגשת דוח הפדיון</option>
+                    </select>
+                    <div className="text-[11px] text-purple-500 mt-0.5">
+                      {revSettleTiming === "with_report"
+                        ? 'ההתחשבנות נערכת ביום הגשת הדוח — השוכר מדווח ומשלים באותה פעולה'
+                        : revSettleTiming === "same_month"
+                          ? "ההתחשבנות נערכת בחודש האחרון של התקופה"
+                          : "ההתחשבנות נערכת בחודש שאחרי תום התקופה"}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-purple-700">
+                      {revSettleTiming === "with_report" ? "יום עריכת ההתחשבנות (נקבע לפי יום הדיווח)" : "יום עריכת ההתחשבנות"}
+                    </label>
                     <input type="number" min="1" max="28" value={revSettleDay}
                       onChange={(e) => setRevSettleDay(e.target.value)} className={ic} />
                   </div>
@@ -1872,10 +1897,22 @@ export default function ContractsNewPage() {
               </div>
             </div>
 
-            {/* Construction-investment detail + reimbursement terms. Appears once
-                an investment rent addition is entered, so the addition is never
-                unexplained and the payment terms are captured with the contract. */}
-            {Number(investAdd) > 0 && (
+            {/* Construction investment and its reimbursement terms. This used to
+                appear only once a rent ADDITION was entered, which had it
+                backwards: the landlord funds the fit-out first, and a monthly
+                addition is one possible consequence — often there is none. */}
+            <div className="flex items-center gap-2 mt-3">
+              <input type="checkbox" id="hasTI" className="w-4 h-4"
+                checked={hasTI || Number(investAdd) > 0 || Number(tiAmount) > 0 || !!tiDescription}
+                onChange={(e) => setHasTI(e.target.checked)} />
+              <label htmlFor="hasTI" className="text-sm font-bold text-slate-700">
+                השקעות בינוי / התאמות למושכר
+                <span className="mr-1 text-[11px] font-normal text-slate-500">
+                  (גם ללא תוספת שכ&quot;ד)
+                </span>
+              </label>
+            </div>
+            {(hasTI || Number(investAdd) > 0 || Number(tiAmount) > 0 || !!tiDescription) && (
               <div className="rounded-xl border border-purple-200 bg-purple-50/40 p-4 mt-3">
                 <div className="text-sm font-bold text-purple-800 mb-1">🏗 פירוט השקעות בינוי ותנאי החזר <span className="text-[11px] font-semibold text-purple-500">(אופציונלי)</span></div>
                 <div className="text-[11px] text-purple-600 mb-3 leading-relaxed">
@@ -1986,16 +2023,29 @@ export default function ContractsNewPage() {
             </div>
 
             {/* Rent preview */}
-            {baseRent > 0 && (
+            {/* On a turnover lease baseRent is 0 (there is no per-sqm rent), so
+                this box simply never appeared — even when a minimum was agreed
+                and IS the figure the landlord can count on. It now shows the
+                floor, labelled as such. */}
+            {(baseRent > 0 || guaranteeMonthlyRent > 0) && (function(){
+              var isRev = rentType === "revenue_pct";
+              var shown = baseRent > 0 ? baseRent : guaranteeMonthlyRent;
+              var shownVat = vatType === "taxable" ? shown * (currentVatPct / 100) : 0;
+              return (
               <div className="rounded-xl bg-blue-50 border border-blue-200 p-4">
                 <div className="text-xs font-bold text-blue-700 mb-2">
-                  תצוגת שכ&quot;ד חודשי
+                  {isRev ? 'תצוגת שכ"ד חודשי — מינימום מובטח' : 'תצוגת שכ"ד חודשי'}
                 </div>
+                {isRev && (
+                  <div className="text-[11px] text-blue-600 mb-2">
+                    בחוזה אחוז-מפדיון שכ&quot;ד בפועל = הגבוה מבין {revenuePct || 0}% מהפדיון לבין המינימום. הסכומים כאן הם הרצפה.
+                  </div>
+                )}
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-center">
                   {[
-                    { l: 'שכ"ד בסיס', v: fmtMoney(baseRent) },
-                    { l: 'מע"מ', v: fmtMoney(vat) },
-                    { l: 'סה"כ לחודש', v: fmtMoney(totalRent) },
+                    { l: isRev ? 'מינימום לחודש' : 'שכ"ד בסיס', v: fmtMoney(shown) },
+                    { l: 'מע"מ', v: fmtMoney(shownVat) },
+                    { l: 'סה"כ לחודש', v: fmtMoney(shown + shownVat) },
                   ].map((k) => (
                     <div key={k.l}>
                       <div className="text-lg font-black text-blue-800">
@@ -2006,10 +2056,11 @@ export default function ContractsNewPage() {
                   ))}
                 </div>
                 <div className="mt-2 text-center text-xs text-blue-600">
-                  שנתי: <strong>{fmtMoney(annualRent)}</strong>
+                  שנתי: <strong>{fmtMoney(shown * 12)}</strong>
                 </div>
               </div>
-            )}
+              );
+            })()}
 
             {/* Per-unit rent — shown when multiple spaces selected (fixed rent only) */}
             {rentType === "fixed" && selSpaces.length > 1 && (
@@ -2381,8 +2432,12 @@ export default function ContractsNewPage() {
                       </select>
                     </div>
                   </div>
-                  {/* Retail: the fit-out window runs from handover to opening.
-                      Whichever comes first ends the grace. */}
+                </div>
+              )}
+
+              {/* Shown whether or not a grace was agreed: a store has an opening
+                  date, and a late-opening penalty, in either case. */}
+              <div className="space-y-3">
                   <div className="rounded-lg border border-indigo-200 bg-indigo-50/40 p-3 space-y-2">
                     <div className="text-xs font-bold text-indigo-800">🏬 פתיחת המושכר (חוזי חנויות)</div>
                     <div className="text-[11px] text-indigo-700 leading-relaxed">
@@ -2520,6 +2575,7 @@ export default function ContractsNewPage() {
                     );
                   })()}
 
+                  {hasGrace && (
                   <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-700">
                     גרייס: {graceMonths} חודשים |{" "}
                     {GRACE_TYPES.find((g) => g.v === graceType)?.l}
@@ -2533,8 +2589,8 @@ export default function ContractsNewPage() {
                           : 0
                     )}
                   </div>
-                </div>
-              )}
+                  )}
+              </div>
             </div>
 
             {/* Dynamic Step-Rent Builder */}

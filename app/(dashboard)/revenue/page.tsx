@@ -180,7 +180,14 @@ export default function RevenuePage() {
       // (collect the top-up) or a protected tenant (refund the shortfall).
       if (!c.revenue_minimum_advance && !hasRevenueProtection(revenueProtectionFromRow(c))) { setSettlements([]); return; }
 
-      var periods = periodsForYear(selYear, freq, Number(c.revenue_settlement_day) || 15);
+      // When the settlement is drawn up: the month after (default), inside the
+      // reporting month, or on the reporting day itself.
+      var periods = periodsForYear(
+        selYear, freq,
+        Number(c.revenue_settlement_day) || 15,
+        (c.revenue_settlement_timing as any) || "next_month",
+        Number(c.revenue_report_day) || 10,
+      );
       var vatPct = c.vat_type === "taxable" ? vatPctAt(vatRates, new Date()) : 0;
       var out: Array<{ period: SettlementPeriod; calc: SettlementCalc }> = [];
 
@@ -387,7 +394,7 @@ export default function RevenuePage() {
     var yearStart = selYear + "-01-01";
     var yearEnd   = (selYear + 1) + "-01-01"; // exclusive — avoids the Feb-31 bug entirely
     const [{ data: c }, { data: r }, { data: conc }] = await Promise.all([
-      supabase.from("contracts").select("id,property_id,status,rent_type,revenue_pct,revenue_pct_tiers,min_rent_per_sqm,charged_area,rent_per_sqm,investment_addition,vat_type,mgmt_fee_per_sqm,mgmt_included_in_revenue,start_date,indexation_method,index_base_date,index_base_value,revenue_categories,revenue_minimum_advance,minimum_rent,revenue_protection_type,revenue_protection_months,revenue_protection_notes,contract_options(id,start_date,status,is_exercised,cancels_revenue_protection),tenants(name),properties(name)").in("status",["active","expiring","extended"]),
+      supabase.from("contracts").select("id,property_id,status,rent_type,revenue_pct,revenue_pct_tiers,revenue_settlement_timing,revenue_report_day,min_rent_per_sqm,charged_area,rent_per_sqm,investment_addition,vat_type,mgmt_fee_per_sqm,mgmt_included_in_revenue,start_date,indexation_method,index_base_date,index_base_value,revenue_categories,revenue_minimum_advance,minimum_rent,revenue_protection_type,revenue_protection_months,revenue_protection_notes,contract_options(id,start_date,status,is_exercised,cancels_revenue_protection),tenants(name),properties(name)").in("status",["active","expiring","extended"]),
       supabase.from("revenue_reports").select("*,contracts(property_id,tenants(name),properties(name))").gte("report_month",yearStart).lt("report_month",yearEnd).order("report_month",{ascending:true}),
       // Standing concessions apply as the rent is computed.
       supabase.from("concessions").select("*").eq("scope","standing").eq("status","active"),

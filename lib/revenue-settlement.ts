@@ -21,6 +21,19 @@ export const FREQ_LABELS: Record<SettlementFreq, string> = {
   monthly: "חודשית", quarterly: "רבעונית", semiannual: "חצי שנתית", annual: "שנתית",
 };
 
+// When the settlement is drawn up and paid.
+//   next_month  — the month after the period closes (the original behaviour)
+//   same_month  — inside the last month of the period itself
+//   with_report — on the day the turnover report is filed: the tenant reports
+//                 and settles in one action
+export type SettlementTiming = "next_month" | "same_month" | "with_report";
+
+export const TIMING_LABELS: Record<SettlementTiming, string> = {
+  next_month: "בחודש שאחרי תום התקופה",
+  same_month: "בחודש הדיווח עצמו",
+  with_report: "יחד עם הגשת דוח הפדיון",
+};
+
 export type SettlementPeriod = {
   key: string;             // "2026-Q1"
   label: string;           // "רבעון 1 2026"
@@ -38,7 +51,13 @@ function lastDay(year: number, month1: number): string {
 
 // Every settlement period of a calendar year, with the date each one is drawn
 // up (the agreed day of the month AFTER the period closes).
-export function periodsForYear(year: number, freq: SettlementFreq, settlementDay: number = 15): SettlementPeriod[] {
+export function periodsForYear(
+  year: number,
+  freq: SettlementFreq,
+  settlementDay: number = 15,
+  timing: SettlementTiming = "next_month",
+  reportDay?: number,
+): SettlementPeriod[] {
   const size = FREQ_MONTHS[freq] || 1;
   const out: SettlementPeriod[] = [];
   const quarterLabel = ["", "רבעון 1", "רבעון 2", "רבעון 3", "רבעון 4"];
@@ -49,11 +68,21 @@ export function periodsForYear(year: number, freq: SettlementFreq, settlementDay
     for (var m = startM; m < startM + size && m <= 12; m++) months.push(m);
     const endM = months[months.length - 1];
 
-    // The settlement happens in the month after the period closes.
-    const sYear = endM === 12 ? year + 1 : year;
-    const sMonth = endM === 12 ? 1 : endM + 1;
+    // Where the settlement lands depends on what was agreed.
+    var sYear: number, sMonth: number, wantedDay: number;
+    if (timing === "next_month") {
+      sYear = endM === 12 ? year + 1 : year;
+      sMonth = endM === 12 ? 1 : endM + 1;
+      wantedDay = settlementDay || 15;
+    } else {
+      // Inside the period's last month. "with_report" pins it to the reporting
+      // day, so the settlement and the report are the same event.
+      sYear = year;
+      sMonth = endM;
+      wantedDay = timing === "with_report" ? (reportDay || settlementDay || 10) : (settlementDay || 15);
+    }
     const maxDay = new Date(sYear, sMonth, 0).getDate();
-    const day = Math.min(Math.max(1, settlementDay || 15), maxDay);
+    const day = Math.min(Math.max(1, wantedDay), maxDay);
 
     const idx = Math.floor((startM - 1) / size) + 1;
     const label = size === 3 ? quarterLabel[idx] + " " + year
