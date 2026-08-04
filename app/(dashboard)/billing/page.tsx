@@ -41,6 +41,8 @@ interface InsResult {
   pct: number;
   charge: number;
   isPartialPeriod: boolean;
+  headerArea?: number;
+  unitsArea?: number;
 }
 interface WasteResult { contractId: string; tenantName: string; spaces: string; wasteArea: number; pct: number; charge: number; }
 interface UseTypeRow { useType: string; totalSqm: number; rate: number; annual: number; }
@@ -1314,6 +1316,17 @@ function InsuranceTab({ properties, initialPropId, initialYear }: { properties: 
       var joinNames = function(cs: any[]): string {
         return (cs || []).map(function(x: any) { return x?.spaces?.space_name; }).filter(Boolean).join(", ");
       };
+      // The area a contract actually holds is the sum of ITS UNITS. charged_area
+      // is a header field that can lag behind — פולירם held מחסן 1 (5,589) plus
+      // גרליה + ממד + מדרגות (422) = 6,011 while charged_area still said 5,589,
+      // so the insurance split billed the gallery to nobody. The units are the
+      // source of truth; charged_area is only the fallback when none are listed.
+      var areaOf = function(row: any): number {
+        var sum = (row?.contract_spaces || []).reduce(function(a: number, x: any) {
+          return a + (Number(x?.spaces?.area) || 0);
+        }, 0);
+        return sum > 0 ? sum : (Number(row?.charged_area) || 0);
+      };
 
       // 2.5) Data-sanity check: detect spaces claimed by multiple contracts
       // AT THE SAME TIME (not just sequentially). A clean handoff (Yehonatan
@@ -1383,7 +1396,7 @@ function InsuranceTab({ properties, initialPropId, initialYear }: { properties: 
         type Seg = { start: Date; end: Date; area: number; spaceName: string };
         const segments: Seg[] = [];
 
-        let curArea  = Number(c.charged_area) || 0;
+        let curArea  = areaOf(c);
         let curName  = joinNames(c.contract_spaces);
         let curStart = contractStart;
 
@@ -1392,7 +1405,7 @@ function InsuranceTab({ properties, initialPropId, initialYear }: { properties: 
           const amDate = new Date(am.amendment_date || am.start_date);
           const prevEnd = new Date(amDate.getTime() - 86400000);
           segments.push({ start: curStart, end: prevEnd, area: curArea, spaceName: curName });
-          curArea = Number(am.charged_area) || curArea;
+          curArea = areaOf(am) || curArea;
           curName = joinNames(am.contract_spaces) || curName;
           curStart = amDate;
         });
@@ -1419,6 +1432,10 @@ function InsuranceTab({ properties, initialPropId, initialYear }: { properties: 
 
         return {
           contractId: c.id,
+          // The header field vs the sum of the units. They should agree; when
+          // they don't, one of them is stale and the manager must decide which.
+          headerArea: Number(c.charged_area) || 0,
+          unitsArea: areaOf(c),
           tenantName: (c.tenants as any)?.name ?? "—",
           spaceNames: namesSeen.join(", ") || "—",
           area: curArea, areaRange,
@@ -1978,6 +1995,15 @@ function InsuranceTab({ properties, initialPropId, initialYear }: { properties: 
                         <td className="px-4 py-3">
                           <div className="font-semibold text-slate-800">{r.tenantName}</div>
                           <div className="text-xs text-slate-500 mt-0.5">{r.spaceNames || "—"}</div>
+                          {/* The split is computed from the units. If the
+                              contract header disagrees, say so — one of the two
+                              is stale and only the manager can tell which. */}
+                          {Number(r.headerArea) > 0 && Number(r.unitsArea) > 0 && Math.abs(Number(r.headerArea) - Number(r.unitsArea)) > 0.5 && (
+                            <div className="text-[10px] mt-1 rounded bg-amber-100 border border-amber-300 text-amber-800 px-1.5 py-0.5 inline-block"
+                              title="החישוב מבוסס על סכום היחידות שבחוזה. בדוק איזה מהשניים נכון ועדכן את החוזה.">
+                              ⚠ שטח בכותרת החוזה {Number(r.headerArea).toLocaleString("he-IL")} מ&quot;ר · סכום היחידות {Number(r.unitsArea).toLocaleString("he-IL")} מ&quot;ר
+                            </div>
+                          )}
                           {r.isPartialPeriod && (
                             <div className="text-[10px] mt-1 font-normal text-amber-700 rounded bg-amber-100 inline-block px-1.5 py-0.5"
                                  title={"החזקה רק " + r.daysInPolicy + " מתוך " + r.policyDays + " ימי הפוליסה — מחויב יחסית"}>
