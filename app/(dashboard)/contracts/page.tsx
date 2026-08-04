@@ -13,6 +13,7 @@ import CalcProgress, { CalcProgressState } from '@/components/CalcProgress';
 import { buildPriceTimeline, calculateTierPreviews, buildSpaceRentSchedule, rentAtDate, type PriceTier } from '@/lib/contract-utils';
 import { penaltyTermsFromRow, hasPenalty, describePenaltyTerms, penaltyMonths } from '@/lib/option-penalty';
 import { contractArea } from '@/lib/contract-area';
+import { classifyAmendment, describeAmendment } from '@/lib/amendment-kind';
 import { previewOptionDecline, applyOptionDecline } from '@/lib/option-decline';
 import { baseIndexRuleFromRow, describeBaseIndexRule, baseIndexPending, resolveBaseIndexMonth } from '@/lib/base-index-rule';
 import { pctTiersFromRow, describePctTiers } from '@/lib/revenue-pct-steps';
@@ -1980,8 +1981,27 @@ export default function ContractsPage() {
                       });
                       if (prevRent === 0) prevRent = (Number(selContract.rent_per_sqm) || 0) * contractArea(selContract);
 
+                      // What this amendment actually changed. A parking
+                      // amendment must not read as square metres moving — every
+                      // cost allocation in the system is m²-based.
+                      var amKind = classifyAmendment({
+                        amendment: am,
+                        prev: amIdx > 0 ? amendments[amIdx-1] : selContract,
+                        amendmentParking: parkingSubs.filter(function(p: any){ return p.contract_id === am.id; }),
+                        prevParking: parkingSubs.filter(function(p: any){
+                          return p.contract_id === (amIdx > 0 ? amendments[amIdx-1].id : selContract.id);
+                        }),
+                      });
+
                       return (
                         <div key={am.id} className="rounded-xl border border-yellow-300 bg-white p-4">
+                          <div className={"rounded-lg px-2.5 py-1.5 mb-2 text-xs font-semibold inline-block " +
+                            (amKind.addsAreaOnly ? "bg-blue-50 border border-blue-200 text-blue-800" : "bg-slate-50 border border-slate-200 text-slate-700")}
+                            title={amKind.addsAreaOnly
+                              ? "השטח המושכר השתנה — משפיע על חלוקת ביטוח, אשפה ודמי ניהול"
+                              : "השטח המושכר לא השתנה — חלוקת ביטוח, אשפה ודמי ניהול אינה מושפעת"}>
+                            {describeAmendment(amKind)}
+                          </div>
                           {/* Header */}
                           <div className="flex items-center justify-between mb-3">
                             <div className="flex items-center gap-3">
