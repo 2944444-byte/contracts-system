@@ -7,6 +7,7 @@ import { logAudit } from '@/lib/audit-log';
 import { PageHero } from '@/components/ui';
 import { getScopeIds, scopeRows, getCurrentAccess } from '@/lib/permissions';
 import { reconcileAlerts } from '@/lib/alerts-reconcile';
+import { graceFactorsFor } from '@/lib/store-opening';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 
@@ -231,7 +232,7 @@ export default function PaymentsPage() {
       // Concessions are read separately and matched in memory: a charge can
       // carry several, and the balance every row shows is derived from them.
       supabase.from("concessions").select("*").eq("status", "active"),
-      supabase.from("contracts").select("id,property_id,vat_type,rent_type,revenue_pct,revenue_report_day,revenue_minimum_advance,minimum_rent,payment_method,start_date,end_date,rent_per_sqm,charged_area,investment_addition,is_amendment,tenants(name),properties(name)").in("status", ["active", "expiring", "extended"]),
+      supabase.from("contracts").select("id,property_id,vat_type,rent_type,revenue_pct,revenue_report_day,revenue_minimum_advance,minimum_rent,payment_method,start_date,end_date,rent_per_sqm,charged_area,investment_addition,is_amendment,grace_months,grace_days,grace_type,grace_discount_pct,grace_mgmt_discount_pct,grace_ends_on_opening,mgmt_charge_starts,mgmt_free_max_days,works_start_date,planned_handover_date,actual_handover_date,planned_opening_date,actual_opening_date,tenants(name),properties(name)").in("status", ["active", "expiring", "extended"]),
       // Rent advances for the year (both paid + unpaid — paid ones still need
       // to show on this screen so שולמו KPI is honest)
       includeAdvances ? supabase.from("advance_payments")
@@ -360,6 +361,14 @@ export default function PaymentsPage() {
       var isRev = c.rent_type === "revenue_pct" || c.rent_type === "revenue_based" || Number(c.revenue_pct) > 0;
       if (!isRev) return;
       var reportDay = Number(c.revenue_report_day) || 10;
+      // A month with no rent due has no turnover to report: the shop is still
+      // being fitted out and has not traded. Chasing a report for it is asking
+      // the tenant to declare nothing. The rent factor decides — a month that
+      // is only partly free, or discounted rather than free, still trades and
+      // still reports.
+      var monthNeedsReport = function(mStart: Date, mEnd: Date) {
+        return graceFactorsFor({ contract: c, periodStart: mStart, periodEnd: mEnd }).rentFactor > 0;
+      };
       var startMonth = c.start_date ? new Date(c.start_date) : new Date(filterYear, 0, 1);
       var endMonth = c.end_date ? new Date(c.end_date) : todayDate;
       // Cap end to current month (a future month's report isn't "missing" yet)
@@ -372,7 +381,10 @@ export default function PaymentsPage() {
         if (monthYear === filterYear) {
           var mk = monthKeyForDate(cursor);
           var hasReport = reportedMonths[c.id] && reportedMonths[c.id][mk];
-          if (!hasReport) {
+          var needsReport = monthNeedsReport(
+            new Date(cursor.getFullYear(), cursor.getMonth(), 1),
+            new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1));
+          if (!hasReport && needsReport) {
             var monthLabel = HEB_MONTHS[cursor.getMonth() + 1] + " " + monthYear;
             // Report for month M is due by day=reportDay of month M+1
             var nextMonth = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
