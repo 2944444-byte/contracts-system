@@ -52,6 +52,14 @@ function daysBetween(a: Date, b: Date): number {
   return Math.round((b.getTime() - a.getTime()) / 86400000);
 }
 
+// Adding days by MILLISECONDS is wrong across a daylight-saving change: 1.7.2026
+// plus 180 × 86,400,000 ms lands on 27.12 at 23:00, so a 180-day fit-out window
+// looked like it ended a day early. Days are a calendar unit — advance the date
+// field and let the clock stay at local midnight.
+export function addDays(base: Date, days: number): Date {
+  return new Date(base.getFullYear(), base.getMonth(), base.getDate() + days);
+}
+
 // The grace window for a contract. `today` only matters for a store that is
 // still shut — the lateness is measured against it.
 export function graceWindow(params: { contract: any; today?: Date }): GraceWindow {
@@ -67,7 +75,7 @@ export function graceWindow(params: { contract: any; today?: Date }): GraceWindo
   const start = d(c.actual_handover_date) || d(c.planned_handover_date) || d(c.start_date);
   if (!start) return none;
 
-  const byTerm = months > 0 ? addMonths(start, months) : new Date(start.getTime() + graceDays * 86400000);
+  const byTerm = months > 0 ? addMonths(start, months) : addDays(start, graceDays);
   const opening = d(c.actual_opening_date);
 
   // Does opening cut the grace short? Usually yes. Some leases grant the full
@@ -143,7 +151,7 @@ export function mgmtFreeWindow(params: { contract: any; today?: Date }): MgmtFre
   if (!g.applies || !g.start) return none;
 
   const cap = Number(c.mgmt_free_max_days) || 0;
-  const byDays = cap > 0 ? new Date(g.start.getTime() + cap * 86400000) : null;
+  const byDays = cap > 0 ? addDays(g.start, cap) : null;
   const works = d(c.works_start_date);
 
   var end: Date | null = null;
@@ -190,8 +198,14 @@ export function mgmtChargeFactorForRange(params: {
   const g = graceWindow({ contract: c, today: params.today });
   if (!g.applies || !g.start || !g.end) return { factor: 1, opted: true, note: "" };
 
-  const from = params.from.getTime();
-  const to = params.to.getTime();
+  // Whole-day integers, not raw milliseconds: a range spanning the October
+  // daylight-saving change is an hour long, which would put a stray 0.04 of a
+  // day into a money figure. dayNum is a DST-free calendar day index.
+  const dayNum = function (x: Date): number {
+    return Date.UTC(x.getFullYear(), x.getMonth(), x.getDate()) / 86400000;
+  };
+  const from = dayNum(params.from);
+  const to = dayNum(params.to);
   const total = to - from;
   if (total <= 0) return { factor: 1, opted: true, note: "" };
 
@@ -199,26 +213,25 @@ export function mgmtChargeFactorForRange(params: {
     return Math.max(0, Math.min(aE, bE) - Math.max(aS, bS));
   };
 
-  const graceMs = overlap(from, to, g.start.getTime(), g.end.getTime());
-  if (graceMs <= 0) return { factor: 1, opted: true, note: "" };
+  const graceDays = overlap(from, to, dayNum(g.start), dayNum(g.end));
+  if (graceDays <= 0) return { factor: 1, opted: true, note: "" };
 
   const free = mgmtFreeWindow({ contract: c, today: params.today });
-  const freeMs = free.applies && free.end
-    ? overlap(from, to, g.start.getTime(), Math.min(free.end.getTime(), g.end.getTime()))
+  const freeDays = free.applies && free.end
+    ? overlap(from, to, dayNum(g.start), Math.min(dayNum(free.end), dayNum(g.end)))
     : 0;
-  const discMs = Math.max(0, graceMs - freeMs);
-  const normalMs = Math.max(0, total - graceMs);
+  const discDays = Math.max(0, graceDays - freeDays);
+  const normalDays = Math.max(0, total - graceDays);
 
   const mgmtInGrace = c.grace_mgmt_discount_pct != null
     ? 1 - (Number(c.grace_mgmt_discount_pct) || 0) / 100
     : (c.grace_type === "full" ? 0 : 1);
 
-  const factor = (normalMs + discMs * mgmtInGrace) / total;
-  const dd = function (ms: number) { return Math.round(ms / 86400000); };
+  const factor = (normalDays + discDays * mgmtInGrace) / total;
   const bits: string[] = [];
-  if (freeMs > 0) bits.push("פטור מלא " + dd(freeMs) + " ימים");
-  if (discMs > 0) bits.push(Math.round(mgmtInGrace * 100) + "% על " + dd(discMs) + " ימים");
-  if (normalMs > 0) bits.push("מלא " + dd(normalMs) + " ימים");
+  if (freeDays > 0) bits.push("פטור מלא " + freeDays + " ימים");
+  if (discDays > 0) bits.push(Math.round(mgmtInGrace * 100) + "% על " + discDays + " ימים");
+  if (normalDays > 0) bits.push("מלא " + normalDays + " ימים");
   return { factor: Math.max(0, Math.min(1, factor)), opted: true, note: bits.join(" · ") };
 }
 

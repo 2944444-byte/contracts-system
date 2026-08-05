@@ -40,9 +40,12 @@ function d(v: any): Date | null {
 // The date a trigger resolves to, from the contract's own milestones. Returns
 // null when the milestone hasn't been set yet — which is information, not an
 // error: the security isn't due because the milestone hasn't happened.
+// Calendar days, not milliseconds — see addDays in store-opening: adding ms
+// across a daylight-saving change shifts the result back by an hour and moves
+// the date a day early.
 function plusDays(x: Date | null, days: number): Date | null {
   if (!x || !days) return x;
-  return new Date(x.getTime() + days * 86400000);
+  return new Date(x.getFullYear(), x.getMonth(), x.getDate() + days);
 }
 
 export function deliveryDueDate(params: { guarantee: any; contract: any }): { date: Date | null; reason: string } {
@@ -87,7 +90,11 @@ export function deliveryDueDate(params: { guarantee: any; contract: any }): { da
     return x ? withOffset(x, TRIGGER_LABELS.opening) : { date: null, reason: "מועד הפתיחה טרם נקבע" };
   }
   if (trigger === "works_end") {
-    // End of the tenant's fit-out — the grace window's end is exactly that.
+    // The actual completion, once reported, is the truth. Otherwise the date
+    // SET for completion — "במועד הקבוע להשלמת עבודות השוכר" — which is exactly
+    // the end of the fit-out window.
+    const actual = d(c.works_end_date);
+    if (actual) return withOffset(actual, "סיום עבודות השוכר בפועל");
     const gw = graceWindow({ contract: c });
     if (gw.applies && gw.end) return withOffset(gw.end, TRIGGER_LABELS.works_end);
     const x = explicit || d(c.planned_opening_date);

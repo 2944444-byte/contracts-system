@@ -17,9 +17,10 @@ import { classifyAmendment, describeAmendment } from '@/lib/amendment-kind';
 import { previewOptionDecline, applyOptionDecline } from '@/lib/option-decline';
 import { baseIndexRuleFromRow, describeBaseIndexRule, baseIndexPending, resolveBaseIndexMonth } from '@/lib/base-index-rule';
 import { pctTiersFromRow, describePctTiers } from '@/lib/revenue-pct-steps';
-import { guaranteeGaps, describeGaps } from '@/lib/guarantee-status';
+import { guaranteeGaps, describeGaps, guaranteeTypeLabel } from '@/lib/guarantee-status';
+import { deliveryStatus, describeDelivery } from '@/lib/guarantee-delivery';
 import { canGrantConcessions, describeConcession, REASON_LABELS, APPLIES_LABELS } from '@/lib/concessions';
-import { graceWindow, describeGrace, lateOpeningPenalty } from '@/lib/store-opening';
+import { graceWindow, describeGrace, lateOpeningPenalty, mgmtFreeWindow, describeMgmtFree } from '@/lib/store-opening';
 import { previewLateOpeningCharge, applyLateOpeningCharge } from '@/lib/late-opening-charge';
 import { mgmtProtectionFromRow, describeMgmtProtection } from '@/lib/mgmt-protection';
 // CPI + price timeline
@@ -144,6 +145,12 @@ export default function ContractsPage() {
   const [handoverSaving, setHandoverSaving] = useState(false);
   // Recording the store opening — the milestone the lease clock really starts on.
   const [showOpening, setShowOpening] = useState(false);
+  // The tenant's works have their own two milestones: the start (which ends the
+  // management exemption) and the completion (which a security can hang on).
+  const [showWorks, setShowWorks] = useState(false);
+  const [worksStart, setWorksStart] = useState("");
+  const [worksEnd, setWorksEnd] = useState("");
+  const [worksSaving, setWorksSaving] = useState(false);
   // הנחות והסדרים ברמת החוזה
   const [mayGrant, setMayGrant] = useState(false);
   const [contractConcessions, setContractConcessions] = useState<any[]>([]);
@@ -261,7 +268,7 @@ export default function ContractsPage() {
 
   async function loadContracts() {
     const { data } = await supabase.from("contracts")
-      .select("*, tenants(name,phone,primary_email,company_name), properties(name,city), contract_options(id,option_number,duration_months,duration_years,start_date,end_date,notice_days_before_end,notice_type,status,is_exercised,rent_mechanism,rent_increase_pct,new_rent_value,option_group,exit_points,price_schedule_type,price_tiers,non_exercise_penalty_type,non_exercise_penalty_value,non_exercise_penalty_basis,non_exercise_penalty_months,non_exercise_penalty_indexed,non_exercise_penalty_vat,non_exercise_penalty_days,non_exercise_penalty_notes,declined_at,non_exercise_charge_id), guarantees(id,guarantee_type,status,amount_required,amount_actual,end_date,bank,document_url), contract_ti(id,description,ti_type,ti_amount,recovery_method,recovery_amount_monthly,recovery_start_date,recovery_end_date,payment_trigger,payment_days_after,payment_due_date,payment_installments,requires_invoice,requires_report,paid_at,paid_amount,payment_notes,notes), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,index_base_value,index_base_date,use_original_index,spaces(space_name,area))")
+      .select("*, tenants(name,phone,primary_email,company_name), properties(name,city), contract_options(id,option_number,duration_months,duration_years,start_date,end_date,notice_days_before_end,notice_type,status,is_exercised,rent_mechanism,rent_increase_pct,new_rent_value,option_group,exit_points,price_schedule_type,price_tiers,non_exercise_penalty_type,non_exercise_penalty_value,non_exercise_penalty_basis,non_exercise_penalty_months,non_exercise_penalty_indexed,non_exercise_penalty_vat,non_exercise_penalty_days,non_exercise_penalty_notes,declined_at,non_exercise_charge_id), guarantees(id,guarantee_type,status,amount_required,amount_actual,end_date,bank,document_url,documents,delivery_trigger,delivery_offset_days,delivery_due_date,delivery_condition,delivered_at), contract_ti(id,description,ti_type,ti_amount,recovery_method,recovery_amount_monthly,recovery_start_date,recovery_end_date,payment_trigger,payment_days_after,payment_due_date,payment_installments,requires_invoice,requires_report,paid_at,paid_amount,payment_notes,notes), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,index_base_value,index_base_date,use_original_index,spaces(space_name,area))")
       .order("end_date");
     // Data-level scoping: managers/viewers see only contracts of their
     // allowed properties (admin scope is null = everything).
@@ -1270,6 +1277,23 @@ export default function ContractsPage() {
                         {selContract.actual_opening_date
                           ? "🏬 נפתח " + new Date(selContract.actual_opening_date).toLocaleDateString("he-IL")
                           : "🏬 פתיחת המושכר"}
+                      </button>
+                    )}
+                    {/* Fit-out works: the start ends the management exemption,
+                        the completion is what a security is often keyed to. */}
+                    {(Number(selContract.grace_months) > 0 || Number(selContract.grace_days) > 0) && (
+                      <button onClick={function(){
+                          setWorksStart((selContract.works_start_date || "").slice(0,10));
+                          setWorksEnd((selContract.works_end_date || "").slice(0,10));
+                          setShowWorks(true);
+                        }}
+                        className={"rounded-lg border px-3 py-1.5 text-xs font-semibold " + (selContract.works_start_date
+                          ? "border-green-200 bg-green-50 text-green-700 hover:bg-green-100"
+                          : "border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100")}
+                        title="תחילת וסיום עבודות השוכר — קובעות את הפטור מדמי ניהול ואת מועד המצאת הביטחונות">
+                        {selContract.works_start_date
+                          ? "🔨 עבודות מ-" + new Date(selContract.works_start_date).toLocaleDateString("he-IL")
+                          : "🔨 עבודות השוכר"}
                       </button>
                     )}
                     {mayGrant && (
@@ -2476,6 +2500,91 @@ export default function ContractsPage() {
           </div>
         </div>
       )}
+
+      {showWorks && selContract && (function(){
+        var draft = { ...selContract, works_start_date: worksStart || null, works_end_date: worksEnd || null };
+        var g = graceWindow({ contract: draft });
+        var mf = mgmtFreeWindow({ contract: draft });
+        var gs = (selContract.guarantees || []);
+        return (
+          <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={function(){ if(!worksSaving) setShowWorks(false); }}>
+            <div className="bg-white rounded-2xl shadow-xl max-w-lg w-full p-6 max-h-[90vh] overflow-y-auto" dir="rtl" onClick={function(e:any){e.stopPropagation();}}>
+              <div className="text-lg font-bold text-slate-800 mb-1">🔨 עבודות השוכר</div>
+              <div className="text-xs text-slate-500 mb-4">
+                {selContract.tenants?.name} — {selContract.properties?.name}
+                {g.applies && g.start && <span> · מסירה {g.start.toLocaleDateString("he-IL")}</span>}
+                {g.applies && g.end && <span> · תום תקופת עבודות לפי החוזה {g.end.toLocaleDateString("he-IL")}</span>}
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 mb-3">
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">תחילת עבודות בפועל</label>
+                  <input type="date" value={worksStart} onChange={function(e){setWorksStart(e.target.value);}}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                  <div className="text-[10px] text-slate-500 mt-0.5">מסיימת את הפטור מדמי ניהול</div>
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">סיום עבודות בפועל</label>
+                  <input type="date" value={worksEnd} onChange={function(e){setWorksEnd(e.target.value);}}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                  <div className="text-[10px] text-slate-500 mt-0.5">עוגן לביטחון שנמסר בסיום העבודות</div>
+                </div>
+              </div>
+
+              {mf.applies && (
+                <div className="rounded-lg bg-emerald-50 border border-emerald-200 p-3 text-xs text-emerald-900 mb-3">
+                  <div className="font-bold mb-0.5">🧾 דמי ניהול בתקופת העבודות</div>
+                  <div>{describeMgmtFree(mf)}</div>
+                  {selContract.mgmt_free_notes && <div className="text-[11px] text-emerald-700 mt-1">{selContract.mgmt_free_notes}</div>}
+                </div>
+              )}
+
+              {gs.length > 0 && (
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs mb-3 space-y-2">
+                  <div className="font-bold text-slate-700">🏦 ביטחונות — מועד ההמצאה לפי התאריכים האלה</div>
+                  {gs.map(function(gu: any, i: number) {
+                    var st = deliveryStatus({ guarantee: gu, contract: draft });
+                    return (
+                      <div key={i} className="rounded bg-white border border-slate-200 p-2">
+                        <div className="font-semibold text-slate-800">
+                          {guaranteeTypeLabel(gu.guarantee_type)}
+                          {Number(gu.amount_required) > 0 && <span className="text-slate-500 font-normal"> · ₪{Number(gu.amount_required).toLocaleString("he-IL")}</span>}
+                        </div>
+                        <div className={st.overdue ? "text-rose-700 font-semibold" : st.delivered ? "text-green-700" : "text-slate-600"}>
+                          {st.delivered ? "✅ " : st.overdue ? "⚠️ " : "⏳ "}{describeDelivery(st, gu)}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              <div className="flex gap-2">
+                <button disabled={worksSaving}
+                  onClick={async function(){
+                    setWorksSaving(true);
+                    try {
+                      var { error } = await supabase.from("contracts")
+                        .update({ works_start_date: worksStart || null, works_end_date: worksEnd || null })
+                        .eq("id", selContract.id);
+                      if (error) throw new Error(error.message);
+                      await logAudit({ entity_type:"contract", entity_id:selContract.id, action:"tenant_works_dates",
+                        notes: "תחילה " + (worksStart || "—") + " · סיום " + (worksEnd || "—") });
+                      setShowWorks(false);
+                      await loadContracts();
+                    } catch(e:any) { alert("שגיאה: " + e?.message); }
+                    finally { setWorksSaving(false); }
+                  }}
+                  className="flex-1 rounded-lg bg-green-600 text-white px-4 py-2 text-sm font-bold hover:bg-green-700 disabled:opacity-50">
+                  {worksSaving ? "⏳ שומר..." : "✓ שמור מועדים"}
+                </button>
+                <button onClick={function(){ setShowWorks(false); }} disabled={worksSaving}
+                  className="rounded-lg border border-slate-200 px-4 py-2 text-sm text-slate-600 hover:bg-slate-50">ביטול</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {showOpening && selContract && (function(){
         var draft = { ...selContract, actual_opening_date: openingDate || null };

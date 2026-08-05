@@ -78,7 +78,7 @@ export async function reconcileAlerts(supabase: SupabaseClient): Promise<{ resol
   const guaranteeIds = idsFor("guarantee");
   if (guaranteeIds.length > 0) {
     const { data: gs } = await supabase.from("guarantees")
-      .select("id,end_date,status,contract_id,guarantee_type,amount_actual,amount_required,bank,document_url,documents,created_at,delivery_trigger,delivery_offset_days,delivery_due_date,delivered_at,contracts(parent_contract_id,signing_date,start_date,planned_handover_date,actual_handover_date,planned_opening_date,actual_opening_date,grace_months,grace_days,grace_type,grace_ends_on_opening)")
+      .select("id,end_date,status,contract_id,guarantee_type,amount_actual,amount_required,bank,document_url,documents,created_at,delivery_trigger,delivery_offset_days,delivery_due_date,delivered_at,contracts(parent_contract_id,signing_date,start_date,planned_handover_date,actual_handover_date,planned_opening_date,actual_opening_date,works_start_date,works_end_date,grace_months,grace_days,grace_type,grace_ends_on_opening)")
       .in("id", guaranteeIds);
     // Mirrors the creation rule: one alert per physical guarantee, so a second
     // row recording the same instrument on an amendment closes as redundant.
@@ -108,7 +108,7 @@ export async function reconcileAlerts(supabase: SupabaseClient): Promise<{ resol
   const contractIds = idsFor("contract");
   if (contractIds.length > 0) {
     const { data: cs } = await supabase.from("contracts")
-      .select("id,end_date,status,planned_handover_date,actual_handover_date,planned_opening_date,actual_opening_date,grace_months,grace_days,grace_type,grace_ends_on_opening,late_opening_penalty_type,late_opening_penalty_value,late_opening_grace_days,rent_type,rent_per_sqm,min_rent_per_sqm,minimum_rent,charged_area,investment_addition,start_date,contract_options(id,status,is_exercised)").in("id", contractIds);
+      .select("id,end_date,status,planned_handover_date,actual_handover_date,planned_opening_date,actual_opening_date,works_start_date,works_end_date,grace_months,grace_days,grace_type,grace_ends_on_opening,late_opening_penalty_type,late_opening_penalty_value,late_opening_grace_days,rent_type,rent_per_sqm,min_rent_per_sqm,minimum_rent,charged_area,investment_addition,start_date,contract_options(id,status,is_exercised)").in("id", contractIds);
     // Which of these already have the penalty billed — a raised charge closes
     // the alert, since the money is now tracked as a debt like any other.
     const { data: penCharges } = await supabase.from("charges")
