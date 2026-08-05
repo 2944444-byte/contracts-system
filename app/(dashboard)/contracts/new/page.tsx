@@ -229,6 +229,12 @@ export default function ContractsNewPage() {
   const [indexMethod, setIndexMethod] = useState("standard");
   const [baseCPI, setBaseCPI] = useState("");
   const [baseCPIDate, setBaseCPIDate] = useState("");
+  // The base index auto-fills from the start date as a CONVENIENCE for an
+  // untouched field. Once the user has typed a date, pulled an index, or the
+  // contract came with one, that is the answer — the default must never write
+  // over it. Pressing "משוך מדד" reloads the CPI list, and the auto-fill effect
+  // keyed on that list used to re-fire and reset 16.6.2026 to 1.6.2026.
+  const [baseCPITouched, setBaseCPITouched] = useState(false);
   const [baseIndexRule, setBaseIndexRule] = useState<BaseIndexRule>({ mode: "fixed", anchor: "actual_handover", offsetMonths: null });
   const [mgmtProtection, setMgmtProtection] = useState<MgmtProtection>(emptyMgmtProtection());
   const [mgmtFeePct, setMgmtFeePct] = useState("");
@@ -344,6 +350,7 @@ export default function ContractsNewPage() {
   // not the start date, decides the base month.
   useEffect(() => {
     if (baseIndexRule.mode === "derived") return;
+    if (baseCPITouched) return;
     if (startDate && cpiRecords.length > 0 && indexMethod !== "none") {
       const start = new Date(startDate);
       if (isNaN(start.getTime())) return;
@@ -357,7 +364,7 @@ export default function ContractsNewPage() {
         setBaseCPIDate(`${baseYear}-${String(baseMonthNum).padStart(2, "0")}-01`);
       }
     }
-  }, [startDate, cpiRecords.length, indexMethod, baseIndexRule.mode]);
+  }, [startDate, cpiRecords.length, indexMethod, baseIndexRule.mode, baseCPITouched]);
 
   // === Auto-calculate option dates ===
   useEffect(() => {
@@ -518,6 +525,7 @@ export default function ContractsNewPage() {
       setIndexMethod(c.indexation_method || "standard");
       setBaseCPI(c.index_base_value ? String(c.index_base_value) : "");
       setBaseCPIDate(c.index_base_date || "");
+      if (c.index_base_date) setBaseCPITouched(true);
       setBaseIndexRule(baseIndexRuleFromRow(c));
       setMgmtProtection(mgmtProtectionFromRow(c));
       // Grace — typically no grace for amendment
@@ -856,7 +864,7 @@ export default function ContractsNewPage() {
       if (data.charged_area) { setChargedArea(String(data.charged_area)); filled++; }
       if (data.investment_addition) { setInvestAdd(String(data.investment_addition)); filled++; }
       if (data.payment_frequency) { setPaymentFreq(data.payment_frequency); filled++; }
-      if (data.index_base_date) { setBaseCPIDate(data.index_base_date + "-15"); filled++; }
+      if (data.index_base_date) { setBaseCPIDate(data.index_base_date + "-15"); setBaseCPITouched(true); filled++; }
       if (data.index_base_value) { setBaseCPI(String(data.index_base_value)); filled++; }
       if (data.end_date) { setEndDate(data.end_date); filled++; }
       if (data.investment_amount) { setTiAmount(String(data.investment_amount)); filled++; }
@@ -2232,7 +2240,7 @@ export default function ContractsNewPage() {
                   <input
                     type="number"
                     value={baseCPI}
-                    onChange={(e) => setBaseCPI(e.target.value)}
+                    onChange={(e) => { setBaseCPI(e.target.value); setBaseCPITouched(true); }}
                     placeholder="נטען אוטומטית מהלמ״ס"
                     className={ic + " flex-1"}
                   />
@@ -2271,6 +2279,10 @@ export default function ContractsNewPage() {
                         const rec = records.find((r: any) => r.year === knownYear && r.month === knownMonth);
                         var HEB_MONTHS = ["","ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
                         if (rec) {
+                          // Pulling an index is a deliberate act: the date the
+                          // user typed is the publication date they meant, and
+                          // it stays exactly as written.
+                          setBaseCPITouched(true);
                           setBaseCPI(rec.value.toString());
                           setCbsFetchedMonth(HEB_MONTHS[knownMonth] + " " + knownYear);
                           const allRes = await fetch("/api/cpi");
@@ -2301,7 +2313,7 @@ export default function ContractsNewPage() {
                 <input
                   type="date"
                   value={baseCPIDate}
-                  onChange={(e) => setBaseCPIDate(e.target.value)}
+                  onChange={(e) => { setBaseCPIDate(e.target.value); setBaseCPITouched(true); }}
                   className={ic}
                 />
               </div>
@@ -2312,6 +2324,7 @@ export default function ContractsNewPage() {
                 inputClass={ic}
                 onResolve={async function(baseDate) {
                   setBaseCPIDate(baseDate);
+                  setBaseCPITouched(true);
                   // Pull the value for the derived month so the base isn't left
                   // as a date with no index behind it.
                   var d = new Date(baseDate);
