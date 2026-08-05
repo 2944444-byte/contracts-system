@@ -292,15 +292,37 @@ export default function ContractsNewPage() {
   const [depositIncludesMgmt, setDepositIncludesMgmt] = useState(false);
   const [amendmentNotes, setAmendmentNotes] = useState("");
 
-  // Leased area used to preview a per-sqm non-exercise penalty: the selected
-  // units' area, falling back to the manually charged area.
-  const penaltyPreviewArea = (function() {
+  // The leased area: the selected units' area, falling back to the manually
+  // charged area only when no unit is selected yet. Units decide — the header
+  // field must never drive a calculation.
+  const leasedArea = (function() {
     var sum = 0;
     selSpaces.forEach(function(sid) {
       const sp = spaces.find(function(s) { return s.id === sid; });
       if (sp?.area) sum += Number(sp.area) || 0;
     });
     return sum > 0 ? sum : (Number(chargedArea) || 0);
+  })();
+  const penaltyPreviewArea = leasedArea;
+
+  // A guaranteed minimum can be agreed either way — ₪65 per m² or a flat
+  // ₪26,099 a month — and they are the same fact stated differently. Everything
+  // downstream (the step ladder, the option price jumps, the revenue screen's
+  // floor) works per m², so a flat sum is converted by dividing by the leased
+  // area. Both forms are kept so each screen can show the one that reads best.
+  const minRentSqm = (function() {
+    const v = Number(minimumRent) || 0;
+    if (v <= 0) return 0;
+    if (minRentBasis === "per_sqm") return v;
+    // Full precision, not 2 decimals: ₪26,099 over 3,728 m² is 7.0008/m², and
+    // rounding to 7.00 loses ₪3 a month off a contractual minimum. Screens
+    // round for display; the stored figure stays exact.
+    return leasedArea > 0 ? Math.round((v / leasedArea) * 1e6) / 1e6 : 0;
+  })();
+  const minRentMonthly = (function() {
+    const v = Number(minimumRent) || 0;
+    if (v <= 0) return 0;
+    return minRentBasis === "monthly" ? v : Math.round(v * leasedArea * 100) / 100;
   })();
 
   // === Auto-calculate end date from start + period ===
@@ -469,10 +491,14 @@ export default function ContractsNewPage() {
       setRentType(c.rent_type === "revenue_pct" ? "revenue_pct" : "fixed");
       setRevenuePct(c.revenue_pct != null ? String(c.revenue_pct) : "");
       setRevenuePctTiers(pctTiersFromRow(c));
-      if (c.min_rent_per_sqm != null && Number(c.min_rent_per_sqm) > 0) {
-        setMinRentBasis("per_sqm"); setMinimumRent(String(c.min_rent_per_sqm));
-      } else if (Number(c.minimum_rent) > 0) {
+      // minimum_rent is only written when the user chose the flat-sum basis, and
+      // min_rent_per_sqm is now derived from it as well — so the flat sum is
+      // checked FIRST, or reopening the contract would show the derived per-m²
+      // figure instead of the ₪ amount that was actually typed.
+      if (Number(c.minimum_rent) > 0) {
         setMinRentBasis("monthly"); setMinimumRent(String(c.minimum_rent));
+      } else if (c.min_rent_per_sqm != null && Number(c.min_rent_per_sqm) > 0) {
+        setMinRentBasis("per_sqm"); setMinimumRent(String(c.min_rent_per_sqm));
       }
       setRevMinAdvance(!!c.revenue_minimum_advance);
       setRevProtection(revenueProtectionFromRow(c));
@@ -955,7 +981,9 @@ export default function ContractsNewPage() {
         minimum_rent: rentType === "revenue_pct" && minRentBasis === "monthly" ? Number(minimumRent) || 0 : null,
         // The per-sqm floor is what the revenue screen reads; it also rises with
         // the rent steps, so this is the field that makes "המינימום עולה משנה 4" work.
-        min_rent_per_sqm: rentType === "revenue_pct" && minRentBasis === "per_sqm" ? Number(minimumRent) || 0 : null,
+        // Derived from a flat monthly minimum as well (÷ leased area) — the
+        // steps, the option price jumps and the revenue floor are all per-m².
+        min_rent_per_sqm: rentType === "revenue_pct" && minRentSqm > 0 ? minRentSqm : null,
         revenue_pct_tiers: rentType === "revenue_pct" && revenuePctTiers.length > 0 ? revenuePctTiers : null,
         revenue_report_day: rentType === "revenue_pct" ? Number(revenueReportDay) || 5 : null,
         revenue_minimum_advance: rentType === "revenue_pct" ? revMinAdvance : false,
@@ -1695,8 +1723,13 @@ export default function ContractsNewPage() {
                       placeholder="0 = ללא מינימום" className={ic} />
                     <div className="text-xs text-purple-500 mt-0.5">
                       0 = ללא מינימום, רק אחוז ממחזור
-                      {minRentBasis === "per_sqm" && Number(minimumRent) > 0 && Number(chargedArea) > 0 && (
-                        <span> · {fmtMoney(Number(minimumRent) * Number(chargedArea))}/חודש ל-{chargedArea} מ&quot;ר</span>
+                      {Number(minimumRent) > 0 && leasedArea > 0 && (
+                        minRentBasis === "per_sqm"
+                          ? <span> · {fmtMoney(minRentMonthly)}/חודש ל-{leasedArea.toLocaleString("he-IL")} מ&quot;ר</span>
+                          : <span> · {fmtMoney(minRentSqm)}/מ&quot;ר לחודש ({leasedArea.toLocaleString("he-IL")} מ&quot;ר)</span>
+                      )}
+                      {Number(minimumRent) > 0 && minRentBasis === "monthly" && leasedArea <= 0 && (
+                        <span className="text-red-600"> · בחר יחידות כדי לגזור מינימום למ&quot;ר</span>
                       )}
                     </div>
                   </div>
@@ -2659,9 +2692,10 @@ export default function ContractsNewPage() {
               {hasIncrease && rentType === "revenue_pct" && (
                 <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 mb-3 text-xs text-amber-800 leading-relaxed">
                   בחוזה אחוז-מפדיון המדרגות האלה מעלות את <b>שכ&quot;ד המינימום</b> (הרצפה), לא את האחוז.
-                  {minRentBasis === "per_sqm"
-                    ? <span> הבסיס: {fmtMoney(Number(minimumRent) || 0)}/מ&quot;ר לחודש.</span>
-                    : <span> הבסיס מוזן כסכום חודשי — כדי שהמדרגות יחולו עליו, הזן את המינימום לפי מ&quot;ר.</span>}
+                  {minRentSqm > 0
+                    ? <span> הבסיס: {fmtMoney(minRentSqm)}/מ&quot;ר לחודש{minRentBasis === "monthly"
+                        ? " (נגזר מ-" + fmtMoney(minRentMonthly) + " לחודש ÷ " + leasedArea.toLocaleString("he-IL") + ' מ"ר)' : ""}.</span>
+                    : <span> טרם הוזן מינימום — המדרגות יחולו עליו לאחר הזנתו.</span>}
                   {" "}להעלאת <b>האחוז</b> עצמו לאורך השנים — השתמש ב&quot;מדרגות אחוז מהפדיון&quot; בשלב תנאי השכירות.
                 </div>
               )}
@@ -2706,8 +2740,8 @@ export default function ContractsNewPage() {
                 const errors = validatePriceTiers(priceTiers, contractYears);
                 // On a revenue lease the steps raise the minimum, so THAT is the
                 // base the preview must build on — rentPerSqm is empty there.
-                const stepBase = rentType === "revenue_pct" && minRentBasis === "per_sqm"
-                  ? (Number(minimumRent) || 0) : (Number(rentPerSqm) || 0);
+                const stepBase = rentType === "revenue_pct" && minRentSqm > 0
+                  ? minRentSqm : (Number(rentPerSqm) || 0);
                 const previews = calculateTierPreviews(priceTiers, stepBase);
                 return (
                   <div className="space-y-3">
@@ -3898,7 +3932,12 @@ export default function ContractsNewPage() {
                     ? new Date(endDate).toLocaleDateString("he-IL")
                     : "",
                 },
-                { l: 'שכ"ד', v: rentType === "revenue_pct" ? `${revenuePct}% ממחזור${Number(minimumRent) > 0 ? " | מינימום " + fmtMoney(Number(minimumRent)) : " | ללא מינימום"}` : fmtMoney(totalRent) + "/חודש" },
+                { l: 'שכ"ד', v: rentType === "revenue_pct"
+                    ? `${revenuePct}% ממחזור` + (minRentMonthly > 0
+                        ? " | מינימום " + fmtMoney(minRentMonthly) + "/חודש" +
+                          (minRentSqm > 0 ? " (" + fmtMoney(minRentSqm) + '/מ"ר)' : "")
+                        : " | ללא מינימום")
+                    : fmtMoney(totalRent) + "/חודש" },
                 ...(rentType === "revenue_pct" ? [{ l: "התחשבנות פדיון", v: ({monthly:"חודשית",quarterly:"רבעונית",semiannual:"חצי שנתית",annual:"שנתית"} as any)[revSettleFreq] + " · דו\"ח " + ({monthly:"חודשי",quarterly:"רבעוני",semiannual:"חצי שנתי",annual:"שנתי"} as any)[revReportFreq] }] : []),
                 { l: "שנתי", v: fmtMoney(annualRent) },
                 {
@@ -3998,8 +4037,10 @@ export default function ContractsNewPage() {
               // On a turnover lease the schedule is the MINIMUM — with a base of
               // 0 the summary showed "—" for the opening period and the raw
               // increase (+10) instead of the resulting price (75).
-              const tlBase = rentType === "revenue_pct" && minRentBasis === "per_sqm"
-                ? (Number(minimumRent) || 0) : (Number(rentPerSqm) || 0);
+              // A flat monthly minimum used to leave this at rentPerSqm (0 on a
+              // turnover lease), so every period in the timeline showed "—".
+              const tlBase = rentType === "revenue_pct"
+                ? minRentSqm : (Number(rentPerSqm) || 0);
               const timeline = buildPriceTimeline({
                 contractStart: startDate,
                 contractEnd: endDate,
@@ -4034,7 +4075,11 @@ export default function ContractsNewPage() {
                             </span>
                           </div>
                           <span className={"font-black text-sm " + textColor}>
-                            {entry.rentPerSqm ? `${fmtMoney(entry.rentPerSqm)}/מ"ר` : entry.fixedAmount ? `${fmtMoney(entry.fixedAmount)}/חודש` : "—"}
+                            {entry.rentPerSqm
+                              ? (leasedArea > 0
+                                  ? <>{fmtMoney(entry.rentPerSqm * leasedArea)}<span className="font-normal text-[11px] text-slate-400">/חודש · {fmtMoney(entry.rentPerSqm)}/מ&quot;ר</span></>
+                                  : <>{fmtMoney(entry.rentPerSqm)}/מ&quot;ר</>)
+                              : entry.fixedAmount ? `${fmtMoney(entry.fixedAmount)}/חודש` : "—"}
                           </span>
                         </div>
                       );

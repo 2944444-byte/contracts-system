@@ -441,10 +441,12 @@ export default function ContractEditPage() {
     setRevenuePct(c.revenue_pct?.toString() ?? "");
     // Whichever column holds the floor decides how the field is shown, so a
     // contract keeps the basis it was signed with.
-    if (c.min_rent_per_sqm != null && Number(c.min_rent_per_sqm) > 0) {
-      setMinRentBasis("per_sqm"); setMinimumRent(String(c.min_rent_per_sqm));
-    } else if (Number(c.minimum_rent) > 0) {
+    // The flat sum is checked first: min_rent_per_sqm is now derived from it too,
+    // so the field must come back showing what was actually typed.
+    if (Number(c.minimum_rent) > 0) {
       setMinRentBasis("monthly"); setMinimumRent(String(c.minimum_rent));
+    } else if (c.min_rent_per_sqm != null && Number(c.min_rent_per_sqm) > 0) {
+      setMinRentBasis("per_sqm"); setMinimumRent(String(c.min_rent_per_sqm));
     }
     setRevenuePctTiers(pctTiersFromRow(c));
     setRevenueReportDay(c.revenue_report_day?.toString() ?? "5");
@@ -706,13 +708,31 @@ export default function ContractEditPage() {
   }
 
   // Leased area used to preview a per-sqm non-exercise penalty.
-  const penaltyPreviewArea = (function() {
+  const leasedArea = (function() {
     var sum = 0;
     selSpaces.forEach(function(sid) {
       const sp = spaces.find(function(s) { return s.id === sid; });
       if (sp?.area) sum += Number(sp.area) || 0;
     });
     return sum > 0 ? sum : (Number(chargedArea) || 0);
+  })();
+  const penaltyPreviewArea = leasedArea;
+
+  // A flat monthly minimum is the same fact as a per-m² one; everything
+  // downstream is per-m², so it is converted by dividing by the leased area.
+  const minRentSqm = (function() {
+    const v = Number(minimumRent) || 0;
+    if (v <= 0) return 0;
+    if (minRentBasis === "per_sqm") return v;
+    // Full precision, not 2 decimals: ₪26,099 over 3,728 m² is 7.0008/m², and
+    // rounding to 7.00 loses ₪3 a month off a contractual minimum. Screens
+    // round for display; the stored figure stays exact.
+    return leasedArea > 0 ? Math.round((v / leasedArea) * 1e6) / 1e6 : 0;
+  })();
+  const minRentMonthly = (function() {
+    const v = Number(minimumRent) || 0;
+    if (v <= 0) return 0;
+    return minRentBasis === "monthly" ? v : Math.round(v * leasedArea * 100) / 100;
   })();
 
   function removeOption(idx: number) {
@@ -768,7 +788,7 @@ export default function ContractEditPage() {
         rent_per_sqm: Number(rentPerSqm) || null,
         revenue_pct: rentType === "revenue_pct" ? Number(revenuePct) || null : null,
         minimum_rent: rentType === "revenue_pct" && minRentBasis === "monthly" ? Number(minimumRent) || 0 : null,
-        min_rent_per_sqm: rentType === "revenue_pct" && minRentBasis === "per_sqm" ? Number(minimumRent) || 0 : null,
+        min_rent_per_sqm: rentType === "revenue_pct" && minRentSqm > 0 ? minRentSqm : null,
         revenue_pct_tiers: rentType === "revenue_pct" && revenuePctTiers.length > 0 ? revenuePctTiers : null,
         revenue_report_day: rentType === "revenue_pct" ? Number(revenueReportDay) || 5 : null,
         mgmt_included_in_revenue: mgmtIncludedInRevenue,
