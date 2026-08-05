@@ -78,7 +78,7 @@ export async function reconcileAlerts(supabase: SupabaseClient): Promise<{ resol
   const guaranteeIds = idsFor("guarantee");
   if (guaranteeIds.length > 0) {
     const { data: gs } = await supabase.from("guarantees")
-      .select("id,end_date,status,contract_id,guarantee_type,amount_actual,amount_required,bank,document_url,documents,created_at,delivery_trigger,delivery_due_date,delivered_at,contracts(parent_contract_id,signing_date,start_date,planned_handover_date,actual_handover_date,planned_opening_date,actual_opening_date,grace_months,grace_days,grace_type,grace_ends_on_opening)")
+      .select("id,end_date,status,contract_id,guarantee_type,amount_actual,amount_required,bank,document_url,documents,created_at,delivery_trigger,delivery_offset_days,delivery_due_date,delivered_at,contracts(parent_contract_id,signing_date,start_date,planned_handover_date,actual_handover_date,planned_opening_date,actual_opening_date,grace_months,grace_days,grace_type,grace_ends_on_opening)")
       .in("id", guaranteeIds);
     // Mirrors the creation rule: one alert per physical guarantee, so a second
     // row recording the same instrument on an amendment closes as redundant.

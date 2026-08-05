@@ -32,7 +32,7 @@ import RevenueCategoriesEditor from "@/components/RevenueCategoriesEditor";
 import BaseIndexRuleFields from '@/components/BaseIndexRuleFields';
 import MgmtProtectionFields from '@/components/MgmtProtectionFields';
 import { mgmtProtectionFromRow, mgmtProtectionToRow, emptyMgmtProtection, type MgmtProtection } from '@/lib/mgmt-protection';
-import ExtraGuaranteesEditor, { emptyExtraGuarantee, extraGuaranteeFromRow, extraGuaranteeToRow, type ExtraGuarantee } from '@/components/ExtraGuaranteesEditor';
+import ExtraGuaranteesEditor, { emptyExtraGuarantee, extraGuaranteeFromRow, extraGuaranteeToRow, DELIVERY_LABELS, type ExtraGuarantee } from '@/components/ExtraGuaranteesEditor';
 import OptionPenaltyFields from '@/components/OptionPenaltyFields';
 import TenantForm from '@/components/TenantForm';
 import PropertyForm from '@/components/PropertyForm';
@@ -270,6 +270,13 @@ export default function ContractsNewPage() {
   // Step 5 — Guarantees
   const [addGuarantee, setAddGuarantee] = useState(false);
   const [guaranteeType, setGuaranteeType] = useState("bank");
+  // The primary security is due at a milestone just as often as an additional
+  // one is — the editor for the extras had these fields and this did not.
+  const [gDelTrigger, setGDelTrigger] = useState("signing");
+  const [gDelOffset, setGDelOffset] = useState("");
+  const [gDelDate, setGDelDate] = useState("");
+  const [gDelCond, setGDelCond] = useState("");
+  const [gDelivered, setGDelivered] = useState("");
   const [guaranteeAmt, setGuaranteeAmt] = useState("");
   const [guaranteeActual, setGuaranteeActual] = useState("");
   const [guaranteeBank, setGuaranteeBank] = useState("");
@@ -404,7 +411,7 @@ export default function ContractsNewPage() {
     if (!amendmentOfId) return;
     async function loadParent() {
       var { data: c } = await supabase.from("contracts")
-        .select("*, tenants(name), properties(name), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area)), contract_options(id,option_number,duration_months,duration_years,notice_type,notice_days_before_end,rent_mechanism,revenue_pct_tiers,rent_increase_pct,new_rent_value,option_group,exit_points,price_schedule_type,price_tiers,non_exercise_penalty_type,non_exercise_penalty_value,non_exercise_penalty_basis,non_exercise_penalty_months,non_exercise_penalty_indexed,non_exercise_penalty_vat,non_exercise_penalty_days,non_exercise_penalty_notes), guarantees(id,guarantee_type,amount_required,amount_actual,bank,reference_number,end_date,document_url,notes,guarantors)")
+        .select("*, tenants(name), properties(name), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area)), contract_options(id,option_number,duration_months,duration_years,notice_type,notice_days_before_end,rent_mechanism,revenue_pct_tiers,rent_increase_pct,new_rent_value,option_group,exit_points,price_schedule_type,price_tiers,non_exercise_penalty_type,non_exercise_penalty_value,non_exercise_penalty_basis,non_exercise_penalty_months,non_exercise_penalty_indexed,non_exercise_penalty_vat,non_exercise_penalty_days,non_exercise_penalty_notes), guarantees(id,guarantee_type,amount_required,amount_actual,bank,reference_number,end_date,document_url,notes,guarantors,delivery_trigger,delivery_offset_days,delivery_due_date,delivery_condition,delivered_at)")
         .eq("id", amendmentOfId).single();
       if (!c) return;
       setAmendmentParent(c);
@@ -528,6 +535,11 @@ export default function ContractsNewPage() {
         var g = c.guarantees[0];
         setAddGuarantee(true);
         setGuaranteeType(g.guarantee_type || "bank");
+        setGDelTrigger(g.delivery_trigger || "signing");
+        setGDelOffset(g.delivery_offset_days != null ? String(g.delivery_offset_days) : "");
+        setGDelDate(g.delivery_due_date ? String(g.delivery_due_date).slice(0, 10) : "");
+        setGDelCond(g.delivery_condition || "");
+        setGDelivered(g.delivered_at ? String(g.delivered_at).slice(0, 10) : "");
         setGuaranteeAmt(g.amount_required ? String(g.amount_required) : "");
         setGuaranteeActual(g.amount_actual ? String(g.amount_actual) : "");
         setGuaranteeBank(g.bank || "");
@@ -1156,6 +1168,11 @@ export default function ContractsNewPage() {
         await supabase.from("guarantees").insert({
           contract_id: contract.id,
           guarantee_type: guaranteeType,
+          delivery_trigger: gDelTrigger || "signing",
+          delivery_offset_days: gDelOffset ? Number(gDelOffset) : null,
+          delivery_due_date: gDelDate || null,
+          delivery_condition: gDelCond || null,
+          delivered_at: gDelivered || null,
           amount_required: guaranteeAmt ? Number(guaranteeAmt) : null,
           amount_actual: guaranteeActual ? Number(guaranteeActual) : null,
           bank: guaranteeBank || null,
@@ -3726,6 +3743,59 @@ export default function ContractsNewPage() {
                       />
                     </div>
                   )}
+                </div>
+
+                {/* When the primary security is due. Identical model to the
+                    additional securities — a lease that ties the main bank
+                    guarantee to "השלמת עבודות השוכר" must be expressible here. */}
+                <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50/60 p-3 space-y-2">
+                  <div className="text-xs font-bold text-amber-800">📅 מועד המצאת הביטחון</div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="mb-1 block text-[11px] text-slate-600">יימסר</label>
+                      <select value={gDelTrigger} onChange={(e) => setGDelTrigger(e.target.value)} className={ic}>
+                        <option value="signing">במועד החתימה</option>
+                        <option value="handover">במועד מסירת המושכר</option>
+                        <option value="opening">במועד פתיחת המושכר</option>
+                        <option value="works_end">בסיום עבודות השוכר</option>
+                        <option value="works_start">בתחילת עבודות ההתאמה</option>
+                        <option value="permit">בקבלת היתר בנייה</option>
+                        <option value="custom_date">בתאריך מוגדר</option>
+                        <option value="other">לפי תנאי בהסכם</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-[11px] text-slate-600">
+                        {["custom_date","permit","works_start","other"].indexOf(gDelTrigger) !== -1
+                          ? "תאריך משוער / מוסכם" : "תאריך (אם ידוע)"}
+                      </label>
+                      <input type="date" value={gDelDate} onChange={(e) => setGDelDate(e.target.value)} className={ic} />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 items-end">
+                    <div>
+                      <label className="mb-1 block text-[11px] text-slate-600">+ ימים מהמועד (לא חובה)</label>
+                      <input type="number" min={0} max={365} value={gDelOffset}
+                        onChange={(e) => setGDelOffset(e.target.value)} className={ic} placeholder="למשל 30" />
+                    </div>
+                    <div className="text-[10px] text-amber-700 pb-1.5">
+                      {Number(gDelOffset) > 0
+                        ? "המועד = " + Number(gDelOffset) + " ימים אחרי " + (DELIVERY_LABELS[gDelTrigger] || "").replace(/^ב/, "")
+                        : "ריק = במועד עצמו"}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[11px] text-slate-600">התנאי כלשונו בהסכם</label>
+                    <input type="text" value={gDelCond} onChange={(e) => setGDelCond(e.target.value)}
+                      className={ic} placeholder="למשל: וכנגד תשלום השתתפות המשכיר" />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[11px] text-slate-600">התקבל בפועל בתאריך</label>
+                    <input type="date" value={gDelivered} onChange={(e) => setGDelivered(e.target.value)} className={ic} />
+                  </div>
+                  <div className="text-[10px] text-amber-700">
+                    עד המועד הזה הביטחון אינו נחשב חסר, וההתראה תיפתח רק כשהוא מגיע — עם התנאי שנרשם כאן.
+                  </div>
                 </div>
 
                 {/* Guarantors for promissory note */}

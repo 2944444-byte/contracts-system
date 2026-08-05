@@ -27,7 +27,7 @@ import BaseIndexRuleFields from '@/components/BaseIndexRuleFields';
 import MgmtProtectionFields from '@/components/MgmtProtectionFields';
 import { mgmtProtectionFromRow, mgmtProtectionToRow, emptyMgmtProtection, type MgmtProtection } from '@/lib/mgmt-protection';
 import { revenueProtectionFromRow, revenueProtectionToRow, emptyRevenueProtection, type RevenueProtection } from '@/lib/revenue-protection';
-import ExtraGuaranteesEditor, { extraGuaranteeFromRow, extraGuaranteeToRow, emptyExtraGuarantee, NO_EXPIRY_TYPES, type ExtraGuarantee } from '@/components/ExtraGuaranteesEditor';
+import ExtraGuaranteesEditor, { extraGuaranteeFromRow, extraGuaranteeToRow, emptyExtraGuarantee, NO_EXPIRY_TYPES, DELIVERY_LABELS, type ExtraGuarantee } from '@/components/ExtraGuaranteesEditor';
 import TenantForm from '@/components/TenantForm';
 import PropertyForm from '@/components/PropertyForm';
 
@@ -199,6 +199,11 @@ export default function ContractEditPage() {
   // Step 5
   const [addGuarantee, setAddGuarantee] = useState(false);
   const [guaranteeType, setGuaranteeType] = useState("bank");
+  const [gDelTrigger, setGDelTrigger] = useState("signing");
+  const [gDelOffset, setGDelOffset] = useState("");
+  const [gDelDate, setGDelDate] = useState("");
+  const [gDelCond, setGDelCond] = useState("");
+  const [gDelivered, setGDelivered] = useState("");
   const [guaranteeAmt, setGuaranteeAmt] = useState("");
   const [guaranteeActual, setGuaranteeActual] = useState("");
   const [guaranteeBank, setGuaranteeBank] = useState("");
@@ -617,6 +622,11 @@ export default function ContractEditPage() {
       setAddGuarantee(true);
       setGuaranteeId(g.id);
       setGuaranteeType(g.guarantee_type ?? "bank");
+      setGDelTrigger(g.delivery_trigger ?? "signing");
+      setGDelOffset(g.delivery_offset_days != null ? String(g.delivery_offset_days) : "");
+      setGDelDate(g.delivery_due_date ? String(g.delivery_due_date).slice(0, 10) : "");
+      setGDelCond(g.delivery_condition ?? "");
+      setGDelivered(g.delivered_at ? String(g.delivered_at).slice(0, 10) : "");
       setGuaranteeAmt(g.amount_required?.toString() ?? "");
       setGuaranteeActual(g.amount_actual?.toString() ?? "");
       setGuaranteeBank(g.bank ?? "");
@@ -941,6 +951,11 @@ export default function ContractEditPage() {
           var primaryRow: any = {
             contract_id: id,
             guarantee_type: guaranteeType,
+            delivery_trigger: gDelTrigger || "signing",
+            delivery_offset_days: gDelOffset ? Number(gDelOffset) : null,
+            delivery_due_date: gDelDate || null,
+            delivery_condition: gDelCond || null,
+            delivered_at: gDelivered || null,
             amount_required: guaranteeAmt ? Number(guaranteeAmt) : null,
             amount_actual: guaranteeActual ? Number(guaranteeActual) : null,
             bank: guaranteeBank || null,
@@ -2460,6 +2475,57 @@ export default function ContractEditPage() {
                       <input type="date" value={guaranteeEnd} onChange={(e) => setGuaranteeEnd(e.target.value)} className={ic} />
                     </div>
                   )}
+                </div>
+
+                {/* Same milestone model as the additional securities. */}
+                <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50/60 p-3 space-y-2">
+                  <div className="text-xs font-bold text-amber-800">📅 מועד המצאת הביטחון</div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="mb-1 block text-[11px] text-slate-600">יימסר</label>
+                      <select value={gDelTrigger} onChange={(e) => setGDelTrigger(e.target.value)} className={ic}>
+                        <option value="signing">במועד החתימה</option>
+                        <option value="handover">במועד מסירת המושכר</option>
+                        <option value="opening">במועד פתיחת המושכר</option>
+                        <option value="works_end">בסיום עבודות השוכר</option>
+                        <option value="works_start">בתחילת עבודות ההתאמה</option>
+                        <option value="permit">בקבלת היתר בנייה</option>
+                        <option value="custom_date">בתאריך מוגדר</option>
+                        <option value="other">לפי תנאי בהסכם</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-[11px] text-slate-600">
+                        {["custom_date","permit","works_start","other"].indexOf(gDelTrigger) !== -1
+                          ? "תאריך משוער / מוסכם" : "תאריך (אם ידוע)"}
+                      </label>
+                      <input type="date" value={gDelDate} onChange={(e) => setGDelDate(e.target.value)} className={ic} />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 items-end">
+                    <div>
+                      <label className="mb-1 block text-[11px] text-slate-600">+ ימים מהמועד (לא חובה)</label>
+                      <input type="number" min={0} max={365} value={gDelOffset}
+                        onChange={(e) => setGDelOffset(e.target.value)} className={ic} placeholder="למשל 30" />
+                    </div>
+                    <div className="text-[10px] text-amber-700 pb-1.5">
+                      {Number(gDelOffset) > 0
+                        ? "המועד = " + Number(gDelOffset) + " ימים אחרי " + (DELIVERY_LABELS[gDelTrigger] || "").replace(/^ב/, "")
+                        : "ריק = במועד עצמו"}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[11px] text-slate-600">התנאי כלשונו בהסכם</label>
+                    <input type="text" value={gDelCond} onChange={(e) => setGDelCond(e.target.value)}
+                      className={ic} placeholder="למשל: וכנגד תשלום השתתפות המשכיר" />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[11px] text-slate-600">התקבל בפועל בתאריך</label>
+                    <input type="date" value={gDelivered} onChange={(e) => setGDelivered(e.target.value)} className={ic} />
+                  </div>
+                  <div className="text-[10px] text-amber-700">
+                    עד המועד הזה הביטחון אינו נחשב חסר, וההתראה תיפתח רק כשהוא מגיע — עם התנאי שנרשם כאן.
+                  </div>
                 </div>
 
                 <div className="mt-3">

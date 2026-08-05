@@ -40,39 +40,53 @@ function d(v: any): Date | null {
 // The date a trigger resolves to, from the contract's own milestones. Returns
 // null when the milestone hasn't been set yet — which is information, not an
 // error: the security isn't due because the milestone hasn't happened.
+function plusDays(x: Date | null, days: number): Date | null {
+  if (!x || !days) return x;
+  return new Date(x.getTime() + days * 86400000);
+}
+
 export function deliveryDueDate(params: { guarantee: any; contract: any }): { date: Date | null; reason: string } {
   const g = params.guarantee || {};
   const c = params.contract || {};
   const trigger: DeliveryTrigger = g.delivery_trigger || "signing";
+  // A milestone is frequently the anchor, not the deadline: "30 יום ממועד
+  // פתיחת המושכר". The offset is applied to whatever the trigger resolves to.
+  const offset = Number(g.delivery_offset_days) || 0;
+  // The labels read "במועד פתיחת המושכר"; with an offset the sentence becomes
+  // "30 ימים ממועד פתיחת המושכר", so the label's own prefix is dropped.
+  const withOffset = function (x: Date | null, why: string) {
+    const anchor = offset > 0 ? offset + " ימים מ" + why.replace(/^ב/, "") : why;
+    return { date: plusDays(x, offset), reason: anchor };
+  };
 
   // An explicit date always wins — it is what the parties wrote down.
   const explicit = d(g.delivery_due_date);
   if (trigger === "custom_date" || trigger === "other" || trigger === "permit" || trigger === "works_start") {
     return explicit
-      ? { date: explicit, reason: TRIGGER_LABELS[trigger] }
+      ? withOffset(explicit, TRIGGER_LABELS[trigger])
       : { date: null, reason: TRIGGER_LABELS[trigger] + " — המועד טרם נקבע" };
   }
 
   if (trigger === "signing") {
     const x = d(c.signing_date) || d(c.start_date);
-    return { date: x, reason: TRIGGER_LABELS.signing };
+    return withOffset(x, TRIGGER_LABELS.signing);
   }
   if (trigger === "handover") {
     const x = d(c.actual_handover_date) || d(c.planned_handover_date);
-    return x ? { date: x, reason: TRIGGER_LABELS.handover } : { date: null, reason: "מועד המסירה טרם נקבע" };
+    return x ? withOffset(x, TRIGGER_LABELS.handover) : { date: null, reason: "מועד המסירה טרם נקבע" };
   }
   if (trigger === "opening") {
     const x = d(c.actual_opening_date) || d(c.planned_opening_date);
-    return x ? { date: x, reason: TRIGGER_LABELS.opening } : { date: null, reason: "מועד הפתיחה טרם נקבע" };
+    return x ? withOffset(x, TRIGGER_LABELS.opening) : { date: null, reason: "מועד הפתיחה טרם נקבע" };
   }
   if (trigger === "works_end") {
     // End of the tenant's fit-out — the grace window's end is exactly that.
     const gw = graceWindow({ contract: c });
-    if (gw.applies && gw.end) return { date: gw.end, reason: TRIGGER_LABELS.works_end };
+    if (gw.applies && gw.end) return withOffset(gw.end, TRIGGER_LABELS.works_end);
     const x = explicit || d(c.planned_opening_date);
-    return x ? { date: x, reason: TRIGGER_LABELS.works_end } : { date: null, reason: "מועד סיום העבודות טרם נקבע" };
+    return x ? withOffset(x, TRIGGER_LABELS.works_end) : { date: null, reason: "מועד סיום העבודות טרם נקבע" };
   }
-  return { date: explicit, reason: TRIGGER_LABELS.other };
+  return withOffset(explicit, TRIGGER_LABELS.other);
 }
 
 export type DeliveryStatus = {

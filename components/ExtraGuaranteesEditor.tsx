@@ -14,6 +14,7 @@ export type ExtraGuarantee = {
   // and the management-fee choice belong to the security, not the contract.
   // When the security is due — leases almost never require it at signing.
   delivery_trigger?: string;
+  delivery_offset_days?: string;
   delivery_due_date?: string;
   delivery_condition?: string;
   delivered_at?: string;
@@ -44,7 +45,7 @@ export const NO_EXPIRY_TYPES = ["promissory_note", "cash"];
 
 export function emptyExtraGuarantee(type: string): ExtraGuarantee {
   return {
-    type: type, delivery_trigger: "signing", delivery_due_date: "", delivery_condition: "", delivered_at: "",
+    type: type, delivery_trigger: "signing", delivery_offset_days: "", delivery_due_date: "", delivery_condition: "", delivered_at: "",
     calc_method: "months_based", months: "3", includes_mgmt: true,
     amount_required: "", amount_actual: "", bank: "",
     reference_number: "", end_date: "", document_url: "", notes: "", guarantors: [],
@@ -52,11 +53,23 @@ export function emptyExtraGuarantee(type: string): ExtraGuarantee {
 }
 
 // Map a guarantees row (DB) → editor entry.
+export const DELIVERY_LABELS: Record<string, string> = {
+  signing: "במועד החתימה",
+  handover: "במועד מסירת המושכר",
+  opening: "במועד פתיחת המושכר",
+  works_end: "בסיום עבודות השוכר",
+  works_start: "בתחילת עבודות ההתאמה",
+  permit: "בקבלת היתר בנייה",
+  custom_date: "בתאריך מוגדר",
+  other: "לפי תנאי בהסכם",
+};
+
 export function extraGuaranteeFromRow(g: any): ExtraGuarantee {
   return {
     id: g.id,
     type: g.guarantee_type,
     delivery_trigger: g.delivery_trigger || "signing",
+    delivery_offset_days: g.delivery_offset_days != null ? String(g.delivery_offset_days) : "",
     delivery_due_date: g.delivery_due_date ? String(g.delivery_due_date).slice(0, 10) : "",
     delivery_condition: g.delivery_condition ?? "",
     delivered_at: g.delivered_at ? String(g.delivered_at).slice(0, 10) : "",
@@ -92,6 +105,7 @@ export function extraGuaranteeToRow(e: ExtraGuarantee, contractId: string): Reco
     notes: e.notes || null,
     guarantors: e.type === "promissory_note" && validGuarantors.length > 0 ? validGuarantors : null,
     delivery_trigger: e.delivery_trigger || "signing",
+    delivery_offset_days: e.delivery_offset_days ? Number(e.delivery_offset_days) : null,
     delivery_due_date: e.delivery_due_date || null,
     delivery_condition: e.delivery_condition || null,
     delivered_at: e.delivered_at || null,
@@ -301,6 +315,22 @@ export default function ExtraGuaranteesEditor(props: {
                       </label>
                       <input type="date" value={e.delivery_due_date || ""}
                         onChange={function(ev){ patch(idx, { delivery_due_date: ev.target.value }); }} className={ic} />
+                    </div>
+                  </div>
+                  {/* The milestone is often the anchor, not the deadline:
+                      "30 יום ממועד פתיחת המושכר". */}
+                  <div className="grid grid-cols-2 gap-2 items-end">
+                    <div>
+                      <label className="mb-1 block text-[11px] text-slate-600">+ ימים מהמועד (לא חובה)</label>
+                      <input type="number" min={0} max={365} value={e.delivery_offset_days || ""}
+                        onChange={function(ev){ patch(idx, { delivery_offset_days: ev.target.value }); }}
+                        className={ic} placeholder="למשל 30" />
+                    </div>
+                    <div className="text-[10px] text-amber-700 pb-1.5">
+                      {Number(e.delivery_offset_days) > 0
+                        ? "המועד = " + Number(e.delivery_offset_days) + " ימים אחרי " +
+                          (DELIVERY_LABELS[e.delivery_trigger || "signing"] || "").replace(/^ב/, "")
+                        : "ריק = במועד עצמו"}
                     </div>
                   </div>
                   <div>
