@@ -2,6 +2,7 @@
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
 import { logAudit } from "@/lib/audit-log";
+import { graceFactorsFor } from "@/lib/store-opening";
 import { fetchCpiAdjusted, fetchCpiAdjustedWithRetry, fetchHighestChainedCpiWithRetry } from "@/lib/cpi-server";
 import { fetchHighestCPI } from "@/lib/cpi-utils";
 import { formatPeriod } from "@/lib/cpi-utils";
@@ -201,7 +202,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
     try {
       // Load contracts
       var query = supabase.from("contracts")
-        .select("id, rent_per_sqm, charged_area, investment_addition, payment_method, payment_frequency, vat_type, indexation_method, index_mechanism, index_base_date, index_base_value, start_date, end_date, is_amendment, grace_months, grace_type, grace_discount_pct, rent_type, minimum_rent, mgmt_included_in_revenue, tenants(name), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,index_base_date,index_base_value,use_original_index,spaces(space_name,area))")
+        .select("id, rent_per_sqm, charged_area, investment_addition, payment_method, payment_frequency, vat_type, indexation_method, index_mechanism, index_base_date, index_base_value, start_date, end_date, is_amendment, grace_months, grace_days, grace_type, grace_discount_pct, grace_mgmt_discount_pct, grace_ends_on_opening, mgmt_charge_starts, mgmt_free_max_days, works_start_date, works_end_date, planned_handover_date, actual_handover_date, planned_opening_date, actual_opening_date, rent_type, minimum_rent, mgmt_included_in_revenue, tenants(name), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,index_base_date,index_base_value,use_original_index,spaces(space_name,area))")
         .eq("property_id", propId)
         .in("status", ["active", "extended"])
         .eq("is_amendment", false);
@@ -518,13 +519,14 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
           var yearEnd = new Date(year, 11, 31);
           var effectiveStart = unitEntry > yearStart ? unitEntry : yearStart;
 
-          // Grace period: compute the end-date of grace from contract start
-          var graceEndDate: Date | null = null;
-          if (c.grace_months && Number(c.grace_months) > 0 && c.grace_type) {
-            graceEndDate = new Date(contractStart);
-            graceEndDate.setMonth(graceEndDate.getMonth() + Number(c.grace_months));
-          }
-          var graceDiscountPct = Number(c.grace_discount_pct) || 0;
+          // The grace window is derived by the shared engine (lib/store-opening),
+          // not re-implemented here. The old local version knew only grace_months
+          // — so a lease with a 180-DAY fit-out got no grace at all and was
+          // charged full rent — and it could not express a management discount,
+          // a window that ends when the shop opens, or the exemption until works
+          // actually begin. For a legacy contract (grace_months, no handover, no
+          // opening, no management rule) the engine returns the same factors this
+          // code did, so existing cheques are unchanged.
 
           // If contract ends before year end, use contract end
           var contractEnd = c.end_date ? new Date(c.end_date) : yearEnd;
@@ -550,27 +552,12 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
           // the rent and management should actually be charged.
           // Returns {rentFactor, mgmtFactor} where 0 = fully in grace, 1 = no grace.
           var graceFactors = function(pStart: Date, pEnd: Date): { rentFactor: number; mgmtFactor: number; inGrace: boolean } {
-            if (!graceEndDate || pStart >= graceEndDate) return { rentFactor: 1, mgmtFactor: 1, inGrace: false };
-            // Period is fully or partially in grace
-            var totalMs = pEnd.getTime() - pStart.getTime();
-            if (totalMs <= 0) return { rentFactor: 1, mgmtFactor: 1, inGrace: false };
-            var graceMs = Math.min(graceEndDate.getTime(), pEnd.getTime()) - pStart.getTime();
-            if (graceMs <= 0) return { rentFactor: 1, mgmtFactor: 1, inGrace: false };
-            var graceRatio = graceMs / totalMs; // portion of the period in grace
-            var normalRatio = 1 - graceRatio;
-
-            if (c.grace_type === "full") {
-              // Full grace: no rent, no management during grace portion
-              return { rentFactor: normalRatio, mgmtFactor: normalRatio, inGrace: true };
-            } else if (c.grace_type === "rent_only") {
-              // Grace on rent only: no rent, but management is charged normally
-              return { rentFactor: normalRatio, mgmtFactor: 1, inGrace: true };
-            } else if (c.grace_type === "partial") {
-              // Partial discount on rent during grace, management normal
-              var discountFactor = 1 - (graceDiscountPct / 100);
-              return { rentFactor: normalRatio + graceRatio * discountFactor, mgmtFactor: 1, inGrace: true };
-            }
-            return { rentFactor: 1, mgmtFactor: 1, inGrace: false };
+            var f = graceFactorsFor({ contract: c, periodStart: pStart, periodEnd: pEnd });
+            return {
+              rentFactor: f.rentFactor,
+              mgmtFactor: f.mgmtFactor,
+              inGrace: f.graceRatio > 0 || f.rentFactor < 1 || f.mgmtFactor < 1,
+            };
           };
 
           // Generate checks based on payment frequency

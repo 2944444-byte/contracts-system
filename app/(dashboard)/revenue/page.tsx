@@ -12,6 +12,19 @@ import { revenueCategoriesFromRow, splitRevenue, hasCategories, describeCategori
 import { periodsForYear, computeSettlement, FREQ_LABELS, type SettlementFreq, type SettlementCalc, type SettlementPeriod } from '@/lib/revenue-settlement';
 import { revenueProtectionFromRow, hasRevenueProtection, isPeriodProtected, describeRevenueProtection } from '@/lib/revenue-protection';
 import { fetchCpiAdjustedWithRetry } from '@/lib/cpi-server';
+import { graceFactorsFor } from '@/lib/store-opening';
+
+// A reported period is a calendar month; the grace factor is measured over it.
+// Parsed to LOCAL midnight — a UTC-parsed date-only string turns a fully-free
+// month into 99.7%.
+function periodStartOf(v: any): Date {
+  const d = v ? new Date(v) : new Date();
+  return new Date(d.getFullYear(), d.getMonth(), 1);
+}
+function periodEndOf(v: any): Date {
+  const d = v ? new Date(v) : new Date();
+  return new Date(d.getFullYear(), d.getMonth() + 1, 1);
+}
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 function fmtMoney(n: number) { return (n && Math.abs(n) > 0.001) ? "₪"+n.toLocaleString("he-IL",{minimumFractionDigits:2,maximumFractionDigits:2}) : "—"; }
@@ -394,7 +407,7 @@ export default function RevenuePage() {
     var yearStart = selYear + "-01-01";
     var yearEnd   = (selYear + 1) + "-01-01"; // exclusive — avoids the Feb-31 bug entirely
     const [{ data: c }, { data: r }, { data: conc }] = await Promise.all([
-      supabase.from("contracts").select("id,property_id,status,rent_type,revenue_pct,revenue_pct_tiers,revenue_settlement_timing,revenue_report_day,min_rent_per_sqm,charged_area,rent_per_sqm,investment_addition,vat_type,mgmt_fee_per_sqm,mgmt_included_in_revenue,start_date,indexation_method,index_base_date,index_base_value,revenue_categories,revenue_minimum_advance,minimum_rent,revenue_protection_type,revenue_protection_months,revenue_protection_notes,contract_options(id,start_date,status,is_exercised,cancels_revenue_protection),tenants(name),properties(name)").in("status",["active","expiring","extended"]),
+      supabase.from("contracts").select("id,property_id,status,rent_type,revenue_pct,revenue_pct_tiers,revenue_settlement_timing,revenue_report_day,min_rent_per_sqm,charged_area,rent_per_sqm,investment_addition,vat_type,mgmt_fee_per_sqm,mgmt_included_in_revenue,start_date,indexation_method,index_base_date,index_base_value,revenue_categories,revenue_minimum_advance,minimum_rent,grace_months,grace_days,grace_type,grace_discount_pct,grace_mgmt_discount_pct,grace_ends_on_opening,mgmt_charge_starts,mgmt_free_max_days,works_start_date,works_end_date,planned_handover_date,actual_handover_date,planned_opening_date,actual_opening_date,revenue_protection_type,revenue_protection_months,revenue_protection_notes,contract_options(id,start_date,status,is_exercised,cancels_revenue_protection),tenants(name),properties(name)").in("status",["active","expiring","extended"]),
       supabase.from("revenue_reports").select("*,contracts(property_id,tenants(name),properties(name))").gte("report_month",yearStart).lt("report_month",yearEnd).order("report_month",{ascending:true}),
       // Standing concessions apply as the rent is computed.
       supabase.from("concessions").select("*").eq("scope","standing").eq("status","active"),
@@ -487,7 +500,26 @@ export default function RevenuePage() {
     // neither way of entering it is silently ignored.
     const minMonthly    = Number(c.minimum_rent) || 0;
     const minRent       = Math.max(minCalc.amount, minMonthly);
-    const rentBeforeDisc = Math.max(rentFromRev, minRent);
+    // Fit-out grace on a turnover lease bites on the MINIMUM: a shop still
+    // being fitted out has no turnover, so without this the tenant is billed
+    // the full guaranteed minimum for months it was contractually rent-free.
+    // The management factor covers the discount and the exemption-until-works
+    // window; both come from the same engine the cheques and the yearly
+    // reconciliation use, so the three can never disagree.
+    const gf = graceFactorsFor({
+      contract: c,
+      periodStart: periodStartOf(periodDate),
+      periodEnd: periodEndOf(periodDate),
+    });
+    // Only the payable amount is scaled. On a turnover lease the management
+    // figure is an internal SPLIT of the same money (mgmt_included_in_revenue),
+    // so discounting it would move money between two labels without reducing
+    // what the tenant owes — the separate management charge for these contracts
+    // is handled by the yearly reconciliation, which applies the rule itself.
+    const rentBeforeGrace = Math.max(rentFromRev, minRent);
+    const rentBeforeDisc = gf.rentFactor < 1
+      ? Math.round(rentBeforeGrace * gf.rentFactor * 100) / 100
+      : rentBeforeGrace;
     // A standing concession (e.g. 50% off rent for three months of war) applies
     // as the rent is computed, so it lands in the charge itself rather than
     // needing a waiver afterwards. 'revenue_share' and 'rent' both cover a
