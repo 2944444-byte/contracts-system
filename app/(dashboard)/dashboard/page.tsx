@@ -5,6 +5,7 @@ import { supabase } from '@/lib/supabase';
 import { getScopeIds, getCompanyScopeIds, getTenantScopeIds, scopeRows, scopeGroups } from '@/lib/permissions';
 import { fetchCpiAdjusted, fetchHighestChainedCpi } from '@/lib/cpi-server';
 import { getKnownIndexMonth } from '@/lib/cpi-utils';
+import { graceFactorsFor, describeGrace, graceWindow } from '@/lib/store-opening';
 import CalcProgress, { CalcProgressState } from '@/components/CalcProgress';
 
 function fmtMoney(n: number) { return "₪" + (n ?? 0).toLocaleString("he-IL",{minimumFractionDigits:2,maximumFractionDigits:2}); }
@@ -19,6 +20,24 @@ function fmtMoneyKpi(n: number) {
 }
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
 
+// A contract in its fit-out grace produces no rent this month — counting the
+// full contractual figure overstates portfolio income by exactly the rent of
+// every shop still being fitted out. The factor comes from the same engine the
+// cheques use, so the KPI agrees with what is actually billed.
+function graceFactorThisMonth(c: any): number {
+  const now = new Date();
+  const f = graceFactorsFor({
+    contract: c,
+    periodStart: new Date(now.getFullYear(), now.getMonth(), 1),
+    periodEnd: new Date(now.getFullYear(), now.getMonth() + 1, 1),
+  });
+  return f.rentFactor;
+}
+
+function inGraceNow(c: any): boolean {
+  return graceFactorThisMonth(c) < 1;
+}
+
 // Calculate base monthly rent for a contract (handles per-unit pricing)
 function calcContractRent(c: any): number {
   var total = 0;
@@ -30,6 +49,11 @@ function calcContractRent(c: any): number {
   }
   if (total === 0) total = (Number(c.rent_per_sqm) || 0) * (Number(c.charged_area) || 0);
   return total + (Number(c.investment_addition) || 0);
+}
+
+// What the contract actually produces this month, after the fit-out grace.
+function calcContractRentNow(c: any): number {
+  return calcContractRent(c) * graceFactorThisMonth(c);
 }
 
 export default function DashboardPage() {
@@ -61,7 +85,7 @@ export default function DashboardPage() {
     const [{ data: pg }, { data: p }, { data: c }, { data: sp }, { data: gu }, { data: al }, { data: ch }, { data: ap }] = await Promise.all([
       supabase.from("property_groups").select("id,group_name").order("group_name"),
       supabase.from("properties").select("id,name,group_id,city,total_area,property_type"),
-      supabase.from("contracts").select("id,status,rent_per_sqm,charged_area,investment_addition,property_id,end_date,start_date,index_base_date,indexation_method,index_mechanism,is_amendment,tenants(name),properties(name),contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area))").in("status",["active","extended","expiring"]),
+      supabase.from("contracts").select("id,status,rent_per_sqm,charged_area,investment_addition,property_id,end_date,start_date,index_base_date,indexation_method,index_mechanism,is_amendment,grace_months,grace_days,grace_type,grace_discount_pct,grace_mgmt_discount_pct,grace_ends_on_opening,planned_handover_date,actual_handover_date,planned_opening_date,actual_opening_date,tenants(name),properties(name),contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area))").in("status",["active","extended","expiring"]),
       supabase.from("spaces").select("id,property_id,status,space_name,area"),
       supabase.from("guarantees").select("id,contract_id,amount_required,amount_actual,end_date,guarantee_type").eq("status","active"),
       supabase.from("alerts").select("id,title,severity,due_date,entity_type,contract_id,property_id").eq("is_resolved",false).order("due_date", { ascending: true }).limit(60),
@@ -231,10 +255,16 @@ export default function DashboardPage() {
   // Base revenue: sum of contract base rents (no CPI applied).
   // Indexed revenue: sum of (base × ratio) per contract — each contract gets
   // its own ratio based on its own base date and indexation method.
-  const baseRevenue = filteredContracts.reduce(function(s,c){return s+calcContractRent(c);},0);
+  const baseRevenue = filteredContracts.reduce(function(s,c){return s+calcContractRentNow(c);},0);
+  // Which contracts produce no (or reduced) rent right now, and how much rent
+  // that withholds — so a lower KPI is explained rather than merely lower.
+  const graced = filteredContracts.filter(inGraceNow);
+  const gracedWithheld = graced.reduce(function(s,c){
+    return s + (calcContractRent(c) - calcContractRentNow(c));
+  },0);
   const indexedRevenue = filteredContracts.reduce(function(s,c){
     var r = cpiRatios[c.id] || 1;
-    return s + calcContractRent(c) * r;
+    return s + calcContractRentNow(c) * r;
   },0);
 
   const totalArea = filteredSpaces.reduce(function(s,sp){return s+(Number(sp.area)||0);},0);
@@ -316,7 +346,7 @@ export default function DashboardPage() {
   // Per-property breakdown: income, occupancy and open debt side by side.
   const propertyRows = filteredProps.map(function(p: any){
     var pContracts = filteredContracts.filter(function(c: any){ return c.property_id === p.id; });
-    var income = pContracts.reduce(function(s: number, c: any){ return s + calcContractRent(c) * (cpiRatios[c.id] || 1); }, 0);
+    var income = pContracts.reduce(function(s: number, c: any){ return s + calcContractRentNow(c) * (cpiRatios[c.id] || 1); }, 0);
     var pSpaces = spaces.filter(function(s: any){ return s.property_id === p.id; });
     var pArea = pSpaces.reduce(function(s: number, x: any){ return s + (Number(x.area) || 0); }, 0);
     var occArea = 0;
@@ -471,6 +501,14 @@ export default function DashboardPage() {
                 </div>
               </div>
               <div className="text-xs text-slate-400 mt-2">בסיס: {fmtMoney(baseRevenue)}</div>
+              {graced.length > 0 && (
+                <div className="text-[11px] text-amber-700 mt-1 leading-snug" title={graced.map(function(c:any){
+                    var g = graceWindow({ contract: c });
+                    return (c.tenants?.name || "—") + " — " + describeGrace(g);
+                  }).join("\n")}>
+                  🔨 {graced.length} {graced.length === 1 ? "חוזה" : "חוזים"} בתקופת גרייס · לא נכללו {fmtMoney(gracedWithheld)} לחודש
+                </div>
+              )}
             </button>
 
             <button onClick={function(){router.push("/units");}}

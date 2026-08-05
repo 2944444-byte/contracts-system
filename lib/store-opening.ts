@@ -111,6 +111,19 @@ export function graceWindow(params: { contract: any; today?: Date }): GraceWindo
   };
 }
 
+// From when does this contract occupy the premises for COST-ALLOCATION purposes
+// — building insurance, waste, and any other m²-days split?
+//
+// Not the rent clock. A retail tenant holds the shop from handover and fits it
+// out for months; the shell is insured and serviced throughout, so their share
+// of those costs runs from the handover, not from the day rent starts. Falls
+// back to the lease start, which is what every contract without a handover date
+// has always used.
+export function occupancyStartDate(contract: any): Date | null {
+  const c = contract || {};
+  return d(c.actual_handover_date) || d(c.planned_handover_date) || d(c.start_date);
+}
+
 // The date the lease term and rent billing really begin: the store opening when
 // there is one, otherwise the day the grace ran out — a tenant who does not
 // open cannot postpone the contract indefinitely.

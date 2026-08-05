@@ -7,7 +7,7 @@ import BillingGroupsManager from '@/components/BillingGroupsManager';
 import { fetchCpiAdjusted } from '@/lib/cpi-server';
 import { getGraceDaysForProperty, dueDateFromGrace } from '@/lib/grace-days';
 import { mgmtProtectionFromRow, mgmtCeilingForYear, applyMgmtProtection, hasMgmtProtection, describeMgmtProtection } from '@/lib/mgmt-protection';
-import { mgmtChargeFactorForRange } from '@/lib/store-opening';
+import { mgmtChargeFactorForRange, occupancyStartDate } from '@/lib/store-opening';
 import { fetchCpiAdjustedWithRetry } from '@/lib/cpi-server';
 import { getVatPct, getVatTypeMap, applyVat } from '@/lib/vat';
 import { loadCompanyInfo, letterContent } from '@/lib/letter-format';
@@ -1310,7 +1310,7 @@ function InsuranceTab({ properties, initialPropId, initialYear }: { properties: 
       // 1) Base contracts (no amendments — those are merged into the timeline below)
       const { data: baseContracts } = await supabase
         .from("contracts")
-        .select("id, charged_area, start_date, end_date, status, tenants(name), contract_spaces(space_id, spaces(space_name, area))")
+        .select("id, charged_area, start_date, end_date, status, planned_handover_date, actual_handover_date, tenants(name), contract_spaces(space_id, spaces(space_name, area))")
         .eq("property_id", propId)
         .eq("is_amendment", false)
         .in("status", ["active", "expiring", "extended"]);
@@ -1370,7 +1370,7 @@ function InsuranceTab({ properties, initialPropId, initialYear }: { properties: 
         claimsBySpace[sid].push({ start, end, contractId, tenant, spaceName: name });
       };
       baseList.forEach(function(c: any) {
-        var contractStart = c.start_date ? new Date(c.start_date) : policyStart;
+        var contractStart = occupancyStartDate(c) || policyStart;
         var contractEndDate = c.end_date ? new Date(c.end_date) : policyEnd;
         var amends = amendsByParent[c.id] || [];
 
@@ -1418,7 +1418,7 @@ function InsuranceTab({ properties, initialPropId, initialYear }: { properties: 
 
       // 3) Build per-contract area timeline → sum sqm-days inside policy window
       const res: InsResult[] = baseList.map(function(c: any) {
-        const contractStart = c.start_date ? new Date(c.start_date) : policyStart;
+        const contractStart = occupancyStartDate(c) || policyStart;
         const contractEnd   = c.end_date   ? new Date(c.end_date)   : policyEnd;
 
         type Seg = { start: Date; end: Date; area: number; spaceName: string };
@@ -1514,7 +1514,7 @@ function InsuranceTab({ properties, initialPropId, initialYear }: { properties: 
           : contractEndDate;
         var baseSpaceIds: Record<string, boolean> = {};
         (c.contract_spaces || []).forEach(function(cs: any) { if (cs.space_id) baseSpaceIds[cs.space_id] = true; });
-        snaps.push({ startDate: c.start_date ? new Date(c.start_date) : policyStart, endDate: baseEnd, spaceIds: baseSpaceIds });
+        snaps.push({ startDate: occupancyStartDate(c) || policyStart, endDate: baseEnd, spaceIds: baseSpaceIds });
 
         amends.forEach(function(am: any, i: number) {
           var amStart = new Date(am.amendment_date || am.start_date);
@@ -2340,7 +2340,7 @@ function WasteTab({ properties }: { properties: any[] }) {
       // same tenant (e.g. Yehonatan's offices contract appearing 3× → 163%).
       const { data: baseContracts } = await supabase
         .from("contracts")
-        .select("id, charged_area, start_date, end_date, tenants(name), contract_spaces(space_id, spaces(id, space_name, area, uses_waste_service))")
+        .select("id, charged_area, start_date, end_date, planned_handover_date, actual_handover_date, tenants(name), contract_spaces(space_id, spaces(id, space_name, area, uses_waste_service))")
         .eq("property_id", propId)
         .eq("is_amendment", false)
         .in("status", ["active", "expiring", "extended"]);
@@ -2388,7 +2388,10 @@ function WasteTab({ properties }: { properties: any[] }) {
           var dy = y.amendment_date ? new Date(y.amendment_date).getTime() : (y.start_date ? new Date(y.start_date).getTime() : 0);
           return dx - dy;
         });
-        const baseStartT = b.start_date ? new Date(b.start_date).getTime() : pStart;
+        // Cost allocation runs from the handover — the tenant holds the shell
+        // while fitting out, and it is insured and serviced throughout.
+        var bOcc = occupancyStartDate(b);
+        const baseStartT = bOcc ? bOcc.getTime() : pStart;
         const contractEndExclT = b.end_date ? new Date(b.end_date).getTime() + 86400000 : pEndExcl;
         // Snapshot points: base first, then each amendment by its date.
         const points: Array<{ t: number; spaces: any[] }> = [{ t: baseStartT, spaces: b.contract_spaces || [] }];

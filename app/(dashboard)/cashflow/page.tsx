@@ -4,6 +4,7 @@ import { contractArea } from "@/lib/contract-area";
 import { supabase } from '@/lib/supabase';
 import { getVatRates, vatPctAt, type VatRate } from '@/lib/vat';
 import { PageHero } from '@/components/ui';
+import { graceWindow, describeGrace, mgmtFreeWindow, describeMgmtFree } from '@/lib/store-opening';
 import { getScopeIds, scopeRows } from '@/lib/permissions';
 
 function fmtMoney(n: number) { return "₪" + (n ?? 0).toLocaleString("he-IL", { minimumFractionDigits: 0, maximumFractionDigits: 0 }); }
@@ -88,7 +89,7 @@ export default function CashflowPage() {
       // Contracts. contract_spaces brings the space_ids each contract holds —
       // we sum the spaces.area for those ids to get the real occupied area.
       supabase.from("contracts")
-        .select("id, status, is_amendment, rent_type, revenue_pct, start_date, end_date, charged_area, rent_per_sqm, vat_type, tenant_id, property_id, tenants(name), properties(name), contract_spaces(space_id, spaces(area))")
+        .select("id, status, is_amendment, rent_type, revenue_pct, start_date, end_date, charged_area, rent_per_sqm, vat_type, tenant_id, property_id, grace_months, grace_days, grace_type, grace_discount_pct, grace_mgmt_discount_pct, grace_ends_on_opening, mgmt_charge_starts, mgmt_free_max_days, works_start_date, planned_handover_date, actual_handover_date, planned_opening_date, actual_opening_date, tenants(name), properties(name), contract_spaces(space_id, spaces(area))")
         .eq("is_amendment", false),
       // Advance payments for the year
       supabase.from("advance_payments")
@@ -534,6 +535,51 @@ export default function CashflowPage() {
               </div>
             </div>
           )}
+
+          {/* Months that carry a fit-out grace produce little or no rent. The
+              figures above already reflect that (they come from the generated
+              cheques), so the point of this panel is to explain a low month
+              rather than leave it looking like a collection problem. */}
+          {(function(){
+            var yStart = new Date(year, 0, 1), yEnd = new Date(year + 1, 0, 1);
+            var rows = contracts.filter(contractMatchesFilter).map(function(c: any){
+              var g = graceWindow({ contract: c });
+              if (!g.applies || !g.start || !g.end) return null;
+              if (g.end <= yStart || g.start >= yEnd) return null;   // no overlap with this year
+              var HEB = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
+              var fromM = g.start > yStart ? g.start.getMonth() : 0;
+              var toM   = g.end   < yEnd   ? g.end.getMonth()   : 11;
+              return {
+                id: c.id,
+                name: (c.tenants?.name || "—") + " · " + (c.properties?.name || ""),
+                text: describeGrace(g),
+                months: fromM === toM ? HEB[fromM] : HEB[fromM] + "–" + HEB[toM],
+                mgmt: (function(){ var mf = mgmtFreeWindow({ contract: c }); return mf.applies ? describeMgmtFree(mf) : ""; })(),
+              };
+            }).filter(Boolean) as any[];
+            if (rows.length === 0) return null;
+            return (
+              <div className="rounded-xl border border-amber-200 bg-amber-50/60 p-4">
+                <div className="text-sm font-bold text-amber-900 mb-2">
+                  🔨 {rows.length} {rows.length === 1 ? "חוזה" : "חוזים"} בתקופת גרייס ב-{year}
+                </div>
+                <div className="text-[11px] text-amber-700 mb-2">
+                  בחודשים האלה השכ&quot;ד מופחת או אינו נגבה לפי החוזה — הסכומים בטבלה כבר מגלמים זאת.
+                </div>
+                <div className="space-y-1.5">
+                  {rows.map(function(r: any){
+                    return (
+                      <div key={r.id} className="rounded-lg bg-white border border-amber-200 px-3 py-2 text-xs">
+                        <div className="font-semibold text-slate-800">{r.name}</div>
+                        <div className="text-slate-600">{r.months} · {r.text}</div>
+                        {r.mgmt && <div className="text-emerald-800">🧾 {r.mgmt}</div>}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Detailed monthly table — broken by income source */}
           <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-x-auto">
