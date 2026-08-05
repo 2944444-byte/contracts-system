@@ -7,6 +7,7 @@ import BillingGroupsManager from '@/components/BillingGroupsManager';
 import { fetchCpiAdjusted } from '@/lib/cpi-server';
 import { getGraceDaysForProperty, dueDateFromGrace } from '@/lib/grace-days';
 import { mgmtProtectionFromRow, mgmtCeilingForYear, applyMgmtProtection, hasMgmtProtection, describeMgmtProtection } from '@/lib/mgmt-protection';
+import { mgmtChargeFactorForRange } from '@/lib/store-opening';
 import { fetchCpiAdjustedWithRetry } from '@/lib/cpi-server';
 import { getVatPct, getVatTypeMap, applyVat } from '@/lib/vat';
 import { loadCompanyInfo, letterContent } from '@/lib/letter-format';
@@ -26,7 +27,9 @@ type Tab = "management" | "insurance" | "waste" | "advances" | "saved_advances" 
 
 interface MgmtResult { contractId: string; tenantName: string; spaceNames: string; chargedArea: number; advance: number; actualShare: number; difference: number; isRevenueBased: boolean;
   // Management-fee protection (cap / fixed) applied to this year's reconciliation
-  protectionLabel?: string; ceilingAmount?: number; absorbed?: number; capped?: boolean; }
+  protectionLabel?: string; ceilingAmount?: number; absorbed?: number; capped?: boolean;
+  // Fit-out period: exempt / discounted management, and why
+  fitOutNote?: string; }
 interface InsResult {
   contractId: string;
   tenantName: string;
@@ -352,7 +355,7 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
       // (their mgmt is paid as part of the % rent — no separate charge).
       const { data: contracts } = await supabase
         .from("contracts")
-        .select("id, charged_area, rent_per_sqm, rent_type, revenue_pct, mgmt_included_in_revenue, is_amendment, start_date, end_date, indexation_method, index_base_date, mgmt_protection_type, mgmt_protection_value, mgmt_protection_months, mgmt_protection_indexed, mgmt_protection_notes, tenants(name), contract_spaces(space_id, spaces(id, space_name, area))")
+        .select("id, charged_area, rent_per_sqm, rent_type, revenue_pct, mgmt_included_in_revenue, is_amendment, start_date, end_date, indexation_method, index_base_date, mgmt_protection_type, mgmt_protection_value, mgmt_protection_months, mgmt_protection_indexed, mgmt_protection_notes, grace_months, grace_days, grace_type, grace_ends_on_opening, grace_mgmt_discount_pct, mgmt_charge_starts, mgmt_free_max_days, works_start_date, planned_handover_date, actual_handover_date, planned_opening_date, actual_opening_date, tenants(name), contract_spaces(space_id, spaces(id, space_name, area))")
         .eq("property_id", propId)
         .eq("is_amendment", false)
         .in("status", ["active", "expiring", "extended"]);
@@ -507,6 +510,22 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
             actualShare += defaultSpaceArea > 0 ? defaultActual * (h.area / defaultSpaceArea) * w : 0;
           }
         });
+        // Fit-out: management may be fully exempt until the tenant begins
+        // works, then discounted to the end of the works period. Both sides of
+        // the reconciliation move together — the tenant's theoretical advance
+        // and their share of the actual cost — so the landlord absorbs the
+        // exempt days rather than the tenant paying them a year later.
+        // Untouched for every contract that carries no such rule (factor 1).
+        const mgmtFit = mgmtChargeFactorForRange({
+          contract: c,
+          from: new Date(year, 0, 1),
+          to: new Date(year + 1, 0, 1),
+        });
+        if (mgmtFit.opted && mgmtFit.factor < 1) {
+          advance = advance * mgmtFit.factor;
+          actualShare = actualShare * mgmtFit.factor;
+        }
+
         // The area the year is billed on: the time-weighted average, so the
         // protection ceiling scales with the same yardstick as the advance.
         contractArea = yearDays > 0 ? Math.round((sqmDays / yearDays) * 100) / 100 : 0;
@@ -545,6 +564,9 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
           ceilingAmount: ceiling.applies ? ceiling.amount : undefined,
           absorbed: applied.absorbed,
           capped: applied.capped,
+          fitOutNote: mgmtFit.opted && mgmtFit.factor < 1
+            ? "תקופת עבודות: " + mgmtFit.note + " (" + Math.round(mgmtFit.factor * 100) + "% מהשנה)"
+            : undefined,
         };
       });
       setMgmtResults(results);
@@ -1067,7 +1089,13 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
                         </td>
                         <td className="px-4 py-3 text-xs text-slate-600">{r.spaceNames}</td>
                         <td className="px-4 py-3 text-slate-600">{r.chargedArea.toLocaleString("he-IL")}</td>
-                        <td className="px-4 py-3">{fmtMoney(r.advance)}</td>
+                        <td className="px-4 py-3">
+                          {fmtMoney(r.advance)}
+                          {r.fitOutNote && (
+                            <div className="text-[10px] mt-0.5 rounded inline-block px-1.5 py-0.5 bg-emerald-100 text-emerald-800"
+                              title={r.fitOutNote}>🧾 {r.fitOutNote}</div>
+                          )}
+                        </td>
                         <td className="px-4 py-3">
                           {fmtMoney(r.actualShare)}
                           {r.protectionLabel && (

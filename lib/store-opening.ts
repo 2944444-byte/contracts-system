@@ -114,6 +114,120 @@ export function rentStartDate(params: { contract: any; today?: Date }): Date | n
   return opening || d(c.actual_handover_date) || d(c.start_date);
 }
 
+// The management discount during fit-out often has its own starting point:
+//
+//   "בתקופת 180 הימים של עבודות השוכר ישולמו דמי ניהול בגובה 50% וגם זאת, רק
+//    לאחר תחילת עבודות השוכר בפועל, או לאחר 90 יום המוקדם מבינם."
+//
+// So the fit-out window splits in two for management: a FREE stretch from
+// handover until the tenant actually begins works, and the discounted stretch
+// after it. The free stretch is capped in days, which is what stops a tenant
+// from holding an empty shop and paying nothing — whichever comes first wins.
+//
+// Left off (mgmt_charge_starts null / 'grace_start') this returns applies:false
+// and management behaves exactly as it did before.
+export type MgmtFreeWindow = {
+  applies: boolean;
+  start: Date | null;     // handover — the fit-out window's own start
+  end: Date | null;       // the day management starts being charged
+  reason: string;         // which of the two came first
+  days: number;
+};
+
+export function mgmtFreeWindow(params: { contract: any; today?: Date }): MgmtFreeWindow {
+  const c = params.contract || {};
+  const none: MgmtFreeWindow = { applies: false, start: null, end: null, reason: "", days: 0 };
+  if (c.mgmt_charge_starts !== "works_start_or_days") return none;
+
+  const g = graceWindow({ contract: c, today: params.today });
+  if (!g.applies || !g.start) return none;
+
+  const cap = Number(c.mgmt_free_max_days) || 0;
+  const byDays = cap > 0 ? new Date(g.start.getTime() + cap * 86400000) : null;
+  const works = d(c.works_start_date);
+
+  var end: Date | null = null;
+  var reason = "";
+  if (works && byDays) {
+    // "המוקדם מביניהם" — literally the earlier of the two.
+    if (works.getTime() <= byDays.getTime()) { end = works; reason = "תחילת עבודות השוכר בפועל"; }
+    else { end = byDays; reason = cap + " יום מהמסירה"; }
+  } else if (works) {
+    end = works; reason = "תחילת עבודות השוכר בפועל";
+  } else if (byDays) {
+    // Works not yet reported: the cap is the only thing that can end the
+    // exemption, and it does so on its own.
+    end = byDays; reason = cap + " יום מהמסירה";
+  } else {
+    return none;
+  }
+
+  // Management can never start later than the fit-out window itself ends.
+  if (g.end && end.getTime() > g.end.getTime()) { end = g.end; reason = "תום תקופת העבודות"; }
+
+  return {
+    applies: true, start: g.start, end, reason,
+    days: Math.max(0, daysBetween(g.start, end)),
+  };
+}
+
+// The share of a date range for which management is actually chargeable — the
+// figure the yearly management reconciliation needs.
+//
+// Deliberately opt-in: a contract that says nothing about management during
+// fit-out returns 1, so every contract that predates this bills exactly as it
+// did. Only `grace_mgmt_discount_pct` or `mgmt_charge_starts` turns it on.
+export function mgmtChargeFactorForRange(params: {
+  contract: any;
+  from: Date;
+  to: Date;
+  today?: Date;
+}): { factor: number; opted: boolean; note: string } {
+  const c = params.contract || {};
+  const opted = c.grace_mgmt_discount_pct != null || c.mgmt_charge_starts === "works_start_or_days";
+  if (!opted) return { factor: 1, opted: false, note: "" };
+
+  const g = graceWindow({ contract: c, today: params.today });
+  if (!g.applies || !g.start || !g.end) return { factor: 1, opted: true, note: "" };
+
+  const from = params.from.getTime();
+  const to = params.to.getTime();
+  const total = to - from;
+  if (total <= 0) return { factor: 1, opted: true, note: "" };
+
+  const overlap = function (aS: number, aE: number, bS: number, bE: number): number {
+    return Math.max(0, Math.min(aE, bE) - Math.max(aS, bS));
+  };
+
+  const graceMs = overlap(from, to, g.start.getTime(), g.end.getTime());
+  if (graceMs <= 0) return { factor: 1, opted: true, note: "" };
+
+  const free = mgmtFreeWindow({ contract: c, today: params.today });
+  const freeMs = free.applies && free.end
+    ? overlap(from, to, g.start.getTime(), Math.min(free.end.getTime(), g.end.getTime()))
+    : 0;
+  const discMs = Math.max(0, graceMs - freeMs);
+  const normalMs = Math.max(0, total - graceMs);
+
+  const mgmtInGrace = c.grace_mgmt_discount_pct != null
+    ? 1 - (Number(c.grace_mgmt_discount_pct) || 0) / 100
+    : (c.grace_type === "full" ? 0 : 1);
+
+  const factor = (normalMs + discMs * mgmtInGrace) / total;
+  const dd = function (ms: number) { return Math.round(ms / 86400000); };
+  const bits: string[] = [];
+  if (freeMs > 0) bits.push("פטור מלא " + dd(freeMs) + " ימים");
+  if (discMs > 0) bits.push(Math.round(mgmtInGrace * 100) + "% על " + dd(discMs) + " ימים");
+  if (normalMs > 0) bits.push("מלא " + dd(normalMs) + " ימים");
+  return { factor: Math.max(0, Math.min(1, factor)), opted: true, note: bits.join(" · ") };
+}
+
+export function describeMgmtFree(w: MgmtFreeWindow): string {
+  if (!w.applies || !w.end) return "";
+  return "פטור מלא מדמי ניהול עד " + w.end.toLocaleDateString("he-IL") +
+    " (" + w.reason + ", " + w.days + " ימים) — ומשם לפי ההנחה";
+}
+
 // How much of a period the grace covers, and what that means for rent and
 // management. A discount of 50% on management during fit-out is common, so it
 // is a percentage rather than a yes/no.
@@ -145,28 +259,33 @@ export function graceFactorsFor(params: {
   const rentDiscount = 1 - (Number(c.grace_discount_pct) || 0) / 100;   // 0 = rent free
   const mgmtDiscount = 1 - (Number(c.grace_mgmt_discount_pct) || 0) / 100;
 
+  // The fit-out window splits in two for management: free until works begin (or
+  // the day cap runs out), discounted after. Measured from the period start the
+  // same way `covered` is, so the two ratios stay consistent.
+  const free = mgmtFreeWindow({ contract: c, today: params.today });
+  const freeCovered = free.applies && free.end
+    ? Math.max(0, Math.min(free.end.getTime(), pE.getTime()) - pS.getTime())
+    : 0;
+  const freeRatio = Math.min(graceRatio, freeCovered / total);
+  const discRatio = Math.max(0, graceRatio - freeRatio);
+
+  // What management costs DURING the fit-out window, once it is chargeable at
+  // all: the stated discount, or — with no discount recorded — free on a full
+  // grace and full price on a rent-only/partial one. With no free window this
+  // reduces to the original formulas exactly (freeRatio = 0, discRatio = graceRatio).
+  const mgmtInGrace = c.grace_mgmt_discount_pct != null
+    ? mgmtDiscount
+    : (c.grace_type === "full" ? 0 : 1);
+  const mgmtFactor = normal + discRatio * mgmtInGrace;   // the free stretch contributes 0
+
   if (c.grace_type === "full") {
-    // Rent and management both waived during fit-out, unless a management
-    // discount says otherwise (50% rather than free).
-    return {
-      rentFactor: normal,
-      mgmtFactor: c.grace_mgmt_discount_pct != null ? normal + graceRatio * mgmtDiscount : normal,
-      graceRatio,
-    };
+    return { rentFactor: normal, mgmtFactor, graceRatio };
   }
   if (c.grace_type === "rent_only") {
-    return {
-      rentFactor: normal,
-      mgmtFactor: c.grace_mgmt_discount_pct != null ? normal + graceRatio * mgmtDiscount : 1,
-      graceRatio,
-    };
+    return { rentFactor: normal, mgmtFactor, graceRatio };
   }
   if (c.grace_type === "partial") {
-    return {
-      rentFactor: normal + graceRatio * rentDiscount,
-      mgmtFactor: c.grace_mgmt_discount_pct != null ? normal + graceRatio * mgmtDiscount : 1,
-      graceRatio,
-    };
+    return { rentFactor: normal + graceRatio * rentDiscount, mgmtFactor, graceRatio };
   }
   return plain;
 }

@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect, Suspense } from "react";
-import { graceWindow, describeGrace, lateOpeningPenalty } from "@/lib/store-opening";
+import { graceWindow, describeGrace, lateOpeningPenalty, mgmtFreeWindow, describeMgmtFree } from "@/lib/store-opening";
 import { guaranteedMonthlyRent } from "@/lib/guarantee-base";
 import RevenuePctTiersEditor from "@/components/RevenuePctTiersEditor";
 import { RevenuePctTier, pctTiersFromRow, describePctTiers } from "@/lib/revenue-pct-steps";
@@ -251,6 +251,12 @@ export default function ContractsNewPage() {
   const [actualOpening, setActualOpening] = useState("");
   const [graceEndsOnOpening, setGraceEndsOnOpening] = useState(true);
   const [graceMgmtDiscount, setGraceMgmtDiscount] = useState("");
+  // "רק לאחר תחילת עבודות השוכר בפועל, או לאחר 90 יום המוקדם מביניהם" — the
+  // management discount has its own starting point inside the fit-out window.
+  const [mgmtStartsMode, setMgmtStartsMode] = useState<"grace_start"|"works_start_or_days">("grace_start");
+  const [mgmtFreeMaxDays, setMgmtFreeMaxDays] = useState("");
+  const [worksStartDate, setWorksStartDate] = useState("");
+  const [mgmtFreeNotes, setMgmtFreeNotes] = useState("");
   const [latePenType, setLatePenType] = useState("none");
   const [latePenValue, setLatePenValue] = useState("");
   const [latePenGraceDays, setLatePenGraceDays] = useState("0");
@@ -995,6 +1001,7 @@ export default function ContractsNewPage() {
         revenue_report_freq: rentType === "revenue_pct" ? revReportFreq : "monthly",
         revenue_late_report_higher_index: rentType === "revenue_pct" ? revLateHigherIndex : false,
         mgmt_included_in_revenue: rentType === "revenue_pct" ? mgmtIncludedInRevenue : false,
+        works_start_date: worksStartDate || null,
         charged_area: Number(chargedArea) || null,
         investment_addition: Number(investAdd) || null,
         vat_type: vatType,
@@ -1044,6 +1051,9 @@ export default function ContractsNewPage() {
         insertPayload.grace_type = graceType;
         insertPayload.grace_ends_on_opening = graceEndsOnOpening;
         insertPayload.grace_mgmt_discount_pct = graceMgmtDiscount === "" ? null : (Number(graceMgmtDiscount) || 0);
+        insertPayload.mgmt_charge_starts = mgmtStartsMode === "works_start_or_days" ? "works_start_or_days" : null;
+        insertPayload.mgmt_free_max_days = mgmtStartsMode === "works_start_or_days" ? (Number(mgmtFreeMaxDays) || null) : null;
+        insertPayload.mgmt_free_notes = mgmtStartsMode === "works_start_or_days" ? (mgmtFreeNotes || null) : null;
         insertPayload.grace_discount_pct =
           graceType === "partial" ? Number(graceDiscountPct) || null : null;
       }
@@ -2560,6 +2570,51 @@ export default function ContractsNewPage() {
                     </div>
                   </div>
 
+                  {/* When does the management charge start at all? The discount
+                      itself often kicks in later than the handover. */}
+                  <div className="rounded-lg border border-emerald-200 bg-emerald-50/50 p-3 space-y-2">
+                    <div className="text-xs font-bold text-emerald-800">🧾 מתי מתחילים דמי ניהול בתקופת הגרייס</div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button type="button" onClick={() => setMgmtStartsMode("grace_start")}
+                        className={"rounded-lg border px-3 py-2 text-[11px] font-bold text-right " + (mgmtStartsMode === "grace_start" ? "border-emerald-500 bg-white text-emerald-800" : "border-slate-200 text-slate-500")}>
+                        מהמסירה
+                        <div className="font-normal text-[10px] text-slate-500">ההנחה חלה מיד עם תחילת הגרייס</div>
+                      </button>
+                      <button type="button" onClick={() => setMgmtStartsMode("works_start_or_days")}
+                        className={"rounded-lg border px-3 py-2 text-[11px] font-bold text-right " + (mgmtStartsMode === "works_start_or_days" ? "border-emerald-500 bg-white text-emerald-800" : "border-slate-200 text-slate-500")}>
+                        מתחילת העבודות בפועל / תקרת ימים
+                        <div className="font-normal text-[10px] text-slate-500">עד אז — פטור מלא מדמי ניהול</div>
+                      </button>
+                    </div>
+                    {mgmtStartsMode === "works_start_or_days" && (
+                      <>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="mb-1 block text-[11px] font-semibold text-slate-700">תקרת ימי פטור מהמסירה</label>
+                            <input type="number" min="0" max="730" value={mgmtFreeMaxDays} placeholder="למשל 90"
+                              onChange={(e) => setMgmtFreeMaxDays(e.target.value)} className={ic} />
+                          </div>
+                          <div>
+                            <label className="mb-1 block text-[11px] font-semibold text-slate-700">תחילת עבודות בפועל (אם ידוע)</label>
+                            <input type="date" value={worksStartDate}
+                              onChange={(e) => plausibleDate(e.target.value) || e.target.value === "" ? setWorksStartDate(e.target.value) : null} className={ic} />
+                          </div>
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-[11px] font-semibold text-slate-700">הסעיף כלשונו בהסכם</label>
+                          <input type="text" value={mgmtFreeNotes} onChange={(e) => setMgmtFreeNotes(e.target.value)}
+                            className={ic} placeholder='למשל: וגם זאת, רק לאחר תחילת עבודות השוכר בפועל, או לאחר 90 יום המוקדם מביניהם' />
+                        </div>
+                        <div className="text-[11px] text-emerald-800 leading-relaxed">
+                          דמי הניהול מתחילים ב<b>מוקדם מבין</b> תחילת העבודות בפועל לבין {Number(mgmtFreeMaxDays) || 0} יום מהמסירה.
+                          עד אותו מועד — <b>אפס דמי ניהול</b>, גם כשהנכס נמסר והגרייס בשכ&quot;ד כבר רץ.
+                          {Number(graceMgmtDiscount) > 0 && <> משם ועד תום הגרייס — {100 - Number(graceMgmtDiscount)}% מדמי הניהול.</>}
+                          {" "}לא דווחה תחילת עבודות → התקרה מסיימת את הפטור לבדה.
+                        </div>
+                      </>
+                    )}
+                  </div>
+
                   {/* Optional — most contracts carry no penalty at all. */}
                   <div className="rounded-lg border border-rose-200 bg-rose-50/40 p-3 space-y-2">
                     <div className="text-xs font-bold text-rose-800">⏰ קנס על אי-פתיחה במועד (אופציונלי)</div>
@@ -2631,6 +2686,9 @@ export default function ContractsNewPage() {
                       late_opening_penalty_type: latePenType === "none" ? null : latePenType,
                       late_opening_penalty_value: Number(latePenValue) || 0,
                       late_opening_grace_days: Number(latePenGraceDays) || 0,
+                      mgmt_charge_starts: mgmtStartsMode === "works_start_or_days" ? "works_start_or_days" : null,
+                      mgmt_free_max_days: Number(mgmtFreeMaxDays) || null,
+                      works_start_date: worksStartDate || null,
                     };
                     var g = graceWindow({ contract: draft });
                     if (!g.applies) return null;
@@ -2641,6 +2699,10 @@ export default function ContractsNewPage() {
                         {g.start && <div>תקופת עבודות מ-{g.start.toLocaleDateString("he-IL")}</div>}
                         {g.end && <div>חיוב שכ&quot;ד מתחיל: <b>{g.end.toLocaleDateString("he-IL")}</b></div>}
                         {graceMgmtDiscount !== "" && <div>דמי ניהול בגרייס: {100 - (Number(graceMgmtDiscount) || 0)}% מהרגיל</div>}
+                        {(function(){
+                          var mf = mgmtFreeWindow({ contract: draft });
+                          return mf.applies ? <div className="text-emerald-800 font-semibold">🧾 {describeMgmtFree(mf)}</div> : null;
+                        })()}
                         {pen.applies && (
                           <div className="text-rose-700 font-semibold">
                             ⏰ קנס אי-פתיחה: ₪{pen.amount.toLocaleString("he-IL")} · {pen.basis}

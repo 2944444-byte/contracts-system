@@ -61,7 +61,14 @@ export function deliveryDueDate(params: { guarantee: any; contract: any }): { da
 
   // An explicit date always wins — it is what the parties wrote down.
   const explicit = d(g.delivery_due_date);
-  if (trigger === "custom_date" || trigger === "other" || trigger === "permit" || trigger === "works_start") {
+  if (trigger === "works_start") {
+    // The contract now records when works actually began; an estimate typed on
+    // the security is only the fallback.
+    const x = d(c.works_start_date) || explicit;
+    return x ? withOffset(x, TRIGGER_LABELS.works_start)
+             : { date: null, reason: TRIGGER_LABELS.works_start + " — המועד טרם נקבע" };
+  }
+  if (trigger === "custom_date" || trigger === "other" || trigger === "permit") {
     return explicit
       ? withOffset(explicit, TRIGGER_LABELS[trigger])
       : { date: null, reason: TRIGGER_LABELS[trigger] + " — המועד טרם נקבע" };
