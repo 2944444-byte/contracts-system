@@ -2724,6 +2724,28 @@ export default function ContractsNewPage() {
                     </label>
                   </div>
 
+                  {/* The two mechanisms overlap, and saying so beats letting the
+                      user discover it in a bill. When the term starts at the
+                      opening there is no rent before it — the rent grace has
+                      nothing to discount, while the MANAGEMENT rule still does
+                      real work, because management IS charged during fit-out. */}
+                  {termStartsAt === "opening" && (
+                    <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-[11px] text-amber-900 leading-relaxed">
+                      <div className="font-bold mb-0.5">ℹ️ תקופת השכירות מתחילה במועד הפתיחה</div>
+                      לפני מועד הפתיחה <b>אין תקופת שכירות ואין שכ&quot;ד</b>, ולכן גרייס בשכ&quot;ד אינו מוסיף דבר —
+                      הפטור כבר מובע בכך שהתקופה מתחילה מאוחר יותר.
+                      מה שכן נדרש כאן הוא <b>הכלל של דמי הניהול</b>, שנגבים גם בתקופת העבודות.
+                      {" "}לכן מומלץ &quot;גרייס על שכ&quot;ד בלבד&quot; עם הנחת דמי ניהול, ולא גרייס מלא.
+                      {(Number(graceMonths) > 0 && openingRuleOn && Number(openingMaxDays) > 0 &&
+                        ((graceUnit === "days" ? Number(graceMonths) : Number(graceMonths) * 30) > Number(openingMaxDays))) && (
+                        <div className="mt-1 font-bold text-rose-700">
+                          ⚠ הגרייס ({graceMonths} {graceUnit === "days" ? "ימים" : "חודשים"}) ארוך מהמועד הקבוע לפתיחה ({openingMaxDays} ימים) —
+                          הגרייס ייעצר במועד הפתיחה, כך שההפרש אינו נספר פעמיים.
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   <div>
                     <label className="mb-1 block text-xs font-semibold text-slate-700">
                       הנחה בדמי ניהול בתקופת הגרייס (%) — ריק = ללא שינוי

@@ -14,6 +14,8 @@
 // Everything here is derived from dates on the contract; a lease with no
 // opening milestone behaves exactly as before.
 
+import { effectiveOpeningDate } from "@/lib/lease-term";
+
 export type GraceEndReason = "opened" | "grace_expired" | "open_ended" | "none";
 
 export type GraceWindow = {
@@ -76,7 +78,17 @@ export function graceWindow(params: { contract: any; today?: Date }): GraceWindo
   if (!start) return none;
 
   const byTerm = months > 0 ? addMonths(start, months) : addDays(start, graceDays);
-  const opening = d(c.actual_opening_date);
+
+  // The opening that ends the fit-out window. A lease whose opening date is
+  // DEFINED — "המוקדם מבין הפתיחה בפועל לבין 60 ימים ממועד המסירה" — reaches
+  // its opening on the deemed date even if the shop never opened, and the lease
+  // term starts there. Without this the grace kept running past the term start
+  // and handed the tenant rent-free months it was never owed.
+  //
+  // Only 'actual' and 'deemed' count. A merely PLANNED opening must not cut the
+  // grace short — that was never the behaviour and a target is not an event.
+  const eo = effectiveOpeningDate(c);
+  const opening = (eo.kind === "actual" || eo.kind === "deemed") ? eo.date : d(c.actual_opening_date);
 
   // Does opening cut the grace short? Usually yes. Some leases grant the full
   // grace regardless — the store trades while the rent holiday runs to its
