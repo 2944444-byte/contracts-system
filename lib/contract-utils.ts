@@ -74,7 +74,10 @@ export function emptyPriceTier(fromYear: number = 1): PriceTier {
     increase_type: "pct",
     increase_value: 0,
     from_year: fromYear,
-    to_year: fromYear + 2,
+    // from == to → the step fires exactly once, at the end of lease year
+    // `fromYear`. This is the common contract shape; a multi-year range means
+    // "an increase in EVERY year of the range" and is chosen explicitly.
+    to_year: fromYear,
     is_recurring: false,
     recurring_every_years: null,
     calculated_rent_per_sqm: null,
@@ -102,11 +105,17 @@ export function validatePriceTiers(
     if (t.increase_type !== "none" && (!t.increase_value || t.increase_value <= 0)) {
       errors.push(`שלב ${i + 1}: חסר ערך עלייה`);
     }
-    // Check overlaps with other tiers
+    // Check overlaps with other tiers. A non-recurring stage fires at the end
+    // of EVERY lease year in [from, to] — so two stages sharing a year both try
+    // to raise the rent that year.
     for (let j = i + 1; j < tiers.length; j++) {
       const o = tiers[j];
       if (t.from_year <= o.to_year && t.to_year >= o.from_year) {
-        errors.push(`שלבים ${i + 1} ו-${j + 1}: חפיפה בשנים`);
+        const oS = Math.max(t.from_year, o.from_year);
+        const oE = Math.min(t.to_year, o.to_year);
+        errors.push(
+          `שלבים ${i + 1} ו-${j + 1}: שניהם מגדירים עלייה בתום שנה ${oS === oE ? oS : oS + "–" + oE}` +
+          ` — שתי עליות באותה שנה. למדרגה חד-פעמית קבע רק "בתום שנת שכירות", בלי טווח.`);
       }
     }
   }
@@ -286,6 +295,14 @@ export function expandRecurringTiers(tiers: PriceTier[]): PriceTier[] {
           is_recurring: false,
           recurring_every_years: null,
         });
+      }
+    } else if ((Number(tier.to_year) || tier.from_year) > tier.from_year) {
+      // An annual-increase range: fires at the end of every year in [from, to],
+      // exactly as tierAppliesAtYear bills it. Shown unexpanded it looked like
+      // a single increase, so the preview/timeline understated the rent while
+      // the cheques compounded it.
+      for (let y = tier.from_year; y <= tier.to_year; y++) {
+        expanded.push({ ...tier, from_year: y, to_year: y });
       }
     } else {
       expanded.push(tier);

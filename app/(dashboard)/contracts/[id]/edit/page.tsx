@@ -1944,28 +1944,43 @@ export default function ContractEditPage() {
                                 className="text-xs text-red-500 hover:text-red-700 font-semibold">🗑 הסר</button>
                             )}
                           </div>
-                          <div className="flex gap-2 mb-2">
-                            <button type="button" onClick={() => setPriceTiers(prev => prev.map((t, i) => i === idx ? { ...t, is_recurring: false } : t))}
-                              className={"rounded-lg border px-3 py-1.5 text-xs transition-all " + (!tier.is_recurring ? "border-blue-500 bg-blue-50 font-bold text-blue-700" : "border-slate-200 hover:bg-white")}>
-                              📅 טווח שנים
+                          <div className="flex gap-2 mb-2 flex-wrap">
+                            {/* Same three modes as the wizard: from == to is a
+                                one-time step; from < to raises the rent in
+                                EVERY year of the range. */}
+                            <button type="button" onClick={() => setPriceTiers(prev => prev.map((t, i) => i === idx ? { ...t, is_recurring: false, to_year: t.from_year } : t))}
+                              className={"rounded-lg border px-3 py-1.5 text-xs transition-all " + (!tier.is_recurring && tier.to_year === tier.from_year ? "border-blue-500 bg-blue-50 font-bold text-blue-700" : "border-slate-200 hover:bg-white")}>
+                              🪜 מדרגה חד-פעמית
+                            </button>
+                            <button type="button" onClick={() => setPriceTiers(prev => prev.map((t, i) => i === idx ? { ...t, is_recurring: false, to_year: t.to_year > t.from_year ? t.to_year : t.from_year + 1 } : t))}
+                              className={"rounded-lg border px-3 py-1.5 text-xs transition-all " + (!tier.is_recurring && tier.to_year > tier.from_year ? "border-blue-500 bg-blue-50 font-bold text-blue-700" : "border-slate-200 hover:bg-white")}>
+                              📅 עלייה בכל שנה בטווח
                             </button>
                             <button type="button" onClick={() => setPriceTiers(prev => prev.map((t, i) => i === idx ? { ...t, is_recurring: true } : t))}
                               className={"rounded-lg border px-3 py-1.5 text-xs transition-all " + (tier.is_recurring ? "border-blue-500 bg-blue-50 font-bold text-blue-700" : "border-slate-200 hover:bg-white")}>
-                              🔁 חוזר כל X שנים
+                              🔁 כל X שנים
                             </button>
                           </div>
                           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                            {!tier.is_recurring ? (
+                            {!tier.is_recurring && tier.to_year === tier.from_year ? (
+                              <div>
+                                <label className="mb-1 block text-xs text-slate-500">בתום שנת שכירות</label>
+                                <input type="number" min="1" value={tier.from_year}
+                                  onChange={(e) => { var v = Number(e.target.value) || 1; setPriceTiers(prev => prev.map((t, i) => i === idx ? { ...t, from_year: v, to_year: v } : t)); }} className={ic} />
+                                <div className="text-[10px] text-slate-400 mt-0.5">המחיר החדש חל משנת השכירות הבאה</div>
+                              </div>
+                            ) : !tier.is_recurring ? (
                               <>
                                 <div>
-                                  <label className="mb-1 block text-xs text-slate-500">בתום שנת שכירות</label>
+                                  <label className="mb-1 block text-xs text-slate-500">מתום שנת שכירות</label>
                                   <input type="number" min="1" value={tier.from_year}
                                     onChange={(e) => setPriceTiers(prev => prev.map((t, i) => i === idx ? { ...t, from_year: Number(e.target.value) || 1 } : t))} className={ic} />
                                 </div>
                                 <div>
-                                  <label className="mb-1 block text-xs text-slate-500">עד שנה</label>
+                                  <label className="mb-1 block text-xs text-slate-500">עד תום שנה</label>
                                   <input type="number" min="1" value={tier.to_year}
                                     onChange={(e) => setPriceTiers(prev => prev.map((t, i) => i === idx ? { ...t, to_year: Number(e.target.value) || 1 } : t))} className={ic} />
+                                  <div className="text-[10px] text-amber-600 mt-0.5">העלייה חלה בכל אחת מהשנים בטווח</div>
                                 </div>
                               </>
                             ) : (

@@ -3066,33 +3066,53 @@ export default function ContractsNewPage() {
                             )}
                           </div>
 
-                          <div className="flex gap-2 mb-2">
-                            <button type="button" onClick={() => setPriceTiers(prev => prev.map((t, i) => i === idx ? { ...t, is_recurring: false } : t))}
+                          <div className="flex gap-2 mb-2 flex-wrap">
+                            {/* from == to → fires once. from < to → fires in
+                                EVERY year of the range. Two different intents,
+                                so two explicit modes — "עד שנה" alone read as
+                                "the price holds until year X" and produced
+                                overlapping stages plus a warning nobody
+                                understood. */}
+                            <button type="button" onClick={() => setPriceTiers(prev => prev.map((t, i) => i === idx ? { ...t, is_recurring: false, to_year: t.from_year } : t))}
                               className={"rounded-lg border px-3 py-1.5 text-xs transition-all " +
-                                (!tier.is_recurring ? "border-blue-500 bg-blue-50 font-bold text-blue-700" : "border-slate-200 hover:bg-white")}>
-                              📅 טווח שנים
+                                (!tier.is_recurring && tier.to_year === tier.from_year ? "border-blue-500 bg-blue-50 font-bold text-blue-700" : "border-slate-200 hover:bg-white")}>
+                              🪜 מדרגה חד-פעמית
+                            </button>
+                            <button type="button" onClick={() => setPriceTiers(prev => prev.map((t, i) => i === idx ? { ...t, is_recurring: false, to_year: t.to_year > t.from_year ? t.to_year : t.from_year + 1 } : t))}
+                              className={"rounded-lg border px-3 py-1.5 text-xs transition-all " +
+                                (!tier.is_recurring && tier.to_year > tier.from_year ? "border-blue-500 bg-blue-50 font-bold text-blue-700" : "border-slate-200 hover:bg-white")}>
+                              📅 עלייה בכל שנה בטווח
                             </button>
                             <button type="button" onClick={() => setPriceTiers(prev => prev.map((t, i) => i === idx ? { ...t, is_recurring: true } : t))}
                               className={"rounded-lg border px-3 py-1.5 text-xs transition-all " +
                                 (tier.is_recurring ? "border-blue-500 bg-blue-50 font-bold text-blue-700" : "border-slate-200 hover:bg-white")}>
-                              🔁 חוזר כל X שנים
+                              🔁 כל X שנים
                             </button>
                           </div>
 
                           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                            {!tier.is_recurring ? (
+                            {!tier.is_recurring && tier.to_year === tier.from_year ? (
+                              <div>
+                                <label className="mb-1 block text-xs text-slate-500">בתום שנת שכירות</label>
+                                <input type="number" min="1" value={tier.from_year}
+                                  onChange={(e) => { var v = Number(e.target.value) || 1; setPriceTiers(prev => prev.map((t, i) => i === idx ? { ...t, from_year: v, to_year: v } : t)); }}
+                                  className={ic} />
+                                <div className="text-[10px] text-slate-400 mt-0.5">המחיר החדש חל משנת השכירות הבאה</div>
+                              </div>
+                            ) : !tier.is_recurring ? (
                               <>
                                 <div>
-                                  <label className="mb-1 block text-xs text-slate-500">בתום שנת שכירות</label>
+                                  <label className="mb-1 block text-xs text-slate-500">מתום שנת שכירות</label>
                                   <input type="number" min="1" value={tier.from_year}
                                     onChange={(e) => setPriceTiers(prev => prev.map((t, i) => i === idx ? { ...t, from_year: Number(e.target.value) || 1 } : t))}
                                     className={ic} />
                                 </div>
                                 <div>
-                                  <label className="mb-1 block text-xs text-slate-500">עד שנה</label>
+                                  <label className="mb-1 block text-xs text-slate-500">עד תום שנה</label>
                                   <input type="number" min="1" value={tier.to_year}
                                     onChange={(e) => setPriceTiers(prev => prev.map((t, i) => i === idx ? { ...t, to_year: Number(e.target.value) || 1 } : t))}
                                     className={ic} />
+                                  <div className="text-[10px] text-amber-600 mt-0.5">העלייה חלה בכל אחת מהשנים בטווח</div>
                                 </div>
                               </>
                             ) : (
@@ -3154,7 +3174,7 @@ export default function ContractsNewPage() {
                                 {expanded.map(function(exp, ei) {
                                   return (
                                     <div key={ei}>
-                                      שנים {exp.from_year}-{exp.to_year}: {exp.increase_type === "none"
+                                      בתום שנה {exp.from_year} → משנת שכירות {exp.from_year + 1}: {exp.increase_type === "none"
                                         ? `מחיר קפוא — ${fmtMoney(stepBase)}/מ"ר`
                                         : exp.increase_type === "fixed_total"
                                           ? `+${fmtMoney(exp.increase_value)} → ${fmtMoney(exp.calculated_rent_per_sqm)}/מ"ר`
