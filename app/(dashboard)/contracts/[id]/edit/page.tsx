@@ -818,10 +818,7 @@ export default function ContractEditPage() {
         opening_rule: openingRuleOn ? "actual_or_days_from_handover" : null,
         opening_max_days_from_handover: openingRuleOn ? (Number(openingMaxDays) || null) : null,
         opening_definition: openingDefinition || null,
-        min_rent_condition_type: rentType === "revenue_pct" && minCondOn ? "project_occupancy_pct" : null,
-        min_rent_condition_pct: rentType === "revenue_pct" && minCondOn ? (Number(minCondPct) || null) : null,
-        min_rent_condition_met_at: rentType === "revenue_pct" && minCondOn ? (minCondMetAt || null) : null,
-        min_rent_condition_notes: rentType === "revenue_pct" && minCondOn ? (minCondNotes || null) : null,
+        min_rent_condition_notes: rentType === "revenue_pct" && Number(revProtection.untilOccupancyPct) > 0 ? (minCondNotes || null) : null,
         revenue_pct_tiers: rentType === "revenue_pct" && revenuePctTiers.length > 0 ? revenuePctTiers : null,
         revenue_report_day: rentType === "revenue_pct" ? Number(revenueReportDay) || 5 : null,
         mgmt_included_in_revenue: mgmtIncludedInRevenue,
@@ -1719,21 +1716,30 @@ export default function ContractEditPage() {
                   {rentType === "revenue_pct" && (
                     <div className="rounded-lg border border-purple-300 bg-purple-50/60 p-3 space-y-2">
                       <label className="flex items-start gap-2 text-[11px] text-slate-700">
-                        <input type="checkbox" checked={minCondOn} onChange={(e) => setMinCondOn(e.target.checked)} className="rounded mt-0.5" />
-                        <span><b>המינימום חל רק בהתקיים תנאי איכלוס בפרויקט</b> — עד אז אחוז מפדיון בלבד</span>
+                        {/* Drives revProtection — the single writer of this
+                            clause, so the two views cannot diverge. */}
+                        <input type="checkbox" checked={(Number(revProtection.untilOccupancyPct) || 0) > 0}
+                          onChange={(e) => { setMinCondOn(e.target.checked); setRevProtection({ ...revProtection, untilOccupancyPct: e.target.checked ? (Number(minCondPct) || 60) : null }); }}
+                          className="rounded mt-0.5" />
+                        <span><b>דמי שכירות חליפיים עד לאיכלוס אחוז מהפרויקט</b> — עד אז אחוז מפדיון בלבד, ללא מינימום</span>
                       </label>
-                      {minCondOn && (
+                      {(Number(revProtection.untilOccupancyPct) || 0) > 0 && (
                         <>
                           <div className="grid grid-cols-2 gap-2">
                             <div>
                               <label className="mb-1 block text-[11px] font-semibold text-slate-700">אחוז איכלוס נדרש (%)</label>
-                              <input type="number" min="0" max="100" value={minCondPct} placeholder="למשל 60"
-                                onChange={(e) => setMinCondPct(e.target.value)} className={ic} />
+                              <input type="number" min="0" max="100" value={revProtection.untilOccupancyPct ?? ""} placeholder="למשל 60"
+                                onChange={(e) => { setMinCondPct(e.target.value); setRevProtection({ ...revProtection, untilOccupancyPct: e.target.value === "" ? null : Number(e.target.value) }); }} className={ic} />
                             </div>
                             <div>
                               <label className="mb-1 block text-[11px] font-semibold text-slate-700">התנאי התקיים בתאריך</label>
-                              <input type="date" value={minCondMetAt} onChange={(e) => setMinCondMetAt(e.target.value)} className={ic} />
+                              <input type="date" value={revProtection.occupancyMetAt ?? ""}
+                                onChange={(e) => { setMinCondMetAt(e.target.value); setRevProtection({ ...revProtection, occupancyMetAt: e.target.value || null }); }} className={ic} />
                             </div>
+                          </div>
+                          <div className="text-[11px] text-purple-800">
+                            נגמר יחד עם הגנת שכ&quot;ד — המוקדם מבין חודשי ההגנה, מימוש אופציה מבטלת, והמועד הזה.
+                            כל עוד לא אושר מועד, המינימום אינו נגבה. המערכת מזהה את המועד ומתריעה.
                           </div>
                           <div>
                             <label className="mb-1 block text-[11px] font-semibold text-slate-700">הסעיף כלשונו</label>

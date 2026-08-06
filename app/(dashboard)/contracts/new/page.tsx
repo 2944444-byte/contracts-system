@@ -1047,10 +1047,7 @@ export default function ContractsNewPage() {
         // Derived from a flat monthly minimum as well (÷ leased area) — the
         // steps, the option price jumps and the revenue floor are all per-m².
         min_rent_per_sqm: rentType === "revenue_pct" && minRentSqm > 0 ? minRentSqm : null,
-        min_rent_condition_type: rentType === "revenue_pct" && minCondOn ? "project_occupancy_pct" : null,
-        min_rent_condition_pct: rentType === "revenue_pct" && minCondOn ? (Number(minCondPct) || null) : null,
-        min_rent_condition_met_at: rentType === "revenue_pct" && minCondOn ? (minCondMetAt || null) : null,
-        min_rent_condition_notes: rentType === "revenue_pct" && minCondOn ? (minCondNotes || null) : null,
+        min_rent_condition_notes: rentType === "revenue_pct" && Number(revProtection.untilOccupancyPct) > 0 ? (minCondNotes || null) : null,
         revenue_pct_tiers: rentType === "revenue_pct" && revenuePctTiers.length > 0 ? revenuePctTiers : null,
         revenue_report_day: rentType === "revenue_pct" ? Number(revenueReportDay) || 5 : null,
         revenue_minimum_advance: rentType === "revenue_pct" ? revMinAdvance : false,
@@ -1870,39 +1867,6 @@ export default function ContractsNewPage() {
                         <span className="text-red-600"> · בחר יחידות כדי לגזור מינימום למ&quot;ר</span>
                       )}
                     </div>
-
-                    {/* The floor can itself be conditional. */}
-                    <div className="mt-2 rounded-lg border border-purple-300 bg-white/70 p-2.5 space-y-2">
-                      <label className="flex items-start gap-2 text-[11px] text-slate-700">
-                        <input type="checkbox" checked={minCondOn} onChange={(e) => setMinCondOn(e.target.checked)} className="rounded mt-0.5" />
-                        <span><b>המינימום חל רק בהתקיים תנאי איכלוס בפרויקט</b> — עד אז אחוז מפדיון בלבד (&quot;דמי שכירות חליפיים&quot;)</span>
-                      </label>
-                      {minCondOn && (
-                        <>
-                          <div className="grid grid-cols-2 gap-2">
-                            <div>
-                              <label className="mb-1 block text-[11px] font-semibold text-slate-700">אחוז איכלוס נדרש (%)</label>
-                              <input type="number" min="0" max="100" value={minCondPct} placeholder="למשל 60"
-                                onChange={(e) => setMinCondPct(e.target.value)} className={ic} />
-                            </div>
-                            <div>
-                              <label className="mb-1 block text-[11px] font-semibold text-slate-700">התנאי התקיים בתאריך</label>
-                              <input type="date" value={minCondMetAt} onChange={(e) => setMinCondMetAt(e.target.value)} className={ic} />
-                            </div>
-                          </div>
-                          <div>
-                            <label className="mb-1 block text-[11px] font-semibold text-slate-700">הסעיף כלשונו בהסכם</label>
-                            <input type="text" value={minCondNotes} onChange={(e) => setMinCondNotes(e.target.value)}
-                              className={ic} placeholder="עד לאיכלוס 60% משטחי הפרויקט ישלם השוכר דמי שכירות חליפיים בלבד" />
-                          </div>
-                          <div className="text-[10px] text-purple-700 leading-relaxed">
-                            כל עוד לא נרשם תאריך — <b>המינימום אינו נגבה</b> והשוכר משלם אחוז מפדיון בלבד.
-                            את התאריך אפשר לחשב ולאשר במסך הפדיון, לפי האיכלוס בפועל בנכס.
-                            הוא נשמר כתאריך קבוע כדי שחיובי עבר לא יזוזו כשהאיכלוס משתנה.
-                          </div>
-                        </>
-                      )}
-                    </div>
                   </div>
                   <div>
                     <label className="mb-1 block text-xs font-semibold text-purple-700">יום הגשת דו&quot;ח פדיון</label>
@@ -1995,7 +1959,7 @@ export default function ContractsNewPage() {
                   </div>
                   <div className="col-span-2 rounded-lg border border-blue-200 bg-blue-50/40 p-3 space-y-2">
                     <div className="flex items-center justify-between">
-                      <label className="text-xs font-bold text-blue-800">🛡️ הגנה על שכ&quot;ד</label>
+                      <label className="text-xs font-bold text-blue-800">🛡️ הגנה על שכ&quot;ד / דמי שכירות חליפיים</label>
                       <select value={revProtection.type} className="rounded border border-slate-200 px-2 py-1 text-xs"
                         onChange={(e) => setRevProtection({ ...revProtection, type: e.target.value as RevenueProtection["type"] })}>
                         <option value="none">ללא הגנה — המינימום הוא רצפה</option>
@@ -2020,6 +1984,46 @@ export default function ContractsNewPage() {
                         </div>
                       </>
                     )}
+
+                    {/* The same clause ended by an EVENT rather than by months:
+                        "עד לאיכלוס 60% משטחי הפרויקט ישלם השוכר דמי שכירות
+                        חליפיים בלבד". Both routes say the tenant pays the
+                        turnover share with no floor, so they live in one block —
+                        and whichever closes first wins. */}
+                    <div className="border-t border-blue-200 pt-2 space-y-2">
+                      <label className="flex items-start gap-2 text-[11px] text-slate-700">
+                        <input type="checkbox" checked={(Number(revProtection.untilOccupancyPct) || 0) > 0}
+                          onChange={(e) => setRevProtection({ ...revProtection,
+                            untilOccupancyPct: e.target.checked ? (Number(minCondPct) || 60) : null })}
+                          className="rounded mt-0.5" />
+                        <span><b>גם עד לאיכלוס אחוז מסוים מהפרויקט</b> — עד אז אחוז מפדיון בלבד, ללא מינימום</span>
+                      </label>
+                      {(Number(revProtection.untilOccupancyPct) || 0) > 0 && (
+                        <>
+                          <div className="flex flex-wrap items-center gap-2 text-xs">
+                            <span className="text-blue-700">עד איכלוס</span>
+                            <input type="number" min="0" max="100" value={revProtection.untilOccupancyPct ?? ""}
+                              onChange={(e) => { setRevProtection({ ...revProtection, untilOccupancyPct: e.target.value === "" ? null : Number(e.target.value) }); setMinCondPct(e.target.value); }}
+                              className="w-20 rounded border border-slate-200 px-2 py-1 text-center text-xs" placeholder="60" />
+                            <span className="text-blue-700">% משטחי הפרויקט</span>
+                            <span className="text-slate-400">·</span>
+                            <span className="text-blue-700">התקיים ב־</span>
+                            <input type="date" value={revProtection.occupancyMetAt ?? ""}
+                              onChange={(e) => setRevProtection({ ...revProtection, occupancyMetAt: e.target.value || null })}
+                              className="rounded border border-slate-200 px-2 py-1 text-xs" />
+                          </div>
+                          <input type="text" value={minCondNotes} onChange={(e) => setMinCondNotes(e.target.value)}
+                            placeholder="לשון הסעיף — למשל: עד לאיכלוס 60% משטחי הפרויקט ישלם השוכר דמי שכירות חליפיים בלבד"
+                            className={ic} />
+                          <div className="text-[11px] text-blue-700">
+                            {revProtection.occupancyMetAt
+                              ? <>מאותו מועד המינימום חוזר לחול.</>
+                              : <><b>המערכת מזהה בעצמה</b> מתי הפרויקט הגיע לאחוז הזה, פותחת התראה ומבקשת את אישורך —
+                                 והמועד יישמר קבוע כדי שחיובי עבר לא יזוזו. עד לאישור, המינימום אינו נגבה.</>}
+                          </div>
+                        </>
+                      )}
+                    </div>
                   </div>
                   <RevenueCategoriesEditor value={revCategories} onChange={setRevCategories} basePct={revenuePct} />
                   <div className="flex items-start gap-2 pt-5 col-span-2">

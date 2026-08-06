@@ -108,7 +108,7 @@ export async function reconcileAlerts(supabase: SupabaseClient): Promise<{ resol
   const contractIds = idsFor("contract");
   if (contractIds.length > 0) {
     const { data: cs } = await supabase.from("contracts")
-      .select("id,end_date,status,planned_handover_date,actual_handover_date,planned_opening_date,actual_opening_date,works_start_date,works_end_date,grace_months,grace_days,grace_type,grace_ends_on_opening,late_opening_penalty_type,late_opening_penalty_value,late_opening_grace_days,rent_type,rent_per_sqm,min_rent_per_sqm,minimum_rent,charged_area,investment_addition,start_date,contract_options(id,status,is_exercised)").in("id", contractIds);
+      .select("id,end_date,status,min_rent_condition_type,min_rent_condition_met_at,planned_handover_date,actual_handover_date,planned_opening_date,actual_opening_date,works_start_date,works_end_date,grace_months,grace_days,grace_type,grace_ends_on_opening,late_opening_penalty_type,late_opening_penalty_value,late_opening_grace_days,rent_type,rent_per_sqm,min_rent_per_sqm,minimum_rent,charged_area,investment_addition,start_date,contract_options(id,status,is_exercised)").in("id", contractIds);
     // Which of these already have the penalty billed — a raised charge closes
     // the alert, since the money is now tracked as a debt like any other.
     const { data: penCharges } = await supabase.from("charges")
@@ -125,6 +125,12 @@ export async function reconcileAlerts(supabase: SupabaseClient): Promise<{ resol
       // Handover confirmation is its own condition, on the same entity_type —
       // tested separately so one rule can't vouch for the other.
       if (handoverPendingVerdict({ contract: c }).applies) keep("contract:handover_pending", c.id);
+      // The occupancy-threshold notice stands until the date is approved. The
+      // creator recomputes the occupancy; here the absence of an approved date
+      // is enough, and it is the only thing the user can act on.
+      if (c.min_rent_condition_type === "project_occupancy_pct" && !c.min_rent_condition_met_at) {
+        keep("contract:min_rent_condition_met", c.id);
+      }
       // Late-opening penalty: still outstanding only while unbilled.
       if (c.late_opening_penalty_type && c.late_opening_penalty_type !== "none" && !billedSet.has(c.id)) {
         const mRent = guaranteedMonthlyRent({
@@ -238,6 +244,8 @@ export async function reconcileAlerts(supabase: SupabaseClient): Promise<{ resol
       ? "contract:handover_pending:" + a.entity_id
       : a.entity_type === "contract" && a.alert_type === "late_opening_penalty"
         ? "contract:late_opening_penalty:" + a.entity_id
+      : a.entity_type === "contract" && a.alert_type === "min_rent_condition_met"
+        ? "contract:min_rent_condition_met:" + a.entity_id
       : a.entity_type === "guarantee" && a.alert_type === "guarantee_missing"
         ? "guarantee:guarantee_missing:" + a.entity_id
         : a.entity_type + ":" + a.entity_id;

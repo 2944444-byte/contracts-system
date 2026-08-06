@@ -10,6 +10,8 @@ import { handoverPendingVerdict, handoverPendingTitle, handoverPendingMessage } 
 import { guaranteeGaps, describeGaps, guaranteeTypeLabel } from "@/lib/guarantee-status";
 import { deliveryStatus, describeDelivery } from "@/lib/guarantee-delivery";
 import { graceWindow, lateOpeningPenalty } from "@/lib/store-opening";
+import { effectiveOpeningDate } from "@/lib/lease-term";
+import { occupancyAt, thresholdCrossedOn } from "@/lib/project-occupancy";
 import { guaranteedMonthlyRent } from "@/lib/guarantee-base";
 import { chargeBalance } from "@/lib/concessions";
 
@@ -103,7 +105,7 @@ export async function runAlertSync(supabase: SupabaseClient): Promise<{ created:
 
   // 1. Contracts expiring + options
   const { data: contracts } = await supabase.from("contracts")
-    .select("id,property_id,end_date,status,is_amendment,parent_contract_id,tenant_id,planned_handover_date,actual_handover_date,planned_opening_date,actual_opening_date,works_start_date,works_end_date,grace_months,grace_days,grace_type,grace_ends_on_opening,late_opening_penalty_type,late_opening_penalty_value,late_opening_grace_days,late_opening_penalty_notes,rent_type,rent_per_sqm,min_rent_per_sqm,minimum_rent,charged_area,investment_addition,start_date,tenants(name),properties(name),contract_options(id,status,is_exercised,start_date,end_date,notice_days_before_end,notice_type,option_number)")
+    .select("id,property_id,end_date,status,is_amendment,parent_contract_id,tenant_id,planned_handover_date,actual_handover_date,planned_opening_date,actual_opening_date,works_start_date,works_end_date,grace_months,grace_days,grace_type,grace_ends_on_opening,late_opening_penalty_type,late_opening_penalty_value,late_opening_grace_days,late_opening_penalty_notes,rent_type,rent_per_sqm,min_rent_per_sqm,minimum_rent,min_rent_condition_type,min_rent_condition_pct,min_rent_condition_met_at,min_rent_condition_notes,opening_rule,opening_max_days_from_handover,term_starts_at,contract_spaces(space_id),charged_area,investment_addition,start_date,tenants(name),properties(name),contract_options(id,status,is_exercised,start_date,end_date,notice_days_before_end,notice_type,option_number)")
     .in("status", ["active", "expiring", "extended", "upcoming"]);
   // A contract and its amendments are ONE tenancy: they share an end date and
   // between them hold the options. Alerting per row put the same expiry on the
@@ -147,6 +149,56 @@ export async function runAlertSync(supabase: SupabaseClient): Promise<{ created:
         }
       }
     }
+    // "עד לאיכלוס 60% משטחי הפרויקט ישלם השוכר דמי שכירות חליפיים בלבד" — the
+    // minimum is suspended until the project fills up, and the moment it does is
+    // an event NOBODY is watching: it is caused by other tenants opening, not by
+    // anything on this contract. So the system watches it and asks for approval,
+    // rather than waiting to be asked.
+    if (c.min_rent_condition_type === "project_occupancy_pct" && !c.min_rent_condition_met_at) {
+      const pct = Number(c.min_rent_condition_pct) || 0;
+      if (pct > 0 && c.property_id) {
+        const { data: pSpaces } = await supabase.from("spaces").select("id,area").eq("property_id", c.property_id);
+        const { data: pCons } = await supabase.from("contracts")
+          .select("id,status,start_date,end_date,actual_opening_date,planned_opening_date,actual_handover_date,planned_handover_date,opening_rule,opening_max_days_from_handover,contract_spaces(space_id)")
+          .eq("property_id", c.property_id).eq("is_amendment", false);
+        const openings: Record<string, Date | null> = {};
+        for (const x of (pCons || [])) openings[x.id] = effectiveOpeningDate(x).date;
+        const today = new Date();
+        const snap = occupancyAt({ spaces: pSpaces || [], contracts: pCons || [], date: today, openingDates: openings });
+        if (snap.pct >= pct) {
+          // The exact day it happened, so the approval is a real date and not "today".
+          const cross = thresholdCrossedOn({
+            spaces: pSpaces || [], contracts: pCons || [], thresholdPct: pct,
+            from: new Date(today.getFullYear() - 5, 0, 1), to: today, openingDates: openings,
+          });
+          const label = (c.tenants?.name ?? "") + " — " + (c.properties?.name ?? "");
+          const onStr = cross.date ? cross.date.toLocaleDateString("he-IL") : "—";
+          const title = "🏗 " + label + " — הפרויקט הגיע ל-" + pct + "% איכלוס";
+          const message = "האיכלוס בנכס הוא " + snap.pct.toFixed(2) + "% (" +
+            snap.occupiedArea.toLocaleString("he-IL") + ' מ"ר מתוך ' + snap.totalArea.toLocaleString("he-IL") + "), " +
+            "והסף נחצה ב-" + onStr + ". עד לאישור המועד המינימום אינו נגבה והשוכר משלם אחוז מפדיון בלבד. " +
+            "יש לאשר את המועד במסך שכ\"ד פדיון כדי שהמינימום יחול." +
+            (c.min_rent_condition_notes ? " · " + c.min_rent_condition_notes : "");
+          const { data: oExist } = await supabase.from("alerts")
+            .select("id,severity").eq("contract_id", c.id)
+            .eq("alert_type", "min_rent_condition_met").eq("is_resolved", false).limit(1);
+          const prev = oExist && oExist[0];
+          if (prev) {
+            await supabase.from("alerts").update({ title, message, severity: "urgent" }).eq("id", prev.id);
+          } else {
+            await add({
+              title, message, severity: "urgent", alert_type: "min_rent_condition_met",
+              entity_type: "contract", entity_id: c.id, contract_id: c.id,
+              property_id: c.property_id ?? null,
+              due_date: cross.date ? (cross.date.getFullYear() + "-" +
+                String(cross.date.getMonth() + 1).padStart(2, "0") + "-" +
+                String(cross.date.getDate()).padStart(2, "0")) : null,
+            });
+          }
+        }
+      }
+    }
+
     // Handover not confirmed. Until it is, the contract sits outside every
     // calculation — so this is the one alert that must not be missed on a
     // future-handover lease.

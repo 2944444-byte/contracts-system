@@ -74,6 +74,48 @@ export default function RevenuePage() {
   // RECORDED, so past billing is never rewritten by today's occupancy.
   const [occState, setOccState] = useState<any>(null);
   const [occBusy, setOccBusy] = useState(false);
+  const [occFor, setOccFor] = useState("");        // which contract occState belongs to
+
+  // The threshold is crossed by OTHER tenants opening, so nothing on this
+  // contract announces it. Compute it as soon as a conditional contract is
+  // selected — the user should be told, not have to ask.
+  async function computeOccupancy(c: any) {
+    if (!c || c.min_rent_condition_type !== "project_occupancy_pct" || !c.property_id) return;
+    const pct = Number(c.min_rent_condition_pct) || 0;
+    if (pct <= 0) return;
+    setOccBusy(true);
+    try {
+      const sp = await supabase.from("spaces").select("id,area").eq("property_id", c.property_id);
+      const cn = await supabase.from("contracts")
+        .select("id,status,start_date,end_date,actual_opening_date,planned_opening_date,actual_handover_date,planned_handover_date,opening_rule,opening_max_days_from_handover,contract_spaces(space_id)")
+        .eq("property_id", c.property_id).eq("is_amendment", false);
+      const spaces = sp.data || [], cons = cn.data || [];
+      const openings: Record<string, Date | null> = {};
+      cons.forEach(function(x: any){ openings[x.id] = effectiveOpeningDate(x).date; });
+      const today = new Date();
+      const now = occupancyAt({ spaces: spaces, contracts: cons, date: today, openingDates: openings });
+      const cross = thresholdCrossedOn({
+        spaces: spaces, contracts: cons, thresholdPct: pct,
+        from: new Date(today.getFullYear() - 5, 0, 1), to: today, openingDates: openings,
+      });
+      setOccState({ now: now, cross: cross, pct: pct });
+      setOccFor(c.id);
+    } catch (e: any) { /* a failed count must not block entering a report */ }
+    finally { setOccBusy(false); }
+  }
+
+  async function approveOccupancy(c: any, date: Date) {
+    const iso = toDateString(date);
+    if (!confirm("לרשום " + date.toLocaleDateString("he-IL") +
+      " כמועד שבו התקיים תנאי האיכלוס?\nמאותו מועד ייגבה שכ\"ד המינימום.")) return;
+    const { error } = await supabase.from("contracts")
+      .update({ min_rent_condition_met_at: iso }).eq("id", c.id);
+    if (error) { alert("שגיאה: " + error.message); return; }
+    await logAudit({ entity_type: "contract", entity_id: c.id,
+      action: "min_rent_condition_met", notes: (Number(c.min_rent_condition_pct) || 0) + "% איכלוס · " + iso });
+    setOccState(null); setOccFor("");
+    await loadAll();
+  }
   const [fMonth,       setFMonth]       = useState<string>(""); // YYYY-MM
   const [fGrossRevenue,setFGrossRevenue]=useState("");
   // Per-category turnover for contracts that price delivery (or anything else)
@@ -676,6 +718,16 @@ export default function RevenuePage() {
     // Drop the params so a refresh doesn't reopen the form.
     window.history.replaceState({}, "", "/revenue");
   }, [contracts.length]);
+
+  // Runs whenever the selected contract changes — including on the deep link
+  // from the payments screen.
+  useEffect(() => {
+    const c: any = contracts.find(function(x: any){ return x.id === (fContractId || selContractId); });
+    if (!c) return;
+    if (c.min_rent_condition_type !== "project_occupancy_pct") { setOccState(null); setOccFor(""); return; }
+    if (occFor === c.id) return;
+    computeOccupancy(c);
+  }, [fContractId, selContractId, contracts.length]);
 
   function closeModal() {
     setEditingId(""); setFContractId(""); setFMonth(""); setFGrossRevenue(""); setFMgmtInGross(""); setFNotes(""); setFFile(null);
@@ -1420,85 +1472,52 @@ export default function RevenuePage() {
                   )}
                 </div>
               )}
+              {/* No button to press: the count is already done. This states
+                  what is true and offers the one action that follows from it. */}
               {(function(){
                 var c: any = contracts.find(function(x:any){ return x.id === fContractId; });
                 if (!c || c.min_rent_condition_type !== "project_occupancy_pct") return null;
                 var pct = Number(c.min_rent_condition_pct) || 0;
+                var st = occFor === c.id ? occState : null;
+                var crossed = st && st.cross && st.cross.date;
+                var approved = !!c.min_rent_condition_met_at;
                 return (
-                  <div className="rounded-xl border border-purple-300 bg-purple-50/60 p-3 space-y-2">
-                    <div className="text-xs font-bold text-purple-900">🏗 תנאי איכלוס להחלת המינימום — {pct}%</div>
-                    {c.min_rent_condition_notes && (
-                      <div className="text-[11px] text-purple-700">{c.min_rent_condition_notes}</div>
-                    )}
-                    <div className="text-[11px] text-slate-700">
-                      {c.min_rent_condition_met_at
-                        ? <>התנאי מסומן כמתקיים מ־<b>{new Date(c.min_rent_condition_met_at).toLocaleDateString("he-IL")}</b> — מאותו מועד נגבה המינימום.</>
-                        : <>טרם נרשם מועד — <b>המינימום אינו נגבה</b>, השוכר משלם אחוז מפדיון בלבד.</>}
+                  <div className={"rounded-xl border p-3 space-y-2 " +
+                    (approved ? "border-slate-200 bg-slate-50"
+                      : crossed ? "border-amber-400 bg-amber-50" : "border-purple-300 bg-purple-50/60")}>
+                    <div className="text-xs font-bold text-slate-800">
+                      🏗 דמי שכירות חליפיים — עד {pct}% איכלוס בפרויקט
                     </div>
-                    <button type="button" disabled={occBusy}
-                      onClick={async function(){
-                        setOccBusy(true);
-                        try {
-                          // The denominator is the PROJECT's area — every unit in
-                          // the property, let or not.
-                          var sp = await supabase.from("spaces").select("id,area").eq("property_id", c.property_id);
-                          var cn = await supabase.from("contracts")
-                            .select("id,status,start_date,end_date,actual_opening_date,planned_opening_date,actual_handover_date,planned_handover_date,opening_rule,opening_max_days_from_handover,contract_spaces(space_id)")
-                            .eq("property_id", c.property_id).eq("is_amendment", false);
-                          var spaces = sp.data || [], cons = cn.data || [];
-                          // Each contract's opening resolved by its OWN rule, so a
-                          // deemed opening counts exactly as a real one does.
-                          var openings: Record<string, Date | null> = {};
-                          cons.forEach(function(x:any){ openings[x.id] = effectiveOpeningDate(x).date; });
-                          var today = new Date();
-                          var now = occupancyAt({ spaces: spaces, contracts: cons, date: today, openingDates: openings });
-                          var cross = thresholdCrossedOn({
-                            spaces: spaces, contracts: cons, thresholdPct: pct,
-                            from: new Date(today.getFullYear() - 5, 0, 1),
-                            to: today, openingDates: openings,
-                          });
-                          setOccState({ now: now, cross: cross });
-                        } catch(e:any) { alert("שגיאה: " + e?.message); }
-                        finally { setOccBusy(false); }
-                      }}
-                      className="rounded-lg bg-purple-600 text-white px-3 py-1.5 text-xs font-bold hover:bg-purple-700 disabled:opacity-50">
-                      {occBusy ? "⏳ מחשב..." : "📐 חשב איכלוס בנכס"}
-                    </button>
+                    {c.min_rent_condition_notes && (
+                      <div className="text-[11px] text-slate-600">{c.min_rent_condition_notes}</div>
+                    )}
+                    {occBusy && <div className="text-[11px] text-slate-500">⏳ מחשב איכלוס בנכס…</div>}
+                    {st && <div className="text-[11px] text-slate-700">היום: <b>{describeOccupancy(st.now)}</b></div>}
 
-                    {occState && (
-                      <div className="rounded-lg bg-white border border-purple-200 p-2.5 text-[11px] space-y-1">
-                        <div>היום: <b>{describeOccupancy(occState.now)}</b></div>
-                        {occState.cross?.date ? (
-                          <>
-                            <div className="text-green-800">
-                              הסף {pct}% נחצה ב־<b>{occState.cross.date.toLocaleDateString("he-IL")}</b>
-                              {occState.cross.snapshot && <> ({occState.cross.snapshot.pct.toFixed(2)}%)</>}
-                            </div>
-                            <button type="button"
-                              onClick={async function(){
-                                var iso = toDateString(occState.cross.date);
-                                if (!confirm("לרשום " + occState.cross.date.toLocaleDateString("he-IL") +
-                                  " כמועד שבו התקיים תנאי האיכלוס?\nמאותו מועד ייגבה שכ\"ד המינימום.")) return;
-                                var { error } = await supabase.from("contracts")
-                                  .update({ min_rent_condition_met_at: iso }).eq("id", c.id);
-                                if (error) { alert("שגיאה: " + error.message); return; }
-                                await logAudit({ entity_type:"contract", entity_id:c.id,
-                                  action:"min_rent_condition_met", notes: pct + "% איכלוס · " + iso });
-                                setOccState(null);
-                                await loadAll();
-                              }}
-                              className="rounded-lg bg-green-600 text-white px-3 py-1.5 text-xs font-bold hover:bg-green-700">
-                              ✓ רשום מועד זה בחוזה
-                            </button>
-                          </>
-                        ) : (
-                          <div className="text-amber-800">הסף {pct}% עדיין לא נחצה — המינימום אינו נגבה.</div>
-                        )}
-                        <div className="text-slate-400 text-[10px]">
-                          שטח מאוכלס = יחידות שחוזה בתוקף חל עליהן והמושכר נפתח. מושכר שנמסר ובעבודות אינו נחשב מאוכלס.
+                    {approved ? (
+                      <div className="text-[11px] text-slate-700">
+                        ✅ התנאי אושר מ־<b>{new Date(c.min_rent_condition_met_at).toLocaleDateString("he-IL")}</b> — מאותו מועד המינימום נגבה.
+                      </div>
+                    ) : crossed ? (
+                      <>
+                        <div className="text-[11px] text-amber-900 font-semibold">
+                          ⚠ הסף {pct}% נחצה ב־<b>{st.cross.date.toLocaleDateString("he-IL")}</b>
+                          {st.cross.snapshot && <> ({st.cross.snapshot.pct.toFixed(2)}%)</>} — והמועד עדיין לא אושר,
+                          ולכן הדיווח הזה עדיין מחושב <b>ללא מינימום</b>.
                         </div>
+                        <button type="button" onClick={function(){ approveOccupancy(c, st.cross.date); }}
+                          className="rounded-lg bg-green-600 text-white px-3 py-1.5 text-xs font-bold hover:bg-green-700">
+                          ✓ אשר {st.cross.date.toLocaleDateString("he-IL")} כמועד התנאי — והחל את המינימום
+                        </button>
+                      </>
+                    ) : (
+                      <div className="text-[11px] text-purple-800">
+                        הסף {pct}% עדיין לא נחצה — <b>המינימום אינו נגבה</b>, השוכר משלם אחוז מפדיון בלבד.
                       </div>
                     )}
+                    <div className="text-slate-400 text-[10px]">
+                      שטח מאוכלס = יחידות שחוזה בתוקף חל עליהן והמושכר נפתח. מושכר שנמסר ובעבודות אינו נחשב מאוכלס.
+                    </div>
                   </div>
                 );
               })()}
