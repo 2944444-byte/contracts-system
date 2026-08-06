@@ -2,6 +2,7 @@
 import { useState, useEffect, Suspense } from "react";
 import { graceWindow, describeGrace, lateOpeningPenalty, mgmtFreeWindow, describeMgmtFree } from "@/lib/store-opening";
 import { leaseTerm, effectiveOpeningDate, describeLeaseTerm, describeOpening } from "@/lib/lease-term";
+import { periodsForYear } from "@/lib/revenue-settlement";
 import { guaranteedMonthlyRent } from "@/lib/guarantee-base";
 import RevenuePctTiersEditor from "@/components/RevenuePctTiersEditor";
 import { RevenuePctTier, pctTiersFromRow, describePctTiers } from "@/lib/revenue-pct-steps";
@@ -1943,10 +1944,20 @@ export default function ContractsNewPage() {
                   </div>
                   <div>
                     <label className="mb-1 block text-xs font-semibold text-purple-700">מתי משולמת ההתחשבנות</label>
+                    {/* "בחודש הדיווח" and "עם הדיווח" place the settlement inside
+                        the period. That is coherent for a MONTHLY settlement, but
+                        on a quarterly one it lands in the quarter's last month —
+                        before the quarter has even closed and before its final
+                        turnover report exists. Offering it would be offering an
+                        impossible configuration. */}
                     <select value={revSettleTiming} onChange={(e) => setRevSettleTiming(e.target.value)} className={ic}>
                       <option value="next_month">בחודש שאחרי תום התקופה</option>
-                      <option value="same_month">בחודש הדיווח עצמו</option>
-                      <option value="with_report">יחד עם הגשת דוח הפדיון</option>
+                      <option value="same_month" disabled={revSettleFreq !== "monthly"}>
+                        בחודש הדיווח עצמו{revSettleFreq !== "monthly" ? " — רק בהתחשבנות חודשית" : ""}
+                      </option>
+                      <option value="with_report" disabled={revSettleFreq !== "monthly"}>
+                        יחד עם הגשת דוח הפדיון{revSettleFreq !== "monthly" ? " — רק בהתחשבנות חודשית" : ""}
+                      </option>
                     </select>
                     <div className="text-[11px] text-purple-500 mt-0.5">
                       {revSettleTiming === "with_report"
@@ -1955,6 +1966,25 @@ export default function ContractsNewPage() {
                           ? "ההתחשבנות נערכת בחודש האחרון של התקופה"
                           : "ההתחשבנות נערכת בחודש שאחרי תום התקופה"}
                     </div>
+                    {revSettleFreq !== "monthly" && revSettleTiming !== "next_month" && (
+                      <div className="text-[11px] text-rose-700 font-semibold mt-1">
+                        ⚠ בהתחשבנות {revSettleFreq === "quarterly" ? "רבעונית" : revSettleFreq === "semiannual" ? "חצי שנתית" : "שנתית"} המועד הזה נופל
+                        לפני תום התקופה — לפני שדוח החודש האחרון הוגש. בחר &quot;בחודש שאחרי תום התקופה&quot;.
+                      </div>
+                    )}
+                    {/* What the choice actually produces, for the first period. */}
+                    {(function(){
+                      var ps = periodsForYear(new Date().getFullYear(), revSettleFreq as any,
+                        Number(revSettleDay) || 15, revSettleTiming as any, Number(revenueReportDay) || 5);
+                      if (!ps.length) return null;
+                      var p = ps[0];
+                      return (
+                        <div className="text-[11px] text-slate-500 mt-1">
+                          דוגמה: תקופה {new Date(p.periodStart).toLocaleDateString("he-IL")}–{new Date(p.periodEnd).toLocaleDateString("he-IL")}
+                          {" → "}התחשבנות <b>{new Date(p.settlementDate).toLocaleDateString("he-IL")}</b>
+                        </div>
+                      );
+                    })()}
                   </div>
                   <div>
                     <label className="mb-1 block text-xs font-semibold text-purple-700">
