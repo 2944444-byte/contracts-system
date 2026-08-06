@@ -13,6 +13,8 @@ import { periodsForYear, computeSettlement, FREQ_LABELS, type SettlementFreq, ty
 import { revenueProtectionFromRow, hasRevenueProtection, isPeriodProtected, describeRevenueProtection } from '@/lib/revenue-protection';
 import { fetchCpiAdjustedWithRetry } from '@/lib/cpi-server';
 import { graceFactorsFor } from '@/lib/store-opening';
+import { minimumApplies, occupancyAt, thresholdCrossedOn, describeOccupancy, toDateString } from '@/lib/project-occupancy';
+import { effectiveOpeningDate } from '@/lib/lease-term';
 
 // A reported period is a calendar month; the grace factor is measured over it.
 // Parsed to LOCAL midnight — a UTC-parsed date-only string turns a fully-free
@@ -68,6 +70,10 @@ export default function RevenuePage() {
 
   // Modal state
   const [fContractId,  setFContractId]  = useState("");
+  // Project-occupancy condition on the minimum: computed on demand, then
+  // RECORDED, so past billing is never rewritten by today's occupancy.
+  const [occState, setOccState] = useState<any>(null);
+  const [occBusy, setOccBusy] = useState(false);
   const [fMonth,       setFMonth]       = useState<string>(""); // YYYY-MM
   const [fGrossRevenue,setFGrossRevenue]=useState("");
   // Per-category turnover for contracts that price delivery (or anything else)
@@ -407,7 +413,7 @@ export default function RevenuePage() {
     var yearStart = selYear + "-01-01";
     var yearEnd   = (selYear + 1) + "-01-01"; // exclusive — avoids the Feb-31 bug entirely
     const [{ data: c }, { data: r }, { data: conc }] = await Promise.all([
-      supabase.from("contracts").select("id,property_id,status,rent_type,revenue_pct,revenue_pct_tiers,revenue_settlement_timing,revenue_report_day,min_rent_per_sqm,charged_area,rent_per_sqm,investment_addition,vat_type,mgmt_fee_per_sqm,mgmt_included_in_revenue,start_date,indexation_method,index_base_date,index_base_value,revenue_categories,revenue_minimum_advance,minimum_rent,grace_months,grace_days,grace_type,grace_discount_pct,grace_mgmt_discount_pct,grace_ends_on_opening,mgmt_charge_starts,mgmt_free_max_days,works_start_date,works_end_date,planned_handover_date,actual_handover_date,planned_opening_date,actual_opening_date,revenue_protection_type,revenue_protection_months,revenue_protection_notes,contract_options(id,start_date,status,is_exercised,cancels_revenue_protection),tenants(name),properties(name)").in("status",["active","expiring","extended"]),
+      supabase.from("contracts").select("id,property_id,status,rent_type,revenue_pct,revenue_pct_tiers,revenue_settlement_timing,revenue_report_day,min_rent_per_sqm,charged_area,rent_per_sqm,investment_addition,vat_type,mgmt_fee_per_sqm,mgmt_included_in_revenue,start_date,indexation_method,index_base_date,index_base_value,revenue_categories,revenue_minimum_advance,minimum_rent,min_rent_condition_type,min_rent_condition_pct,min_rent_condition_met_at,min_rent_condition_notes,term_starts_at,opening_rule,opening_max_days_from_handover,grace_months,grace_days,grace_type,grace_discount_pct,grace_mgmt_discount_pct,grace_ends_on_opening,mgmt_charge_starts,mgmt_free_max_days,works_start_date,works_end_date,planned_handover_date,actual_handover_date,planned_opening_date,actual_opening_date,revenue_protection_type,revenue_protection_months,revenue_protection_notes,contract_options(id,start_date,status,is_exercised,cancels_revenue_protection),tenants(name),properties(name)").in("status",["active","expiring","extended"]),
       supabase.from("revenue_reports").select("*,contracts(property_id,tenants(name),properties(name))").gte("report_month",yearStart).lt("report_month",yearEnd).order("report_month",{ascending:true}),
       // Standing concessions apply as the rent is computed.
       supabase.from("concessions").select("*").eq("scope","standing").eq("status","active"),
@@ -499,7 +505,11 @@ export default function RevenuePage() {
     // empty) still have a floor — take the larger of the two readings so
     // neither way of entering it is silently ignored.
     const minMonthly    = Number(c.minimum_rent) || 0;
-    const minRent       = Math.max(minCalc.amount, minMonthly);
+    // The floor may be conditional: "עד לאיכלוס 60% משטחי הפרויקט ישלם השוכר
+    // דמי שכירות חליפיים בלבד". Until the recorded date the tenant pays the
+    // turnover percentage alone, so the floor is simply absent.
+    const minCond       = minimumApplies({ contract: c, date: periodDate || new Date() });
+    const minRent       = minCond.applies ? Math.max(minCalc.amount, minMonthly) : 0;
     // Fit-out grace on a turnover lease bites on the MINIMUM: a shop still
     // being fitted out has no turnover, so without this the tenant is billed
     // the full guaranteed minimum for months it was contractually rent-free.
@@ -543,7 +553,7 @@ export default function RevenuePage() {
       consideration,                  // 12% × gross
       calcRent: consideration,        // alias used elsewhere
       rentFromRev,                    // consideration − mgmt (before min)
-      minRent, minCalc, finalRent, vat,
+      minRent, minCalc, finalRent, vat, minCond,
       rentBeforeDisc, rentDiscount,
       concessionsApplied: combined.factor !== 1 || combined.deduct !== 0
         ? (discRent.applied || []).concat(discRent2.applied || []) : [],
@@ -1369,6 +1379,11 @@ export default function RevenuePage() {
                   {previewCalc.minRent > 0 && (
                     <div className="flex justify-between text-xs"><span className="text-slate-500">מינימום</span><span className="font-medium">{fmtMoney(previewCalc.minRent)}</span></div>
                   )}
+                  {previewCalc.minCond && !previewCalc.minCond.applies && (
+                    <div className="rounded bg-purple-50 border border-purple-200 px-2 py-1.5 text-[11px] text-purple-800">
+                      🏗 <b>דמי שכירות חליפיים</b> — {previewCalc.minCond.reason}
+                    </div>
+                  )}
                   <div className="flex justify-between font-black text-blue-800 text-base pt-2 border-t border-blue-200">
                     <span>שכ&quot;ד מפדיון</span><span>{fmtMoney(previewCalc.finalRent)}</span>
                   </div>
@@ -1383,6 +1398,88 @@ export default function RevenuePage() {
                   )}
                 </div>
               )}
+              {(function(){
+                var c: any = contracts.find(function(x:any){ return x.id === fContractId; });
+                if (!c || c.min_rent_condition_type !== "project_occupancy_pct") return null;
+                var pct = Number(c.min_rent_condition_pct) || 0;
+                return (
+                  <div className="rounded-xl border border-purple-300 bg-purple-50/60 p-3 space-y-2">
+                    <div className="text-xs font-bold text-purple-900">🏗 תנאי איכלוס להחלת המינימום — {pct}%</div>
+                    {c.min_rent_condition_notes && (
+                      <div className="text-[11px] text-purple-700">{c.min_rent_condition_notes}</div>
+                    )}
+                    <div className="text-[11px] text-slate-700">
+                      {c.min_rent_condition_met_at
+                        ? <>התנאי מסומן כמתקיים מ־<b>{new Date(c.min_rent_condition_met_at).toLocaleDateString("he-IL")}</b> — מאותו מועד נגבה המינימום.</>
+                        : <>טרם נרשם מועד — <b>המינימום אינו נגבה</b>, השוכר משלם אחוז מפדיון בלבד.</>}
+                    </div>
+                    <button type="button" disabled={occBusy}
+                      onClick={async function(){
+                        setOccBusy(true);
+                        try {
+                          // The denominator is the PROJECT's area — every unit in
+                          // the property, let or not.
+                          var sp = await supabase.from("spaces").select("id,area").eq("property_id", c.property_id);
+                          var cn = await supabase.from("contracts")
+                            .select("id,status,start_date,end_date,actual_opening_date,planned_opening_date,actual_handover_date,planned_handover_date,opening_rule,opening_max_days_from_handover,contract_spaces(space_id)")
+                            .eq("property_id", c.property_id).eq("is_amendment", false);
+                          var spaces = sp.data || [], cons = cn.data || [];
+                          // Each contract's opening resolved by its OWN rule, so a
+                          // deemed opening counts exactly as a real one does.
+                          var openings: Record<string, Date | null> = {};
+                          cons.forEach(function(x:any){ openings[x.id] = effectiveOpeningDate(x).date; });
+                          var today = new Date();
+                          var now = occupancyAt({ spaces: spaces, contracts: cons, date: today, openingDates: openings });
+                          var cross = thresholdCrossedOn({
+                            spaces: spaces, contracts: cons, thresholdPct: pct,
+                            from: new Date(today.getFullYear() - 5, 0, 1),
+                            to: today, openingDates: openings,
+                          });
+                          setOccState({ now: now, cross: cross });
+                        } catch(e:any) { alert("שגיאה: " + e?.message); }
+                        finally { setOccBusy(false); }
+                      }}
+                      className="rounded-lg bg-purple-600 text-white px-3 py-1.5 text-xs font-bold hover:bg-purple-700 disabled:opacity-50">
+                      {occBusy ? "⏳ מחשב..." : "📐 חשב איכלוס בנכס"}
+                    </button>
+
+                    {occState && (
+                      <div className="rounded-lg bg-white border border-purple-200 p-2.5 text-[11px] space-y-1">
+                        <div>היום: <b>{describeOccupancy(occState.now)}</b></div>
+                        {occState.cross?.date ? (
+                          <>
+                            <div className="text-green-800">
+                              הסף {pct}% נחצה ב־<b>{occState.cross.date.toLocaleDateString("he-IL")}</b>
+                              {occState.cross.snapshot && <> ({occState.cross.snapshot.pct.toFixed(2)}%)</>}
+                            </div>
+                            <button type="button"
+                              onClick={async function(){
+                                var iso = toDateString(occState.cross.date);
+                                if (!confirm("לרשום " + occState.cross.date.toLocaleDateString("he-IL") +
+                                  " כמועד שבו התקיים תנאי האיכלוס?\nמאותו מועד ייגבה שכ\"ד המינימום.")) return;
+                                var { error } = await supabase.from("contracts")
+                                  .update({ min_rent_condition_met_at: iso }).eq("id", c.id);
+                                if (error) { alert("שגיאה: " + error.message); return; }
+                                await logAudit({ entity_type:"contract", entity_id:c.id,
+                                  action:"min_rent_condition_met", notes: pct + "% איכלוס · " + iso });
+                                setOccState(null);
+                                await loadAll();
+                              }}
+                              className="rounded-lg bg-green-600 text-white px-3 py-1.5 text-xs font-bold hover:bg-green-700">
+                              ✓ רשום מועד זה בחוזה
+                            </button>
+                          </>
+                        ) : (
+                          <div className="text-amber-800">הסף {pct}% עדיין לא נחצה — המינימום אינו נגבה.</div>
+                        )}
+                        <div className="text-slate-400 text-[10px]">
+                          שטח מאוכלס = יחידות שחוזה בתוקף חל עליהן והמושכר נפתח. מושכר שנמסר ובעבודות אינו נחשב מאוכלס.
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
               <div><label className="mb-1 block text-xs font-semibold text-slate-700">הערות</label><input type="text" value={fNotes} onChange={function(e){setFNotes(e.target.value);}} className={ic}/></div>
               <div>
                 <label className="mb-1 block text-xs font-semibold text-slate-700">📎 צרף דיווח מהשוכר (PDF / תמונה)</label>

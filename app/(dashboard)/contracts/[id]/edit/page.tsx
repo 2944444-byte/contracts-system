@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
 import { graceWindow, describeGrace, lateOpeningPenalty, mgmtFreeWindow, describeMgmtFree } from "@/lib/store-opening";
+import { leaseTerm, effectiveOpeningDate, describeLeaseTerm, describeOpening } from "@/lib/lease-term";
 import { guaranteedMonthlyRent } from "@/lib/guarantee-base";
 import RevenuePctTiersEditor from "@/components/RevenuePctTiersEditor";
 import { RevenuePctTier, pctTiersFromRow } from "@/lib/revenue-pct-steps";
@@ -151,6 +152,14 @@ export default function ContractEditPage() {
   const [rentType, setRentType] = useState<"fixed" | "revenue_pct">("fixed");
   const [revenuePct, setRevenuePct] = useState("");
   const [minimumRent, setMinimumRent] = useState("");
+  const [termStartsAt, setTermStartsAt] = useState<"start_date"|"handover"|"opening">("start_date");
+  const [openingRuleOn, setOpeningRuleOn] = useState(false);
+  const [openingMaxDays, setOpeningMaxDays] = useState("");
+  const [openingDefinition, setOpeningDefinition] = useState("");
+  const [minCondOn, setMinCondOn] = useState(false);
+  const [minCondPct, setMinCondPct] = useState("");
+  const [minCondMetAt, setMinCondMetAt] = useState("");
+  const [minCondNotes, setMinCondNotes] = useState("");
   const [minRentBasis, setMinRentBasis] = useState<"per_sqm"|"monthly">("per_sqm");
   const [revenuePctTiers, setRevenuePctTiers] = useState<RevenuePctTier[]>([]);
   const [revenueReportDay, setRevenueReportDay] = useState("5");
@@ -447,6 +456,14 @@ export default function ContractEditPage() {
     // contract keeps the basis it was signed with.
     // The flat sum is checked first: min_rent_per_sqm is now derived from it too,
     // so the field must come back showing what was actually typed.
+    setTermStartsAt(c.term_starts_at === "opening" || c.term_starts_at === "handover" ? c.term_starts_at : "start_date");
+    setOpeningRuleOn(c.opening_rule === "actual_or_days_from_handover");
+    setOpeningMaxDays(c.opening_max_days_from_handover != null ? String(c.opening_max_days_from_handover) : "");
+    setOpeningDefinition(c.opening_definition || "");
+    setMinCondOn(c.min_rent_condition_type === "project_occupancy_pct");
+    setMinCondPct(c.min_rent_condition_pct != null ? String(c.min_rent_condition_pct) : "");
+    setMinCondMetAt(c.min_rent_condition_met_at ? String(c.min_rent_condition_met_at).slice(0, 10) : "");
+    setMinCondNotes(c.min_rent_condition_notes || "");
     if (Number(c.minimum_rent) > 0) {
       setMinRentBasis("monthly"); setMinimumRent(String(c.minimum_rent));
     } else if (c.min_rent_per_sqm != null && Number(c.min_rent_per_sqm) > 0) {
@@ -797,6 +814,14 @@ export default function ContractEditPage() {
         revenue_pct: rentType === "revenue_pct" ? Number(revenuePct) || null : null,
         minimum_rent: rentType === "revenue_pct" && minRentBasis === "monthly" ? Number(minimumRent) || 0 : null,
         min_rent_per_sqm: rentType === "revenue_pct" && minRentSqm > 0 ? minRentSqm : null,
+        term_starts_at: termStartsAt === "start_date" ? null : termStartsAt,
+        opening_rule: openingRuleOn ? "actual_or_days_from_handover" : null,
+        opening_max_days_from_handover: openingRuleOn ? (Number(openingMaxDays) || null) : null,
+        opening_definition: openingDefinition || null,
+        min_rent_condition_type: rentType === "revenue_pct" && minCondOn ? "project_occupancy_pct" : null,
+        min_rent_condition_pct: rentType === "revenue_pct" && minCondOn ? (Number(minCondPct) || null) : null,
+        min_rent_condition_met_at: rentType === "revenue_pct" && minCondOn ? (minCondMetAt || null) : null,
+        min_rent_condition_notes: rentType === "revenue_pct" && minCondOn ? (minCondNotes || null) : null,
         revenue_pct_tiers: rentType === "revenue_pct" && revenuePctTiers.length > 0 ? revenuePctTiers : null,
         revenue_report_day: rentType === "revenue_pct" ? Number(revenueReportDay) || 5 : null,
         mgmt_included_in_revenue: mgmtIncludedInRevenue,
@@ -1640,6 +1665,85 @@ export default function ContractEditPage() {
                       </span>
                     </label>
                   </div>
+
+                  <div className="rounded-lg border border-violet-200 bg-violet-50/50 p-3 space-y-2">
+                    <div className="text-xs font-bold text-violet-800">🗓 תקופת השכירות מתחילה מ־</div>
+                    <div className="grid grid-cols-3 gap-2">
+                      {[{v:"start_date",l:"תאריך שהוזן"},{v:"handover",l:"מועד המסירה"},{v:"opening",l:"פתיחת המושכר"}].map(function(o){
+                        return (
+                          <button key={o.v} type="button" onClick={function(){ setTermStartsAt(o.v as any); }}
+                            className={"rounded-lg border px-2 py-2 text-[11px] font-bold " + (termStartsAt === o.v ? "border-violet-500 bg-white text-violet-800" : "border-slate-200 text-slate-500")}>
+                            {o.l}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {termStartsAt === "opening" && (
+                      <>
+                        <label className="flex items-start gap-2 text-[11px] text-slate-700">
+                          <input type="checkbox" checked={openingRuleOn} onChange={(e) => setOpeningRuleOn(e.target.checked)} className="rounded mt-0.5" />
+                          <span>מועד הפתיחה מוגדר בהסכם — המוקדם מבין הפתיחה בפועל לבין ימים ממועד המסירה</span>
+                        </label>
+                        {openingRuleOn && (
+                          <div>
+                            <label className="mb-1 block text-[11px] font-semibold text-slate-700">ולא יאוחר מ־ (ימים ממועד המסירה)</label>
+                            <input type="number" min="0" max="730" value={openingMaxDays} placeholder="למשל 60"
+                              onChange={(e) => setOpeningMaxDays(e.target.value)} className={ic} />
+                          </div>
+                        )}
+                        <div>
+                          <label className="mb-1 block text-[11px] font-semibold text-slate-700">הגדרת מועד הפתיחה כלשונה</label>
+                          <textarea value={openingDefinition} onChange={(e) => setOpeningDefinition(e.target.value)} rows={2} className={ic} />
+                        </div>
+                      </>
+                    )}
+                    {termStartsAt !== "start_date" && (function(){
+                      var draft = {
+                        start_date: startDate || null,
+                        actual_handover_date: actualHandover || null, planned_handover_date: plannedHandover || null,
+                        actual_opening_date: actualOpening || null, planned_opening_date: plannedOpening || null,
+                        opening_rule: openingRuleOn ? "actual_or_days_from_handover" : null,
+                        opening_max_days_from_handover: Number(openingMaxDays) || null,
+                        term_starts_at: termStartsAt, lease_period_unit: leasePeriodUnit,
+                      };
+                      var t = leaseTerm({ contract: draft, months: leasePeriodUnit === "years" ? leasePeriodValue * 12 : leasePeriodValue });
+                      return (
+                        <div className="rounded-lg bg-white border border-violet-200 p-2 text-[11px] text-violet-900">
+                          {termStartsAt === "opening" && <div>מועד הפתיחה: <b>{describeOpening(effectiveOpeningDate(draft))}</b></div>}
+                          <div>{describeLeaseTerm(t)}</div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+
+                  {rentType === "revenue_pct" && (
+                    <div className="rounded-lg border border-purple-300 bg-purple-50/60 p-3 space-y-2">
+                      <label className="flex items-start gap-2 text-[11px] text-slate-700">
+                        <input type="checkbox" checked={minCondOn} onChange={(e) => setMinCondOn(e.target.checked)} className="rounded mt-0.5" />
+                        <span><b>המינימום חל רק בהתקיים תנאי איכלוס בפרויקט</b> — עד אז אחוז מפדיון בלבד</span>
+                      </label>
+                      {minCondOn && (
+                        <>
+                          <div className="grid grid-cols-2 gap-2">
+                            <div>
+                              <label className="mb-1 block text-[11px] font-semibold text-slate-700">אחוז איכלוס נדרש (%)</label>
+                              <input type="number" min="0" max="100" value={minCondPct} placeholder="למשל 60"
+                                onChange={(e) => setMinCondPct(e.target.value)} className={ic} />
+                            </div>
+                            <div>
+                              <label className="mb-1 block text-[11px] font-semibold text-slate-700">התנאי התקיים בתאריך</label>
+                              <input type="date" value={minCondMetAt} onChange={(e) => setMinCondMetAt(e.target.value)} className={ic} />
+                            </div>
+                          </div>
+                          <div>
+                            <label className="mb-1 block text-[11px] font-semibold text-slate-700">הסעיף כלשונו</label>
+                            <input type="text" value={minCondNotes} onChange={(e) => setMinCondNotes(e.target.value)} className={ic}
+                              placeholder="עד לאיכלוס 60% משטחי הפרויקט ישלם השוכר דמי שכירות חליפיים בלבד" />
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )}
 
                   <div>
                     <label className="mb-1 block text-xs font-semibold text-slate-700">הנחה בדמי ניהול בגרייס (%) — ריק = ללא שינוי</label>
