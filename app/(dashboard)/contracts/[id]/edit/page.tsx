@@ -183,6 +183,8 @@ export default function ContractEditPage() {
   // Step 3
   const [hasGrace, setHasGrace] = useState(false);
   const [graceMonths, setGraceMonths] = useState("3");
+  const [graceUnit, setGraceUnit] = useState<"months"|"days">("months");
+  const [gracePhase2Days, setGracePhase2Days] = useState("");
   const [graceType, setGraceType] = useState("full");
   const [graceDiscountPct, setGraceDiscountPct] = useState("50");
   // Retail: fit-out window and the store opening that ends it.
@@ -489,9 +491,14 @@ export default function ContractEditPage() {
     setDocumentUrl(c.document_url ?? "");
 
     // Populate Step 3
-    if (c.grace_months) {
+    if (c.grace_months || Number(c.grace_days) > 0) {
       setHasGrace(true);
-      setGraceMonths(c.grace_months.toString());
+      if (Number(c.grace_days) > 0 && !c.grace_months) {
+        setGraceUnit("days"); setGraceMonths(String(c.grace_days));
+      } else {
+        setGraceUnit("months"); setGraceMonths(c.grace_months.toString());
+      }
+      setGracePhase2Days(c.grace_phase2_days != null ? String(c.grace_phase2_days) : "");
       setGraceType(c.grace_type ?? "full");
       setGraceDiscountPct(c.grace_discount_pct?.toString() ?? "50");
     setGraceMgmtDiscount(c.grace_mgmt_discount_pct != null ? String(c.grace_mgmt_discount_pct) : "");
@@ -854,11 +861,15 @@ export default function ContractEditPage() {
         updatePayload.mgmt_free_max_days = mgmtStartsMode === "works_start_or_days" ? (Number(mgmtFreeMaxDays) || null) : null;
         updatePayload.mgmt_free_notes = mgmtStartsMode === "works_start_or_days" ? (mgmtFreeNotes || null) : null;
         updatePayload.works_start_date = worksStartDate || null;
-        updatePayload.grace_months = Number(graceMonths) || null;
+        updatePayload.grace_months = graceUnit === "months" ? (Number(graceMonths) || null) : null;
+        updatePayload.grace_days   = graceUnit === "days"   ? (Number(graceMonths) || null) : null;
+        updatePayload.grace_phase2_days = Number(gracePhase2Days) || null;
         updatePayload.grace_type = graceType;
         updatePayload.grace_discount_pct = graceType === "partial" ? Number(graceDiscountPct) || null : null;
       } else {
         updatePayload.grace_months = null;
+        updatePayload.grace_days = null;
+        updatePayload.grace_phase2_days = null;
         updatePayload.grace_type = null;
         updatePayload.grace_discount_pct = null;
       }
@@ -1626,8 +1637,21 @@ export default function ContractEditPage() {
                 <div className="space-y-3">
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="mb-1 block text-xs font-semibold text-slate-700">מספר חודשי גרייס</label>
-                      <input type="number" min="1" max="24" value={graceMonths} onChange={(e) => setGraceMonths(e.target.value)} className={ic} />
+                      <label className="mb-1 block text-xs font-semibold text-slate-700">
+                        {graceUnit === "months" ? "מספר חודשי גרייס" : "מספר ימי גרייס"}
+                      </label>
+                      <div className="flex gap-1 mb-1">
+                        <button type="button" onClick={() => setGraceUnit("months")}
+                          className={"rounded border px-2 py-1 text-[11px] " + (graceUnit === "months" ? "border-blue-500 bg-blue-50 font-bold text-blue-700" : "border-slate-200 text-slate-500")}>חודשים</button>
+                        <button type="button" onClick={() => setGraceUnit("days")}
+                          className={"rounded border px-2 py-1 text-[11px] " + (graceUnit === "days" ? "border-blue-500 bg-blue-50 font-bold text-blue-700" : "border-slate-200 text-slate-500")}>ימים</button>
+                      </div>
+                      <input type="number" min="1" max={graceUnit === "months" ? 24 : 730} value={graceMonths} onChange={(e) => setGraceMonths(e.target.value)} className={ic} />
+                      <label className="mb-1 mt-2 block text-[11px] font-semibold text-slate-600">
+                        + גרייס נוסף מפתיחת המושכר (ימים) — לא חובה
+                      </label>
+                      <input type="number" min="0" max="365" value={gracePhase2Days} placeholder="למשל 60"
+                        onChange={(e) => setGracePhase2Days(e.target.value)} className={ic} />
                     </div>
                     <div>
                       <label className="mb-1 block text-xs font-semibold text-slate-700">סוג גרייס</label>
@@ -1826,7 +1850,9 @@ export default function ContractEditPage() {
 
                   {(function(){
                     var draft = {
-                      grace_months: Number(graceMonths) || 0, grace_type: graceType,
+                      grace_months: graceUnit === "months" ? (Number(graceMonths) || 0) : 0,
+                      grace_days: graceUnit === "days" ? (Number(graceMonths) || 0) : 0,
+                      grace_phase2_days: Number(gracePhase2Days) || 0, grace_type: graceType,
                       grace_discount_pct: Number(graceDiscountPct) || 0,
                       grace_mgmt_discount_pct: graceMgmtDiscount === "" ? null : Number(graceMgmtDiscount),
                       mgmt_charge_starts: mgmtStartsMode === "works_start_or_days" ? "works_start_or_days" : null,
@@ -1846,7 +1872,7 @@ export default function ContractEditPage() {
                     return (
                       <div className="rounded-lg bg-indigo-50 border border-indigo-200 p-3 text-xs text-indigo-900 space-y-1">
                         <div className="font-bold">📅 {describeGrace(g)}</div>
-                        {g.end && <div>חיוב שכ&quot;ד מתחיל: <b>{g.end.toLocaleDateString("he-IL")}</b></div>}
+                        {g.end && <div>חיוב שכ&quot;ד מתחיל: <b>{(g.rentFreeEnd || g.end).toLocaleDateString("he-IL")}</b>{g.phase2Days > 0 && <span className="text-indigo-500"> (שלב 1 + {g.phase2Days} ימים מהפתיחה)</span>}</div>}
                         {(function(){
                           var mf = mgmtFreeWindow({ contract: draft });
                           return mf.applies ? <div className="text-emerald-800 font-semibold">🧾 {describeMgmtFree(mf)}</div> : null;
@@ -2774,7 +2800,7 @@ export default function ContractEditPage() {
                 { l: "תדירות", v: PAYMENT_FREQS.find((p) => p.v === paymentFreq)?.l },
                 { l: "הצמדה", v: INDEX_METHODS.find((m) => m.v === indexMethod)?.l },
                 { l: 'מע"מ', v: vatType === "taxable" ? `${currentVatPct}%` : "פטור" },
-                { l: "גרייס", v: hasGrace ? `${graceMonths} חודשים` : "לא" },
+                { l: "גרייס", v: hasGrace ? `${graceMonths} ${graceUnit === "days" ? "ימים" : "חודשים"}${Number(gracePhase2Days) > 0 ? " + " + gracePhase2Days + " מהפתיחה" : ""}` : "לא" },
                 { l: "עלייה מדורגת", v: hasIncrease ? (increaseMode === "per_unit" ? `לפי יחידה (${Object.keys(perUnitTiers).filter(k => perUnitTiers[k]?.length > 0).length} יחידות)` : priceTiers.length > 0 ? `${priceTiers.length} שלבים` : "לא") : "לא" },
                 { l: "אופציות", v: extensionOptions.length > 0 ? `${extensionOptions.length} אופציות` : "לא" },
                 { l: "ערבות", v: addGuarantee ? fmtMoney(Number(guaranteeAmt) || 0) : "לא" },

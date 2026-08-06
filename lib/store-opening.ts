@@ -21,11 +21,21 @@ export type GraceEndReason = "opened" | "grace_expired" | "open_ended" | "none";
 export type GraceWindow = {
   applies: boolean;
   start: Date | null;        // handover — when fit-out may begin
-  end: Date | null;          // the day grace stops covering
+  end: Date | null;          // the day the FIT-OUT window stops (phase 1)
   reason: GraceEndReason;
-  days: number;              // length of the grace actually used
-  openedLate: boolean;       // grace ran out before the store opened
-  lateDays: number;          // days beyond the grace (0 when opened in time)
+  days: number;              // length of phase 1 actually used
+  openedLate: boolean;       // phase 1 ran out before the store opened
+  lateDays: number;          // days beyond phase 1 (0 when opened in time)
+  // Some leases grant a SECOND grace counted from the opening itself:
+  //   שלב 1: עד 60 יום ממסירה או עד הפתיחה, המוקדם — שלב 2: עוד 60 יום מהפתיחה
+  // Phase 2 runs from wherever phase 1 ended, so opening on day 30 gives
+  // 30 + 60 = 90 rent-free days and never opening gives the full maximum
+  // (60 + 60 = 120) — it can never grow past phase1 + phase2.
+  // `end` stays the fit-out boundary (works-end anchors, the late-opening
+  // penalty and the opening target all measure against it); `rentFreeEnd`
+  // is what rent billing covers, and equals `end` when there is no phase 2.
+  phase2Days: number;
+  rentFreeEnd: Date | null;
 };
 
 // A date-only value must land on LOCAL midnight. `new Date("2025-01-01")`
@@ -66,7 +76,7 @@ export function addDays(base: Date, days: number): Date {
 // still shut — the lateness is measured against it.
 export function graceWindow(params: { contract: any; today?: Date }): GraceWindow {
   const c = params.contract || {};
-  const none: GraceWindow = { applies: false, start: null, end: null, reason: "none", days: 0, openedLate: false, lateDays: 0 };
+  const none: GraceWindow = { applies: false, start: null, end: null, reason: "none", days: 0, openedLate: false, lateDays: 0, phase2Days: 0, rentFreeEnd: null };
 
   const months = Number(c.grace_months) || 0;
   const graceDays = Number(c.grace_days) || 0;
@@ -96,14 +106,20 @@ export function graceWindow(params: { contract: any; today?: Date }): GraceWindo
   // every contract had before this existed (grace runs its term), and only a
   // contract that actually records an opening date is affected at all.
   const endsOnOpening = c.grace_ends_on_opening !== false;
+  const phase2Days = Number(c.grace_phase2_days) || 0;
+  const withPhase2 = function (w: GraceWindow): GraceWindow {
+    w.phase2Days = phase2Days;
+    w.rentFreeEnd = w.end && phase2Days > 0 ? addDays(w.end, phase2Days) : w.end;
+    return w;
+  };
 
   // Opened inside the window → grace stops on the opening day.
   if (endsOnOpening && opening && opening <= byTerm) {
-    return {
+    return withPhase2({
       applies: true, start, end: opening, reason: "opened",
       days: Math.max(0, daysBetween(start, opening)),
-      openedLate: false, lateDays: 0,
-    };
+      openedLate: false, lateDays: 0, phase2Days: 0, rentFreeEnd: null,
+    });
   }
 
   // Grace running its full term: either it was agreed to (endsOnOpening=false),
@@ -114,13 +130,14 @@ export function graceWindow(params: { contract: any; today?: Date }): GraceWindo
   const hasOpeningMilestone = !!(opening || d(c.planned_opening_date));
   const ref = opening || (params.today ? new Date(params.today) : new Date());
   const late = hasOpeningMilestone && (opening ? opening > byTerm : ref > byTerm);
-  return {
+  return withPhase2({
     applies: true, start, end: byTerm,
     reason: (!endsOnOpening && opening && opening <= byTerm) ? "open_ended" : "grace_expired",
     days: Math.max(0, daysBetween(start, byTerm)),
     openedLate: late,
     lateDays: late ? Math.max(0, daysBetween(byTerm, opening || ref)) : 0,
-  };
+    phase2Days: 0, rentFreeEnd: null,
+  });
 }
 
 // From when does this contract occupy the premises for COST-ALLOCATION purposes
@@ -143,7 +160,7 @@ export function rentStartDate(params: { contract: any; today?: Date }): Date | n
   const c = params.contract || {};
   const opening = d(c.actual_opening_date);
   const g = graceWindow(params);
-  if (g.applies) return g.end;
+  if (g.applies) return g.rentFreeEnd || g.end;
   return opening || d(c.actual_handover_date) || d(c.start_date);
 }
 
@@ -238,7 +255,7 @@ export function mgmtChargeFactorForRange(params: {
     return Math.max(0, Math.min(aE, bE) - Math.max(aS, bS));
   };
 
-  const graceDays = overlap(from, to, dayNum(g.start), dayNum(g.end));
+  const graceDays = overlap(from, to, dayNum(g.start), dayNum(g.rentFreeEnd || g.end));
   if (graceDays <= 0) return { factor: 1, opted: true, note: "" };
 
   const free = mgmtFreeWindow({ contract: c, today: params.today });
@@ -279,6 +296,8 @@ export function graceFactorsFor(params: {
   const g = graceWindow({ contract: c, today: params.today });
   const plain = { rentFactor: 1, mgmtFactor: 1, graceRatio: 0 };
   if (!g.applies || !g.end) return plain;
+  // Phase 2 (extra grace from the opening) extends the covered stretch.
+  const coverEnd = g.rentFreeEnd || g.end;
 
   // Compare on day boundaries only — a stray hour must not turn a fully-free
   // month into 99.7% free.
@@ -288,7 +307,7 @@ export function graceFactorsFor(params: {
   if (total <= 0) return plain;
   // The grace covers from the START of the period: fit-out that began earlier
   // still covers this period, and the old behaviour never clipped at g.start.
-  const covered = Math.min(g.end.getTime(), pE.getTime()) - pS.getTime();
+  const covered = Math.min(coverEnd.getTime(), pE.getTime()) - pS.getTime();
   if (covered <= 0) return plain;
 
   const graceRatio = Math.min(1, covered / total);
@@ -383,9 +402,12 @@ export function lateOpeningPenalty(params: {
 
 export function describeGrace(g: GraceWindow): string {
   if (!g.applies || !g.end) return "";
+  const phase2 = g.phase2Days > 0 && g.rentFreeEnd
+    ? " · ועוד " + g.phase2Days + " ימי גרייס מהפתיחה — חיוב שכ\"ד מ-" + g.rentFreeEnd.toLocaleDateString("he-IL")
+    : "";
   const dateStr = g.end.toLocaleDateString("he-IL");
-  if (g.reason === "opened") return "הגרייס הסתיים בפתיחת המושכר — " + dateStr + " (" + g.days + " ימים)";
-  if (g.reason === "open_ended") return "הגרייס נמשך לתקופתו המלאה גם לאחר הפתיחה — עד " + dateStr + " (" + g.days + " ימים)";
-  return "הגרייס הסתיים בתום התקופה — " + dateStr + " (" + g.days + " ימים)" +
-    (g.openedLate ? " · המושכר נפתח באיחור של " + g.lateDays + " ימים" : "");
+  if (g.reason === "opened") return "שלב 1 הסתיים בפתיחת המושכר — " + dateStr + " (" + g.days + " ימים)" + phase2;
+  if (g.reason === "open_ended") return "הגרייס נמשך לתקופתו המלאה גם לאחר הפתיחה — עד " + dateStr + " (" + g.days + " ימים)" + phase2;
+  return (g.phase2Days > 0 ? "שלב 1" : "הגרייס") + " הסתיים בתום התקופה — " + dateStr + " (" + g.days + " ימים)" +
+    (g.openedLate ? " · המושכר נפתח באיחור של " + g.lateDays + " ימים" : "") + phase2;
 }

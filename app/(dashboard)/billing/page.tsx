@@ -355,7 +355,7 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
       // (their mgmt is paid as part of the % rent — no separate charge).
       const { data: contracts } = await supabase
         .from("contracts")
-        .select("id, charged_area, rent_per_sqm, rent_type, revenue_pct, mgmt_included_in_revenue, is_amendment, start_date, end_date, indexation_method, index_base_date, mgmt_protection_type, mgmt_protection_value, mgmt_protection_months, mgmt_protection_indexed, mgmt_protection_notes, grace_months, grace_days, grace_type, grace_ends_on_opening, grace_mgmt_discount_pct, mgmt_charge_starts, mgmt_free_max_days, works_start_date, planned_handover_date, actual_handover_date, planned_opening_date, actual_opening_date, tenants(name), contract_spaces(space_id, spaces(id, space_name, area))")
+        .select("id, charged_area, rent_per_sqm, rent_type, revenue_pct, mgmt_included_in_revenue, is_amendment, start_date, end_date, indexation_method, index_base_date, mgmt_protection_type, mgmt_protection_value, mgmt_protection_months, mgmt_protection_indexed, mgmt_protection_notes, grace_months, grace_days, grace_phase2_days, grace_type, grace_ends_on_opening, grace_mgmt_discount_pct, mgmt_charge_starts, mgmt_free_max_days, works_start_date, planned_handover_date, actual_handover_date, planned_opening_date, actual_opening_date, tenants(name), contract_spaces(space_id, spaces(id, space_name, area))")
         .eq("property_id", propId)
         .eq("is_amendment", false)
         .in("status", ["active", "expiring", "extended"]);

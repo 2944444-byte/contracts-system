@@ -235,7 +235,7 @@ export default function PaymentsPage() {
       // Concessions are read separately and matched in memory: a charge can
       // carry several, and the balance every row shows is derived from them.
       supabase.from("concessions").select("*").eq("status", "active"),
-      supabase.from("contracts").select("id,property_id,vat_type,rent_type,revenue_pct,revenue_report_day,revenue_minimum_advance,minimum_rent,payment_method,start_date,end_date,rent_per_sqm,charged_area,investment_addition,is_amendment,grace_months,grace_days,grace_type,grace_discount_pct,grace_mgmt_discount_pct,grace_ends_on_opening,mgmt_charge_starts,mgmt_free_max_days,works_start_date,planned_handover_date,actual_handover_date,planned_opening_date,actual_opening_date,tenants(name),properties(name)").in("status", ["active", "expiring", "extended"]),
+      supabase.from("contracts").select("id,property_id,vat_type,rent_type,revenue_pct,revenue_report_day,revenue_minimum_advance,minimum_rent,payment_method,start_date,end_date,rent_per_sqm,charged_area,investment_addition,is_amendment,grace_months,grace_days,grace_phase2_days,grace_type,grace_discount_pct,grace_mgmt_discount_pct,grace_ends_on_opening,mgmt_charge_starts,mgmt_free_max_days,works_start_date,planned_handover_date,actual_handover_date,planned_opening_date,actual_opening_date,tenants(name),properties(name)").in("status", ["active", "expiring", "extended"]),
       // Rent advances for the year (both paid + unpaid — paid ones still need
       // to show on this screen so שולמו KPI is honest)
       includeAdvances ? supabase.from("advance_payments")

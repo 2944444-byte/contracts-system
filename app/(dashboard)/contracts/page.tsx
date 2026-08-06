@@ -2607,7 +2607,7 @@ export default function ContractsPage() {
               {g.applies && (
                 <div className="rounded-lg bg-indigo-50 border border-indigo-200 p-3 text-xs text-indigo-900 space-y-1 mb-3">
                   <div className="font-bold">{describeGrace(g)}</div>
-                  {g.end && <div>חיוב שכ&quot;ד מתחיל: <b>{g.end.toLocaleDateString("he-IL")}</b></div>}
+                  {g.end && <div>חיוב שכ&quot;ד מתחיל: <b>{(g.rentFreeEnd || g.end).toLocaleDateString("he-IL")}</b>{g.phase2Days > 0 && <span className="text-indigo-500"> (שלב 1 + {g.phase2Days} ימים מהפתיחה)</span>}</div>}
                 </div>
               )}
 

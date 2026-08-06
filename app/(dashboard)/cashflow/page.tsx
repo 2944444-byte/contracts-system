@@ -89,7 +89,7 @@ export default function CashflowPage() {
       // Contracts. contract_spaces brings the space_ids each contract holds —
       // we sum the spaces.area for those ids to get the real occupied area.
       supabase.from("contracts")
-        .select("id, status, is_amendment, rent_type, revenue_pct, start_date, end_date, charged_area, rent_per_sqm, vat_type, tenant_id, property_id, grace_months, grace_days, grace_type, grace_discount_pct, grace_mgmt_discount_pct, grace_ends_on_opening, mgmt_charge_starts, mgmt_free_max_days, works_start_date, planned_handover_date, actual_handover_date, planned_opening_date, actual_opening_date, tenants(name), properties(name), contract_spaces(space_id, spaces(area))")
+        .select("id, status, is_amendment, rent_type, revenue_pct, start_date, end_date, charged_area, rent_per_sqm, vat_type, tenant_id, property_id, grace_months, grace_days, grace_phase2_days, grace_type, grace_discount_pct, grace_mgmt_discount_pct, grace_ends_on_opening, mgmt_charge_starts, mgmt_free_max_days, works_start_date, planned_handover_date, actual_handover_date, planned_opening_date, actual_opening_date, tenants(name), properties(name), contract_spaces(space_id, spaces(area))")
         .eq("is_amendment", false),
       // Advance payments for the year
       supabase.from("advance_payments")

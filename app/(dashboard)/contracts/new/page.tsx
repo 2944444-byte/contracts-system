@@ -258,6 +258,8 @@ export default function ContractsNewPage() {
   // Step 3 — Grace & Increase
   const [hasGrace, setHasGrace] = useState(false);
   const [graceMonths, setGraceMonths] = useState("3");
+  // שלב 2: עוד X ימי גרייס הנספרים מפתיחת המושכר (מתום שלב 1).
+  const [gracePhase2Days, setGracePhase2Days] = useState("");
   // Fit-out is often agreed in days ("90 ימי התארגנות"), not whole months.
   const [graceUnit, setGraceUnit] = useState<"months"|"days">("months");
   const [graceType, setGraceType] = useState("full");
@@ -1106,6 +1108,7 @@ export default function ContractsNewPage() {
       if (hasGrace) {
         insertPayload.grace_months = graceUnit === "months" ? (Number(graceMonths) || null) : null;
         insertPayload.grace_days   = graceUnit === "days"   ? (Number(graceMonths) || null) : null;
+        insertPayload.grace_phase2_days = Number(gracePhase2Days) || null;
         insertPayload.grace_type = graceType;
         insertPayload.grace_ends_on_opening = graceEndsOnOpening;
         insertPayload.grace_mgmt_discount_pct = graceMgmtDiscount === "" ? null : (Number(graceMgmtDiscount) || 0);
@@ -2696,6 +2699,20 @@ export default function ContractsNewPage() {
                         onChange={(e) => setGraceMonths(e.target.value)}
                         className={ic}
                       />
+                      {/* Phase 2: "גרייס של 60 יום או עד הפתיחה, ואז עוד 60 יום
+                          מהפתיחה". Counted from wherever phase 1 ends, so the
+                          total can never exceed phase1 + phase2. */}
+                      <label className="mb-1 mt-2 block text-[11px] font-semibold text-slate-600">
+                        + גרייס נוסף מפתיחת המושכר (ימים) — לא חובה
+                      </label>
+                      <input type="number" min="0" max="365" value={gracePhase2Days} placeholder="למשל 60"
+                        onChange={(e) => setGracePhase2Days(e.target.value)} className={ic} />
+                      {Number(gracePhase2Days) > 0 && (
+                        <div className="text-[10px] text-blue-700 mt-0.5 leading-relaxed">
+                          שלב 1 נגמר בפתיחה או בתום {graceMonths || 0} {graceUnit === "days" ? "ימים" : "חודשים"} (המוקדם),
+                          ומשם עוד {gracePhase2Days} ימים. פתיחה מוקדמת מקצרת את הסך; המקסימום נשמר.
+                        </div>
+                      )}
                     </div>
                     <div>
                       <label className="mb-1 block text-xs font-semibold text-slate-700">
@@ -2918,7 +2935,7 @@ export default function ContractsNewPage() {
                       <div className="rounded-lg bg-indigo-50 border border-indigo-200 p-3 text-xs text-indigo-900 space-y-1">
                         <div className="font-bold">📅 {describeGrace(g)}</div>
                         {g.start && <div>תקופת עבודות מ-{g.start.toLocaleDateString("he-IL")}</div>}
-                        {g.end && <div>חיוב שכ&quot;ד מתחיל: <b>{g.end.toLocaleDateString("he-IL")}</b></div>}
+                        {g.end && <div>חיוב שכ&quot;ד מתחיל: <b>{(g.rentFreeEnd || g.end).toLocaleDateString("he-IL")}</b>{g.phase2Days > 0 && <span className="text-indigo-500"> (שלב 1 + {g.phase2Days} ימים מהפתיחה)</span>}</div>}
                         {graceMgmtDiscount !== "" && <div>דמי ניהול בגרייס: {100 - (Number(graceMgmtDiscount) || 0)}% מהרגיל</div>}
                         {(function(){
                           var mf = mgmtFreeWindow({ contract: draft });

@@ -109,7 +109,7 @@ export default function AlertsPage() {
     try { await reconcileAlerts(supabase); } catch (e) { /* keep showing the list */ }
 
     // due_date ascending = AGING order: most-overdue first, then nearest deadlines.
-    const { data } = await supabase.from("alerts").select("*, contracts(property_id, tenants(name), properties(id,name), start_date, planned_handover_date, actual_handover_date, planned_opening_date, actual_opening_date, works_start_date, works_end_date, grace_months, grace_days, grace_type, grace_ends_on_opening, late_opening_penalty_type, late_opening_penalty_value, late_opening_grace_days, late_opening_penalty_notes, vat_type, rent_type, rent_per_sqm, min_rent_per_sqm, minimum_rent, charged_area, investment_addition)").order("due_date", {ascending: true, nullsFirst: false}).order("created_at",{ascending:false});
+    const { data } = await supabase.from("alerts").select("*, contracts(property_id, tenants(name), properties(id,name), start_date, planned_handover_date, actual_handover_date, planned_opening_date, actual_opening_date, works_start_date, works_end_date, grace_months, grace_days, grace_phase2_days, grace_type, grace_ends_on_opening, late_opening_penalty_type, late_opening_penalty_value, late_opening_grace_days, late_opening_penalty_notes, vat_type, rent_type, rent_per_sqm, min_rent_per_sqm, minimum_rent, charged_area, investment_addition)").order("due_date", {ascending: true, nullsFirst: false}).order("created_at",{ascending:false});
     var scope = await getScopeIds();
     setAlerts(scopeRows(data??[], scope, function(a: any){ return a.property_id || a.contracts?.property_id; }));
     setLoading(false);
