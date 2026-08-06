@@ -1,5 +1,6 @@
 "use client";
 import React, { useState, useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { chargeBalance, waivedTotalFor, describeConcession, concessionValue, canGrantConcessions, REASON_LABELS, type ConcessionReason } from "@/lib/concessions";
 import { getVatRates, vatPctAt, getVatPctForDate, type VatRate } from "@/lib/vat";
 import { supabase } from '@/lib/supabase';
@@ -117,6 +118,7 @@ function Dropdown(props: {
 type Row = {
   id: string;
   source: "charge" | "rent_check" | "revenue" | "missing_revenue_report";
+  reportMonth?: string;          // YYYY-MM, on missing-report rows only
   contractId: string;
   tenantName: string;
   propertyName: string;
@@ -141,6 +143,7 @@ type Row = {
 };
 
 export default function PaymentsPage() {
+  const router = useRouter();
   const currentYear = new Date().getFullYear();
   const [rows,      setRows]      = useState<Row[]>([]);
   const [contracts, setContracts] = useState<any[]>([]);
@@ -407,6 +410,9 @@ export default function PaymentsPage() {
               status: "pending",
               createdAt: cursor.toISOString().slice(0, 10),
               period: monthLabel,
+              // The month in YYYY-MM, so the row can hand the revenue screen
+              // exactly which report is missing without re-parsing a label.
+              reportMonth: mk,
             });
           }
         }
@@ -763,6 +769,15 @@ export default function PaymentsPage() {
   // Creates a draft letter pre-filled with the debt info. For
   // missing-revenue-report rows the wording asks the tenant to send the
   // monthly revenue report rather than demanding payment.
+  // A "waiting for a turnover report" row is a task, not a debt: the useful
+  // action is to enter the report. Hands the revenue screen the contract and
+  // the exact month so the form opens filled in rather than blank.
+  function openRevenueReport(row: any) {
+    const m = row?.reportMonth || "";
+    router.push("/revenue?contract=" + encodeURIComponent(row.contractId || "") +
+      (m ? "&month=" + encodeURIComponent(m) : "") + "&report=1");
+  }
+
   async function sendLetter(row: Row) {
     try {
       var body: string;
@@ -1222,7 +1237,9 @@ export default function PaymentsPage() {
                                   <div className="text-[10px] text-purple-700 font-semibold mt-0.5">📊 שכ&quot;ד פידיון</div>
                                 )}
                                 {r.source === "missing_revenue_report" && (
-                                  <div className="text-[10px] text-orange-700 font-semibold mt-0.5">📝 ממתין לדיווח מהשוכר</div>
+                                  <button onClick={function(){ openRevenueReport(r); }}
+                                    className="text-[10px] text-orange-700 font-semibold mt-0.5 underline hover:text-purple-700 text-right"
+                                    title="פתח את טופס דיווח הפדיון">📝 ממתין לדיווח מהשוכר — לחץ להזנת הדיווח</button>
                                 )}
                               </td>
                               <td className="px-4 py-2.5 font-bold text-slate-800 font-mono whitespace-nowrap">
@@ -1274,6 +1291,11 @@ export default function PaymentsPage() {
                                     <button onClick={function() { openConcession(r); }}
                                       className="text-xs border border-emerald-200 bg-emerald-50 rounded px-2 py-1 text-emerald-700 hover:bg-emerald-100"
                                       title="ויתור מלא או חלקי על החיוב — לא יירשם כחוב של השוכר">🤝 ויתור</button>
+                                  )}
+                                  {r.source === "missing_revenue_report" && (
+                                    <button onClick={function() { openRevenueReport(r); }}
+                                      className="text-xs bg-purple-600 text-white px-2 py-1 rounded font-semibold hover:bg-purple-700"
+                                      title="פתח את טופס דיווח הפדיון לחודש הזה">📊 הזן דיווח</button>
                                   )}
                                   <button onClick={function() { sendLetter(r); }} className="text-xs border border-amber-200 bg-amber-50 rounded px-2 py-1 text-amber-700 hover:bg-amber-100" title="צור טיוטת מכתב דרישה">📧</button>
                                   {r.source === "charge" && (

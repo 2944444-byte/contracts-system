@@ -655,6 +655,28 @@ export default function RevenuePage() {
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
+  // Arriving from the payments screen: /revenue?contract=…&month=YYYY-MM&report=1
+  // opens the report form already filled in for that contract and month, so the
+  // "waiting for a report" row leads straight to entering it.
+  // Read from window rather than useSearchParams — no Suspense boundary needed
+  // and no prerender constraint on this page.
+  const deepLinked = useRef(false);
+  useEffect(() => {
+    if (deepLinked.current) return;
+    if (typeof window === "undefined") return;
+    if (contracts.length === 0) return;              // wait for the list to load
+    const q = new URLSearchParams(window.location.search);
+    if (q.get("report") !== "1") return;
+    const cid = q.get("contract") || "";
+    const m = q.get("month") || "";
+    if (!cid || !contracts.some(function(c: any){ return c.id === cid; })) return;
+    deepLinked.current = true;
+    setSelContractId(cid);
+    openNewFor(cid, m);
+    // Drop the params so a refresh doesn't reopen the form.
+    window.history.replaceState({}, "", "/revenue");
+  }, [contracts.length]);
+
   function closeModal() {
     setEditingId(""); setFContractId(""); setFMonth(""); setFGrossRevenue(""); setFMgmtInGross(""); setFNotes(""); setFFile(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
