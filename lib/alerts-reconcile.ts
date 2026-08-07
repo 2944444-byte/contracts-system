@@ -231,7 +231,9 @@ export async function reconcileAlerts(supabase: SupabaseClient): Promise<{ resol
   // Informational notices report that something HAPPENED — there is no condition
   // to re-test, so they stay until the user closes them. Auto-closing would make
   // an event they may not have seen disappear on its own.
-  const NOTICES = ["option_auto_exercised"];
+  // Alert types resolved by a HUMAN, not by a condition the reconciler can
+  // re-test — the yearly accountant true-up stays open until someone did it.
+  const NOTICES = ["option_auto_exercised", "annual_revenue_audit"];
   const toResolve: string[] = [];
   for (const a of open as any[]) {
     if (OWNED.indexOf(a.entity_type) === -1) continue;

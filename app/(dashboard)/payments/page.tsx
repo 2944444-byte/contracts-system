@@ -9,6 +9,7 @@ import { PageHero } from '@/components/ui';
 import { getScopeIds, scopeRows, getCurrentAccess } from '@/lib/permissions';
 import { reconcileAlerts } from '@/lib/alerts-reconcile';
 import { graceFactorsFor } from '@/lib/store-opening';
+import { generateTransferCharges, nextBillingMonth } from '@/lib/transfer-billing';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 
@@ -28,6 +29,7 @@ const CHARGE_TYPES = [
   { v: "late_opening_penalty", l: "קנס אי-פתיחת המושכר", icon: "⏰" },
   { v: "investment_clawback", l: "החזר השקעות ביציאה מוקדמת", icon: "↩️" },
   { v: "revenue_settlement", l: "התחשבנות פדיון", icon: "⚖️" },
+  { v: "rent_transfer", l: 'שכ"ד ודמי ניהול — העברה/ה"ק', icon: "🏦" },
   { v: "other",       l: "אחר",               icon: "📋" },
 ];
 
@@ -119,6 +121,7 @@ type Row = {
   id: string;
   source: "charge" | "rent_check" | "revenue" | "missing_revenue_report";
   reportMonth?: string;          // YYYY-MM, on missing-report rows only
+  notes?: string;                // the calculation breakdown, for the letter
   contractId: string;
   tenantName: string;
   propertyName: string;
@@ -295,7 +298,7 @@ export default function PaymentsPage() {
       var tenant = (c.contracts?.tenants as any)?.name || "—";
       var property = (c.contracts?.properties as any)?.name || "";
       var t = typeInfo(c.charge_type);
-      var description = c.notes || t.l;
+      var description = c.description || c.notes || t.l;
       allRows.push({
         id: c.id,
         source: "charge",
@@ -315,6 +318,7 @@ export default function PaymentsPage() {
         dueDate: c.due_date,
         status: c.status || "pending",
         createdAt: c.created_at,
+        notes: c.notes || "",
       });
     });
 
@@ -778,6 +782,30 @@ export default function PaymentsPage() {
       (m ? "&month=" + encodeURIComponent(m) : "") + "&report=1");
   }
 
+  // Tenants who pay by transfer / standing order get no cheques — each month,
+  // once the index is known, their figure is computed and lands here as a
+  // charge, and 📧 on the row produces the notice letter with the breakdown.
+  const [transferRunning, setTransferRunning] = useState(false);
+  async function runTransferBilling() {
+    const period = nextBillingMonth(new Date());
+    if (!confirm("לחשב וליצור חיובי שכ\"ד ודמי ניהול ל" + period.label +
+      " עבור שוכרים בהעברה בנקאית / הוראת קבע?\nהחישוב לפי המדד הידוע היום; חיוב שכבר קיים לחודש זה לא ייווצר שוב.")) return;
+    setTransferRunning(true);
+    try {
+      const r = await generateTransferCharges({ supabase });
+      await logAudit({ entity_type: "billing", entity_id: "transfer_run", action: "generate_transfer_charges",
+        notes: period.label + " · נוצרו " + r.created });
+      alert("חיובי " + period.label + ":\n" +
+        "✅ נוצרו: " + r.created + "\n" +
+        (r.skippedExisting ? "⏭ כבר קיימים: " + r.skippedExisting + "\n" : "") +
+        (r.skippedZero ? "⚪ ללא חיוב: " + r.skippedZero + "\n" : "") +
+        (r.errors.length ? "⚠ שגיאות:\n" + r.errors.join("\n") + "\n" : "") +
+        (r.lines.length ? "\n" + r.lines.join("\n") : ""));
+      await loadAll();
+    } catch (e: any) { alert("שגיאה: " + (e?.message || e)); }
+    finally { setTransferRunning(false); }
+  }
+
   async function sendLetter(row: Row) {
     try {
       var body: string;
@@ -792,14 +820,20 @@ export default function PaymentsPage() {
         title = "דרישת דיווח מחזור — " + (row.period || "");
         letterType = "notice";
       } else {
+        var isNotice = row.chargeType === "rent_transfer";
         body = "שוכר/ת נכבד/ה,\n\n" +
-          "להלן חיוב שטרם שולם:\n" +
+          (isNotice
+            ? "להלן הודעת חיוב לתקופה הקרובה:\n"
+            : "להלן חיוב שטרם שולם:\n") +
           "תיאור: " + row.description + "\n" +
           "סכום: " + fmtMoney(row.totalAmount) + "\n" +
           (row.dueDate ? "תאריך לתשלום: " + fmtDate(row.dueDate) + "\n" : "") +
-          "\nאנא הסדירו את התשלום בהקדם.\n\nבברכה,\nהנהלת הנכס";
-        title = "דרישת תשלום — " + row.description.slice(0, 60);
-        letterType = "demand";
+          (row.notes ? "\nתחשיב החיוב:\n" + row.notes + "\n" : "") +
+          (isNotice
+            ? "\nאם התשלום בהעברה בנקאית — נא להעביר את הסכום עד המועד. אם בהוראת קבע/הרשאה לחיוב — החשבון יחויב בסכום זה.\n\nבברכה,\nהנהלת הנכס"
+            : "\nאנא הסדירו את התשלום בהקדם.\n\nבברכה,\nהנהלת הנכס");
+        title = (isNotice ? "הודעת חיוב — " : "דרישת תשלום — ") + row.description.slice(0, 60);
+        letterType = isNotice ? "notice" : "demand";
       }
       var { data, error } = await supabase.from("letters").insert({
         contract_id: row.contractId,
@@ -982,7 +1016,14 @@ export default function PaymentsPage() {
         subtitle={<>
           {rows.length} פריטים בשנת {filterYear}
           {includeAdvances && <span className="text-white/70 text-xs mr-2">(כולל מקדמות שכ&quot;ד שטרם שולמו)</span>}
-        </>} />
+        </>}
+        actions={
+          <button onClick={runTransferBilling} disabled={transferRunning}
+            className="rounded-xl bg-white/15 hover:bg-white/25 border border-white/30 px-4 py-2 text-sm font-bold text-white disabled:opacity-50"
+            title="חישוב שכ&quot;ד ודמי ניהול לחודש הבא לשוכרים בהעברה בנקאית / הוראת קבע, לפי המדד הידוע">
+            {transferRunning ? "⏳ מחשב..." : "🏦 חיובי העברה/ה&quot;ק — " + nextBillingMonth(new Date()).label}
+          </button>
+        } />
 
       {/* KPIs — clickable to filter by status. Simplified to 3 buckets:
           לתשלום (everything not yet paid, including approved), באיחור (subset

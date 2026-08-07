@@ -253,6 +253,9 @@ export default function ContractsNewPage() {
   const [baseIndexRule, setBaseIndexRule] = useState<BaseIndexRule>({ mode: "fixed", anchor: "actual_handover", offsetMonths: null });
   const [mgmtProtection, setMgmtProtection] = useState<MgmtProtection>(emptyMgmtProtection());
   const [mgmtFeePct, setMgmtFeePct] = useState("");
+  // דמי ניהול בשיטת קוסט-פלוס: חלק השוכר בעלות בפועל + אחוז. הסכום למ"ר הוא
+  // המקדמה; ההתחשבנות השנתית מוסיפה את המרווח על העלות בפועל.
+  const [mgmtCostPlus, setMgmtCostPlus] = useState("");
   const [documentUrl, setDocumentUrl] = useState("");
 
   // Step 3 — Grace & Increase
@@ -1078,6 +1081,7 @@ export default function ContractsNewPage() {
         ...mgmtProtectionToRow(mgmtProtection),
         index_base_resolved_at: baseIndexRule.mode === "derived" && baseCPIDate ? new Date().toISOString() : null,
         mgmt_fee_per_sqm: mgmtFeePct ? Number(mgmtFeePct) : null,
+        mgmt_cost_plus_pct: mgmtCostPlus ? Number(mgmtCostPlus) : null,
         document_url: documentUrl || null,
         status,
         // Amendment fields
@@ -2531,7 +2535,7 @@ export default function ContractsNewPage() {
               />
               <div>
                 <label className="mb-1 block text-xs font-semibold text-slate-700">
-                  דמי ניהול (₪/מ&quot;ר)
+                  דמי ניהול — מקדמה (₪/מ&quot;ר לחודש)
                 </label>
                 <input
                   type="number"
@@ -2540,6 +2544,17 @@ export default function ContractsNewPage() {
                   placeholder="5"
                   className={ic}
                 />
+                <div className="text-[10px] text-slate-400 mt-0.5">
+                  מקדמה לשנה הראשונה / עד הזנת תקציב ניהול לנכס. ההתחשבנות השנתית משווה לעלות בפועל.
+                </div>
+                <label className="mb-1 mt-2 block text-[11px] font-semibold text-slate-600">
+                  קוסט פלוס (%) — לא חובה
+                </label>
+                <input type="number" min="0" max="100" step="0.5" value={mgmtCostPlus}
+                  onChange={(e) => setMgmtCostPlus(e.target.value)} placeholder="למשל 15" className={ic} />
+                <div className="text-[10px] text-slate-400 mt-0.5">
+                  אם ההסכם קובע עלות בפועל + אחוז — ההתחשבנות השנתית תוסיף את המרווח על חלק השוכר בעלות.
+                </div>
               </div>
               <MgmtProtectionFields
                 value={mgmtProtection}

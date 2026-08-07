@@ -29,7 +29,9 @@ interface MgmtResult { contractId: string; tenantName: string; spaceNames: strin
   // Management-fee protection (cap / fixed) applied to this year's reconciliation
   protectionLabel?: string; ceilingAmount?: number; absorbed?: number; capped?: boolean;
   // Fit-out period: exempt / discounted management, and why
-  fitOutNote?: string; }
+  fitOutNote?: string;
+  // Cost-plus margin applied to the actual-cost side
+  costPlusNote?: string; }
 interface InsResult {
   contractId: string;
   tenantName: string;
@@ -355,7 +357,7 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
       // (their mgmt is paid as part of the % rent — no separate charge).
       const { data: contracts } = await supabase
         .from("contracts")
-        .select("id, charged_area, rent_per_sqm, rent_type, revenue_pct, mgmt_included_in_revenue, is_amendment, start_date, end_date, indexation_method, index_base_date, mgmt_protection_type, mgmt_protection_value, mgmt_protection_months, mgmt_protection_indexed, mgmt_protection_notes, grace_months, grace_days, grace_phase2_days, grace_type, grace_ends_on_opening, grace_mgmt_discount_pct, mgmt_charge_starts, mgmt_free_max_days, works_start_date, planned_handover_date, actual_handover_date, planned_opening_date, actual_opening_date, tenants(name), contract_spaces(space_id, spaces(id, space_name, area))")
+        .select("id, charged_area, rent_per_sqm, rent_type, revenue_pct, mgmt_included_in_revenue, is_amendment, start_date, end_date, indexation_method, index_base_date, mgmt_protection_type, mgmt_protection_value, mgmt_protection_months, mgmt_protection_indexed, mgmt_protection_notes, mgmt_cost_plus_pct, grace_months, grace_days, grace_phase2_days, grace_type, grace_ends_on_opening, grace_mgmt_discount_pct, mgmt_charge_starts, mgmt_free_max_days, works_start_date, planned_handover_date, actual_handover_date, planned_opening_date, actual_opening_date, tenants(name), contract_spaces(space_id, spaces(id, space_name, area))")
         .eq("property_id", propId)
         .eq("is_amendment", false)
         .in("status", ["active", "expiring", "extended"]);
@@ -526,6 +528,15 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
           actualShare = actualShare * mgmtFit.factor;
         }
 
+        // Cost-plus: the lease bills the tenant's share of the actual cost
+        // PLUS a margin. Applied to the actual side only — the advance is
+        // whatever was collected — so the margin lands in the reconciliation
+        // difference, which is where it is actually owed.
+        const costPlusPct = Number(c.mgmt_cost_plus_pct) || 0;
+        if (costPlusPct > 0) {
+          actualShare = actualShare * (1 + costPlusPct / 100);
+        }
+
         // The area the year is billed on: the time-weighted average, so the
         // protection ceiling scales with the same yardstick as the advance.
         contractArea = yearDays > 0 ? Math.round((sqmDays / yearDays) * 100) / 100 : 0;
@@ -567,6 +578,7 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
           fitOutNote: mgmtFit.opted && mgmtFit.factor < 1
             ? "תקופת עבודות: " + mgmtFit.note + " (" + Math.round(mgmtFit.factor * 100) + "% מהשנה)"
             : undefined,
+          costPlusNote: costPlusPct > 0 ? "קוסט פלוס " + costPlusPct + "% על העלות בפועל" : undefined,
         };
       });
       setMgmtResults(results);
@@ -1098,6 +1110,9 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
                         </td>
                         <td className="px-4 py-3">
                           {fmtMoney(r.actualShare)}
+                          {r.costPlusNote && (
+                            <div className="text-[10px] mt-0.5 rounded inline-block px-1.5 py-0.5 bg-indigo-100 text-indigo-800">➕ {r.costPlusNote}</div>
+                          )}
                           {r.protectionLabel && (
                             <div className={"text-[10px] mt-0.5 rounded inline-block px-1.5 py-0.5 " + (r.capped ? "bg-teal-100 text-teal-800" : "bg-slate-100 text-slate-600")}
                               title={r.protectionLabel}>

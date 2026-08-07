@@ -178,6 +178,7 @@ export default function ContractEditPage() {
   const [mgmtProtection, setMgmtProtection] = useState<MgmtProtection>(emptyMgmtProtection());
   const [revProtection, setRevProtection] = useState<RevenueProtection>(emptyRevenueProtection());
   const [mgmtFeePct, setMgmtFeePct] = useState("");
+  const [mgmtCostPlus, setMgmtCostPlus] = useState("");
   const [documentUrl, setDocumentUrl] = useState("");
 
   // Step 3
@@ -488,6 +489,7 @@ export default function ContractEditPage() {
     setMgmtProtection(mgmtProtectionFromRow(c));
     setRevProtection(revenueProtectionFromRow(c));
     setMgmtFeePct(c.mgmt_fee_per_sqm?.toString() ?? "");
+    setMgmtCostPlus(c.mgmt_cost_plus_pct != null ? String(c.mgmt_cost_plus_pct) : "");
     setDocumentUrl(c.document_url ?? "");
 
     // Populate Step 3
@@ -843,6 +845,7 @@ export default function ContractEditPage() {
         ...revenueProtectionToRow(revProtection),
         index_base_resolved_at: baseIndexRule.mode === "derived" && baseCPIDate ? new Date().toISOString() : null,
         mgmt_fee_per_sqm: mgmtFeePct ? Number(mgmtFeePct) : null,
+        mgmt_cost_plus_pct: mgmtCostPlus ? Number(mgmtCostPlus) : null,
         document_url: documentUrl || null,
         status,
       };
@@ -1556,6 +1559,9 @@ export default function ContractEditPage() {
               <div>
                 <label className="mb-1 block text-xs font-semibold text-slate-700">דמי ניהול (₪/מ&quot;ר)</label>
                 <input type="number" value={mgmtFeePct} onChange={(e) => setMgmtFeePct(e.target.value)} className={ic} />
+                <label className="mb-1 mt-2 block text-[11px] font-semibold text-slate-600">קוסט פלוס (%) — לא חובה</label>
+                <input type="number" min="0" max="100" step="0.5" value={mgmtCostPlus}
+                  onChange={(e) => setMgmtCostPlus(e.target.value)} placeholder="למשל 15" className={ic} />
               </div>
               <MgmtProtectionFields
                 value={mgmtProtection}

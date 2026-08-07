@@ -199,6 +199,37 @@ export async function runAlertSync(supabase: SupabaseClient): Promise<{ created:
       }
     }
 
+    // A turnover lease settles monthly/quarterly against the tenant's own
+    // reports — and once a year the whole thing must be trued up against the
+    // accountant-audited revenue figure. Nobody's screen produces that moment,
+    // so the system reminds: every January, one notice per revenue contract
+    // that was in force during the closed year. Manually resolved (it is a
+    // task for a human), so reconcile lists it under NOTICES.
+    {
+      const isRev = c.rent_type === "revenue_pct" || c.rent_type === "revenue_based" || Number(c.revenue_pct) > 0;
+      const now = new Date();
+      const auditYear = now.getFullYear() - 1;
+      if (isRev && now.getMonth() >= 0 && c.start_date && new Date(c.start_date).getFullYear() <= auditYear
+          && (!c.end_date || new Date(c.end_date).getFullYear() >= auditYear)) {
+        const dueStr = (auditYear + 1) + "-03-31";
+        const { data: aExist } = await supabase.from("alerts")
+          .select("id").eq("contract_id", c.id)
+          .eq("alert_type", "annual_revenue_audit").eq("due_date", dueStr).limit(1);
+        if (!aExist || aExist.length === 0) {
+          const label = (c.tenants?.name ?? "") + " — " + (c.properties?.name ?? "");
+          await add({
+            title: "📚 " + label + " — התאמה שנתית מול רו\"ח לשנת " + auditYear,
+            message: "חוזה פדיון: יש להשוות את דיווחי המחזור וההתחשבנויות של " + auditYear +
+              " מול הדוח המבוקר של רואה החשבון, ולחייב/לזכות את ההפרש אם קיים. " +
+              "ההתראה נסגרת ידנית לאחר ביצוע ההתאמה.",
+            severity: "warning", alert_type: "annual_revenue_audit",
+            entity_type: "contract", entity_id: c.id, contract_id: c.id,
+            property_id: c.property_id ?? null, due_date: dueStr,
+          });
+        }
+      }
+    }
+
     // Handover not confirmed. Until it is, the contract sits outside every
     // calculation — so this is the one alert that must not be missed on a
     // future-handover lease.
