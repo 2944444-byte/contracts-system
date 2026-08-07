@@ -3,6 +3,10 @@
     {
       "path": "/api/cron/sync-contracts",
       "schedule": "0 2 * * *"
+    },
+    {
+      "path": "/api/cron/transfer-billing",
+      "schedule": "0 5 16-20 * *"
     }
   ]
 }
