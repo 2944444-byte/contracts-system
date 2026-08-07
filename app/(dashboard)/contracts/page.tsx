@@ -21,6 +21,9 @@ import { guaranteeGaps, describeGaps, guaranteeTypeLabel } from '@/lib/guarantee
 import { deliveryStatus, describeDelivery } from '@/lib/guarantee-delivery';
 import { canGrantConcessions, describeConcession, REASON_LABELS, APPLIES_LABELS } from '@/lib/concessions';
 import { graceWindow, describeGrace, lateOpeningPenalty, mgmtFreeWindow, describeMgmtFree } from '@/lib/store-opening';
+import { minimumApplies } from '@/lib/project-occupancy';
+import { revenueProtectionFromRow, protectionEndsOn, hasRevenueProtection } from '@/lib/revenue-protection';
+import { effectiveOpeningDate, describeOpening, leaseTerm, describeLeaseTerm } from '@/lib/lease-term';
 import { previewLateOpeningCharge, applyLateOpeningCharge } from '@/lib/late-opening-charge';
 import { mgmtProtectionFromRow, describeMgmtProtection } from '@/lib/mgmt-protection';
 // CPI + price timeline
@@ -106,6 +109,10 @@ const STATUS_MAP: Record<string,{label:string;color:string;dot:string}> = {
   extended: {label:"פעיל",   color:"bg-green-100 text-green-700",  dot:"bg-green-500"}, // alias for active
   upcoming: {label:"עתידי",  color:"bg-purple-100 text-purple-700",dot:"bg-purple-500"},
   ended:    {label:"הסתיים", color:"bg-slate-100 text-slate-500",  dot:"bg-slate-400"},
+  // A signed lease whose term hasn't begun — typically waiting for the
+  // handover or the opening. NOT the same as ended, which is what the old
+  // fallback displayed for it.
+  future:   {label:"עתידי — טרם החלה התקופה", color:"bg-purple-100 text-purple-700", dot:"bg-purple-500"},
 };
 
 export default function ContractsPage() {
@@ -268,7 +275,7 @@ export default function ContractsPage() {
 
   async function loadContracts() {
     const { data } = await supabase.from("contracts")
-      .select("*, tenants(name,phone,primary_email,company_name), properties(name,city), contract_options(id,option_number,duration_months,duration_years,start_date,end_date,notice_days_before_end,notice_type,status,is_exercised,rent_mechanism,rent_increase_pct,new_rent_value,option_group,exit_points,price_schedule_type,price_tiers,non_exercise_penalty_type,non_exercise_penalty_value,non_exercise_penalty_basis,non_exercise_penalty_months,non_exercise_penalty_indexed,non_exercise_penalty_vat,non_exercise_penalty_days,non_exercise_penalty_notes,declined_at,non_exercise_charge_id), guarantees(id,guarantee_type,status,amount_required,amount_actual,end_date,bank,document_url,documents,delivery_trigger,delivery_offset_days,delivery_due_date,delivery_condition,delivered_at), contract_ti(id,description,ti_type,ti_amount,recovery_method,recovery_amount_monthly,recovery_start_date,recovery_end_date,payment_trigger,payment_days_after,payment_due_date,payment_installments,requires_invoice,requires_report,paid_at,paid_amount,payment_notes,notes), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,index_base_value,index_base_date,use_original_index,spaces(space_name,area))")
+      .select("*, tenants(name,phone,primary_email,company_name), properties(name,city), contract_options(id,option_number,duration_months,duration_years,start_date,end_date,notice_days_before_end,notice_type,status,is_exercised,rent_mechanism,rent_increase_pct,new_rent_value,option_group,exit_points,price_schedule_type,price_tiers,non_exercise_penalty_type,non_exercise_penalty_value,non_exercise_penalty_basis,non_exercise_penalty_months,non_exercise_penalty_indexed,non_exercise_penalty_vat,non_exercise_penalty_days,non_exercise_penalty_notes,declined_at,non_exercise_charge_id,cancels_revenue_protection), guarantees(id,guarantee_type,status,amount_required,amount_actual,end_date,bank,document_url,documents,delivery_trigger,delivery_offset_days,delivery_due_date,delivery_condition,delivered_at), contract_ti(id,description,ti_type,ti_amount,recovery_method,recovery_amount_monthly,recovery_start_date,recovery_end_date,payment_trigger,payment_days_after,payment_due_date,payment_installments,requires_invoice,requires_report,paid_at,paid_amount,payment_notes,notes), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,index_base_value,index_base_date,use_original_index,spaces(space_name,area))")
       .order("end_date");
     // Data-level scoping: managers/viewers see only contracts of their
     // allowed properties (admin scope is null = everything).
@@ -879,7 +886,7 @@ export default function ContractsPage() {
     if (filterSt === "all") ms = true;
     else if (filterSt === "active") ms = c.status === "active" || c.status === "extended" || c.status === "expiring";
     else if (filterSt === "ended") ms = c.status === "ended";
-    else if (filterSt === "upcoming") ms = c.status === "upcoming";
+    else if (filterSt === "upcoming") ms = c.status === "upcoming" || c.status === "future";
     else ms = c.status === filterSt;
     const mp = filterProp === "all" || c.property_id === filterProp;
     const mq = !search || c.tenants?.name?.includes(search) || c.properties?.name?.includes(search);
@@ -1041,7 +1048,7 @@ export default function ContractsPage() {
   const counts: Record<string,number> = { active: 0, upcoming: 0, ended: 0 };
   contracts.filter(function(c) { return !c.is_amendment; }).forEach(function(c){
     if (c.status === "active" || c.status === "extended" || c.status === "expiring") counts.active++;
-    else if (c.status === "upcoming") counts.upcoming++;
+    else if (c.status === "upcoming" || c.status === "future") counts.upcoming++;
     else if (c.status === "ended") counts.ended++;
   });
 
@@ -1158,7 +1165,8 @@ export default function ContractsPage() {
               <div className="text-4xl mb-2">📄</div><div>אין חוזים</div>
             </div>
           ) : filtered.map(function(c) {
-            const si   = STATUS_MAP[c.status] ?? STATUS_MAP.ended;
+            // An unknown status must not masquerade as "הסתיים".
+            const si   = STATUS_MAP[c.status] ?? { label: c.status || "—", color: "bg-slate-100 text-slate-500", dot: "bg-slate-300" };
             // Find latest amendment for this contract to show effective rent
             var cAmends = contracts.filter(function(a){return a.parent_contract_id===c.id && a.is_amendment;}).sort(function(a,b){return (a.amendment_number||0)-(b.amendment_number||0);});
             var cEffSpaces = cAmends.length > 0 && cAmends[cAmends.length-1].contract_spaces?.length > 0
@@ -1418,6 +1426,97 @@ export default function ContractsPage() {
                     <div className="text-xs text-slate-400">עד {fmtEndDate(effectiveEndDate, selContract.start_date)}</div>
                   </div>
                 </div>
+
+                {/* Special terms CURRENTLY in force. Each line has a lapse
+                    condition and vanishes once it no longer binds — a clause
+                    that expired last year is noise, not information. */}
+                {(function(){
+                  var c: any = selContract;
+                  var today = new Date(); today.setHours(0,0,0,0);
+                  var items: { icon: string; text: string; tone?: string }[] = [];
+
+                  // The lease clock runs from a milestone, not a typed date.
+                  // Shown until the premises actually open — after that the
+                  // dates are ordinary history.
+                  if ((c.term_starts_at === "opening" || c.term_starts_at === "handover") && !c.actual_opening_date) {
+                    var t = leaseTerm({ contract: c });
+                    var op = effectiveOpeningDate(c);
+                    var termTxt = t.start && t.end
+                      ? t.months + " חודשים · " + t.start.toLocaleDateString("he-IL") + " – " + t.end.toLocaleDateString("he-IL")
+                      : describeLeaseTerm(t);
+                    items.push({
+                      icon: "🗓",
+                      text: c.term_starts_at === "opening"
+                        ? "תקופת השכירות נספרת ממועד פתיחת המושכר — " + describeOpening(op) + " · " + termTxt
+                        : "תקופת השכירות נספרת ממועד המסירה · " + termTxt,
+                      tone: "violet",
+                    });
+                  }
+
+                  // Alternative rent until the project fills up. Gone the day
+                  // the minimum starts applying.
+                  var minCond = minimumApplies({ contract: c, date: today });
+                  if (!minCond.applies) {
+                    items.push({ icon: "🏗", text: 'דמי שכירות חליפיים — אחוז מפדיון ללא מינימום. ' + minCond.reason +
+                      (c.min_rent_condition_notes ? " · " + c.min_rent_condition_notes : ""), tone: "amber" });
+                  }
+
+                  // Revenue protection (the refund kind) while it still covers.
+                  var prot = revenueProtectionFromRow(c);
+                  if (hasRevenueProtection(prot)) {
+                    var pe = protectionEndsOn({ contract: c, protection: prot, options: c.contract_options || [] });
+                    if (!pe.date || pe.date.getTime() >= today.getTime()) {
+                      items.push({ icon: "🛡", text: 'הגנה על שכ"ד — פער שלילי מול המינימום מוחזר לשוכר' +
+                        (pe.date ? " · עד " + pe.date.toLocaleDateString("he-IL") : " · לכל תקופת ההסכם"), tone: "blue" });
+                    }
+                  }
+
+                  // Grace, both phases, while any of it still covers billing.
+                  var g = graceWindow({ contract: c, today: today });
+                  var freeEnd = g.applies ? (g.rentFreeEnd || g.end) : null;
+                  if (g.applies && freeEnd && freeEnd.getTime() >= today.getTime()) {
+                    items.push({ icon: "🔨", text: describeGrace(g), tone: "indigo" });
+                  }
+
+                  // Management exempt until works begin — while it lasts.
+                  var mf = mgmtFreeWindow({ contract: c, today: today });
+                  if (mf.applies && mf.end && mf.end.getTime() >= today.getTime()) {
+                    items.push({ icon: "🧾", text: describeMgmtFree(mf), tone: "emerald" });
+                  }
+
+                  // A late-opening penalty clause matters only while the shop
+                  // hasn't opened.
+                  if (c.late_opening_penalty_type && c.late_opening_penalty_type !== "none" && !c.actual_opening_date) {
+                    items.push({ icon: "⏰", text: "קנס על אי-פתיחה במועד: " +
+                      (c.late_opening_penalty_type === "daily_amount" ? "₪" + Number(c.late_opening_penalty_value || 0).toLocaleString("he-IL") + " לכל יום איחור"
+                       : c.late_opening_penalty_type === "daily_pct_rent" ? Number(c.late_opening_penalty_value || 0) + '% משכ"ד יומי לכל יום איחור'
+                       : "סכום חד-פעמי ₪" + Number(c.late_opening_penalty_value || 0).toLocaleString("he-IL")) +
+                      (Number(c.late_opening_grace_days) > 0 ? " · " + c.late_opening_grace_days + " ימי חסד" : ""), tone: "rose" });
+                  }
+
+                  if (items.length === 0) return null;
+                  var toneCls: Record<string,string> = {
+                    violet: "border-violet-200 bg-violet-50 text-violet-900",
+                    amber: "border-amber-300 bg-amber-50 text-amber-900",
+                    blue: "border-blue-200 bg-blue-50 text-blue-900",
+                    indigo: "border-indigo-200 bg-indigo-50 text-indigo-900",
+                    emerald: "border-emerald-200 bg-emerald-50 text-emerald-900",
+                    rose: "border-rose-200 bg-rose-50 text-rose-900",
+                  };
+                  return (
+                    <div className="rounded-xl border border-slate-200 bg-white p-3 space-y-1.5">
+                      <div className="text-xs font-bold text-slate-700">📌 תנאים מיוחדים בתוקף</div>
+                      {items.map(function(it, i){
+                        return (
+                          <div key={i} className={"rounded-lg border px-2.5 py-1.5 text-[11px] leading-relaxed " + (toneCls[it.tone || "blue"])}>
+                            {it.icon} {it.text}
+                          </div>
+                        );
+                      })}
+                      <div className="text-[10px] text-slate-400">מוצגים רק תנאים שעדיין בתוקף — תנאי שפג נעלם מהרשימה.</div>
+                    </div>
+                  );
+                })()}
 
                 {/* Concessions on this contract — standing discounts and waivers
                     on individual charges, in one place, and reversible without
