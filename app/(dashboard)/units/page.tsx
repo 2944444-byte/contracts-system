@@ -136,11 +136,20 @@ export default function UnitsPage() {
     return spaceHolderMap[spaceId] ?? null;
   }
 
-  const filtered = spaces.filter(function(s){ return (filterPropIds.length===0||filterPropIds.includes(s.property_id))&&(filterSt==="all"||s.status===filterSt); });
-  const vacant=spaces.filter(function(s){return s.status==="vacant";}).length;
-  const occupied=spaces.filter(function(s){return s.status==="occupied";}).length;
+  const filtered = spaces.filter(function(s){
+    if (filterPropIds.length>0 && !filterPropIds.includes(s.property_id)) return false;
+    if (filterSt==="all") return true;
+    return filterSt==="occupied" ? unitHeld(s) : !unitHeld(s);
+  });
+  // One truth for "is this unit taken": the cached flag OR any contract that
+  // holds it — including a signed lease whose term hasn't begun. The cards
+  // already worked this way; the top counters and the filter still read the
+  // drift-prone flag alone and could disagree with the cards on the same page.
+  const unitHeld = function(s: any): boolean { return s.status === "occupied" || !!tenantForSpace(s.id); };
+  const vacant=spaces.filter(function(s){return !unitHeld(s);}).length;
+  const occupied=spaces.filter(unitHeld).length;
   const totalArea=spaces.reduce(function(s,sp){return s+(Number(sp.area)??0);},0);
-  const rentedArea=spaces.filter(function(s){return s.status==="occupied";}).reduce(function(s,sp){return s+(Number(sp.area)??0);},0);
+  const rentedArea=spaces.filter(unitHeld).reduce(function(s,sp){return s+(Number(sp.area)??0);},0);
   const typeInfo=function(v:string){return SPACE_TYPES.find(function(t){return t.v===v;})??SPACE_TYPES[5];};
 
   // Group filtered spaces by property
@@ -184,7 +193,7 @@ export default function UnitsPage() {
         <div className="space-y-6">
           {Object.values(propGroups).map(function(group) {
             const propSpaces = group.spaces;
-            const propOccupied = propSpaces.filter(function(s){return s.status==="occupied";}).length;
+            const propOccupied = propSpaces.filter(unitHeld).length;
             const propVacant = propSpaces.filter(function(s){return s.status==="vacant";}).length;
             const propTotalArea = propSpaces.reduce(function(s,sp){return s+(Number(sp.area)||0);},0);
             const propRentedArea = propSpaces.filter(function(s){return s.status==="occupied";}).reduce(function(s,sp){return s+(Number(sp.area)||0);},0);
