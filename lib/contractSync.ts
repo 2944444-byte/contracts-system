@@ -1,7 +1,12 @@
-import { supabase } from "./supabase";
+import { supabase as browserClient } from "./supabase";
 import { logAudit } from "./audit-log";
 
-export async function syncContractStatuses(): Promise<number> {
+// Runs from two places: the contracts screen's "🔄 סנכרן סטטוסים" button (the
+// browser client) and the nightly cron (service-role client). Until the cron
+// was wired in, auto-exercising options and status transitions happened ONLY
+// when somebody pressed the button.
+export async function syncContractStatuses(client?: any): Promise<number> {
+  const supabase = client || browserClient;
   const today = new Date().toISOString().split("T")[0];
   const todayMs = Date.now();
   let updated = 0;

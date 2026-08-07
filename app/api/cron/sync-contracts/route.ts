@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { runAlertSync, buildAlertsDigestHtml } from "@/lib/alerts-sync";
+import { syncContractStatuses } from "@/lib/contractSync";
 import { autoCreateGuaranteeRenewalLetters, getUnsentLetters, buildLettersReminderHtml } from "@/lib/guarantee-letters";
 import { sendEmail } from "@/lib/email-utils";
 
@@ -26,6 +27,12 @@ export async function GET(req: NextRequest) {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
   const supabase = createClient(url, key, { auth: { autoRefreshToken: false, persistSession: false } });
+
+  // Status lifecycle + auto-exercised options + visitor-parking billing dates.
+  // This ran ONLY from the manual "סנכרן סטטוסים" button until now — a lease
+  // whose notice deadline passed was auto-exercised only when somebody
+  // happened to click.
+  const statusUpdates = await syncContractStatuses(supabase);
 
   const { created, newAlerts } = await runAlertSync(supabase);
 
@@ -67,7 +74,7 @@ export async function GET(req: NextRequest) {
   }
 
   return NextResponse.json({
-    ok: true, created, emailed, emailError,
+    ok: true, created, statusUpdates, emailed, emailError,
     guaranteeLettersCreated: createdGuaranteeLetters.length,
     unsentLetters: unsent.length,
   });
