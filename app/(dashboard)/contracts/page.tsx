@@ -187,6 +187,10 @@ export default function ContractsPage() {
   const [allPropertySpaces, setAllPropertySpaces] = useState<any[]>([]);
   // For extend period
   const [amendNewEndDate, setAmendNewEndDate] = useState("");
+  // שינוי שיטת תשלום בתוספת: השיטה/התדירות/היום החדשים, מתוקף מועד התוספת.
+  const [amendPayMethod, setAmendPayMethod] = useState("");
+  const [amendPayFreq, setAmendPayFreq] = useState("");
+  const [amendPayDay, setAmendPayDay] = useState("");
   // For price change
   const [amendPriceChanges, setAmendPriceChanges] = useState<Record<string, string>>({});
   // Per-unit CPI base: "original" = use contract's CPI, "custom" = new CPI value/date
@@ -2888,10 +2892,16 @@ export default function ContractsPage() {
                     { v: "price_change", l: "שינוי מחירים", desc: "עדכון מחירים ליחידות קיימות", icon: "💰" },
                     { v: "parking_subscription", l: "תוספת חניות מינוי", desc: "חניות קבועות בתשלום חודשי", icon: "🅿️" },
                     { v: "parking_visitor", l: "חניות אורחים מזדמנים", desc: "מנוי דרך מקומות / קודים בהנחה", icon: "🎫" },
+                    { v: "payment_change", l: "שינוי שיטת תשלום", desc: "שיטה / תדירות / יום תשלום — מתוקף מועד התוספת", icon: "💳" },
                     { v: "other", l: "שינוי אחר", desc: "פתיחת כל האפשרויות (אשף מלא)", icon: "📋" },
                   ].map(function(opt) {
                     return (
-                      <button key={opt.v} onClick={function(){ if (opt.v==="other") { router.push("/contracts/new?amendment_of="+selContract.id); setShowAmendModal(false); return; } setAmendType(opt.v); }}
+                      <button key={opt.v} onClick={function(){ if (opt.v==="other") { router.push("/contracts/new?amendment_of="+selContract.id); setShowAmendModal(false); return; } if (opt.v === "payment_change") {
+                          setAmendPayMethod(selContract.payment_method || "checks_advance");
+                          setAmendPayFreq(selContract.payment_frequency || "monthly");
+                          setAmendPayDay(String(selContract.payment_day || 1));
+                        }
+                        setAmendType(opt.v); }}
                         className="w-full rounded-xl border border-slate-200 p-3 flex items-center gap-3 hover:bg-slate-50 hover:border-blue-300 transition-all text-right">
                         <span className="text-2xl">{opt.icon}</span>
                         <div className="flex-1">
@@ -3036,6 +3046,55 @@ export default function ContractsPage() {
                       <div className="text-xs text-slate-400 mb-2">סיום נוכחי: {fmtEndDate(selContract.end_date, selContract.start_date)}</div>
                       <input type="date" value={amendNewEndDate} onChange={function(e){setAmendNewEndDate(e.target.value);}}
                         className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                    </div>
+                  )}
+
+                  {/* ── PAYMENT CHANGE ── */}
+                  {amendType === "payment_change" && (
+                    <div className="space-y-3">
+                      <div className="rounded-lg bg-slate-50 border border-slate-200 p-2.5 text-xs text-slate-600">
+                        היום: {selContract.payment_method === "checks_advance" ? "שיקים מראש" : selContract.payment_method === "bank_transfer" ? "העברה בנקאית" : selContract.payment_method === "standing_order" ? "הוראת קבע" : selContract.payment_method}
+                        {" · "}{selContract.payment_frequency === "monthly" ? "חודשי" : selContract.payment_frequency === "quarterly" ? "רבעוני" : selContract.payment_frequency === "annual" ? "שנתי" : selContract.payment_frequency}
+                        {" · יום "}{selContract.payment_day || 1}
+                      </div>
+                      <div className="grid grid-cols-3 gap-2">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-1">שיטת תשלום</label>
+                          <select value={amendPayMethod} onChange={function(e){setAmendPayMethod(e.target.value);}}
+                            className="w-full rounded-lg border border-slate-300 px-2 py-2 text-sm">
+                            <option value="checks_advance">שיקים מראש</option>
+                            <option value="standing_order">הוראת קבע</option>
+                            <option value="bank_transfer">העברה בנקאית</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-1">תדירות</label>
+                          <select value={amendPayFreq} onChange={function(e){setAmendPayFreq(e.target.value);}}
+                            className="w-full rounded-lg border border-slate-300 px-2 py-2 text-sm">
+                            <option value="monthly">חודשי</option>
+                            <option value="quarterly">רבעוני</option>
+                            <option value="annual">שנתי</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-1">יום תשלום</label>
+                          <input type="number" min="1" max="28" value={amendPayDay}
+                            onChange={function(e){setAmendPayDay(e.target.value);}}
+                            className="w-full rounded-lg border border-slate-300 px-2 py-2 text-sm" />
+                        </div>
+                      </div>
+                      <div className="rounded-lg bg-blue-50 border border-blue-200 p-2.5 text-[11px] text-blue-900 leading-relaxed">
+                        השינוי חל ממועד התוספת ואילך; מה שנגבה עד אז נשאר כפי שהיה, וכל תנאי שלא שונה כאן ממשיך מההסכם המקורי.
+                        {amendPayMethod !== "checks_advance" && selContract.payment_method === "checks_advance" && (
+                          <div className="mt-1 font-semibold">מעבר משיקים להעברה/ה&quot;ק: מהמועד הזה החיובים ייווצרו אוטומטית מדי חודש אחרי פרסום המדד. מקדמות/שיקים שכבר הופקו לתקופה שאחרי המועד — מחק במסך המקדמות.</div>
+                        )}
+                        {amendPayMethod === "checks_advance" && selContract.payment_method !== "checks_advance" && (
+                          <div className="mt-1 font-semibold">מעבר לשיקים: הפק את המקדמות ממסך חיובי נכס ← מקדמות מהמועד הזה.</div>
+                        )}
+                        {amendPayFreq !== selContract.payment_frequency && amendPayMethod === "checks_advance" && (
+                          <div className="mt-1 font-semibold">שינוי תדירות בשיקים: יש להפיק מחדש את המקדמות לתקופה שמהמועד הזה ואילך.</div>
+                        )}
+                      </div>
                     </div>
                   )}
 
@@ -3306,9 +3365,9 @@ export default function ContractsPage() {
                         rent_per_sqm: selContract.rent_per_sqm || null,
                         charged_area: totalArea || selContract.charged_area,
                         vat_type: selContract.vat_type,
-                        payment_frequency: selContract.payment_frequency,
-                        payment_method: selContract.payment_method,
-                        payment_day: selContract.payment_day,
+                        payment_frequency: amendType === "payment_change" ? amendPayFreq : selContract.payment_frequency,
+                        payment_method: amendType === "payment_change" ? amendPayMethod : selContract.payment_method,
+                        payment_day: amendType === "payment_change" ? (Number(amendPayDay) || 1) : selContract.payment_day,
                         indexation_method: selContract.indexation_method,
                         index_base_value: selContract.index_base_value,
                         index_base_date: selContract.index_base_date,
@@ -3318,11 +3377,29 @@ export default function ContractsPage() {
                         amendment_number: (count ?? 0) + 1,
                         amendment_date: amendDate,
                         document_url: amendDocUrl || null,
-                        amendment_notes: amendNotes || (amendType === "swap_units" ? "החלפת יחידות" : amendType === "add_units" ? "הוספת יחידות" : amendType === "remove_units" ? "הורדת יחידות" : amendType === "extend" ? "הארכת תקופה" : amendType === "price_change" ? "שינוי מחירים" : amendType === "parking_subscription" ? "תוספת חניות מינוי" : amendType === "parking_visitor" ? "חניות אורחים מזדמנים" : "שינוי אחר"),
+                        amendment_notes: amendNotes || (amendType === "swap_units" ? "החלפת יחידות" : amendType === "add_units" ? "הוספת יחידות" : amendType === "remove_units" ? "הורדת יחידות" : amendType === "extend" ? "הארכת תקופה" : amendType === "price_change" ? "שינוי מחירים" : amendType === "parking_subscription" ? "תוספת חניות מינוי" : amendType === "parking_visitor" ? "חניות אורחים מזדמנים" : amendType === "payment_change"
+                          ? (function(){
+                              var lbl = function(m: string){ return m === "checks_advance" ? "שיקים מראש" : m === "bank_transfer" ? "העברה בנקאית" : m === "standing_order" ? "הוראת קבע" : m; };
+                              var frq = function(f: string){ return f === "monthly" ? "חודשי" : f === "quarterly" ? "רבעוני" : f === "annual" ? "שנתי" : f; };
+                              return "שינוי שיטת תשלום מ-" + new Date(amendDate).toLocaleDateString("he-IL") + ": " +
+                                lbl(selContract.payment_method) + " → " + lbl(amendPayMethod) +
+                                " · " + frq(selContract.payment_frequency) + " → " + frq(amendPayFreq) +
+                                " · יום " + (selContract.payment_day || 1) + " → " + (Number(amendPayDay) || 1);
+                            })()
+                          : "שינוי אחר"),
                       };
 
                       var { data: newContract, error } = await supabase.from("contracts").insert(amendPayload).select().single();
                       if (error) throw error;
+
+                      if (amendType === "payment_change") {
+                        var { error: pmErr } = await supabase.from("contracts").update({
+                          payment_method: amendPayMethod,
+                          payment_frequency: amendPayFreq,
+                          payment_day: Number(amendPayDay) || 1,
+                        }).eq("id", selContract.id);
+                        if (pmErr) throw pmErr;
+                      }
 
                       // Insert spaces for the amendment
                       var spacesToInsert: any[] = [];
