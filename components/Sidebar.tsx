@@ -42,6 +42,7 @@ const NAV: NavItem[] = [
   {href:"/companies",    label:"חברות",          icon:"🏛️"},
   {href:"/users",        label:"משתמשים",        icon:"👑"},
   {href:"/settings",     label:"הגדרות",         icon:"⚙️"},
+  {href:"/guide",        label:"מדריך למשתמש",  icon:"📖"},
 ];
 
 export default function Sidebar() {
