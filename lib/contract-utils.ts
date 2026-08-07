@@ -281,6 +281,91 @@ export function rentAtDate(schedule: RentScheduleEntry[], queryDate: Date): numb
   return r;
 }
 
+export type RentPeriodChange = { date: Date; from: number; to: number };
+
+/**
+ * Rent owed for an arbitrary period [periodStart, periodEnd] (both inclusive),
+ * computed by walking the ACTUAL schedule segments — not a single
+ * before/after pair. Handles any number of rent changes inside the period
+ * (e.g. a tier anniversary in March AND an exercised option in October of the
+ * same year), and prorates the entry/exit months by days-in-month, so a unit
+ * entering mid-month is never billed a full month just because the month also
+ * contains a rent change.
+ *
+ * Month-by-month walk: each calendar month overlapping the period contributes
+ * Σ over rent segments of  monthlyRate × (segment days in month ∩ period) / daysInMonth.
+ * A change effective on day D bills days 1..D-1 at the old rate and D..end at
+ * the new rate — same convention as the historical mid-month split.
+ *
+ * `monthlyAddend` is added to every segment's monthly rate (e.g. an
+ * investment rent addition that is part of the rent but not in the schedule);
+ * `rateMultiplier` scales every rate (e.g. the CPI ratio).
+ *
+ * Returns the period total plus the list of change points that fall inside
+ * the period (for labelling), with from/to already addend+multiplier adjusted.
+ */
+export function rentForPeriod(params: {
+  schedule: RentScheduleEntry[];
+  periodStart: Date;
+  periodEnd: Date;
+  monthlyAddend?: number;
+  rateMultiplier?: number;
+}): { total: number; changes: RentPeriodChange[] } {
+  const { schedule, periodStart, periodEnd } = params;
+  const addend = params.monthlyAddend ?? 0;
+  const mult = params.rateMultiplier ?? 1;
+  if (periodEnd < periodStart || schedule.length === 0) return { total: 0, changes: [] };
+
+  // Normalize to local-midnight day granularity: schedule dates parsed from
+  // ISO strings are UTC midnight, period bounds are local-midnight Dates.
+  const toDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const pStart = toDay(periodStart);
+  const pEnd = toDay(periodEnd);
+  const rateAt = (d: Date) => (rentAtDate(schedule, new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59)) + addend) * mult;
+
+  // Change points strictly inside the period (a change ON pStart just sets
+  // the opening rate — it is not a mid-period split).
+  const changes: RentPeriodChange[] = [];
+  let prevRate = rateAt(pStart);
+  for (const e of schedule) {
+    const d = toDay(e.date);
+    if (d <= pStart || d > pEnd) continue;
+    const newRate = (e.rentMonthly + addend) * mult;
+    if (Math.abs(newRate - prevRate) > 0.005) {
+      changes.push({ date: d, from: prevRate, to: newRate });
+      prevRate = newRate;
+    }
+  }
+
+  let total = 0;
+  const cursor = new Date(pStart.getFullYear(), pStart.getMonth(), 1);
+  while (cursor <= pEnd) {
+    const mStart = new Date(cursor.getFullYear(), cursor.getMonth(), 1);
+    const mEnd = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0);
+    const dim = mEnd.getDate();
+    const clipStart = mStart < pStart ? pStart : mStart;
+    const clipEnd = mEnd > pEnd ? pEnd : mEnd;
+    if (clipStart <= clipEnd) {
+      // Segment boundaries inside this month's clipped window
+      const bounds = [clipStart];
+      for (const ch of changes) {
+        if (ch.date > clipStart && ch.date <= clipEnd) bounds.push(ch.date);
+      }
+      for (let i = 0; i < bounds.length; i++) {
+        const segStart = bounds[i];
+        const segEnd = i + 1 < bounds.length
+          ? new Date(bounds[i + 1].getFullYear(), bounds[i + 1].getMonth(), bounds[i + 1].getDate() - 1)
+          : clipEnd;
+        const days = Math.round((segEnd.getTime() - segStart.getTime()) / 86400000) + 1;
+        total += rateAt(segStart) * days / dim;
+      }
+    }
+    cursor.setMonth(cursor.getMonth() + 1);
+  }
+
+  return { total, changes };
+}
+
 /**
  * Expand recurring tiers into individual year-by-year tiers.
  * Example: { is_recurring: true, recurring_every_years: 1, from_year: 1, to_year: 10 }
