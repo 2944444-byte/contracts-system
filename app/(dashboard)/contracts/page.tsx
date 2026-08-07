@@ -303,7 +303,7 @@ export default function ContractsPage() {
     if (!selContract) { setAmendments([]); setParkingSubs([]); setSpaceOverlaps([]); return; }
     // Load amendments first, then check overlaps using ALL spaces (base + amendments)
     supabase.from("contracts")
-      .select("id,amendment_number,amendment_date,amendment_notes,document_url,start_date,end_date,rent_per_sqm,charged_area,contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,index_base_value,index_base_date,use_original_index,spaces(space_name,area))")
+      .select("id,amendment_number,amendment_date,amendment_notes,document_url,start_date,end_date,rent_per_sqm,charged_area,payment_method,payment_frequency,payment_day,amendment_prev,contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,index_base_value,index_base_date,use_original_index,spaces(space_name,area))")
       .eq("parent_contract_id", selContract.id)
       .eq("is_amendment", true)
       .order("amendment_number")
@@ -2220,6 +2220,37 @@ export default function ContractsPage() {
 
                           {/* Changes summary */}
                           <div className="space-y-2">
+                            {/* Payment change: old → new, from the amendment's
+                                own pre-change snapshot — the base row was
+                                updated on save, so the snapshot is the only
+                                witness to what the terms were before. */}
+                            {(function(){
+                              var ap: any = am.amendment_prev;
+                              if (!ap) return null;
+                              var changed = (ap.payment_method != null && ap.payment_method !== am.payment_method)
+                                || (ap.payment_frequency != null && ap.payment_frequency !== am.payment_frequency)
+                                || (ap.payment_day != null && Number(ap.payment_day) !== Number(am.payment_day));
+                              if (!changed) return null;
+                              var lbl = function(m: string){ return m === "checks_advance" ? "שיקים מראש" : m === "bank_transfer" ? "העברה בנקאית" : m === "standing_order" ? "הוראת קבע" : m || "—"; };
+                              var frq = function(f: string){ return f === "monthly" ? "חודשי" : f === "quarterly" ? "רבעוני" : f === "annual" ? "שנתי" : f || "—"; };
+                              return (
+                                <div className="rounded-lg bg-indigo-50 border border-indigo-200 px-3 py-2">
+                                  <div className="text-sm font-bold text-indigo-800 mb-1">💳 שינוי שיטת תשלום</div>
+                                  <div className="text-xs text-indigo-900 space-y-0.5">
+                                    {ap.payment_method !== am.payment_method && (
+                                      <div>שיטה: <span className="line-through text-slate-400">{lbl(ap.payment_method)}</span> ← <b>{lbl(am.payment_method)}</b></div>
+                                    )}
+                                    {ap.payment_frequency !== am.payment_frequency && (
+                                      <div>תדירות: <span className="line-through text-slate-400">{frq(ap.payment_frequency)}</span> ← <b>{frq(am.payment_frequency)}</b></div>
+                                    )}
+                                    {Number(ap.payment_day) !== Number(am.payment_day) && (
+                                      <div>יום תשלום: <span className="line-through text-slate-400">{ap.payment_day}</span> ← <b>{am.payment_day}</b></div>
+                                    )}
+                                    <div className="text-indigo-600">בתוקף מ-{am.amendment_date ? fmtDate(am.amendment_date) : "מועד התוספת"}</div>
+                                  </div>
+                                </div>
+                              );
+                            })()}
                             {/* Added spaces */}
                             {addedSpaces.length > 0 && (
                               <div className="rounded-lg bg-green-50 border border-green-200 px-3 py-2">
@@ -3377,7 +3408,19 @@ export default function ContractsPage() {
                         amendment_number: (count ?? 0) + 1,
                         amendment_date: amendDate,
                         document_url: amendDocUrl || null,
-                        amendment_notes: amendNotes || (amendType === "swap_units" ? "החלפת יחידות" : amendType === "add_units" ? "הוספת יחידות" : amendType === "remove_units" ? "הורדת יחידות" : amendType === "extend" ? "הארכת תקופה" : amendType === "price_change" ? "שינוי מחירים" : amendType === "parking_subscription" ? "תוספת חניות מינוי" : amendType === "parking_visitor" ? "חניות אורחים מזדמנים" : amendType === "payment_change"
+                        // The pre-change snapshot: the base row is about to be
+                        // updated for the generators, so this is the only place
+                        // the OLD values survive for the details display.
+                        amendment_prev: amendType === "payment_change" ? {
+                          payment_method: selContract.payment_method,
+                          payment_frequency: selContract.payment_frequency,
+                          payment_day: selContract.payment_day,
+                        } : null,
+                        amendment_notes: (amendType === "payment_change" ? ((amendNotes ? amendNotes + " · " : "") + (function(){
+                          var lbl2 = function(m2: string){ return m2 === "checks_advance" ? "שיקים מראש" : m2 === "bank_transfer" ? "העברה בנקאית" : m2 === "standing_order" ? "הוראת קבע" : m2; };
+                          var frq2 = function(f2: string){ return f2 === "monthly" ? "חודשי" : f2 === "quarterly" ? "רבעוני" : f2 === "annual" ? "שנתי" : f2; };
+                          return "שינוי שיטת תשלום: " + lbl2(selContract.payment_method) + " → " + lbl2(amendPayMethod) + " · " + frq2(selContract.payment_frequency) + " → " + frq2(amendPayFreq);
+                        })()) : amendNotes) || (amendType === "swap_units" ? "החלפת יחידות" : amendType === "add_units" ? "הוספת יחידות" : amendType === "remove_units" ? "הורדת יחידות" : amendType === "extend" ? "הארכת תקופה" : amendType === "price_change" ? "שינוי מחירים" : amendType === "parking_subscription" ? "תוספת חניות מינוי" : amendType === "parking_visitor" ? "חניות אורחים מזדמנים" : amendType === "payment_change"
                           ? (function(){
                               var lbl = function(m: string){ return m === "checks_advance" ? "שיקים מראש" : m === "bank_transfer" ? "העברה בנקאית" : m === "standing_order" ? "הוראת קבע" : m; };
                               var frq = function(f: string){ return f === "monthly" ? "חודשי" : f === "quarterly" ? "רבעוני" : f === "annual" ? "שנתי" : f; };

@@ -13,7 +13,7 @@
 
 import { contractArea } from "@/lib/contract-area";
 
-export type AmendmentChange = "units" | "area" | "parking" | "rent" | "term" | "other";
+export type AmendmentChange = "units" | "area" | "parking" | "rent" | "term" | "payment" | "other";
 
 export const CHANGE_LABELS: Record<AmendmentChange, string> = {
   units: "שינוי יחידות",
@@ -21,11 +21,12 @@ export const CHANGE_LABELS: Record<AmendmentChange, string> = {
   parking: "תוספת/שינוי חניה",
   rent: 'שינוי שכ"ד',
   term: "שינוי תקופה",
+  payment: "שינוי שיטת תשלום",
   other: "שינוי תנאים",
 };
 
 export const CHANGE_ICONS: Record<AmendmentChange, string> = {
-  units: "🏢", area: "📐", parking: "🅿️", rent: "💰", term: "📅", other: "📝",
+  units: "🏢", area: "📐", parking: "🅿️", rent: "💰", term: "📅", payment: "💳", other: "📝",
 };
 
 function spaceIds(row: any): string[] {
@@ -97,6 +98,17 @@ export function classifyAmendment(params: {
   const termChanged = String(am.end_date || "").slice(0, 10) !== String(prev.end_date || "").slice(0, 10);
   if (termChanged) changes.push("term");
 
+  // Payment change: the base row is updated when the amendment is saved, so
+  // comparing against `prev` sees nothing — the amendment's own pre-change
+  // snapshot (amendment_prev) is the reliable witness.
+  const ap = am.amendment_prev;
+  const paymentChanged = !!ap && (
+    (ap.payment_method != null && ap.payment_method !== am.payment_method) ||
+    (ap.payment_frequency != null && ap.payment_frequency !== am.payment_frequency) ||
+    (ap.payment_day != null && Number(ap.payment_day) !== Number(am.payment_day))
+  );
+  if (paymentChanged) changes.push("payment");
+
   if (changes.length === 0) changes.push("other");
 
   // Headline: square metres first (it drives every allocation), then parking,
@@ -106,7 +118,8 @@ export function classifyAmendment(params: {
     : changes.indexOf("area") !== -1 ? "area"
     : changes.indexOf("parking") !== -1 ? "parking"
     : changes.indexOf("rent") !== -1 ? "rent"
-    : changes.indexOf("term") !== -1 ? "term" : "other";
+    : changes.indexOf("term") !== -1 ? "term"
+    : changes.indexOf("payment") !== -1 ? "payment" : "other";
 
   return {
     changes,
