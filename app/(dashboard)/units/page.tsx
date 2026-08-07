@@ -43,7 +43,10 @@ export default function UnitsPage() {
     const [{ data: sp }, { data: pr }, { data: c }] = await Promise.all([
       supabase.from("spaces").select("*, properties(name, total_area)").order("space_name"),
       supabase.from("properties").select("id,name,total_area").order("name"),
-      supabase.from("contracts").select("id,property_id,tenant_id,status,is_amendment,parent_contract_id,amendment_number,amendment_date,start_date,tenants(name),contract_spaces(space_id)").in("status",["active","expiring","extended"]),
+      // upcoming/future included: a SIGNED lease holds its units — the shop is
+      // let even though the term hasn't begun, and showing it vacant invited
+      // someone to rent it twice.
+      supabase.from("contracts").select("id,property_id,tenant_id,status,is_amendment,parent_contract_id,amendment_number,amendment_date,start_date,tenants(name),contract_spaces(space_id)").in("status",["active","expiring","extended","upcoming","future"]),
     ]);
     var scope = await getScopeIds();
     setSpaces(scopeRows(sp??[], scope, function(x: any){ return x.property_id; }));
@@ -92,7 +95,7 @@ export default function UnitsPage() {
   // snapshot of each contract family (base + amendments). So after Golf's
   // 13.3.2026 amendment swapped them to חנות 4 (and חנות 6 to Yehonatan), each
   // unit shows its up-to-date occupant — not the stale original base rows.
-  const spaceHolderMap: Record<string, string> = (function() {
+  const spaceHolderMap: Record<string, { name: string; started: boolean }> = (function() {
     const byContract: Record<string, { contract: any; spaceIds: string[] }> = {};
     contracts.forEach(function(c: any) {
       if (!byContract[c.id]) byContract[c.id] = { contract: c, spaceIds: [] };
@@ -112,19 +115,24 @@ export default function UnitsPage() {
       const dt = c.amendment_date || c.start_date;
       return (dt ? new Date(dt).getTime() : 0) * 1000 + (c.amendment_number || 0);
     };
-    const map: Record<string, string> = {};
+    const map: Record<string, { name: string; started: boolean }> = {};
     Object.keys(families).forEach(function(fid) {
       const snaps = families[fid];
       const baseEntry = snaps.find(function(s) { return !s.contract.is_amendment; }) || snaps[0];
       const latest = snaps.slice().sort(function(a, b) { return rank(a) - rank(b); })[snaps.length - 1];
       const name = baseEntry.contract.tenants?.name || null;
       if (!name) return;
-      latest.spaceIds.forEach(function(sid) { if (!map[sid]) map[sid] = name; });
+      const st = String(baseEntry.contract.status);
+      const started = st !== "upcoming" && st !== "future";
+      latest.spaceIds.forEach(function(sid) {
+        // A started lease outranks a future one on the same unit.
+        if (!map[sid] || (started && !map[sid].started)) map[sid] = { name: name, started: started };
+      });
     });
     return map;
-  })();
+  })() as Record<string, { name: string; started: boolean }>;
 
-  function tenantForSpace(spaceId: string) {
+  function tenantForSpace(spaceId: string): { name: string; started: boolean } | null {
     return spaceHolderMap[spaceId] ?? null;
   }
 
@@ -213,19 +221,23 @@ export default function UnitsPage() {
                 {/* Units grid */}
                 <div className="p-4 grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3">
                   {propSpaces.map(function(s) {
-                    const ti=typeInfo(s.space_type), tenant=tenantForSpace(s.id), isOcc=s.status==="occupied";
+                    const ti=typeInfo(s.space_type), tenant=tenantForSpace(s.id);
+                    // Held-but-not-started is its own state: not vacant (the
+                    // unit is committed) and not simply "מושכר" (no rent yet).
+                    const isFuture = !!tenant && !tenant.started;
+                    const isOcc = (s.status==="occupied" || !!tenant) && !isFuture;
                     return (
-                      <div key={s.id} className={"rounded-xl border p-3 transition-all hover:shadow-md "+(isOcc?"border-green-200 bg-green-50":"border-blue-100 bg-blue-50/50 border-dashed")}>
+                      <div key={s.id} className={"rounded-xl border p-3 transition-all hover:shadow-md "+(isOcc?"border-green-200 bg-green-50":isFuture?"border-amber-300 bg-amber-50":"border-blue-100 bg-blue-50/50 border-dashed")}>
                         <div className="flex items-center justify-between mb-1">
                           <div className="flex items-center gap-1.5">
                             <span className="text-lg">{ti.icon}</span>
                             <span className="font-bold text-slate-800 text-sm">{s.space_name}</span>
                           </div>
-                          <span className={"text-[10px] px-1.5 py-0.5 rounded-full font-semibold "+(isOcc?"bg-green-100 text-green-700":"bg-blue-100 text-blue-700")}>{isOcc?"מושכר":"פנוי"}</span>
+                          <span className={"text-[10px] px-1.5 py-0.5 rounded-full font-semibold "+(isOcc?"bg-green-100 text-green-700":isFuture?"bg-amber-100 text-amber-800":"bg-blue-100 text-blue-700")}>{isOcc?"מושכר":isFuture?"תפוס — חוזה טרם החל":"פנוי"}</span>
                         </div>
                         <div className="text-[10px] text-slate-400 mb-1">{ti.l}</div>
                         {s.area&&<div className="text-xs text-slate-500">{s.area} מ"ר{s.floor?" | קומה "+s.floor:""}</div>}
-                        {tenant&&<div className="text-xs text-green-700 font-semibold mt-1 cursor-pointer hover:underline" onClick={function(e){e.stopPropagation();router.push("/contracts");}}>👤 {tenant} <span className="text-[10px] text-green-500">📄</span></div>}
+                        {tenant&&<div className={"text-xs font-semibold mt-1 cursor-pointer hover:underline "+(isFuture?"text-amber-800":"text-green-700")} onClick={function(e){e.stopPropagation();router.push("/contracts");}}>👤 {tenant.name}{isFuture?" 🔜":""} <span className="text-[10px] text-green-500">📄</span></div>}
                         <div className="mt-2 flex gap-1">
                           <button onClick={function(){openEdit(s);}} className="flex-1 text-[10px] border border-slate-200 rounded py-1 text-slate-600 hover:bg-slate-50">עריכה</button>
                           <button onClick={function(){handleDelete(s.id);}} className="text-[10px] border border-red-200 rounded py-1 px-2 text-red-500 hover:bg-red-50">🗑</button>

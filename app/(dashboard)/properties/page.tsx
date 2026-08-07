@@ -164,7 +164,9 @@ export default function PropertiesPage() {
   async function loadAll() {
     const [{ data: p }, { data: c }, { data: sp }, { data: co }] = await Promise.all([
       supabase.from("properties").select("*, companies(company_name)").order("name"),
-      supabase.from("contracts").select("id, status, rent_per_sqm, charged_area, investment_addition, property_id, end_date, indexation_method, index_mechanism, index_base_date, index_base_value, is_amendment, parent_contract_id, tenants(name), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area))").in("status",["active","expiring","extended"]),
+      // upcoming/future included so a signed-not-started lease HOLDS its units
+      // in the occupancy figures. Income sums filter them back out below.
+      supabase.from("contracts").select("id, status, start_date, rent_type, revenue_pct, min_rent_per_sqm, minimum_rent, rent_per_sqm, charged_area, investment_addition, property_id, end_date, indexation_method, index_mechanism, index_base_date, index_base_value, is_amendment, parent_contract_id, tenants(name), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area))").in("status",["active","expiring","extended","upcoming","future"]),
       supabase.from("spaces").select("id, property_id, status, space_name, area").order("space_name"),
       supabase.from("companies").select("id,company_name").order("company_name"),
     ]);
@@ -193,6 +195,13 @@ export default function PropertiesPage() {
       });
     }
     if (total === 0) total = (Number(c.rent_per_sqm) || 0) * (Number(c.charged_area) || 0);
+    // A turnover lease has no rent_per_sqm — its base figure is the MINIMUM,
+    // which is what a שפע-style contract earns the property on paper. Without
+    // this the contract contributed ₪0 and read as nonexistent.
+    if (total === 0 && (c.rent_type === "revenue_pct" || Number(c.revenue_pct) > 0)) {
+      var mArea = (c.contract_spaces || []).reduce(function (a: number, x: any) { return a + (Number(x?.spaces?.area) || 0); }, 0) || Number(c.charged_area) || 0;
+      total = Number(c.min_rent_per_sqm) > 0 ? Number(c.min_rent_per_sqm) * mArea : (Number(c.minimum_rent) || 0);
+    }
     return total + (Number(c.investment_addition) || 0);
   }
 
@@ -278,7 +287,11 @@ export default function PropertiesPage() {
   const selProp = properties.find(function(p) { return p.id === selected; });
   const selSpaces    = spaces.filter(function(s) { return s.property_id === selected; });
   // Filter out amendments — show only main contracts. Amendment data is folded into parent below.
-  const selContracts = contracts.filter(function(c) { return c.property_id === selected && !c.is_amendment; });
+  const selAllContracts = contracts.filter(function(c) { return c.property_id === selected && !c.is_amendment; });
+  // A lease whose term hasn't begun holds its units but earns nothing yet —
+  // it belongs in occupancy, not in income.
+  const selFutureContracts = selAllContracts.filter(function(c) { return c.status === "upcoming" || c.status === "future"; });
+  const selContracts = selAllContracts.filter(function(c) { return c.status !== "upcoming" && c.status !== "future"; });
   // Base revenue (not indexed) — using accurate per-unit calculation
   const selRevenueBase = selContracts.reduce(function(s,c){return s + calcContractRent(c);},0);
   // Indexed revenue — applies CPI ratio per contract from cpiRatios state
@@ -302,6 +315,11 @@ export default function PropertiesPage() {
     (c.contract_spaces || []).forEach(function(cs: any) {
       if (cs?.space_id) heldSpaceIds.add(cs.space_id);
     });
+  });
+  // Units held ONLY by a not-yet-started lease — committed, not yet earning.
+  const futureHeldIds = new Set<string>();
+  selFutureContracts.forEach(function(c) {
+    (c.contract_spaces || []).forEach(function(cs: any) { if (cs?.space_id) futureHeldIds.add(cs.space_id); });
   });
   const selOccupied  = selSpaces.filter(function(s){return heldSpaceIds.has(s.id);}).length;
   const selVacant    = selSpaces.filter(function(s){return !heldSpaceIds.has(s.id);});
@@ -459,6 +477,28 @@ export default function PropertiesPage() {
                         <div key={k.label} className="text-center">
                           <div className={"text-xl font-black " + k.color}>{k.count}</div>
                           <div className="text-xs text-slate-400">{k.label}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Signed leases whose term hasn't begun: they hold units and
+                  must be VISIBLE — the user's exact complaint was that they
+                  "look nonexistent" while their shops are already committed. */}
+              {selFutureContracts.length > 0 && (
+                <div className="rounded-xl border border-amber-300 bg-amber-50/60 p-3">
+                  <div className="text-sm font-bold text-amber-900 mb-1.5">🔜 חוזים חתומים שטרם החלו ({selFutureContracts.length})</div>
+                  <div className="space-y-1">
+                    {selFutureContracts.map(function(c: any) {
+                      var units = (c.contract_spaces || []).map(function(cs: any){ return cs?.spaces?.space_name; }).filter(Boolean).join(", ");
+                      return (
+                        <div key={c.id} className="rounded-lg bg-white border border-amber-200 px-2.5 py-1.5 text-xs flex items-center justify-between gap-2 flex-wrap">
+                          <span className="font-semibold text-slate-800">👤 {c.tenants?.name || "—"}{units ? " · " + units : ""}</span>
+                          <span className="text-amber-800">
+                            תחילה {c.start_date ? new Date(c.start_date).toLocaleDateString("he-IL") : "—"} · היחידות תפוסות, ההכנסה תתווסף מתחילת התקופה
+                          </span>
                         </div>
                       );
                     })}

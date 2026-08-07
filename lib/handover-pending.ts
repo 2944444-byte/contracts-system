@@ -36,7 +36,7 @@ export function handoverPendingVerdict(params: { contract: any; today?: Date }):
   const planned = c.planned_handover_date;
   if (!planned) return none;                                  // not a handover contract
   // A cancelled or ended contract is not waiting for anything.
-  if (["upcoming", "active", "expiring", "extended", "pending"].indexOf(String(c.status)) === -1) return none;
+  if (["upcoming", "future", "active", "expiring", "extended", "pending"].indexOf(String(c.status)) === -1) return none;
 
   const days = daysUntilDay(String(planned).slice(0, 10), params.today);
   if (days > HANDOVER_LEAD_DAYS) return none;

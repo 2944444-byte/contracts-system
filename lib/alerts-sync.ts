@@ -106,7 +106,9 @@ export async function runAlertSync(supabase: SupabaseClient): Promise<{ created:
   // 1. Contracts expiring + options
   const { data: contracts } = await supabase.from("contracts")
     .select("id,property_id,end_date,status,is_amendment,parent_contract_id,tenant_id,planned_handover_date,actual_handover_date,planned_opening_date,actual_opening_date,works_start_date,works_end_date,grace_months,grace_days,grace_phase2_days,grace_type,grace_ends_on_opening,late_opening_penalty_type,late_opening_penalty_value,late_opening_grace_days,late_opening_penalty_notes,rent_type,rent_per_sqm,min_rent_per_sqm,minimum_rent,min_rent_condition_type,min_rent_condition_pct,min_rent_condition_met_at,min_rent_condition_notes,opening_rule,opening_max_days_from_handover,term_starts_at,contract_spaces(space_id),charged_area,investment_addition,start_date,tenants(name),properties(name),contract_options(id,status,is_exercised,start_date,end_date,notice_days_before_end,notice_type,option_number)")
-    .in("status", ["active", "expiring", "extended", "upcoming"]);
+    // "future" included: that status is exactly the handover-pending
+    // population — a signed lease waiting for its handover/opening.
+    .in("status", ["active", "expiring", "extended", "upcoming", "future"]);
   // A contract and its amendments are ONE tenancy: they share an end date and
   // between them hold the options. Alerting per row put the same expiry on the
   // screen three times for a tenant with two amendments, so the family is
