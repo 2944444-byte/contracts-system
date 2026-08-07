@@ -1471,11 +1471,22 @@ export default function ContractsPage() {
                     }
                   }
 
-                  // Grace, both phases, while any of it still covers billing.
+                  // Grace, both phases. Kept on screen until TWO payment
+                  // cycles after it ended — the first post-grace cheques are
+                  // exactly when the grace terms get checked against billing,
+                  // and vanishing on the end date would hide them then.
                   var g = graceWindow({ contract: c, today: today });
                   var freeEnd = g.applies ? (g.rentFreeEnd || g.end) : null;
-                  if (g.applies && freeEnd && freeEnd.getTime() >= today.getTime()) {
-                    items.push({ icon: "🔨", text: describeGrace(g), tone: "indigo" });
+                  if (g.applies && freeEnd) {
+                    var cycleMonths = c.payment_frequency === "quarterly" ? 3
+                      : c.payment_frequency === "semiannual" ? 6
+                      : c.payment_frequency === "annual" ? 12 : 1;
+                    var showUntil = new Date(freeEnd.getFullYear(), freeEnd.getMonth() + 2 * cycleMonths, freeEnd.getDate());
+                    if (showUntil.getTime() >= today.getTime()) {
+                      var over = freeEnd.getTime() < today.getTime();
+                      items.push({ icon: "🔨", text: describeGrace(g) +
+                        (over ? " · הסתיים — מוצג לבקרת התשלומים הראשונים שאחריו" : ""), tone: "indigo" });
+                    }
                   }
 
                   // Management exempt until works begin — while it lasts.
