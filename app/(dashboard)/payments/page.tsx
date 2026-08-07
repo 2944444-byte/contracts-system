@@ -896,8 +896,23 @@ export default function PaymentsPage() {
   var overdueCount  = rows.filter(function(r) { return isOverdueRow(r) && stillOwed(r); }).length;
 
   // Per-tenant balance for the bottom summary
+  // The strip answers "who owes the most IN WHAT I'M LOOKING AT" — it must
+  // honour the property/type/search filters, or filtering to one property
+  // still paraded the whole portfolio's biggest payers (tenants of other
+  // properties included). Only the status filter is ignored: the strip is
+  // about unpaid amounts by definition.
   var balanceByTenant: Record<string, number> = {};
-  rows.filter(function(r) { return r.status !== "paid"; }).forEach(function(r) {
+  rows.filter(function(r) {
+    if (r.status === "paid") return false;
+    if (filterType && r.chargeType !== filterType) return false;
+    if (filterProperty && r.propertyName !== filterProperty) return false;
+    if (filterSearch) {
+      var q = filterSearch.toLowerCase();
+      var hay = (r.tenantName + " " + r.propertyName + " " + r.description).toLowerCase();
+      if (hay.indexOf(q) === -1) return false;
+    }
+    return true;
+  }).forEach(function(r) {
     balanceByTenant[r.tenantName] = (balanceByTenant[r.tenantName] || 0) + r.totalAmount;
   });
   var topDebtors = Object.entries(balanceByTenant)

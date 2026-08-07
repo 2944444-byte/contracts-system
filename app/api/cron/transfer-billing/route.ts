@@ -83,9 +83,13 @@ export async function GET(req: NextRequest) {
     });
   }
 
+  // Counts only in the HTTP response. The per-tenant lines carry names and
+  // amounts; they belong in the alert (RLS-protected, visible only to
+  // authorized users), not in a JSON body that a caller without CRON_SECRET
+  // configured could read.
   return NextResponse.json({
     ok: true, period: period.label,
     created: result.created, skippedExisting: result.skippedExisting,
-    skippedZero: result.skippedZero, errors: result.errors,
+    skippedZero: result.skippedZero, errorCount: result.errors.length,
   });
 }
