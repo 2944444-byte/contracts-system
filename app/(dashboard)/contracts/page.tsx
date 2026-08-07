@@ -2251,6 +2251,21 @@ export default function ContractsPage() {
                                 </div>
                               );
                             })()}
+                            {(function(){
+                              var ap: any = am.amendment_prev;
+                              if (!ap || !ap.end_date || String(ap.end_date).slice(0,10) === String(am.end_date || "").slice(0,10)) return null;
+                              var shortened = new Date(am.end_date) < new Date(ap.end_date);
+                              return (
+                                <div className={"rounded-lg px-3 py-2 border " + (shortened ? "bg-rose-50 border-rose-200" : "bg-green-50 border-green-200")}>
+                                  <div className={"text-sm font-bold mb-1 " + (shortened ? "text-rose-800" : "text-green-800")}>
+                                    {shortened ? "✂️ קיצור תקופה — סיום מוקדם בהסכמה" : "📅 שינוי תקופה"}
+                                  </div>
+                                  <div className="text-xs text-slate-700">
+                                    תום ההסכם: <span className="line-through text-slate-400">{fmtDate(ap.end_date)}</span> ← <b>{fmtDate(am.end_date)}</b>
+                                  </div>
+                                </div>
+                              );
+                            })()}
                             {/* Added spaces */}
                             {addedSpaces.length > 0 && (
                               <div className="rounded-lg bg-green-50 border border-green-200 px-3 py-2">
@@ -2924,6 +2939,7 @@ export default function ContractsPage() {
                     { v: "parking_subscription", l: "תוספת חניות מינוי", desc: "חניות קבועות בתשלום חודשי", icon: "🅿️" },
                     { v: "parking_visitor", l: "חניות אורחים מזדמנים", desc: "מנוי דרך מקומות / קודים בהנחה", icon: "🎫" },
                     { v: "payment_change", l: "שינוי שיטת תשלום", desc: "שיטה / תדירות / יום תשלום — מתוקף מועד התוספת", icon: "💳" },
+                    { v: "terminate_early", l: "קיצור תקופה / סיום מוקדם", desc: "סיום ההסכם בהסכמה לפני תום התקופה", icon: "✂️" },
                     { v: "other", l: "שינוי אחר", desc: "פתיחת כל האפשרויות (אשף מלא)", icon: "📋" },
                   ].map(function(opt) {
                     return (
@@ -3077,6 +3093,28 @@ export default function ContractsPage() {
                       <div className="text-xs text-slate-400 mb-2">סיום נוכחי: {fmtEndDate(selContract.end_date, selContract.start_date)}</div>
                       <input type="date" value={amendNewEndDate} onChange={function(e){setAmendNewEndDate(e.target.value);}}
                         className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                    </div>
+                  )}
+
+                  {/* ── EARLY TERMINATION ── */}
+                  {amendType === "terminate_early" && (
+                    <div className="space-y-3">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1">מועד הסיום המוסכם</label>
+                        <div className="text-xs text-slate-400 mb-2">סיום מקורי: {fmtEndDate(selContract.end_date, selContract.start_date)}</div>
+                        <input type="date" value={amendNewEndDate} onChange={function(e){setAmendNewEndDate(e.target.value);}}
+                          className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                      </div>
+                      <div className="rounded-lg bg-rose-50 border border-rose-200 p-2.5 text-[11px] text-rose-900 leading-relaxed space-y-1">
+                        <div className="font-bold">מה יקרה עם השמירה:</div>
+                        <div>· ההסכם יסתיים במועד הזה — בדיוק כאילו הגיע לסופו הטבעי: מהמועד היחידות מתפנות להשכרה, ההכנסה יורדת מהתחזיות, וההתראות מפסיקות.</div>
+                        <div>· אופציות שטרם מומשו יסומנו "נדחו" — כדי שהמימוש האוטומטי הלילי לא יאריך הסכם שסוכם לסיים.</div>
+                        <div>· שיקים/מקדמות שטרם שולמו לתקופה שאחרי המועד — תוצע מחיקתם.</div>
+                        <div>· תיפתח תזכורת להשבת הביטחונות לאחר גמר החשבון.</div>
+                        {((selContract.contract_ti ?? []).length > 0 || Number(selContract.investment_addition) > 0) && (
+                          <div className="font-bold">· בהסכם רשומות השקעות בינוי — בדוק אם מגיע החזר השקעות ביציאה מוקדמת (מסך החוזה ← השקעות ← חיוב investment_clawback).</div>
+                        )}
+                      </div>
                     </div>
                   )}
 
@@ -3307,6 +3345,20 @@ export default function ContractsPage() {
                   {/* Save */}
                   <button disabled={amendSaving} onClick={async function() {
                     if (!amendDate) { alert("נא להזין תאריך תוקף"); return; }
+                    if (amendType === "terminate_early") {
+                      if (!amendNewEndDate) { alert("נא להזין את מועד הסיום המוסכם"); return; }
+                      var curEnd = String(effectiveEndDate || selContract.end_date || "").slice(0, 10);
+                      if (curEnd && amendNewEndDate >= curEnd) {
+                        alert("מועד הסיום המוסכם (" + new Date(amendNewEndDate).toLocaleDateString("he-IL") +
+                          ") חייב להיות מוקדם מתום ההסכם הנוכחי (" + new Date(curEnd).toLocaleDateString("he-IL") + "). להארכה השתמש ב\"הארכת תקופה\".");
+                        return;
+                      }
+                      if (selContract.start_date && amendNewEndDate < String(selContract.start_date).slice(0, 10)) {
+                        alert("מועד הסיום אינו יכול להקדים את תחילת ההסכם."); return;
+                      }
+                      if (!confirm("לאשר סיום מוקדם ב-" + new Date(amendNewEndDate).toLocaleDateString("he-IL") +
+                        "?\nההסכם יתנהג מהמועד הזה כאילו הגיע לסופו, ואופציות שטרם מומשו יסומנו כנדחו.")) return;
+                    }
                     // ── Overlap validation + cross-tenant swap ──
                     var crossSwapContracts: any[] = []; // contracts that need a mirror amendment
                     if (amendAddSpaces.length > 0) {
@@ -3374,7 +3426,7 @@ export default function ContractsPage() {
                       var newSpaces = currentSpaces.filter(function(cs: any){ return !amendRemoveSpaces.includes(cs.space_id); });
 
                       // Calculate new end date from effective
-                      var newEnd = amendType === "extend" ? amendNewEndDate : effectiveEndDate;
+                      var newEnd = (amendType === "extend" || amendType === "terminate_early") ? amendNewEndDate : effectiveEndDate;
 
                       // Calculate totals for the amendment record
                       var totalArea = 0;
@@ -3415,12 +3467,14 @@ export default function ContractsPage() {
                           payment_method: selContract.payment_method,
                           payment_frequency: selContract.payment_frequency,
                           payment_day: selContract.payment_day,
+                        } : amendType === "terminate_early" ? {
+                          end_date: effectiveEndDate,
                         } : null,
                         amendment_notes: (amendType === "payment_change" ? ((amendNotes ? amendNotes + " · " : "") + (function(){
                           var lbl2 = function(m2: string){ return m2 === "checks_advance" ? "שיקים מראש" : m2 === "bank_transfer" ? "העברה בנקאית" : m2 === "standing_order" ? "הוראת קבע" : m2; };
                           var frq2 = function(f2: string){ return f2 === "monthly" ? "חודשי" : f2 === "quarterly" ? "רבעוני" : f2 === "annual" ? "שנתי" : f2; };
                           return "שינוי שיטת תשלום: " + lbl2(selContract.payment_method) + " → " + lbl2(amendPayMethod) + " · " + frq2(selContract.payment_frequency) + " → " + frq2(amendPayFreq);
-                        })()) : amendNotes) || (amendType === "swap_units" ? "החלפת יחידות" : amendType === "add_units" ? "הוספת יחידות" : amendType === "remove_units" ? "הורדת יחידות" : amendType === "extend" ? "הארכת תקופה" : amendType === "price_change" ? "שינוי מחירים" : amendType === "parking_subscription" ? "תוספת חניות מינוי" : amendType === "parking_visitor" ? "חניות אורחים מזדמנים" : amendType === "payment_change"
+                        })()) : amendNotes) || (amendType === "swap_units" ? "החלפת יחידות" : amendType === "add_units" ? "הוספת יחידות" : amendType === "remove_units" ? "הורדת יחידות" : amendType === "extend" ? "הארכת תקופה" : amendType === "price_change" ? "שינוי מחירים" : amendType === "parking_subscription" ? "תוספת חניות מינוי" : amendType === "parking_visitor" ? "חניות אורחים מזדמנים" : amendType === "terminate_early" ? ("סיום מוקדם בהסכמה: " + new Date(effectiveEndDate).toLocaleDateString("he-IL") + " → " + (amendNewEndDate ? new Date(amendNewEndDate).toLocaleDateString("he-IL") : "")) : amendType === "payment_change"
                           ? (function(){
                               var lbl = function(m: string){ return m === "checks_advance" ? "שיקים מראש" : m === "bank_transfer" ? "העברה בנקאית" : m === "standing_order" ? "הוראת קבע" : m; };
                               var frq = function(f: string){ return f === "monthly" ? "חודשי" : f === "quarterly" ? "רבעוני" : f === "annual" ? "שנתי" : f; };
@@ -3574,6 +3628,56 @@ export default function ContractsPage() {
                       // Update parent end date if extended
                       if (amendType === "extend" && amendNewEndDate > selContract.end_date) {
                         await supabase.from("contracts").update({ end_date: amendNewEndDate }).eq("id", selContract.id);
+                      }
+
+                      // Early termination: from here the contract behaves as if
+                      // it reached its natural end on the agreed date.
+                      if (amendType === "terminate_early") {
+                        var todayStr0 = new Date().toISOString().split("T")[0];
+                        await supabase.from("contracts").update({
+                          end_date: amendNewEndDate,
+                          // A date already behind us ends the contract NOW; a
+                          // future one lets the nightly sync flip it on the day.
+                          ...(amendNewEndDate <= todayStr0 ? { status: "ended" } : {}),
+                        }).eq("id", selContract.id);
+
+                        // Un-exercised options are moot — and must be DECLINED,
+                        // or the nightly auto-exercise would extend a contract
+                        // both sides agreed to end.
+                        await supabase.from("contract_options")
+                          .update({ status: "declined", is_exercised: false })
+                          .eq("contract_id", selContract.id)
+                          .eq("is_exercised", false)
+                          .neq("status", "declined");
+
+                        // Unpaid cheques/advances for the period after the end
+                        // date are money nobody owes — offer their deletion.
+                        var { data: futureAdv } = await supabase.from("advance_payments")
+                          .select("id, check_date, total_with_vat, actual_paid, status")
+                          .eq("contract_id", selContract.id)
+                          .gt("check_date", amendNewEndDate);
+                        var deletable = (futureAdv ?? []).filter(function(a: any){
+                          return a.status !== "paid" && !(Number(a.actual_paid) > 0);
+                        });
+                        if (deletable.length > 0 && confirm(
+                          "נמצאו " + deletable.length + " שיקים/מקדמות שטרם שולמו לתקופה שאחרי " +
+                          new Date(amendNewEndDate).toLocaleDateString("he-IL") + ".\nלמחוק אותם? (שיקים ששולמו לא יימחקו)")) {
+                          await supabase.from("advance_payments").delete()
+                            .in("id", deletable.map(function(a: any){ return a.id; }));
+                          await logAudit({ entity_type: "contract", entity_id: selContract.id,
+                            action: "terminate_delete_advances", notes: deletable.length + " מקדמות לתקופה שאחרי הסיום" });
+                        }
+
+                        // The securities come back after the final account.
+                        await supabase.from("alerts").insert({
+                          title: "✂️ סיום מוקדם: " + (selContract.tenants?.name || "") + " — השבת ביטחונות",
+                          message: "ההסכם הסתיים בהסכמה ב-" + new Date(amendNewEndDate).toLocaleDateString("he-IL") +
+                            " (במקום " + new Date(effectiveEndDate).toLocaleDateString("he-IL") + "). " +
+                            "לאחר גמר חשבון (חיובים פתוחים, התחשבנויות, הפרשי הצמדה) יש להשיב לשוכר את הביטחונות שבידינו.",
+                          severity: "warning", alert_type: "guarantee_return",
+                          entity_type: "contract", entity_id: selContract.id, contract_id: selContract.id,
+                          property_id: selContract.property_id ?? null, due_date: amendNewEndDate, is_resolved: false,
+                        });
                       }
 
                       // Mark new spaces as occupied, removed as vacant

@@ -172,6 +172,29 @@ export async function syncContractStatuses(client?: any): Promise<number> {
       await supabase.from("contracts").update({status:newStatus}).eq("id",c.id);
       await logAudit({entity_type:"contract",entity_id:c.id,action:"status_change",notes:`${c.status} → ${newStatus}`});
       updated++;
+
+      // A contract that just ENDED frees its units — unless another live
+      // contract (including an early-terminated-and-replaced tenant's new
+      // lease, or a signed future one) holds them. Without this the cached
+      // spaces.status stayed "occupied" forever after both a natural end and
+      // an agreed early termination, and the unit read as let with no tenant.
+      if (newStatus === "ended") {
+        const { data: mySpaces } = await supabase.from("contract_spaces")
+          .select("space_id").eq("contract_id", c.id);
+        const sids = (mySpaces ?? []).map(function (x: any) { return x.space_id; }).filter(Boolean);
+        if (sids.length > 0) {
+          const { data: holders } = await supabase.from("contract_spaces")
+            .select("space_id, contracts!inner(id,status,is_amendment)")
+            .in("space_id", sids)
+            .in("contracts.status", ["active", "extended", "expiring", "upcoming", "future"]);
+          const stillHeld = new Set((holders ?? []).map(function (h: any) { return h.space_id; }));
+          const toFree = sids.filter(function (sid: string) { return !stillHeld.has(sid); });
+          if (toFree.length > 0) {
+            await supabase.from("spaces").update({ status: "vacant" })
+              .in("id", toFree).eq("status", "occupied");
+          }
+        }
+      }
     }
   }
   return updated;
