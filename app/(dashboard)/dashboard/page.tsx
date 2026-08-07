@@ -150,6 +150,9 @@ export default function DashboardPage() {
     // base→today call.
     try {
       var validContracts = (c ?? []).filter(function(x: any) {
+        // A not-started lease contributes to no indexed sum — fetching its CPI
+        // ratios is pure CBS latency.
+        if (x.status === "upcoming" || x.status === "future") return false;
         return !x.is_amendment && x.index_base_date
           && x.indexation_method && x.indexation_method !== "none";
       });
@@ -257,7 +260,7 @@ export default function DashboardPage() {
   const filteredContracts = contracts.filter(function(c){return filteredPropIds.includes(c.property_id);});
   const filteredSpaces = spaces.filter(function(s){return filteredPropIds.includes(s.property_id);});
   const filteredGuarantees = guarantees.filter(function(g){
-    return filteredContracts.some(function(c){return c.id===g.contract_id;});
+    return startedContracts.some(function(c){return c.id===g.contract_id;});
   });
 
   // ─── Calculations ───
@@ -293,7 +296,7 @@ export default function DashboardPage() {
 
   // Expiring contracts in next 12 months (by date, not status)
   const oneYearMs = 365*24*60*60*1000;
-  const expiringSoon = filteredContracts.filter(function(c){
+  const expiringSoon = startedContracts.filter(function(c){
     if (!c.end_date) return false;
     var diff = new Date(c.end_date).getTime() - Date.now();
     return diff > 0 && diff <= oneYearMs;
@@ -375,7 +378,7 @@ export default function DashboardPage() {
     }).reduce(function(s: number, ch: any){ return s + (Number(ch.total_amount) || 0); }, 0);
     return {
       id: p.id, name: p.name, income: income, open: pOpen,
-      contracts: pContracts.length,
+      contracts: pContracts.filter(contractStarted).length,
       occPct: pArea > 0 ? Math.round((occArea / pArea) * 100) : 0,
     };
   }).sort(function(a, b){ return b.income - a.income; });
@@ -545,7 +548,7 @@ export default function DashboardPage() {
                 <div className="w-11 h-11 rounded-xl bg-slate-100 flex items-center justify-center text-2xl shrink-0">📄</div>
                 <div className="min-w-0">
                   <div className="text-[11px] font-semibold text-slate-500">חוזים פעילים</div>
-                  <div className="text-2xl font-black text-slate-800 leading-tight">{filteredContracts.length}</div>
+                  <div className="text-2xl font-black text-slate-800 leading-tight">{startedContracts.length}</div>
                 </div>
               </div>
               <div className="text-xs text-slate-400 mt-2">{expiring90.length} פוגים תוך 90 יום</div>

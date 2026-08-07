@@ -21,17 +21,25 @@ export const maxDuration = 60;
 const BASE_YEAR = 2022;
 
 export async function GET(req: NextRequest) {
+  // Fail CLOSED: without a configured secret this endpoint would be open to
+  // any caller — triggering runs, racing the dedup, and probing portfolio
+  // metadata. Header only; a ?secret= query param lands in access logs.
   const secret = process.env.CRON_SECRET;
-  if (secret) {
-    const auth = req.headers.get("authorization") || "";
-    const qsecret = req.nextUrl.searchParams.get("secret") || "";
-    if (auth !== `Bearer ${secret}` && qsecret !== secret) {
-      return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-    }
+  if (!secret) {
+    return NextResponse.json({ error: "CRON_SECRET not configured" }, { status: 503 });
+  }
+  if ((req.headers.get("authorization") || "") !== `Bearer ${secret}`) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+  // The anon-key fallback made a missing service key a SILENT no-op: every
+  // scoped SELECT returned empty under RLS, the index looked unpublished
+  // forever, and nobody was billed or told. Fail loudly instead.
+  if (!key) {
+    return NextResponse.json({ error: "SUPABASE_SERVICE_ROLE_KEY not configured" }, { status: 503 });
+  }
   const supabase = createClient(url, key, { auth: { autoRefreshToken: false, persistSession: false } });
 
   const today = new Date();
@@ -69,6 +77,17 @@ export async function GET(req: NextRequest) {
   // The user reviews, then sends the letters — so a run that created charges
   // announces itself as an alert rather than passing silently.
   if (result.created > 0 || result.errors.length > 0) {
+    // The error path is not self-limiting the way success is (the dedup makes
+    // the next successful run a no-op) — a broken CBS API would otherwise
+    // insert a fresh alert on every scheduled retry.
+    if (result.created === 0) {
+      const { data: errExist } = await supabase.from("alerts")
+        .select("id").eq("alert_type", "transfer_billing_run")
+        .eq("is_resolved", false).ilike("title", "%" + period.label + "%").limit(1);
+      if (errExist && errExist.length > 0) {
+        return NextResponse.json({ ok: true, period: period.label, created: 0, skippedExisting: result.skippedExisting, skippedZero: result.skippedZero, errorCount: result.errors.length, alertExists: true });
+      }
+    }
     await supabase.from("alerts").insert({
       title: "🏦 " + (result.created > 0
         ? "נוצרו " + result.created + " חיובי העברה/ה\"ק ל" + period.label + " — לבדיקתך"

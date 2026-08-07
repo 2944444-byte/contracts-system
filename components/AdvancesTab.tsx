@@ -435,9 +435,14 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
           // charged at all. Not used when management rides inside the
           // turnover percentage.
           var mgmtRate = spaceMgmtRate[cs.space_id] ?? defaultMgmtRate;
-          if (!mgmtRate && !c.mgmt_included_in_revenue && Number(c.mgmt_fee_per_sqm) > 0) {
+          if (!mgmtRate && Number(c.mgmt_fee_per_sqm) > 0) {
             mgmtRate = Number(c.mgmt_fee_per_sqm);
           }
+          // Management inside the turnover percentage is paid THROUGH the
+          // percentage — charging the group/budget rate on the cheque as well
+          // double-billed it. Guarded on every rate source, not only the
+          // contract-figure fallback.
+          if (c.mgmt_included_in_revenue) mgmtRate = 0;
           var mgmtMonthly = mgmtRate * area;
 
           // CPI: use space-specific base or contract base

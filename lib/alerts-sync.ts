@@ -106,9 +106,15 @@ export async function runAlertSync(supabase: SupabaseClient): Promise<{ created:
   // 1. Contracts expiring + options
   const { data: contracts } = await supabase.from("contracts")
     .select("id,property_id,end_date,status,is_amendment,parent_contract_id,tenant_id,planned_handover_date,actual_handover_date,planned_opening_date,actual_opening_date,works_start_date,works_end_date,grace_months,grace_days,grace_phase2_days,grace_type,grace_ends_on_opening,late_opening_penalty_type,late_opening_penalty_value,late_opening_grace_days,late_opening_penalty_notes,rent_type,rent_per_sqm,min_rent_per_sqm,minimum_rent,min_rent_condition_type,min_rent_condition_pct,min_rent_condition_met_at,min_rent_condition_notes,opening_rule,opening_max_days_from_handover,term_starts_at,contract_spaces(space_id),charged_area,investment_addition,start_date,tenants(name),properties(name),contract_options(id,status,is_exercised,start_date,end_date,notice_days_before_end,notice_type,option_number)")
-    // "future" included: that status is exactly the handover-pending
-    // population — a signed lease waiting for its handover/opening.
+    // "future"/"upcoming" included for the handover-pending rule — but most
+    // rules below assume an IN-FORCE lease (insurance, expiry/vacating,
+    // late-opening, occupancy threshold) and must skip a lease whose term
+    // hasn't begun: an urgent "אין ביטוח" for a shop opening in 8 months is
+    // noise that buries real alerts.
     .in("status", ["active", "expiring", "extended", "upcoming", "future"]);
+  const leaseStarted = function (x: any): boolean {
+    return x && x.status !== "upcoming" && x.status !== "future";
+  };
   // A contract and its amendments are ONE tenancy: they share an end date and
   // between them hold the options. Alerting per row put the same expiry on the
   // screen three times for a tenant with two amendments, so the family is
@@ -126,7 +132,7 @@ export async function runAlertSync(supabase: SupabaseClient): Promise<{ created:
     // Contract end. With a live option this is a short heads-up; with no option
     // left the end date IS the vacating date and needs a year's runway. One
     // alert either way, updated in place so the countdown stays true.
-    if (!c.is_amendment) {
+    if (!c.is_amendment && leaseStarted(c)) {
       const fam = c.id;
       const v = contractExpiryVerdict({ contract: { end_date: famEnd[fam] || c.end_date }, options: famOptions[fam] ?? [] });
       if (v.applies) {
@@ -156,7 +162,7 @@ export async function runAlertSync(supabase: SupabaseClient): Promise<{ created:
     // an event NOBODY is watching: it is caused by other tenants opening, not by
     // anything on this contract. So the system watches it and asks for approval,
     // rather than waiting to be asked.
-    if (c.min_rent_condition_type === "project_occupancy_pct" && !c.min_rent_condition_met_at) {
+    if (leaseStarted(c) && c.min_rent_condition_type === "project_occupancy_pct" && !c.min_rent_condition_met_at) {
       const pct = Number(c.min_rent_condition_pct) || 0;
       if (pct > 0 && c.property_id) {
         const { data: pSpaces } = await supabase.from("spaces").select("id,area").eq("property_id", c.property_id);
@@ -264,7 +270,7 @@ export async function runAlertSync(supabase: SupabaseClient): Promise<{ created:
     // penalty existed only inside the contract screen — if nobody opened that
     // one contract, money the tenant owes was simply never noticed. The alert
     // closes itself once the charge is raised or the store opens in time.
-    if (c.late_opening_penalty_type && c.late_opening_penalty_type !== "none") {
+    if (leaseStarted(c) && c.late_opening_penalty_type && c.late_opening_penalty_type !== "none") {
       const monthlyRent = guaranteedMonthlyRent({
         rentType: c.rent_type, rentPerSqm: c.rent_per_sqm, area: c.charged_area,
         investmentAddition: c.investment_addition,
@@ -483,7 +489,10 @@ export async function runAlertSync(supabase: SupabaseClient): Promise<{ created:
         .filter(Boolean) as string[]
     );
     const groups: Record<string, any[]> = {};
-    (contracts ?? []).forEach(function (c: any) { const k = groupKey(c); (groups[k] = groups[k] || []).push(c); });
+    // Only leases IN FORCE owe an insurance certificate today — a signed lease
+    // starting in months delivers its certificate at handover, and flagging it
+    // "urgent, no insurance" now would flood the screen with false alarms.
+    (contracts ?? []).filter(leaseStarted).forEach(function (c: any) { const k = groupKey(c); (groups[k] = groups[k] || []).push(c); });
     for (const key of Object.keys(groups)) {
       if (coveredGroups.has(key)) continue;
       const g = groups[key];
@@ -562,13 +571,18 @@ export async function runAlertSync(supabase: SupabaseClient): Promise<{ created:
 }
 
 // Build an RTL HTML digest email from the alerts created this run.
+// Alert titles carry user-entered tenant names; the digest is HTML email.
+function escapeHtml(x: string): string {
+  return String(x || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
 export function buildAlertsDigestHtml(newAlerts: NewAlert[]): string {
   const urgent = newAlerts.filter(a => a.severity === "urgent");
   const warning = newAlerts.filter(a => a.severity === "warning");
   const info = newAlerts.filter(a => a.severity !== "urgent" && a.severity !== "warning");
   const section = (title: string, color: string, items: NewAlert[]) => items.length === 0 ? "" :
     `<h3 style="color:${color};margin:16px 0 8px">${title} (${items.length})</h3><ul style="line-height:1.8;padding-right:18px">` +
-    items.map(a => `<li>${a.title}${a.due_date ? ` <span style="color:#94a3b8;font-size:12px">— ${new Date(a.due_date).toLocaleDateString("he-IL")}</span>` : ""}</li>`).join("") + `</ul>`;
+    items.map(a => `<li>${escapeHtml(a.title)}${a.due_date ? ` <span style="color:#94a3b8;font-size:12px">— ${new Date(a.due_date).toLocaleDateString("he-IL")}</span>` : ""}</li>`).join("") + `</ul>`;
   return `<div dir="rtl" style="font-family:Arial,sans-serif;direction:rtl;padding:28px;max-width:640px">
     <h2 style="color:#1e3a5f;border-bottom:2px solid #3b82f6;padding-bottom:8px">התראות מערכת — סיכום</h2>
     <p style="color:#64748b;font-size:13px">${new Date().toLocaleDateString("he-IL")} · ${newAlerts.length} התראות חדשות</p>

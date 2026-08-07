@@ -80,7 +80,9 @@ export default function PropertiesPage() {
     (async function() {
       try {
         if (!selected) { setCpiRatios({}); return; }
-        var propContracts = contracts.filter(function(c) { return c.property_id === selected && !c.is_amendment; });
+        // Started only: a not-started lease is in no indexed sum, and each
+        // extra base-date group is a sequential CBS call.
+        var propContracts = contracts.filter(function(c) { return c.property_id === selected && !c.is_amendment && c.status !== "upcoming" && c.status !== "future"; });
         if (propContracts.length === 0) { setCpiRatios({}); return; }
 
         // Group contracts by (base date + mechanism). Contracts with same
@@ -349,9 +351,11 @@ export default function PropertiesPage() {
       var f = calcContractRent(c);
       var area = (c.contract_spaces || []).reduce(function (a: number, x: any) { return a + (Number(x?.spaces?.area) || 0); }, 0) || Number(c.charged_area) || 0;
       var mgmtF = (!c.mgmt_included_in_revenue && Number(c.mgmt_fee_per_sqm) > 0) ? Number(c.mgmt_fee_per_sqm) * area : 0;
-      full += f; mgmtFull += mgmtF;
+      full += f;
 
       if (c.status === "upcoming" || c.status === "future") {
+        // Rent AND management of a not-started lease are pending, not a
+        // discount — counting the fee in mgmtFull put it under "פטור/הנחה".
         futurePending += f;
         // Full income from this lease starts at its term start — and if it has
         // its own grace, only when that grace's rent coverage ends.
@@ -359,6 +363,7 @@ export default function PropertiesPage() {
         later(gF.applies ? (gF.rentFreeEnd || gF.end) : (c.start_date ? new Date(c.start_date) : null));
         return;
       }
+      mgmtFull += mgmtF;
       var gf = graceFactorsFor({ contract: c, periodStart: mS, periodEnd: mE });
       today += f * gf.rentFactor;
       graceDisc += f * (1 - gf.rentFactor);

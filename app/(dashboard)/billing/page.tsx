@@ -162,6 +162,11 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
   const [costPlusIncluded, setCostPlusIncluded] = useState(true);
   const [vacantRedistribute, setVacantRedistribute] = useState(false);
   const [mgmtSummary, setMgmtSummary] = useState<any>(null);
+  // Which property the loaded inputs belong to. Switching properties and
+  // clicking compute before the async load lands ran the calculation — and the
+  // auto-saves — with the PREVIOUS property's cost-plus and actual costs,
+  // writing them onto the newly selected property.
+  const [inputsFor, setInputsFor] = useState("");
   const [mgmtGroupsData, setMgmtGroupsData] = useState<any[]>([]);
   const [mgmtResults, setMgmtResults] = useState<MgmtResult[]>([]);
   const [computing, setComputing] = useState(false);
@@ -206,6 +211,7 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
     setGroupActualCosts(gm);
     setCostPlusIncluded(row ? row.cost_plus_included !== false : true);
     setVacantRedistribute(!!(row && row.vacant_redistribute));
+    setInputsFor(propId);
   }
   async function saveActualInputs() {
     if (!propId) return;
@@ -229,8 +235,13 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
         .eq("charge_type", "management")
         .eq("billing_period_start", year + "-01-01"),
       supabase.from("letters")
-        .select("id, title, contract_id, status, contracts(property_id)")
+        .select("id, title, contract_id, status, contracts(property_id), content_json")
         .eq("letter_type", "demand")
+        // The year marker in content_json is written by the reconciliation's
+        // own letter generator; a manually authored demand letter that merely
+        // mentions "דמי ניהול 2026" in its title lacks it — and must not be
+        // swept into the irreversible delete.
+        .eq("content_json->>year", String(year))
         .or("subject.ilike.%דמי ניהול " + year + "%,title.ilike.%דמי ניהול " + year + "%"),
     ]);
     setExistingMgmtCharges((ch ?? []).filter(function(x:any){ return x.contracts?.property_id === propId; }));
@@ -352,6 +363,10 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
   const yearEnded = new Date().getTime() > new Date(year, 11, 31, 23, 59, 59).getTime();
 
   async function computeReconciliation() {
+    if (propId && inputsFor !== propId) {
+      alert("הנתונים של הנכס עדיין נטענים — נסה שוב בעוד רגע.");
+      return;
+    }
     if (!propId) { alert("יש לבחור נכס"); return; }
     if (!yearEnded) {
       alert("לא ניתן לבצע התחשבנות דמי ניהול לשנת " + year + " לפני סיומה (31.12." + year + ").\nההתחשבנות מבוצעת מול העלות בפועל הידועה רק בתום השנה.");
@@ -359,6 +374,17 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
     }
     const hasGroups = mgmtGroupsData.length > 0;
     if (!hasGroups && !actualCost) { alert("יש להזין עלות בפועל"); return; }
+    // A group whose actual-cost field was left blank computes as cost = 0 and
+    // hands its whole year back to its tenants as a credit — a data-entry
+    // omission dressed as money. Say so and demand an explicit yes.
+    if (hasGroups) {
+      var blankGroups = (mgmtGroupsData as any[]).filter(function (g: any) {
+        return !(Number(groupActualCosts[g.id]) > 0);
+      }).map(function (g: any) { return g.group_name || g.name || g.id; });
+      if (blankGroups.length > 0 && !confirm(
+        "לקבוצות הבאות לא הוזנה עלות בפועל:\n" + blankGroups.join(", ") +
+        "\n\nחישוב כך יעניק לשוכרי הקבוצות האלה זיכוי מלא על כל המקדמות. להמשיך בכל זאת?")) return;
+    }
     setComputing(true);
     setProgress({ current: 0, total: 0, label: "מחשב התחשבנות דמי ניהול...", startedAt: Date.now() });
     try {
@@ -372,7 +398,7 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
       // (their mgmt is paid as part of the % rent — no separate charge).
       const { data: contracts } = await supabase
         .from("contracts")
-        .select("id, charged_area, rent_per_sqm, rent_type, revenue_pct, mgmt_included_in_revenue, is_amendment, start_date, end_date, indexation_method, index_base_date, mgmt_protection_type, mgmt_protection_value, mgmt_protection_months, mgmt_protection_indexed, mgmt_protection_notes, mgmt_cost_plus_pct, grace_months, grace_days, grace_phase2_days, grace_type, grace_ends_on_opening, grace_mgmt_discount_pct, mgmt_charge_starts, mgmt_free_max_days, works_start_date, planned_handover_date, actual_handover_date, planned_opening_date, actual_opening_date, tenants(name), contract_spaces(space_id, spaces(id, space_name, area))")
+        .select("id, charged_area, rent_per_sqm, rent_type, revenue_pct, mgmt_included_in_revenue, is_amendment, start_date, end_date, indexation_method, index_base_date, mgmt_protection_type, mgmt_protection_value, mgmt_protection_months, mgmt_protection_indexed, mgmt_protection_notes, mgmt_cost_plus_pct, mgmt_fee_per_sqm, mgmt_included_in_revenue, grace_months, grace_days, grace_phase2_days, grace_type, grace_ends_on_opening, grace_mgmt_discount_pct, mgmt_charge_starts, mgmt_free_max_days, works_start_date, planned_handover_date, actual_handover_date, planned_opening_date, actual_opening_date, tenants(name), contract_spaces(space_id, spaces(id, space_name, area))")
         .eq("property_id", propId)
         .eq("is_amendment", false)
         .in("status", ["active", "expiring", "extended"]);
@@ -512,11 +538,16 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
         }
       }
 
+      // Pool-level share totals, for PER-POOL vacancy redistribution: each
+      // group is its own cost pool, and one pool's vacancy must not be billed
+      // to another pool's tenants.
+      const shareByPool: Record<string, number> = {};
       const interim = (contracts ?? []).map(function (c: any) {
         let advance = 0;
         let actualShare = 0;
         let contractArea = 0;
         const spaceNamesList: string[] = [];
+        const myPools: Record<string, number> = {};
 
         // Weighted by days held: a unit swapped mid-year contributes only the
         // days it was actually held, so the old and the new unit each carry
@@ -534,10 +565,24 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
           const info = spaceGroupMap.get(sid);
           if (info) {
             advance += info.rate * h.area * 12 * w;
-            actualShare += info.groupTotalArea > 0 ? info.groupActualCost * (h.area / info.groupTotalArea) * w : 0;
+            const sh = info.groupTotalArea > 0 ? info.groupActualCost * (h.area / info.groupTotalArea) * w : 0;
+            actualShare += sh;
+            shareByPool[info.groupId] = (shareByPool[info.groupId] || 0) + sh;
+            myPools[info.groupId] = (myPools[info.groupId] || 0) + sh;
           } else {
-            advance += defaultRate * h.area * 12 * w;
-            actualShare += defaultSpaceArea > 0 ? defaultActual * (h.area / defaultSpaceArea) * w : 0;
+            // Mirror of the cheque generator's fallback: with no group and no
+            // budget the ADVANCE actually collected was the contract's own
+            // mgmt_fee_per_sqm — pricing the theoretical advance at 0 here
+            // billed those tenants their management twice.
+            var dRate = defaultRate;
+            if (!dRate && !c.mgmt_included_in_revenue && Number(c.mgmt_fee_per_sqm) > 0) {
+              dRate = Number(c.mgmt_fee_per_sqm);
+            }
+            advance += dRate * h.area * 12 * w;
+            const shD = defaultSpaceArea > 0 ? defaultActual * (h.area / defaultSpaceArea) * w : 0;
+            actualShare += shD;
+            shareByPool["__default"] = (shareByPool["__default"] || 0) + shD;
+            myPools["__default"] = (myPools["__default"] || 0) + shD;
           }
         });
         // Fit-out: management may be fully exempt until the tenant begins
@@ -551,10 +596,13 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
           from: new Date(year, 0, 1),
           to: new Date(year + 1, 0, 1),
         });
-        if (mgmtFit.opted && mgmtFit.factor < 1) {
-          advance = advance * mgmtFit.factor;
-          actualShare = actualShare * mgmtFit.factor;
-        }
+        // The advance side follows what was actually billed month by month
+        // (the cheques applied the fit factor). The ACTUAL share stays pre-fit
+        // here: the fit reduction is applied after redistribution, so exempt
+        // days land with the OWNER — not inside "vacancy" to be redistributed
+        // back onto the very tenant the exemption belongs to.
+        const fitFactor = mgmtFit.opted && mgmtFit.factor < 1 ? mgmtFit.factor : 1;
+        advance = advance * fitFactor;
 
         // The area the year is billed on: the time-weighted average, so the
         // protection ceiling scales with the same yardstick as the advance.
@@ -573,31 +621,45 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
         // landlord; an overpayment still comes back to the tenant, so the
         // reconciliation stays one-directional in the tenant's favour.
         return {
-          c, advance, rawShare: actualShare, contractArea, isRevenueBased,
+          c, advance, rawShare: actualShare, myPools: myPools, fitFactor: fitFactor,
+          contractArea, isRevenueBased,
           spaceNames: spaceNamesList.join(", ") || "—",
-          fitOutNote: mgmtFit.opted && mgmtFit.factor < 1
+          fitOutNote: fitFactor < 1
             ? "תקופת עבודות: " + mgmtFit.note + " (" + Math.round(mgmtFit.factor * 100) + "% מהשנה)"
             : undefined,
         };
       });
 
       // ── The property-level passes ─────────────────────────────────
-      // 1. Vacancy: the entered NET cost minus what the let areas carry.
-      //    Absorbed by the owner (today's behaviour) or, when the user says
-      //    so, redistributed to the tenants pro-rata — the same question the
-      //    insurance billing asks about empty units.
-      const rawTotalCost = (mgmtGroupsData as any[]).reduce(function (sum: number, g: any) {
-        return sum + toRaw(Number(groupActualCosts[g.id]) || 0);
-      }, 0) + defaultActual;
-      const sumRawShares = interim.reduce(function (sum: number, r: any) { return sum + r.rawShare; }, 0);
-      const vacantShare = Math.max(0, rawTotalCost - sumRawShares);
-      const redisFactor = vacantRedistribute && sumRawShares > 0 && vacantShare > 0
-        ? rawTotalCost / sumRawShares : 1;
+      // 1. Vacancy, PER POOL: each billing group is its own cost pool, so one
+      //    group's vacancy is redistributed only within that group — never
+      //    billed to another group's tenants. Absorbed by the owner (default)
+      //    or redistributed pro-rata within the pool, the insurance question.
+      const poolCost: Record<string, number> = { "__default": defaultActual };
+      (mgmtGroupsData as any[]).forEach(function (g: any) {
+        poolCost[g.id] = toRaw(Number(groupActualCosts[g.id]) || 0);
+      });
+      const rawTotalCost = Object.keys(poolCost).reduce(function (sum, k) { return sum + poolCost[k]; }, 0);
+      const poolFactor: Record<string, number> = {};
+      var vacantShare = 0;
+      Object.keys(poolCost).forEach(function (pid) {
+        const shares = shareByPool[pid] || 0;
+        const gap = Math.max(0, poolCost[pid] - shares);
+        vacantShare += gap;
+        poolFactor[pid] = vacantRedistribute && shares > 0 && gap > 0 ? poolCost[pid] / shares : 1;
+      });
 
-      var plusAddedTotal = 0, absorbedTotal = 0, tenantTotal = 0;
+      var plusAddedTotal = 0, absorbedTotal = 0, tenantTotal = 0, fitOwnerTotal = 0;
       const results: MgmtResult[] = interim.map(function (r: any) {
         const c = r.c;
-        const rawShare = r.rawShare * redisFactor;
+        // Redistribute within each pool, THEN take off the fit-out exemption —
+        // that difference is the owner's, by the contract's own words.
+        var redisShare = 0;
+        Object.keys(r.myPools).forEach(function (pid) {
+          redisShare += r.myPools[pid] * (poolFactor[pid] || 1);
+        });
+        const rawShare = redisShare * r.fitFactor;
+        fitOwnerTotal += redisShare - rawShare;
 
         // 2. Each tenant's plus — the contract's own percent when it has one,
         //    the property's otherwise. Applied to the NET share, so the margin
@@ -642,7 +704,7 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
         rawTotal: rawTotalCost,
         plusAdded: plusAddedTotal,
         tenantTotal: tenantTotal,
-        vacantOwner: vacantRedistribute ? 0 : vacantShare,
+        vacantOwner: (vacantRedistribute ? 0 : vacantShare) + fitOwnerTotal,
         redistributed: vacantRedistribute ? vacantShare : 0,
         absorbed: absorbedTotal,
         plusPct: plusPct,

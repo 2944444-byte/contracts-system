@@ -107,8 +107,10 @@ export default function GroupsPage() {
   const groupPropIds = groupProps.map(function(p){return p.id;});
   const groupContracts = contracts.filter(function(c){return groupPropIds.includes(c.property_id);});
   const groupSpaces = spaces.filter(function(s){return groupPropIds.includes(s.property_id);});
+  // A future lease's guarantee is due at its own milestone — not a gap today.
+  const startedGroupContracts = groupContracts.filter(contractStarted);
   const groupGuarantees = guarantees.filter(function(gu){
-    return groupContracts.some(function(c){return c.id===gu.contract_id;});
+    return startedGroupContracts.some(function(c){return c.id===gu.contract_id;});
   });
 
   // Income: started leases only. Occupancy: every held unit — the cached
@@ -125,7 +127,7 @@ export default function GroupsPage() {
   const occupiedSpaces = groupSpaces.filter(isHeld);
 
   const oneYearMs = 365*24*60*60*1000;
-  const expiringContracts = groupContracts.filter(function(c){
+  const expiringContracts = startedGroupContracts.filter(function(c){
     if (!c.end_date) return false;
     var diff = new Date(c.end_date).getTime() - Date.now();
     return diff > 0 && diff <= oneYearMs;
@@ -230,7 +232,7 @@ export default function GroupsPage() {
                     </div>
                     <div className="rounded-xl p-3 text-center border border-amber-200 bg-amber-50 cursor-pointer hover:ring-2 hover:ring-amber-300"
                       onClick={function(){router.push("/contracts");}}>
-                      <div className="text-lg font-black text-amber-700">{groupContracts.length}</div>
+                      <div className="text-lg font-black text-amber-700">{startedGroupContracts.length}</div>
                       <div className="text-xs text-amber-600">חוזים →</div>
                     </div>
                   </div>
@@ -276,7 +278,7 @@ export default function GroupsPage() {
                                 <div className="text-xs text-slate-500 mt-0.5">
                                   {p.total_area ? p.total_area + ' מ"ר | ' : ""}
                                   {pSpaces.length} יחידות ({pOccupied} מושכרות) |
-                                  {" " + pContracts.length} חוזים
+                                  {" " + pContracts.filter(contractStarted).length} חוזים
                                 </div>
                               </div>
                               <div className="text-left">

@@ -255,7 +255,9 @@ export function mgmtChargeFactorForRange(params: {
     return Math.max(0, Math.min(aE, bE) - Math.max(aS, bS));
   };
 
-  const graceDays = overlap(from, to, dayNum(g.start), dayNum(g.rentFreeEnd || g.end));
+  // Management stops being discounted at the fit-out end — phase 2 is a rent
+  // holiday for a trading store, not a management one.
+  const graceDays = overlap(from, to, dayNum(g.start), dayNum(g.end));
   if (graceDays <= 0) return { factor: 1, opted: true, note: "" };
 
   const free = mgmtFreeWindow({ contract: c, today: params.today });
@@ -296,8 +298,12 @@ export function graceFactorsFor(params: {
   const g = graceWindow({ contract: c, today: params.today });
   const plain = { rentFactor: 1, mgmtFactor: 1, graceRatio: 0 };
   if (!g.applies || !g.end) return plain;
-  // Phase 2 (extra grace from the opening) extends the covered stretch.
+  // Phase 2 (extra grace from the opening) extends RENT coverage only — it is
+  // a rent holiday for a store that is already trading, and management is
+  // charged from the opening on. Rent measures against rentFreeEnd; the
+  // management stretch stops at the fit-out end.
   const coverEnd = g.rentFreeEnd || g.end;
+  const mgmtEnd = g.end;
 
   // Compare on day boundaries only — a stray hour must not turn a fully-free
   // month into 99.7% free.
@@ -312,6 +318,10 @@ export function graceFactorsFor(params: {
 
   const graceRatio = Math.min(1, covered / total);
   const normal = 1 - graceRatio;
+  // Management's own window (phase 1 only) and its normal remainder.
+  const mgmtCovered = Math.max(0, Math.min(mgmtEnd.getTime(), pE.getTime()) - pS.getTime());
+  const mgmtGraceRatio = Math.min(1, mgmtCovered / total);
+  const mgmtNormal = 1 - mgmtGraceRatio;
 
   const rentDiscount = 1 - (Number(c.grace_discount_pct) || 0) / 100;   // 0 = rent free
   const mgmtDiscount = 1 - (Number(c.grace_mgmt_discount_pct) || 0) / 100;
@@ -323,8 +333,8 @@ export function graceFactorsFor(params: {
   const freeCovered = free.applies && free.end
     ? Math.max(0, Math.min(free.end.getTime(), pE.getTime()) - pS.getTime())
     : 0;
-  const freeRatio = Math.min(graceRatio, freeCovered / total);
-  const discRatio = Math.max(0, graceRatio - freeRatio);
+  const freeRatio = Math.min(mgmtGraceRatio, freeCovered / total);
+  const discRatio = Math.max(0, mgmtGraceRatio - freeRatio);
 
   // What management costs DURING the fit-out window, once it is chargeable at
   // all: the stated discount, or — with no discount recorded — free on a full
@@ -333,7 +343,7 @@ export function graceFactorsFor(params: {
   const mgmtInGrace = c.grace_mgmt_discount_pct != null
     ? mgmtDiscount
     : (c.grace_type === "full" ? 0 : 1);
-  const mgmtFactor = normal + discRatio * mgmtInGrace;   // the free stretch contributes 0
+  const mgmtFactor = mgmtNormal + discRatio * mgmtInGrace;   // the free stretch contributes 0
 
   if (c.grace_type === "full") {
     return { rentFactor: normal, mgmtFactor, graceRatio };

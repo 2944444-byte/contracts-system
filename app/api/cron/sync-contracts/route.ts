@@ -13,13 +13,14 @@ export const maxDuration = 60;
 export async function GET(req: NextRequest) {
   // Optional auth: when CRON_SECRET is set, require it via Vercel's
   // Authorization: Bearer header or a ?secret= query param.
+  // Fail CLOSED (same hardening as transfer-billing): unauthenticated calls
+  // could trigger digest emails on every hit and probe internals.
   const secret = process.env.CRON_SECRET;
-  if (secret) {
-    const auth = req.headers.get("authorization") || "";
-    const qsecret = req.nextUrl.searchParams.get("secret") || "";
-    if (auth !== `Bearer ${secret}` && qsecret !== secret) {
-      return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-    }
+  if (!secret) {
+    return NextResponse.json({ error: "CRON_SECRET not configured" }, { status: 503 });
+  }
+  if ((req.headers.get("authorization") || "") !== `Bearer ${secret}`) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;

@@ -105,16 +105,20 @@ export function validatePriceTiers(
     if (t.increase_type !== "none" && (!t.increase_value || t.increase_value <= 0)) {
       errors.push(`שלב ${i + 1}: חסר ערך עלייה`);
     }
-    // Check overlaps with other tiers. A non-recurring stage fires at the end
-    // of EVERY lease year in [from, to] — so two stages sharing a year both try
-    // to raise the rent that year.
+    // Check overlaps with other tiers by ACTUAL FIRING YEARS — a recurring
+    // "every 5 years, years 1-10" fires only in years 1 and 6, so a one-off
+    // step at year 7 is a valid schedule, not an overlap.
     for (let j = i + 1; j < tiers.length; j++) {
       const o = tiers[j];
-      if (t.from_year <= o.to_year && t.to_year >= o.from_year) {
-        const oS = Math.max(t.from_year, o.from_year);
-        const oE = Math.min(t.to_year, o.to_year);
+      const horizon = Math.max(t.to_year || 0, o.to_year || 0, contractYears || 0, 1);
+      const clash: number[] = [];
+      for (let y = 1; y <= horizon; y++) {
+        if (tierAppliesAtYear(t, y) && tierAppliesAtYear(o, y)) clash.push(y);
+      }
+      if (clash.length > 0) {
+        const oS = clash[0], oE = clash[clash.length - 1];
         errors.push(
-          `שלבים ${i + 1} ו-${j + 1}: שניהם מגדירים עלייה בתום שנה ${oS === oE ? oS : oS + "–" + oE}` +
+          `שלבים ${i + 1} ו-${j + 1}: שניהם מגדירים עלייה בתום שנה ${oS === oE ? String(oS) : oS + "–" + oE}` +
           ` — שתי עליות באותה שנה. למדרגה חד-פעמית קבע רק "בתום שנת שכירות", בלי טווח.`);
       }
     }
@@ -280,7 +284,8 @@ export function rentAtDate(schedule: RentScheduleEntry[], queryDate: Date): numb
 /**
  * Expand recurring tiers into individual year-by-year tiers.
  * Example: { is_recurring: true, recurring_every_years: 1, from_year: 1, to_year: 10 }
- * → 10 individual tiers: year 1-2, 2-3, 3-4, ..., 9-10
+ * → 9 individual firings (years 1..9; year 10 does not fire — the year-10 rent
+ *   IS the result of the 9 increases, matching tierAppliesAtYear)
  */
 export function expandRecurringTiers(tiers: PriceTier[]): PriceTier[] {
   const expanded: PriceTier[] = [];
@@ -554,16 +559,22 @@ export function buildPriceTimeline(params: {
       });
     }
     // Add each expanded tier as individual year, clipping at mainEffectiveEnd
-    mainPreviews.forEach((tier) => {
+    mainPreviews.forEach((tier, ti) => {
       const tStart = new Date(contractStart);
       tStart.setFullYear(tStart.getFullYear() + tier.from_year);
       if (tStart >= mainEndObj) return; // tier starts after main period — skip
+      // A firing at the end of year N sets the price for years N+1 .. the next
+      // firing (expandRecurringTiers emits single-year entries, from == to).
+      const next = mainPreviews[ti + 1];
+      const endYearNum = tier.to_year > tier.from_year ? tier.to_year : (next ? next.from_year : 0);
       const tEnd = new Date(contractStart);
-      tEnd.setFullYear(tEnd.getFullYear() + tier.to_year);
+      if (endYearNum > 0) tEnd.setFullYear(tEnd.getFullYear() + endYearNum);
+      else tEnd.setTime(mainEndObj.getTime());
       const clippedEnd = tEnd < mainEndObj ? tEnd : mainEndObj;
-      const yearLabel = (tier.to_year - tier.from_year === 1)
-        ? `שנה ${tier.to_year}`
-        : `שנים ${tier.from_year + 1}-${tier.to_year}`;
+      const firstYear = tier.from_year + 1;
+      const yearLabel = endYearNum === 0
+        ? (firstYear ? `משנה ${firstYear}` : "")
+        : endYearNum <= firstYear ? `שנה ${firstYear}` : `שנים ${firstYear}-${endYearNum}`;
       timeline.push({
         label: yearLabel,
         startDate: format(tStart, "yyyy-MM-dd"),
@@ -698,14 +709,17 @@ export function buildPriceTimeline(params: {
             type: "base",
           });
 
-          optPreviews.forEach(function(tier) {
+          optPreviews.forEach(function(tier, tIdx) {
             const tierStart = new Date(optStart);
             tierStart.setFullYear(tierStart.getFullYear() + tier.from_year);
+            const nextT: any = optPreviews[tIdx + 1];
+            const endYearNum = tier.to_year > tier.from_year ? tier.to_year : (nextT ? nextT.from_year : tier.from_year + 1);
             const tierEnd = new Date(optStart);
-            tierEnd.setFullYear(tierEnd.getFullYear() + tier.to_year);
-            const yearLabel = (tier.to_year - tier.from_year === 1)
-              ? `${optLabel} — שנה ${tier.to_year}`
-              : `${optLabel} — שנים ${tier.from_year + 1}-${tier.to_year}`;
+            tierEnd.setFullYear(tierEnd.getFullYear() + endYearNum);
+            const firstYear = tier.from_year + 1;
+            const yearLabel = endYearNum <= firstYear
+              ? `${optLabel} — שנה ${firstYear}`
+              : `${optLabel} — שנים ${firstYear}-${endYearNum}`;
             timeline.push({
               label: yearLabel,
               startDate: format(tierStart, "yyyy-MM-dd"),

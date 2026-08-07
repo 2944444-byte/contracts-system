@@ -19,14 +19,19 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { buildSpaceRentSchedule, rentAtDate } from "@/lib/contract-utils";
 import { graceFactorsFor, graceWindow } from "@/lib/store-opening";
 import { minimumApplies } from "@/lib/project-occupancy";
-import { fetchCpiAdjustedWithRetry } from "@/lib/cpi-server";
+import { minRentPerSqmAtDate } from "@/lib/min-rent";
+import { fetchCpiAdjustedWithRetry, fetchHighestChainedCpiWithRetry } from "@/lib/cpi-server";
 import { getVatRates, vatPctAt } from "@/lib/vat";
 
-// CBS wants MM-DD-YYYY.
+// CBS wants MM-DD-YYYY. The 15th is the publication day itself and is
+// ambiguous — bumped to the 16th, matching the cheque path, so both paths
+// resolve the same known index for the same contract.
 function cbsDate(dateStr: string): string | null {
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(dateStr);
-  if (!m) return null;
-  return m[2] + "-" + m[3] + "-" + m[1];
+  const d0 = /^(\d{4})-(\d{2})-(\d{2})/.exec(dateStr);
+  if (!d0) return null;
+  const d = new Date(Number(d0[1]), Number(d0[2]) - 1, Number(d0[3]));
+  if (d.getDate() === 15) d.setDate(16);
+  return String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0") + "-" + d.getFullYear();
 }
 
 export const TRANSFER_METHODS = ["bank_transfer", "standing_order"];
@@ -133,12 +138,21 @@ export async function generateTransferCharges(params: {
         const area = (c.contract_spaces || []).reduce(function (s: number, cs: any) {
           return s + (Number(cs?.spaces?.area) || 0);
         }, 0) || Number(c.charged_area) || 0;
-        baseMonthly = Number(c.min_rent_per_sqm) > 0
-          ? Number(c.min_rent_per_sqm) * area
-          : Number(c.minimum_rent) || 0;
+        // The floor follows its own rent steps — the same tier rows that
+        // drive fixed rent drive the minimum, so year 2's stepped floor is
+        // billed as stepped, not at the signing figure.
+        const minSqmNow = Number(c.min_rent_per_sqm) > 0
+          ? minRentPerSqmAtDate({
+              baseMinPerSqm: Number(c.min_rent_per_sqm),
+              tiers: tiersByContract[c.id] || [],
+              contractStart: c.start_date, date: period.start,
+            })
+          : 0;
+        baseMonthly = minSqmNow > 0 ? minSqmNow * area : (Number(c.minimum_rent) || 0);
         noteLines.push('שכ"ד מינימום: ' +
-          (Number(c.min_rent_per_sqm) > 0
-            ? "₪" + Number(c.min_rent_per_sqm).toLocaleString("he-IL") + '/מ"ר × ' + area.toLocaleString("he-IL") + ' מ"ר'
+          (minSqmNow > 0
+            ? "₪" + r2(minSqmNow).toLocaleString("he-IL") + '/מ"ר × ' + area.toLocaleString("he-IL") + ' מ"ר' +
+              (minSqmNow !== Number(c.min_rent_per_sqm) ? " (כולל מדרגות)" : "")
             : "סכום חודשי קבוע") + " = ₪" + r2(baseMonthly).toLocaleString("he-IL"));
         if (cond.reason) noteLines.push(cond.reason);
       } else {
@@ -178,7 +192,30 @@ export async function generateTransferCharges(params: {
             // final would understate the rent. The contract is skipped aloud.
             throw new Error("שליפת מדד נכשלה: " + (adj?.error || "—"));
           }
-          const ratio = Number(adj.adjustedRentPerSqm) / 10000;
+          var ratio = Number(adj.adjustedRentPerSqm) / 10000;
+          // no_drop / highest_in_period: the governing index is the PEAK since
+          // the base, not the current — the same scan the cheque path runs.
+          const isPeakMech = c.indexation_method === "highest_in_period" || c.index_mechanism === "highest_in_period"
+            || c.indexation_method === "no_drop" || c.index_mechanism === "no_drop";
+          if (isPeakMech) {
+            const bD0 = /^(\d{4})-(\d{2})/.exec(String(c.index_base_date));
+            const pD = new Date(today);
+            if (pD.getDate() < 16) pD.setMonth(pD.getMonth() - 2); else pD.setMonth(pD.getMonth() - 1);
+            const peak = await fetchHighestChainedCpiWithRetry({
+              baseFromDate: fromCbs,
+              scanFromYear: bD0 ? Number(bD0[1]) : pD.getFullYear(),
+              scanFromMonth: bD0 ? Number(bD0[2]) : 1,
+              scanToYear: pD.getFullYear(),
+              scanToMonth: pD.getMonth() + 1,
+            } as any);
+            if (!peak || !peak.success) {
+              throw new Error("סריקת שיא מדד נכשלה (מנגנון " + (c.index_mechanism || c.indexation_method) + "): " + (peak?.error || "—"));
+            }
+            if (Number(peak.peakRatio) > ratio) {
+              ratio = Number(peak.peakRatio);
+              noteLines.push("מנגנון שיא: המדד הקובע הוא שיא התקופה (" + peak.peakYear + "-" + String(peak.peakMonth).padStart(2, "0") + ")");
+            }
+          }
           if (ratio > 1) {
             const adjusted = r2(baseMonthly * ratio);
             noteLines.push("הצמדה למדד: ₪" + r2(baseMonthly).toLocaleString("he-IL") + " → ₪" +
@@ -189,6 +226,19 @@ export async function generateTransferCharges(params: {
             noteLines.push("הצמדה למדד: ללא שינוי (המדד אינו מעל הבסיס)");
           }
         }
+      }
+
+      // Mid-month start or end: only the days in force are billed. The cheque
+      // path prorates this way; a transfer tenant leaving on the 10th must not
+      // be billed the whole month.
+      const daysInMonth = Math.round((period.end.getTime() - period.start.getTime()) / 86400000);
+      var inForceFrom = cStart && cStart > period.start ? cStart : period.start;
+      var inForceTo = cEnd && cEnd < period.end ? new Date(cEnd.getFullYear(), cEnd.getMonth(), cEnd.getDate() + 1) : period.end;
+      const inForceDays = Math.max(0, Math.round((inForceTo.getTime() - inForceFrom.getTime()) / 86400000));
+      if (inForceDays < daysInMonth) {
+        const part = r2(baseMonthly * inForceDays / daysInMonth);
+        noteLines.push("חלקיות חודש: " + inForceDays + "/" + daysInMonth + " ימים → ₪" + part.toLocaleString("he-IL"));
+        baseMonthly = part;
       }
 
       // Grace — both phases, and the management rules.
@@ -249,7 +299,13 @@ export async function generateTransferCharges(params: {
         status: "pending",
         notes: noteLines.join("\n"),
       });
-      if (iErr) { res.errors.push(name + ": " + iErr.message); continue; }
+      if (iErr) {
+        // 23505 = the DB's unique backstop caught a concurrent run that billed
+        // this contract between our SELECT and this INSERT. Not an error — the
+        // month is billed, exactly once.
+        if ((iErr as any).code === "23505") { res.skippedExisting++; res.lines.push(name + " — כבר קיים חיוב ל" + period.label); continue; }
+        res.errors.push(name + ": " + iErr.message); continue;
+      }
       res.created++;
       res.lines.push(name + " — ₪" + r2(baseTotal + vatAmount).toLocaleString("he-IL") + " לתשלום עד " + due.toLocaleDateString("he-IL"));
     } catch (e: any) {
