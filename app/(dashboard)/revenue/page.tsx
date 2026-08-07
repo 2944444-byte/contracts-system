@@ -1021,15 +1021,34 @@ export default function RevenuePage() {
               </span>
             );
           })()}
-          {mgmtIncluded && (
-            <span className="rounded-md bg-amber-100 text-amber-900 px-2 py-0.5 font-semibold">
-              ⚙️ ניהול כלול במחזור — מנוטרל אוטומטית
-              {contractFeePerSqm > 0 && <span className="text-amber-700"> ({fmtMoney(contractFeePerSqm)}/מ"ר/חודש)</span>}
-            </span>
-          )}
-          {!contractFeePerSqm && mgmtIncluded && (
-            <span className="text-amber-700 text-[11px]">⚠ אין הגדרת mgmt_fee_per_sqm — הזן את דמי הניהול ידנית בכל דיווח</span>
-          )}
+          {mgmtIncluded && (function(){
+            // The neutralization rate comes from a PRIORITY CHAIN (actual →
+            // manual → billing-group advance → contract figure). The old
+            // banner checked only the contract figure and cried "no rate"
+            // while the billing-group advance was doing the work in every row.
+            var bgRates = Object.keys(mgmtRateBySpaceId).length > 0;
+            var bgRateShown = 0;
+            if (bgRates && selContract) {
+              // The rate actually applied to this contract's own unit(s).
+              (areaSegments || []).forEach(function(sg: any){
+                if (!bgRateShown && sg?.spaceId && mgmtRateBySpaceId[sg.spaceId] > 0) bgRateShown = mgmtRateBySpaceId[sg.spaceId];
+              });
+              if (!bgRateShown) { var ks = Object.keys(mgmtRateBySpaceId); bgRateShown = Number(mgmtRateBySpaceId[ks[0]]) || 0; }
+            }
+            return (
+              <>
+                <span className="rounded-md bg-amber-100 text-amber-900 px-2 py-0.5 font-semibold">
+                  ⚙️ ניהול כלול במחזור — מנוטרל אוטומטית
+                  {bgRates && bgRateShown > 0
+                    ? <span className="text-amber-700"> (מקדמה {fmtMoney(bgRateShown)}/מ&quot;ר מקבוצת החיוב; מתוקן לעלות בפועל בהתחשבנות)</span>
+                    : contractFeePerSqm > 0 && <span className="text-amber-700"> ({fmtMoney(contractFeePerSqm)}/מ&quot;ר/חודש מהחוזה)</span>}
+                </span>
+                {!bgRates && !contractFeePerSqm && (
+                  <span className="text-amber-700 text-[11px]">⚠ אין תעריף דמי ניהול — לא בקבוצת חיוב, לא בתקציב ולא בחוזה. הזן ידנית בכל דיווח או הגדר תעריף.</span>
+                )}
+              </>
+            );
+          })()}
         </div>
 
         {selContract.revenue_minimum_advance === false && (Number(selContract.minimum_rent) > 0 || selContract.min_rent_per_sqm) && (
