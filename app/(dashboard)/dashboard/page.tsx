@@ -259,6 +259,8 @@ export default function DashboardPage() {
 
   const filteredContracts = contracts.filter(function(c){return filteredPropIds.includes(c.property_id);});
   const filteredSpaces = spaces.filter(function(s){return filteredPropIds.includes(s.property_id);});
+  const startedContracts = filteredContracts.filter(contractStarted);
+  const futureContracts = filteredContracts.filter(function(c){ return !contractStarted(c); });
   const filteredGuarantees = guarantees.filter(function(g){
     return startedContracts.some(function(c){return c.id===g.contract_id;});
   });
@@ -267,8 +269,6 @@ export default function DashboardPage() {
   // Base revenue: sum of contract base rents (no CPI applied).
   // Indexed revenue: sum of (base × ratio) per contract — each contract gets
   // its own ratio based on its own base date and indexation method.
-  const startedContracts = filteredContracts.filter(contractStarted);
-  const futureContracts = filteredContracts.filter(function(c){ return !contractStarted(c); });
   const baseRevenue = startedContracts.reduce(function(s,c){return s+calcContractRentNow(c);},0);
   // Which contracts produce no (or reduced) rent right now, and how much rent
   // that withholds — so a lower KPI is explained rather than merely lower.
