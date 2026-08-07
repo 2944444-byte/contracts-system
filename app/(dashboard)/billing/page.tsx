@@ -154,6 +154,14 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
   const [actualCost, setActualCost] = useState("");
   const [groupActualCosts, setGroupActualCosts] = useState<Record<string, string>>({}); // groupId → actual cost
   const [defaultActualCost, setDefaultActualCost] = useState(""); // actual cost for units not in any group
+  // Cost-plus is a property-level term (uniform for a managed property); a
+  // contract may override with its own percent. The two flags answer, per
+  // reconciliation: is the entered cost already WITH the plus, and where does
+  // the vacant share go.
+  const [propCostPlus, setPropCostPlus] = useState("");
+  const [costPlusIncluded, setCostPlusIncluded] = useState(true);
+  const [vacantRedistribute, setVacantRedistribute] = useState(false);
+  const [mgmtSummary, setMgmtSummary] = useState<any>(null);
   const [mgmtGroupsData, setMgmtGroupsData] = useState<any[]>([]);
   const [mgmtResults, setMgmtResults] = useState<MgmtResult[]>([]);
   const [computing, setComputing] = useState(false);
@@ -183,8 +191,11 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
   // reconciliation restores them (same idea as the insurance dispositions).
   async function loadActualInputs() {
     if (!propId) return;
+    const { data: propRow } = await supabase.from("properties")
+      .select("mgmt_cost_plus_pct").eq("id", propId).maybeSingle();
+    setPropCostPlus(propRow?.mgmt_cost_plus_pct != null ? String(propRow.mgmt_cost_plus_pct) : "");
     const { data } = await supabase.from("mgmt_reconciliation_inputs")
-      .select("actual_cost, default_actual_cost, group_actual_costs")
+      .select("actual_cost, default_actual_cost, group_actual_costs, cost_plus_included, vacant_redistribute")
       .eq("property_id", propId).eq("year", year).limit(1);
     var row = data && data[0];
     setActualCost(row && row.actual_cost != null ? String(row.actual_cost) : "");
@@ -193,6 +204,8 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
     var gm: Record<string, string> = {};
     Object.keys(g).forEach(function(k){ gm[k] = g[k] != null ? String(g[k]) : ""; });
     setGroupActualCosts(gm);
+    setCostPlusIncluded(row ? row.cost_plus_included !== false : true);
+    setVacantRedistribute(!!(row && row.vacant_redistribute));
   }
   async function saveActualInputs() {
     if (!propId) return;
@@ -202,6 +215,8 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
         actual_cost: actualCost ? Number(actualCost) : null,
         default_actual_cost: defaultActualCost ? Number(defaultActualCost) : null,
         group_actual_costs: groupActualCosts,
+        cost_plus_included: costPlusIncluded,
+        vacant_redistribute: vacantRedistribute,
         updated_at: new Date().toISOString(),
       }, { onConflict: "property_id,year" });
     } catch (e) { /* non-fatal */ }
@@ -439,13 +454,26 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
       const spaceAreaMap = new Map<string, number>();
       (propSpaces ?? []).forEach((sp: any) => spaceAreaMap.set(sp.id, Number(sp.area) || 0));
 
+      // Cost-plus: the property's uniform percent. The entered actual figure
+      // is usually WITH the plus already ("דרכ עם ה+"), so the default strips
+      // it back to the NET cost — everything downstream works on net cost and
+      // each tenant's plus is added per-tenant (a contract can carry its own
+      // percent). Entering a net figure flips the toggle instead.
+      const plusPct = Number(propCostPlus) || 0;
+      const toRaw = function (x: number): number {
+        return costPlusIncluded && plusPct > 0 ? x / (1 + plusPct / 100) : x;
+      };
+      if (plusPct > 0) {
+        await supabase.from("properties").update({ mgmt_cost_plus_pct: plusPct }).eq("id", propId);
+      }
+
       // Build map: space_id → { rate, groupId, groupTotalArea, groupActualCost }
       const spaceGroupMap = new Map<string, { rate: number; groupId: string; groupTotalArea: number; groupActualCost: number; }>();
       for (const g of mgmtGroupsData) {
         const sids = (g.billing_group_spaces || []).map((x: any) => x.space_id);
         const groupTotalArea = sids.reduce((s: number, sid: string) => s + (spaceAreaMap.get(sid) || 0), 0);
         const rate = Number(g.rate_per_sqm_monthly) || (Number(g.annual_amount) && groupTotalArea > 0 ? Number(g.annual_amount) / groupTotalArea / 12 : 0);
-        const groupActualCost = Number(groupActualCosts[g.id]) || 0;
+        const groupActualCost = toRaw(Number(groupActualCosts[g.id]) || 0);
         for (const sid of sids) {
           spaceGroupMap.set(sid, { rate, groupId: g.id, groupTotalArea, groupActualCost });
         }
@@ -455,7 +483,7 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
       const groupedSpaceIds = new Set(spaceGroupMap.keys());
       const defaultSpaceArea = (propSpaces ?? []).filter((sp: any) => !groupedSpaceIds.has(sp.id))
         .reduce((s: number, sp: any) => s + (Number(sp.area) || 0), 0);
-      const defaultActual = Number(defaultActualCost) || (hasGroups ? 0 : Number(actualCost));
+      const defaultActual = toRaw(Number(defaultActualCost) || (hasGroups ? 0 : Number(actualCost)));
       const defaultAnnualBudget = hasGroups ? annualBudget : annualBudget; // still same source
       const defaultRate = defaultSpaceArea > 0 ? defaultAnnualBudget / defaultSpaceArea / 12 : (totalArea > 0 ? annualBudget / totalArea / 12 : 0);
 
@@ -484,7 +512,7 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
         }
       }
 
-      const results: MgmtResult[] = (contracts ?? []).map(function (c: any) {
+      const interim = (contracts ?? []).map(function (c: any) {
         let advance = 0;
         let actualShare = 0;
         let contractArea = 0;
@@ -528,15 +556,6 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
           actualShare = actualShare * mgmtFit.factor;
         }
 
-        // Cost-plus: the lease bills the tenant's share of the actual cost
-        // PLUS a margin. Applied to the actual side only — the advance is
-        // whatever was collected — so the margin lands in the reconciliation
-        // difference, which is where it is actually owed.
-        const costPlusPct = Number(c.mgmt_cost_plus_pct) || 0;
-        if (costPlusPct > 0) {
-          actualShare = actualShare * (1 + costPlusPct / 100);
-        }
-
         // The area the year is billed on: the time-weighted average, so the
         // protection ceiling scales with the same yardstick as the advance.
         contractArea = yearDays > 0 ? Math.round((sqmDays / yearDays) * 100) / 100 : 0;
@@ -553,33 +572,80 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
         // never billed above the agreed ceiling. An overrun is absorbed by the
         // landlord; an overpayment still comes back to the tenant, so the
         // reconciliation stays one-directional in the tenant's favour.
+        return {
+          c, advance, rawShare: actualShare, contractArea, isRevenueBased,
+          spaceNames: spaceNamesList.join(", ") || "—",
+          fitOutNote: mgmtFit.opted && mgmtFit.factor < 1
+            ? "תקופת עבודות: " + mgmtFit.note + " (" + Math.round(mgmtFit.factor * 100) + "% מהשנה)"
+            : undefined,
+        };
+      });
+
+      // ── The property-level passes ─────────────────────────────────
+      // 1. Vacancy: the entered NET cost minus what the let areas carry.
+      //    Absorbed by the owner (today's behaviour) or, when the user says
+      //    so, redistributed to the tenants pro-rata — the same question the
+      //    insurance billing asks about empty units.
+      const rawTotalCost = (mgmtGroupsData as any[]).reduce(function (sum: number, g: any) {
+        return sum + toRaw(Number(groupActualCosts[g.id]) || 0);
+      }, 0) + defaultActual;
+      const sumRawShares = interim.reduce(function (sum: number, r: any) { return sum + r.rawShare; }, 0);
+      const vacantShare = Math.max(0, rawTotalCost - sumRawShares);
+      const redisFactor = vacantRedistribute && sumRawShares > 0 && vacantShare > 0
+        ? rawTotalCost / sumRawShares : 1;
+
+      var plusAddedTotal = 0, absorbedTotal = 0, tenantTotal = 0;
+      const results: MgmtResult[] = interim.map(function (r: any) {
+        const c = r.c;
+        const rawShare = r.rawShare * redisFactor;
+
+        // 2. Each tenant's plus — the contract's own percent when it has one,
+        //    the property's otherwise. Applied to the NET share, so the margin
+        //    lands in the reconciliation difference where it is owed.
+        const tenantPlusPct = c.mgmt_cost_plus_pct != null ? Number(c.mgmt_cost_plus_pct) : plusPct;
+        const actualShare = rawShare * (1 + Math.max(0, tenantPlusPct) / 100);
+        plusAddedTotal += actualShare - rawShare;
+
+        // 3. Protection: the ceiling caps the FINAL figure — a protected
+        //    tenant is shielded from the plus and the redistribution alike.
         const prot = mgmtProtectionFromRow(c);
         const ceiling = mgmtCeilingForYear({
-          contract: c, protection: prot, area: contractArea, year: year,
+          contract: c, protection: prot, area: r.contractArea, year: year,
           cpiRatio: c.index_base_date ? protectionRatios[String(c.index_base_date).slice(0, 10)] : null,
         });
         const applied = applyMgmtProtection({
-          advance: advance, actualShare: actualShare, ceiling: ceiling, type: prot.type,
+          advance: r.advance, actualShare: actualShare, ceiling: ceiling, type: prot.type,
         });
+        absorbedTotal += applied.absorbed || 0;
+        tenantTotal += applied.chargeableShare;
 
         return {
           contractId: c.id,
           tenantName: c.tenants?.name ?? "—",
-          spaceNames: spaceNamesList.join(", ") || "—",
-          chargedArea: contractArea,
-          advance,
+          spaceNames: r.spaceNames,
+          chargedArea: r.contractArea,
+          advance: r.advance,
           actualShare,
-          difference: applied.chargeableShare - advance,
-          isRevenueBased,
+          difference: applied.chargeableShare - r.advance,
+          isRevenueBased: r.isRevenueBased,
           protectionLabel: ceiling.applies ? describeMgmtProtection(prot, c) : undefined,
           ceilingAmount: ceiling.applies ? ceiling.amount : undefined,
           absorbed: applied.absorbed,
           capped: applied.capped,
-          fitOutNote: mgmtFit.opted && mgmtFit.factor < 1
-            ? "תקופת עבודות: " + mgmtFit.note + " (" + Math.round(mgmtFit.factor * 100) + "% מהשנה)"
+          fitOutNote: r.fitOutNote,
+          costPlusNote: tenantPlusPct > 0
+            ? "קוסט פלוס " + tenantPlusPct + "%" + (c.mgmt_cost_plus_pct != null ? " (תנאי החוזה)" : "")
             : undefined,
-          costPlusNote: costPlusPct > 0 ? "קוסט פלוס " + costPlusPct + "% על העלות בפועל" : undefined,
         };
+      });
+      setMgmtSummary({
+        rawTotal: rawTotalCost,
+        plusAdded: plusAddedTotal,
+        tenantTotal: tenantTotal,
+        vacantOwner: vacantRedistribute ? 0 : vacantShare,
+        redistributed: vacantRedistribute ? vacantShare : 0,
+        absorbed: absorbedTotal,
+        plusPct: plusPct,
       });
       setMgmtResults(results);
       getVatTypeMap(results.map(function(r:any){ return r.contractId; })).then(setVatTypeMap);
@@ -1022,6 +1088,43 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
           </div>
         )}
 
+        {/* Cost-plus + the vacancy question — answered at input time so the
+            compute never guesses what the entered figure means. */}
+        <div className="rounded-xl border border-indigo-200 bg-indigo-50/50 p-4 my-4 space-y-3">
+          <div className="flex items-center gap-3 flex-wrap">
+            <label className="text-xs font-bold text-indigo-900">➕ קוסט פלוס לנכס (%)</label>
+            <input type="number" min="0" max="100" step="0.5" value={propCostPlus}
+              onChange={function(e){ setPropCostPlus(e.target.value); }}
+              className="w-24 rounded-lg border border-indigo-200 px-2 py-1.5 text-sm text-center" placeholder="0" />
+            <span className="text-[11px] text-indigo-700">אחיד לנכס · נשמר על הנכס · חוזה עם אחוז משלו גובר עליו</span>
+          </div>
+          {Number(propCostPlus) > 0 && (
+            <div className="flex items-center gap-2 flex-wrap text-[11px]">
+              <span className="font-semibold text-slate-700">הסכום שהוזן למעלה:</span>
+              <button type="button" onClick={function(){ setCostPlusIncluded(true); }}
+                className={"rounded-lg border px-3 py-1.5 font-semibold " + (costPlusIncluded ? "border-indigo-500 bg-white text-indigo-800" : "border-slate-200 text-slate-500")}>
+                כולל כבר את התוספת ({propCostPlus}%)
+              </button>
+              <button type="button" onClick={function(){ setCostPlusIncluded(false); }}
+                className={"rounded-lg border px-3 py-1.5 font-semibold " + (!costPlusIncluded ? "border-indigo-500 bg-white text-indigo-800" : "border-slate-200 text-slate-500")}>
+                עלות נטו — המערכת תוסיף {propCostPlus}%
+              </button>
+            </div>
+          )}
+          <div className="flex items-center gap-2 flex-wrap text-[11px]">
+            <span className="font-semibold text-slate-700">🏚 שטח שאינו מושכר:</span>
+            <button type="button" onClick={function(){ setVacantRedistribute(false); }}
+              className={"rounded-lg border px-3 py-1.5 font-semibold " + (!vacantRedistribute ? "border-indigo-500 bg-white text-indigo-800" : "border-slate-200 text-slate-500")}>
+              חלקו נספג אצל הבעלים
+            </button>
+            <button type="button" onClick={function(){ setVacantRedistribute(true); }}
+              className={"rounded-lg border px-3 py-1.5 font-semibold " + (vacantRedistribute ? "border-indigo-500 bg-white text-indigo-800" : "border-slate-200 text-slate-500")}>
+              מחולק מחדש לשוכרים באופן יחסי
+            </button>
+            <span className="text-slate-400">— אותה שאלה שנשאלת בחיוב הביטוח</span>
+          </div>
+        </div>
+
         {/* Management charges already created for this property + year */}
         {existingMgmtCharges.length > 0 && (
           <div className="rounded-lg bg-blue-50 border border-blue-200 p-4 my-4">
@@ -1051,6 +1154,43 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
         )}
 
         {progress && <div className="my-3"><CalcProgress {...progress} /></div>}
+
+        {mgmtSummary && mgmtResults.length > 0 && (
+          <div className="rounded-xl border border-slate-200 bg-white p-3 my-4">
+            <div className="text-xs font-bold text-slate-700 mb-2">סיכום ההתחשבנות</div>
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-center">
+              <div className="rounded-lg bg-slate-50 border border-slate-100 p-2">
+                <div className="text-sm font-bold text-slate-800">{fmtMoney(mgmtSummary.rawTotal)}</div>
+                <div className="text-[10px] text-slate-500">עלות בפועל (נטו)</div>
+              </div>
+              <div className="rounded-lg bg-indigo-50 border border-indigo-100 p-2">
+                <div className="text-sm font-bold text-indigo-800">{fmtMoney(mgmtSummary.plusAdded)}</div>
+                <div className="text-[10px] text-slate-500">תוספת קוסט-פלוס{mgmtSummary.plusPct > 0 ? " (" + mgmtSummary.plusPct + "%)" : ""}</div>
+              </div>
+              <div className="rounded-lg bg-green-50 border border-green-100 p-2">
+                <div className="text-sm font-bold text-green-800">{fmtMoney(mgmtSummary.tenantTotal)}</div>
+                <div className="text-[10px] text-slate-500">סה&quot;כ חלק השוכרים</div>
+              </div>
+              <div className={"rounded-lg p-2 border " + (mgmtSummary.vacantOwner > 0.5 ? "bg-amber-50 border-amber-200" : "bg-slate-50 border-slate-100")}>
+                <div className={"text-sm font-bold " + (mgmtSummary.vacantOwner > 0.5 ? "text-amber-800" : "text-slate-500")}>
+                  {fmtMoney(mgmtSummary.vacantOwner || mgmtSummary.redistributed)}
+                </div>
+                <div className="text-[10px] text-slate-500">
+                  {mgmtSummary.vacantOwner > 0.5 ? "שטח ריק — נספג אצל הבעלים" : mgmtSummary.redistributed > 0.5 ? "שטח ריק — חולק לשוכרים" : "שטח ריק"}
+                </div>
+              </div>
+              <div className={"rounded-lg p-2 border " + (mgmtSummary.absorbed > 0.5 ? "bg-rose-50 border-rose-200" : "bg-slate-50 border-slate-100")}>
+                <div className={"text-sm font-bold " + (mgmtSummary.absorbed > 0.5 ? "text-rose-700" : "text-slate-500")}>{fmtMoney(mgmtSummary.absorbed)}</div>
+                <div className="text-[10px] text-slate-500">עלות עודפת שנספגה בהגנות</div>
+              </div>
+            </div>
+            {mgmtSummary.absorbed > 0.5 && (
+              <div className="text-[11px] text-rose-700 mt-2">
+                🛡 ההגנות לתקופה מוגבלת — בתום תקופת ההגנה נפתחת התראה לעריכת התחשבנות סגירה מול השוכר.
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="flex gap-3 items-center">
           <button onClick={computeReconciliation} disabled={computing || !propId || !yearEnded}
