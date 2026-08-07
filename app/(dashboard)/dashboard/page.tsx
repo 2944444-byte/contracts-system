@@ -48,7 +48,16 @@ function calcContractRent(c: any): number {
     });
   }
   if (total === 0) total = (Number(c.rent_per_sqm) || 0) * (Number(c.charged_area) || 0);
+  // A turnover lease earns its MINIMUM on paper.
+  if (total === 0 && (c.rent_type === "revenue_pct" || Number(c.revenue_pct) > 0)) {
+    var mArea = (c.contract_spaces || []).reduce(function (a: number, x: any) { return a + (Number(x?.spaces?.area) || 0); }, 0) || Number(c.charged_area) || 0;
+    total = Number(c.min_rent_per_sqm) > 0 ? Number(c.min_rent_per_sqm) * mArea : (Number(c.minimum_rent) || 0);
+  }
   return total + (Number(c.investment_addition) || 0);
+}
+
+function contractStarted(c: any): boolean {
+  return c.status !== "upcoming" && c.status !== "future";
 }
 
 // What the contract actually produces this month, after the fit-out grace.
@@ -85,7 +94,7 @@ export default function DashboardPage() {
     const [{ data: pg }, { data: p }, { data: c }, { data: sp }, { data: gu }, { data: al }, { data: ch }, { data: ap }] = await Promise.all([
       supabase.from("property_groups").select("id,group_name").order("group_name"),
       supabase.from("properties").select("id,name,group_id,city,total_area,property_type"),
-      supabase.from("contracts").select("id,status,rent_per_sqm,charged_area,investment_addition,property_id,end_date,start_date,index_base_date,indexation_method,index_mechanism,is_amendment,grace_months,grace_days,grace_phase2_days,grace_type,grace_discount_pct,grace_mgmt_discount_pct,grace_ends_on_opening,planned_handover_date,actual_handover_date,planned_opening_date,actual_opening_date,tenants(name),properties(name),contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area))").in("status",["active","extended","expiring"]),
+      supabase.from("contracts").select("id,status,rent_per_sqm,charged_area,investment_addition,property_id,end_date,start_date,index_base_date,indexation_method,index_mechanism,is_amendment,grace_months,grace_days,grace_phase2_days,grace_type,grace_discount_pct,grace_mgmt_discount_pct,grace_ends_on_opening,rent_type,revenue_pct,min_rent_per_sqm,minimum_rent,planned_handover_date,actual_handover_date,planned_opening_date,actual_opening_date,tenants(name),properties(name),contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area))").in("status",["active","extended","expiring","upcoming","future"]),
       supabase.from("spaces").select("id,property_id,status,space_name,area"),
       supabase.from("guarantees").select("id,contract_id,amount_required,amount_actual,end_date,guarantee_type").eq("status","active"),
       supabase.from("alerts").select("id,title,severity,due_date,entity_type,contract_id,property_id").eq("is_resolved",false).order("due_date", { ascending: true }).limit(60),
@@ -255,25 +264,32 @@ export default function DashboardPage() {
   // Base revenue: sum of contract base rents (no CPI applied).
   // Indexed revenue: sum of (base × ratio) per contract — each contract gets
   // its own ratio based on its own base date and indexation method.
-  const baseRevenue = filteredContracts.reduce(function(s,c){return s+calcContractRentNow(c);},0);
+  const startedContracts = filteredContracts.filter(contractStarted);
+  const futureContracts = filteredContracts.filter(function(c){ return !contractStarted(c); });
+  const baseRevenue = startedContracts.reduce(function(s,c){return s+calcContractRentNow(c);},0);
   // Which contracts produce no (or reduced) rent right now, and how much rent
   // that withholds — so a lower KPI is explained rather than merely lower.
-  const graced = filteredContracts.filter(inGraceNow);
+  const graced = startedContracts.filter(inGraceNow);
   const gracedWithheld = graced.reduce(function(s,c){
     return s + (calcContractRent(c) - calcContractRentNow(c));
   },0);
-  const indexedRevenue = filteredContracts.reduce(function(s,c){
+  const indexedRevenue = startedContracts.reduce(function(s,c){
     var r = cpiRatios[c.id] || 1;
     return s + calcContractRentNow(c) * r;
   },0);
 
   const totalArea = filteredSpaces.reduce(function(s,sp){return s+(Number(sp.area)||0);},0);
-  const occupiedArea = filteredSpaces.filter(function(s){return s.status==="occupied";}).reduce(function(s,sp){return s+(Number(sp.area)||0);},0);
+  // Held = the cached flag OR any contract covering the unit — including a
+  // signed lease whose term hasn't begun, which commits the unit already.
+  const heldIds = new Set<string>();
+  filteredContracts.forEach(function(c: any){ (c.contract_spaces || []).forEach(function(cs: any){ if (cs?.space_id) heldIds.add(cs.space_id); }); });
+  const isHeld = function(s: any){ return s.status === "occupied" || heldIds.has(s.id); };
+  const occupiedArea = filteredSpaces.filter(isHeld).reduce(function(s,sp){return s+(Number(sp.area)||0);},0);
   const occupancyPct = totalArea > 0 ? Math.round(occupiedArea/totalArea*100) : 0;
 
-  const vacantSpaces = filteredSpaces.filter(function(s){return s.status==="vacant";});
+  const vacantSpaces = filteredSpaces.filter(function(s){return !isHeld(s);});
   const vacantArea = vacantSpaces.reduce(function(s,sp){return s+(Number(sp.area)||0);},0);
-  const occupiedSpaces = filteredSpaces.filter(function(s){return s.status==="occupied";});
+  const occupiedSpaces = filteredSpaces.filter(isHeld);
 
   // Expiring contracts in next 12 months (by date, not status)
   const oneYearMs = 365*24*60*60*1000;
@@ -346,7 +362,7 @@ export default function DashboardPage() {
   // Per-property breakdown: income, occupancy and open debt side by side.
   const propertyRows = filteredProps.map(function(p: any){
     var pContracts = filteredContracts.filter(function(c: any){ return c.property_id === p.id; });
-    var income = pContracts.reduce(function(s: number, c: any){ return s + calcContractRentNow(c) * (cpiRatios[c.id] || 1); }, 0);
+    var income = pContracts.filter(contractStarted).reduce(function(s: number, c: any){ return s + calcContractRentNow(c) * (cpiRatios[c.id] || 1); }, 0);
     var pSpaces = spaces.filter(function(s: any){ return s.property_id === p.id; });
     var pArea = pSpaces.reduce(function(s: number, x: any){ return s + (Number(x.area) || 0); }, 0);
     var occArea = 0;
@@ -438,7 +454,7 @@ export default function DashboardPage() {
           <div className="text-left">
             <div className="text-blue-100 text-xs font-medium">הכנסה חודשית צמודה</div>
             <div className="text-4xl font-black leading-tight">{fmtMoney(indexedRevenue)}</div>
-            <div className="text-blue-200 text-xs mt-0.5">תפוסה {occupancyPct}% · {filteredContracts.length} חוזים פעילים</div>
+            <div className="text-blue-200 text-xs mt-0.5">תפוסה {occupancyPct}% · {startedContracts.length} חוזים פעילים{futureContracts.length > 0 ? " · " + futureContracts.length + " עתידיים 🔜" : ""}</div>
           </div>
         </div>
         <div className="flex gap-2 items-center mt-4 flex-wrap">

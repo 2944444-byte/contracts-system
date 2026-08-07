@@ -7,6 +7,7 @@ import { fetchCpiAdjusted, fetchHighestChainedCpi } from '@/lib/cpi-server';
 import { PageHero } from '@/components/ui';
 import { getScopeIds, getCompanyScopeIds, getTenantScopeIds, scopeRows, scopeGroups } from '@/lib/permissions';
 import { getKnownIndexMonth } from '@/lib/cpi-utils';
+import { graceFactorsFor, graceWindow } from '@/lib/store-opening';
 import CalcProgress, { CalcProgressState } from '@/components/CalcProgress';
 import PropertyBudgetManager from '@/components/PropertyBudgetManager';
 
@@ -166,7 +167,7 @@ export default function PropertiesPage() {
       supabase.from("properties").select("*, companies(company_name)").order("name"),
       // upcoming/future included so a signed-not-started lease HOLDS its units
       // in the occupancy figures. Income sums filter them back out below.
-      supabase.from("contracts").select("id, status, start_date, rent_type, revenue_pct, min_rent_per_sqm, minimum_rent, rent_per_sqm, charged_area, investment_addition, property_id, end_date, indexation_method, index_mechanism, index_base_date, index_base_value, is_amendment, parent_contract_id, tenants(name), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area))").in("status",["active","expiring","extended","upcoming","future"]),
+      supabase.from("contracts").select("id, status, start_date, rent_type, revenue_pct, min_rent_per_sqm, minimum_rent, rent_per_sqm, charged_area, investment_addition, property_id, end_date, indexation_method, index_mechanism, index_base_date, index_base_value, is_amendment, parent_contract_id, mgmt_fee_per_sqm, mgmt_included_in_revenue, grace_months, grace_days, grace_phase2_days, grace_type, grace_discount_pct, grace_mgmt_discount_pct, grace_ends_on_opening, mgmt_charge_starts, mgmt_free_max_days, works_start_date, planned_handover_date, actual_handover_date, planned_opening_date, actual_opening_date, opening_rule, opening_max_days_from_handover, tenants(name), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area))").in("status",["active","expiring","extended","upcoming","future"]),
       supabase.from("spaces").select("id, property_id, status, space_name, area").order("space_name"),
       supabase.from("companies").select("id,company_name").order("company_name"),
     ]);
@@ -301,6 +302,8 @@ export default function PropertiesPage() {
     return s + (base * ratio);
   },0);
   const selRevenue = selRevenueBase; // for backwards compat below
+
+
   // Vacancy derived from contract_spaces — NOT from the cached spaces.status
   // field. The status flag silently drifts when an amendment changes holdings
   // (e.g. Golf's amendment took חנות 4 from "vacant" to occupied, but the
@@ -327,6 +330,54 @@ export default function PropertiesPage() {
   const totalArea    = selSpaces.reduce(function(s,sp){return s + (Number(sp.area) || 0);}, 0);
   const occupiedArea = selSpaces.filter(function(s){return heldSpaceIds.has(s.id);}).reduce(function(s,sp){return s + (Number(sp.area) || 0);}, 0);
   const selOccPct    = totalArea > 0 ? Math.round(occupiedArea/totalArea*100) : (selSpaces.length > 0 ? Math.round(selOccupied/selSpaces.length*100) : 0);
+
+  // ── The income picture ─────────────────────────────────────────────
+  // Three answers side by side: what the contracts are WORTH at full term
+  // (no grace, future leases included), what is actually billed TODAY, and
+  // when the gap closes. Management income gets the same treatment for a
+  // property under our management.
+  const incomePicture = (function() {
+    var now = new Date();
+    var mS = new Date(now.getFullYear(), now.getMonth(), 1);
+    var mE = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    var full = 0, today = 0, graceDisc = 0, futurePending = 0;
+    var mgmtFull = 0, mgmtToday = 0;
+    var fullFrom: Date | null = null;
+    var later = function (x: Date | null) { if (x && (!fullFrom || x > fullFrom)) fullFrom = x; };
+
+    selAllContracts.forEach(function(c: any) {
+      var f = calcContractRent(c);
+      var area = (c.contract_spaces || []).reduce(function (a: number, x: any) { return a + (Number(x?.spaces?.area) || 0); }, 0) || Number(c.charged_area) || 0;
+      var mgmtF = (!c.mgmt_included_in_revenue && Number(c.mgmt_fee_per_sqm) > 0) ? Number(c.mgmt_fee_per_sqm) * area : 0;
+      full += f; mgmtFull += mgmtF;
+
+      if (c.status === "upcoming" || c.status === "future") {
+        futurePending += f;
+        // Full income from this lease starts at its term start — and if it has
+        // its own grace, only when that grace's rent coverage ends.
+        var gF = graceWindow({ contract: c });
+        later(gF.applies ? (gF.rentFreeEnd || gF.end) : (c.start_date ? new Date(c.start_date) : null));
+        return;
+      }
+      var gf = graceFactorsFor({ contract: c, periodStart: mS, periodEnd: mE });
+      today += f * gf.rentFactor;
+      graceDisc += f * (1 - gf.rentFactor);
+      mgmtToday += mgmtF * gf.mgmtFactor;
+      if (gf.rentFactor < 1) {
+        var g = graceWindow({ contract: c });
+        later(g.rentFreeEnd || g.end);
+      }
+    });
+
+    var heldArea = occupiedArea > 0 ? occupiedArea : totalArea;
+    return {
+      full: full, today: today, graceDisc: graceDisc, futurePending: futurePending,
+      mgmtFull: mgmtFull, mgmtToday: mgmtToday, mgmtDisc: mgmtFull - mgmtToday,
+      perSqm: heldArea > 0 ? full / heldArea : 0,
+      fullFrom: fullFrom,
+      hasGap: graceDisc > 0.5 || futurePending > 0.5,
+    };
+  })();
   // Contracts expiring within next 12 months
   const oneYearMs    = 365 * 24 * 60 * 60 * 1000;
   const expiringSoon = selContracts.filter(function(c) {
@@ -483,6 +534,54 @@ export default function PropertiesPage() {
                   </div>
                 </div>
               )}
+
+              {/* The income picture: worth at full term vs billed today. */}
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50/40 p-3">
+                <div className="text-sm font-bold text-emerald-900 mb-2">💰 תמונת הכנסה חודשית — שכ&quot;ד</div>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-center">
+                  <div className="rounded-lg bg-white border border-emerald-100 p-2">
+                    <div className="text-sm font-black text-emerald-800">{fmtMoney(incomePicture.full)}</div>
+                    <div className="text-[10px] text-slate-500">מלוא ההסכמים — ללא גרייס</div>
+                    {incomePicture.hasGap && incomePicture.fullFrom && (
+                      <div className="text-[10px] text-emerald-700 font-semibold">צפוי מ-{incomePicture.fullFrom.toLocaleDateString("he-IL")}</div>
+                    )}
+                  </div>
+                  <div className="rounded-lg bg-white border border-emerald-100 p-2">
+                    <div className="text-sm font-black text-slate-800">{fmtMoney(incomePicture.today)}</div>
+                    <div className="text-[10px] text-slate-500">בפועל החודש</div>
+                  </div>
+                  <div className={"rounded-lg p-2 border " + (incomePicture.graceDisc > 0.5 ? "bg-amber-50 border-amber-200" : "bg-white border-emerald-100")}>
+                    <div className={"text-sm font-black " + (incomePicture.graceDisc > 0.5 ? "text-amber-800" : "text-slate-400")}>{fmtMoney(incomePicture.graceDisc)}</div>
+                    <div className="text-[10px] text-slate-500">הנחת גרייס היום</div>
+                  </div>
+                  <div className="rounded-lg bg-white border border-emerald-100 p-2">
+                    <div className="text-sm font-black text-slate-700">{fmtMoney(incomePicture.perSqm)}</div>
+                    <div className="text-[10px] text-slate-500">ממוצע למ&quot;ר (מלא)</div>
+                  </div>
+                </div>
+                {incomePicture.futurePending > 0.5 && (
+                  <div className="text-[11px] text-amber-800 mt-1.5">🔜 עוד {fmtMoney(incomePicture.futurePending)}/חודש מחוזים חתומים שטרם החלו</div>
+                )}
+                {incomePicture.mgmtFull > 0.5 && (
+                  <div className="mt-2 pt-2 border-t border-emerald-100">
+                    <div className="text-xs font-bold text-emerald-900 mb-1.5">🔧 דמי ניהול (נכס בניהולנו)</div>
+                    <div className="grid grid-cols-3 gap-2 text-center">
+                      <div className="rounded-lg bg-white border border-emerald-100 p-2">
+                        <div className="text-sm font-black text-emerald-800">{fmtMoney(incomePicture.mgmtFull)}</div>
+                        <div className="text-[10px] text-slate-500">מלוא ההסכמים</div>
+                      </div>
+                      <div className="rounded-lg bg-white border border-emerald-100 p-2">
+                        <div className="text-sm font-black text-slate-800">{fmtMoney(incomePicture.mgmtToday)}</div>
+                        <div className="text-[10px] text-slate-500">בפועל החודש</div>
+                      </div>
+                      <div className={"rounded-lg p-2 border " + (incomePicture.mgmtDisc > 0.5 ? "bg-amber-50 border-amber-200" : "bg-white border-emerald-100")}>
+                        <div className={"text-sm font-black " + (incomePicture.mgmtDisc > 0.5 ? "text-amber-800" : "text-slate-400")}>{fmtMoney(incomePicture.mgmtDisc)}</div>
+                        <div className="text-[10px] text-slate-500">פטור/הנחה היום</div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
 
               {/* Signed leases whose term hasn't begun: they hold units and
                   must be VISIBLE — the user's exact complaint was that they

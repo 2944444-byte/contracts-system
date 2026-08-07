@@ -22,7 +22,16 @@ function calcContractRent(c: any): number {
     });
   }
   if (total === 0) total = (Number(c.rent_per_sqm) || 0) * contractArea(c);
+  // A turnover lease earns its MINIMUM on paper — without this it counted ₪0.
+  if (total === 0 && (c.rent_type === "revenue_pct" || Number(c.revenue_pct) > 0)) {
+    var mArea = contractArea(c);
+    total = Number(c.min_rent_per_sqm) > 0 ? Number(c.min_rent_per_sqm) * mArea : (Number(c.minimum_rent) || 0);
+  }
   return total + (Number(c.investment_addition) || 0);
+}
+
+function contractStarted(c: any): boolean {
+  return c.status !== "upcoming" && c.status !== "future";
 }
 
 export default function GroupsPage() {
@@ -46,7 +55,9 @@ export default function GroupsPage() {
     const [{ data: g }, { data: p }, { data: c }, { data: sp }, { data: gu }] = await Promise.all([
       supabase.from("property_groups").select("*").order("group_name"),
       supabase.from("properties").select("id,name,group_id,total_area,city,property_type").order("name"),
-      supabase.from("contracts").select("id, status, rent_per_sqm, charged_area, investment_addition, property_id, end_date, tenants(name), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area))").in("status",["active","expiring","extended"]),
+      // upcoming/future included: a signed lease holds its units in the group's
+      // occupancy even before its term begins. Income filters them out below.
+      supabase.from("contracts").select("id, status, start_date, rent_type, revenue_pct, min_rent_per_sqm, minimum_rent, rent_per_sqm, charged_area, investment_addition, property_id, end_date, tenants(name), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area))").in("status",["active","expiring","extended","upcoming","future"]),
       supabase.from("spaces").select("id, property_id, status, space_name, area").order("space_name"),
       supabase.from("guarantees").select("id,contract_id,guarantee_type,amount_required,end_date,status").eq("status","active"),
     ]);
@@ -100,12 +111,18 @@ export default function GroupsPage() {
     return groupContracts.some(function(c){return c.id===gu.contract_id;});
   });
 
-  const totalRevenue = groupContracts.reduce(function(s,c){return s+calcContractRent(c);},0);
+  // Income: started leases only. Occupancy: every held unit — the cached
+  // spaces.status OR a contract (including a signed-not-started one) covering
+  // it, so the flag's drift can't hide a committed unit.
+  const heldIds = new Set<string>();
+  groupContracts.forEach(function(c: any){ (c.contract_spaces || []).forEach(function(cs: any){ if (cs?.space_id) heldIds.add(cs.space_id); }); });
+  const isHeld = function(s: any){ return s.status === "occupied" || heldIds.has(s.id); };
+  const totalRevenue = groupContracts.filter(contractStarted).reduce(function(s,c){return s+calcContractRent(c);},0);
   const totalArea = groupSpaces.reduce(function(s,sp){return s+(Number(sp.area)||0);},0);
-  const occupiedArea = groupSpaces.filter(function(s){return s.status==="occupied";}).reduce(function(s,sp){return s+(Number(sp.area)||0);},0);
+  const occupiedArea = groupSpaces.filter(isHeld).reduce(function(s,sp){return s+(Number(sp.area)||0);},0);
   const occupancyPct = totalArea > 0 ? Math.round(occupiedArea/totalArea*100) : 0;
-  const vacantSpaces = groupSpaces.filter(function(s){return s.status==="vacant";});
-  const occupiedSpaces = groupSpaces.filter(function(s){return s.status==="occupied";});
+  const vacantSpaces = groupSpaces.filter(function(s){return !isHeld(s);});
+  const occupiedSpaces = groupSpaces.filter(isHeld);
 
   const oneYearMs = 365*24*60*60*1000;
   const expiringContracts = groupContracts.filter(function(c){
@@ -142,7 +159,7 @@ export default function GroupsPage() {
               const props = properties.filter(function(p){return p.group_id===g.id;});
               const propIds = props.map(function(p){return p.id;});
               const gContracts = contracts.filter(function(c){return propIds.includes(c.property_id);});
-              const gRevenue = gContracts.reduce(function(s,c){return s+calcContractRent(c);},0);
+              const gRevenue = gContracts.filter(contractStarted).reduce(function(s,c){return s+calcContractRent(c);},0);
               return (
                 <div key={g.id} onClick={function(){setSelected(selected===g.id?null:g.id);}}
                   className={"rounded-xl border p-3 cursor-pointer transition-all " +
@@ -245,8 +262,8 @@ export default function GroupsPage() {
                       {groupProps.map(function(p) {
                         const pContracts = contracts.filter(function(c){return c.property_id===p.id;});
                         const pSpaces = spaces.filter(function(s){return s.property_id===p.id;});
-                        const pOccupied = pSpaces.filter(function(s){return s.status==="occupied";}).length;
-                        const pRevenue = pContracts.reduce(function(s,c){return s+calcContractRent(c);},0);
+                        const pOccupied = pSpaces.filter(isHeld).length;
+                        const pRevenue = pContracts.filter(contractStarted).reduce(function(s,c){return s+calcContractRent(c);},0);
                         return (
                           <div key={p.id} className="px-5 py-3 hover:bg-slate-50 cursor-pointer"
                             onClick={function(){router.push("/properties");}}>
