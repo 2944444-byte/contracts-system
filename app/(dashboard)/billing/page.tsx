@@ -227,6 +227,29 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
       }, { onConflict: "property_id,year" });
     } catch (e) { /* non-fatal */ }
   }
+  // Persist the per-tenant reconciliation outcome (advance / actual share /
+  // difference) as STRUCTURED rows — until now it lived only inside the letter
+  // text, so screens like the contracts screen couldn't show "what was actually
+  // paid per m² last year". Snapshot semantics: delete+insert per property+year.
+  async function saveReconciliationSnapshot() {
+    if (!propId || mgmtResults.length === 0) return;
+    try {
+      await supabase.from("billing_reconciliations").delete()
+        .eq("property_id", propId).eq("year", year).eq("billing_type", "management").is("period", null);
+      await supabase.from("billing_reconciliations").insert(mgmtResults.map(function(r){
+        return {
+          property_id: propId, year: year, billing_type: "management", period: null,
+          contract_id: r.contractId, tenant_name: r.tenantName,
+          charged_area: r.chargedArea > 0 ? Math.round(r.chargedArea * 100) / 100 : null,
+          advance_amount: Math.round(r.advance * 100) / 100,
+          actual_share: Math.round(r.actualShare * 100) / 100,
+          difference: Math.round(r.difference * 100) / 100,
+          status: "billed",
+          notes: r.isRevenueBased ? "דמי הניהול כלולים בשכ\"ד הפדיון" : null,
+        };
+      }));
+    } catch (e) { /* non-fatal — display data only, never blocks the reconciliation */ }
+  }
   async function loadExistingMgmtCharges() {
     if (!propId) { setExistingMgmtCharges([]); setExistingMgmtLetters([]); return; }
     const [{ data: ch }, { data: lt }] = await Promise.all([
@@ -265,6 +288,8 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
         await supabase.from("letters").delete().in("id", existingMgmtLetters.map(function(l:any){ return l.id; }));
       }
       await supabase.from("mgmt_reconciliation_inputs").delete().eq("property_id", propId).eq("year", year);
+      await supabase.from("billing_reconciliations").delete()
+        .eq("property_id", propId).eq("year", year).eq("billing_type", "management").is("period", null);
       await logAudit({ entity_type: "billing", entity_id: propId, action: "delete_mgmt_reconciliation", notes: nC + " חיובים, " + nL + " מכתבים" });
       setActualCost(""); setDefaultActualCost(""); setGroupActualCosts({}); setMgmtResults([]);
       await loadExistingMgmtCharges();
@@ -780,6 +805,7 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
       if (skippedRevenue > 0) msg += "\nדולגו " + skippedRevenue + " שוכרי % פידיון (דמי הניהול כלולים בשכ\"ד המחזור)";
       if (skippedPaid > 0) msg += "\nנשמרו ללא שינוי " + skippedPaid + " חיובים ששולמו (מע\"מ נעול לפי מועד הפרעון)";
       await saveActualInputs();
+      await saveReconciliationSnapshot();
       await loadExistingMgmtCharges();
       alert(msg);
     } catch (e: any) { alert("שגיאה: " + e?.message); }
@@ -904,6 +930,7 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
         }
       }
       await logAudit({ entity_type: "billing", entity_id: propId, action: "create_mgmt_letters", notes: "נוצרו " + created + ", הוחלפו " + replaced + ", תיקונים " + corrected });
+      await saveReconciliationSnapshot();
       await loadExistingMgmtCharges();
       alert("✅ הושלם — נוצרו " + created + ", הוחלפו " + replaced + ", מכתבי תיקון " + corrected);
     } catch (e: any) { alert("שגיאה: " + e?.message); }

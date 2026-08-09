@@ -140,6 +140,7 @@ export default function ContractsPage() {
   const [priceTimeline, setPriceTimeline] = useState<any[]>([]);
   // For revenue-% contracts: rent-per-sqm derived from reported turnover (no CPI).
   const [revStats, setRevStats] = useState<any>(null);
+  const [mgmtInfo, setMgmtInfo] = useState<any>(null);
   const [amendments, setAmendments] = useState<any[]>([]);
   const [parkingSubs, setParkingSubs] = useState<any[]>([]);
   const [spaceOverlaps, setSpaceOverlaps] = useState<any[]>([]);
@@ -484,6 +485,72 @@ export default function ContractsPage() {
           avgPerSqm: area > 0 ? avgFinal / area : 0,
         });
       });
+    return function(){ cancelled = true; };
+  }, [selected]);
+
+  // ─── Management-fee picture: the CURRENT advance rate per m² (contract
+  // override, else the property's management billing group covering this
+  // contract's units) + what was ACTUALLY paid in the last settled year, from
+  // billing_reconciliations — written by the annual reconciliation, so the
+  // "actual" line appears only once a year has been reconciled. ───
+  useEffect(function() {
+    var cancelled = false;
+    if (!selContract) { setMgmtInfo(null); return; }
+    (async function() {
+      try {
+        var contractRate = Number(selContract.mgmt_fee_per_sqm) || 0;
+        var included = !!selContract.mgmt_included_in_revenue;
+        // Advance-source priority mirrors the billing engine: the property's
+        // management BILLING GROUP covering this contract's units is what
+        // actually gets charged; the contract's own rate is the fallback.
+        var advanceRate = 0, advanceSource = "";
+        if (selContract.property_id) {
+          var mySpaceIds = (selContract.contract_spaces || []).map(function(cs: any){ return cs.space_id; }).filter(Boolean);
+          if (mySpaceIds.length > 0) {
+            var { data: groups } = await supabase.from("billing_groups")
+              .select("year, rate_per_sqm_monthly, billing_group_spaces(space_id)")
+              .eq("property_id", selContract.property_id)
+              .eq("group_type", "management")
+              .order("year", { ascending: false });
+            for (const g of (groups || []) as any[]) {
+              var hit = (g.billing_group_spaces || []).some(function(bgs: any){ return mySpaceIds.indexOf(bgs.space_id) !== -1; });
+              if (hit && Number(g.rate_per_sqm_monthly) > 0) {
+                advanceRate = Number(g.rate_per_sqm_monthly);
+                advanceSource = "קבוצת חיוב " + g.year;
+                break;
+              }
+            }
+          }
+        }
+        if (advanceRate <= 0 && contractRate > 0) { advanceRate = contractRate; advanceSource = "לפי החוזה"; }
+        // Latest reconciled year for this contract (family covers the case
+        // where an amendment row carries the reconciliation).
+        var famIds = [selContract.id];
+        if (selContract.parent_contract_id) famIds.push(selContract.parent_contract_id);
+        var { data: recs } = await supabase.from("billing_reconciliations")
+          .select("year, advance_amount, actual_share, charged_area")
+          .in("contract_id", famIds).eq("billing_type", "management").is("period", null)
+          .not("actual_share", "is", null)
+          .order("year", { ascending: false }).limit(1);
+        var rec: any = recs && recs[0];
+        var actual: any = null;
+        if (rec && Number(rec.actual_share) > 0) {
+          var area = Number(rec.charged_area) || Number(selContract.charged_area)
+            || (selContract.contract_spaces || []).reduce(function(s: number, cs: any){ return s + (Number(cs.spaces?.area) || 0); }, 0) || 0;
+          actual = {
+            year: rec.year,
+            total: Number(rec.actual_share),
+            advance: Number(rec.advance_amount) || 0,
+            area: area,
+            perSqmMonth: area > 0 ? Number(rec.actual_share) / area / 12 : 0,
+            perSqmYear: area > 0 ? Number(rec.actual_share) / area : 0,
+          };
+        }
+        if (cancelled) return;
+        if (advanceRate <= 0 && !actual && !included) { setMgmtInfo(null); return; }
+        setMgmtInfo({ advanceRate: advanceRate, advanceSource: advanceSource, included: included, actual: actual });
+      } catch (e) { if (!cancelled) setMgmtInfo(null); }
+    })();
     return function(){ cancelled = true; };
   }, [selected]);
 
@@ -1657,6 +1724,44 @@ export default function ContractsPage() {
                     </div>
                   </div>
                 ) : null}
+
+                {/* Management fees: current advance per m² + the last settled
+                    year's ACTUAL per m² (only once a reconciliation exists) */}
+                {mgmtInfo && (
+                  <div className="rounded-lg bg-teal-50 border border-teal-200 px-3 py-2 mb-2 text-xs space-y-1">
+                    <div className="font-bold text-teal-800">🧾 דמי ניהול</div>
+                    {mgmtInfo.included && (
+                      <div className="text-teal-700">כלולים בשכ&quot;ד הפדיון — מנוטרלים בחישוב ההתחשבנות</div>
+                    )}
+                    {mgmtInfo.advanceRate > 0 && (
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <span className="text-teal-600">מקדמה נוכחית <span className="text-teal-400">({mgmtInfo.advanceSource})</span></span>
+                        <span className="font-black text-teal-900">₪{mgmtInfo.advanceRate.toFixed(2)}/מ&quot;ר לחודש <span className="font-semibold text-teal-600">· ₪{Math.round(mgmtInfo.advanceRate * 12).toLocaleString()}/מ&quot;ר לשנה</span></span>
+                      </div>
+                    )}
+                    {mgmtInfo.actual ? (
+                      <>
+                        {mgmtInfo.actual.area > 0 && (
+                          <div className="flex items-center justify-between gap-2 flex-wrap">
+                            <span className="text-teal-600">שולם בפועל ב-{mgmtInfo.actual.year} <span className="text-teal-400">(התחשבנות שנתית)</span></span>
+                            <span className="font-black text-teal-900">₪{mgmtInfo.actual.perSqmMonth.toFixed(2)}/מ&quot;ר לחודש <span className="font-semibold text-teal-600">· ₪{Math.round(mgmtInfo.actual.perSqmYear).toLocaleString()}/מ&quot;ר לשנה</span></span>
+                          </div>
+                        )}
+                        <div className="flex items-center justify-between gap-2 flex-wrap text-[10px] text-teal-500">
+                          <span>סה&quot;כ {mgmtInfo.actual.year}: {fmtMoney(mgmtInfo.actual.total)} לפני מע&quot;מ{mgmtInfo.actual.area > 0 ? " · " + mgmtInfo.actual.area.toLocaleString() + " מ\"ר" : ""}</span>
+                          {mgmtInfo.actual.advance > 0 && (
+                            <span className={mgmtInfo.actual.total > mgmtInfo.actual.advance ? "text-rose-600 font-semibold" : "text-emerald-600 font-semibold"}
+                              title={"מקדמות ששולמו ב-" + mgmtInfo.actual.year + ": " + fmtMoney(mgmtInfo.actual.advance)}>
+                              {mgmtInfo.actual.total > mgmtInfo.actual.advance ? "+" : ""}{(((mgmtInfo.actual.total / mgmtInfo.actual.advance) - 1) * 100).toFixed(1)}% מול המקדמות
+                            </span>
+                          )}
+                        </div>
+                      </>
+                    ) : (
+                      <div className="text-[10px] text-teal-400">טרם נערכה התחשבנות שנתית — הנתון &quot;בפועל&quot; יוצג לאחר ההתחשבנות הראשונה</div>
+                    )}
+                  </div>
+                )}
 
                 {/* CPI-adjusted price via CBS calculator */}
                 {cpiPending && (
