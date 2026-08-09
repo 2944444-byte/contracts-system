@@ -106,7 +106,10 @@ export default function UsersPage() {
   // unrestricted admin would be privilege escalation).
   const canCreateAdmins   = iAmUnrestricted;
   const canCreateManagers = myRole === "admin";
-  const canCreateViewers  = myRole === "admin" || myRole === "manager";
+  // A manager needs the explicit manage_viewers capability — a manager without
+  // it has no business on this screen at all (matches ROUTE_RULES + the DB
+  // trigger, which rejects his writes anyway).
+  const canCreateViewers  = myRole === "admin" || (myRole === "manager" && !!me?.permissions?.["manage_viewers"]);
   const canUseScreen      = canCreateViewers;
 
   // Granting is capped at the granter's OWN scope (manager AND scoped admin).
@@ -133,6 +136,9 @@ export default function UsersPage() {
     if (u.is_master) return false;
     if (me?.profile?.id && u.id === me.profile.id) return iAmUnrestricted;
     if (u.role === "admin") return !!me?.profile?.is_master;
+    // A manager manages VIEWERS only — other managers are peers, not subjects
+    // (enforced by the DB trigger too; this just hides the button).
+    if (myRole === "manager") return u.role === "viewer";
     return true;
   }
   // Defense in depth: clamp whatever the UI submits to what I may grant.
@@ -165,8 +171,10 @@ export default function UsersPage() {
     (me?.companyIds || []).forEach(function(c){ compOk[c] = true; });
     return users.filter(function(u){
       if (me?.profile?.id && u.id === me.profile.id) return true;          // self
-      // Level rule: a manager never sees admins; a scoped admin may see
-      // equal-level admins — but only if their scope is inside his.
+      // Level rule: a manager sees VIEWERS only — never admins and never
+      // fellow managers; a scoped admin may see equal-level users, but only
+      // if their scope is inside his.
+      if (myRole === "manager" && u.role !== "viewer") return false;
       if (u.role === "admin" && myRole !== "admin") return false;
       if (u.is_master) return false;                                        // unrestricted by definition
       var sc = scopes[u.id] || { companyIds: [], propertyIds: [] };
@@ -405,7 +413,7 @@ export default function UsersPage() {
         <div className="rounded-xl border-2 border-dashed border-slate-200 bg-white p-12 text-center text-slate-400">
           <div className="text-5xl mb-3">🔒</div>
           <div className="font-semibold text-slate-600">אין לך הרשאה לנהל משתמשים</div>
-          <div className="text-sm mt-1">פנה למנהל המערכת</div>
+          <div className="text-sm mt-1">להוספת משתמש או שינוי הרשאות — פנה לבעלי המערכת</div>
         </div>
       </div>
     );

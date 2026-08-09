@@ -15,7 +15,7 @@ export function adminClient(): SupabaseClient | null {
   );
 }
 
-export async function callerProfile(req: Request, admin: SupabaseClient): Promise<{ uid: string; role: "admin" | "manager" | "viewer"; isMaster: boolean } | null> {
+export async function callerProfile(req: Request, admin: SupabaseClient): Promise<{ uid: string; role: "admin" | "manager" | "viewer"; isMaster: boolean; permissions: Record<string, boolean> } | null> {
   try {
     const auth = req.headers.get("authorization") || "";
     const token = auth.toLowerCase().startsWith("bearer ") ? auth.slice(7) : "";
@@ -23,10 +23,11 @@ export async function callerProfile(req: Request, admin: SupabaseClient): Promis
     const { data } = await admin.auth.getUser(token);
     const uid = data?.user?.id;
     if (!uid) return null;
-    const { data: prof } = await admin.from("user_profiles").select("role,is_active,is_master").eq("id", uid).maybeSingle();
+    const { data: prof } = await admin.from("user_profiles").select("role,is_active,is_master,permissions").eq("id", uid).maybeSingle();
     if (!prof || prof.is_active === false) return null;
     const role = prof.role === "admin" ? "admin" : prof.role === "manager" ? "manager" : "viewer";
-    return { uid: uid, role: role, isMaster: !!prof.is_master };
+    const permissions = (prof.permissions && typeof prof.permissions === "object") ? prof.permissions : {};
+    return { uid: uid, role: role, isMaster: !!prof.is_master, permissions: permissions };
   } catch (e) {
     return null;
   }

@@ -1,6 +1,8 @@
 "use client";
 import { useState } from "react";
 import { PageHero } from "@/components/ui";
+import { useAccess } from "@/components/AccessProvider";
+import { canAccessRoute } from "@/lib/permissions";
 
 // המדריך למשתמש — חי בתוך התוכנה כדי שיהיה תמיד זמין ותמיד עדכני.
 // כתוב לפי סדר העבודה בפועל: שגרה חודשית ושנתית קודם, ואז מסך-מסך.
@@ -148,14 +150,31 @@ const SECTIONS: Section[] = [
     body: <>
       <P><b>כתובת המערכת:</b> contracts-system.vercel.app — כניסה עם משתמש וסיסמה של התוכנה.</P>
       <P><b>הרשאות:</b> משתמש רואה ופועל רק על הנכסים/חברות שהוקצו לו — נאכף בשכבת המסד, לא רק בתצוגה. הרשאות מיוחדות: מתן הנחות. משתמש-העל אינו ניתן למחיקה.</P>
+      <P><b>ניהול משתמשים:</b> מנהל מערכת מנהל את כל המשתמשים. מנהל בעל הרשאת "👁 הקמת משתמשי צפייה" רואה ומנהל <b>משתמשי צפייה בלבד</b> — בנכסים שבהיקפו ורק בהרשאות שהוא עצמו מחזיק; מנהלים אינם רואים או עורכים מנהלים אחרים. מנהל ללא הרשאה זו אינו רואה את מסך המשתמשים כלל.</P>
       <P><b>יומן פעולות:</b> כל פעולה מהותית נרשמת — מי, מה ומתי.</P>
       <Tip>עדכון נתוני עבר (חיובים ששולמו, התחשבנויות שנסגרו) אינו מתבצע אוטומטית לעולם — שינויי חוזה חלים מכאן ואילך.</Tip>
     </>,
   },
 ];
 
+// What a user WITHOUT user-management access sees instead of the admin
+// section — no instructions for screens he can't open, just where to turn.
+const ADMIN_SECTION_LIMITED: Section = {
+  id: "admin", icon: "👑", title: "הרשאות וכתובת",
+  body: <>
+    <P><b>כתובת המערכת:</b> contracts-system.vercel.app — כניסה עם משתמש וסיסמה של התוכנה.</P>
+    <P><b>הרשאות:</b> אתה רואה ופועל רק על הנכסים והמסכים שהוקצו לך. להוספת משתמש, שינוי הרשאות או איפוס סיסמה — <b>פנה לבעלי המערכת</b>.</P>
+    <Tip>עדכון נתוני עבר (חיובים ששולמו, התחשבנויות שנסגרו) אינו מתבצע אוטומטית לעולם — שינויי חוזה חלים מכאן ואילך.</Tip>
+  </>,
+};
+
 export default function GuidePage() {
   const [open, setOpen] = useState<Record<string, boolean>>({ routine: true });
+  const { access } = useAccess();
+  // Same gate as the users screen itself: whoever can't open /users gets the
+  // "contact the system owner" variant instead of user-management guidance.
+  const canManageUsers = !access || canAccessRoute(access, "/users");
+  const sections = SECTIONS.map(function(s) { return (s.id === "admin" && !canManageUsers) ? ADMIN_SECTION_LIMITED : s; });
   return (
     <div className="max-w-4xl mx-auto">
       <PageHero title="מדריך למשתמש" icon="📖" tone="blue"
@@ -167,7 +186,7 @@ export default function GuidePage() {
       <style>{`@media print { .guide-body { display: block !important; } .no-print { display: none !important; } }`}</style>
 
       <div className="no-print flex flex-wrap gap-1.5 mb-4">
-        {SECTIONS.map(function(s) {
+        {sections.map(function(s) {
           return (
             <a key={s.id} href={"#g-" + s.id}
               onClick={function(){ setOpen(function(p){ return { ...p, [s.id]: true }; }); }}
@@ -179,7 +198,7 @@ export default function GuidePage() {
       </div>
 
       <div className="space-y-3">
-        {SECTIONS.map(function(s) {
+        {sections.map(function(s) {
           const isOpen = !!open[s.id];
           return (
             <div key={s.id} id={"g-" + s.id} className="rounded-xl border border-slate-200 bg-white overflow-hidden">

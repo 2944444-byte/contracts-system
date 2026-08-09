@@ -103,7 +103,7 @@ export const ROUTE_RULES: RouteRule[] = [
   { prefix: "/companies",  adminOnly: true },
   { prefix: "/settings",   adminOnly: true },
   { prefix: "/audit",      adminOnly: true },
-  { prefix: "/users",      roles: ["admin", "manager"] },
+  { prefix: "/users",      roles: ["admin", "manager"], anyOf: ["manage_viewers"] },
   { prefix: "/guarantees", anyOf: ["manage_guarantees"] },
   { prefix: "/insurances", anyOf: ["manage_insurance"] },
   { prefix: "/safety",     anyOf: ["manage_safety"] },
@@ -128,7 +128,9 @@ export function canAccessRoute(access: CurrentAccess, pathname: string): boolean
   const rule = ROUTE_RULES.find(function (r) { return pathname.indexOf(r.prefix) === 0; });
   if (!rule) return true;
   if (rule.adminOnly) return false;
-  if (rule.roles) return rule.roles.indexOf(access.role) !== -1;
+  // roles + anyOf together = BOTH must pass (e.g. /users: a manager needs the
+  // manage_viewers capability on top of the manager role).
+  if (rule.roles && rule.roles.indexOf(access.role) === -1) return false;
   if (rule.anyOf) return rule.anyOf.some(function (k) { return hasPerm(access, k); });
   return true;
 }

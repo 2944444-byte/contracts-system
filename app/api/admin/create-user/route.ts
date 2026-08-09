@@ -19,7 +19,10 @@ export async function POST(req: NextRequest) {
     const prof = await callerProfile(req, admin);
     const caller = prof?.role ?? null;
     const newRole = role ?? "viewer";
-    const allowed = caller === "admin" || (caller === "manager" && newRole === "viewer");
+    // A manager also needs the explicit manage_viewers capability — matching
+    // the users screen, ROUTE_RULES and the DB triggers.
+    const allowed = caller === "admin" ||
+      (caller === "manager" && newRole === "viewer" && !!prof?.permissions?.["manage_viewers"]);
     if (!allowed) return NextResponse.json({ error: FORBIDDEN_MSG }, { status: 403 });
     if (newRole === "admin" && !(prof && await isUnrestrictedAdmin(prof, admin))) {
       return NextResponse.json({ error: "רק מנהל מערכת בלתי-מוגבל יכול להקים מנהלי מערכת" }, { status: 403 });
