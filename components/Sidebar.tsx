@@ -42,6 +42,7 @@ const NAV: NavItem[] = [
   {href:"/companies",    label:"חברות",          icon:"🏛️"},
   {href:"/users",        label:"משתמשים",        icon:"👑"},
   {href:"/restore",      label:"שחזור נתונים",   icon:"🗄"},
+  {href:"/errors",       label:"שגיאות ודיווחים", icon:"🐞"},
   {href:"/settings",     label:"הגדרות",         icon:"⚙️"},
   {href:"/guide",        label:"מדריך למשתמש",  icon:"📖"},
 ];
@@ -53,6 +54,7 @@ export default function Sidebar() {
   const { open, setOpen } = useMobileNav();
   const [pendingPay, setPendingPay] = useState(0);
   const [openAlerts, setOpenAlerts] = useState(0);
+  const [openErrors, setOpenErrors] = useState(0);
 
   // Menu filtered by the user's permissions (admin sees all; while access is
   // still loading we show everything — RouteGate blocks navigation anyway).
@@ -89,6 +91,11 @@ export default function Sidebar() {
       ]);
       setPendingPay(scopeRows(ch ?? [], scope, function(r: any){ return r.contracts?.property_id; }).length);
       setOpenAlerts(scopeRows(al ?? [], scope, function(a: any){ return a.property_id || a.contracts?.property_id; }).length);
+      // Unresolved error reports — RLS returns rows to the master only, so
+      // everyone else just gets 0 (and the nav item is hidden anyway).
+      const { count: errCount } = await supabase.from("app_errors")
+        .select("id", { count: "exact", head: true }).eq("resolved", false);
+      setOpenErrors(errCount ?? 0);
     }
     loadBadges();
     const interval = setInterval(loadBadges, 120000);
@@ -103,7 +110,16 @@ export default function Sidebar() {
   const BADGES: Record<string,number> = {
     "/payments": pendingPay,
     "/alerts":   openAlerts,
+    "/errors":   openErrors,
   };
+
+  async function reportProblem() {
+    var text = window.prompt("מה קרה? תארו בקצרה את הבעיה או ההצעה — הדיווח יגיע לבעלי המערכת יחד עם שם המסך הנוכחי:");
+    if (!text || !text.trim()) return;
+    const { reportAppError } = await import("@/components/ErrorReporting");
+    await reportAppError("user_report", text.trim());
+    alert("✅ הדיווח נשלח — תודה!");
+  }
 
   return (
     <>
@@ -157,8 +173,12 @@ export default function Sidebar() {
         })}
       </nav>
 
-      {/* Logout */}
-      <div className="border-t border-slate-100 p-3">
+      {/* Report a problem + Logout */}
+      <div className="border-t border-slate-100 p-3 space-y-0.5">
+        <button onClick={reportProblem}
+          className="w-full flex items-center gap-2 rounded-xl px-3 py-2 text-sm text-slate-500 hover:bg-amber-50 hover:text-amber-700 transition-colors">
+          <span>📣</span><span>דווח על בעיה</span>
+        </button>
         <button onClick={handleLogout}
           className="w-full flex items-center gap-2 rounded-xl px-3 py-2 text-sm text-slate-500 hover:bg-red-50 hover:text-red-600 transition-colors">
           <span>🚪</span><span>יציאה</span>

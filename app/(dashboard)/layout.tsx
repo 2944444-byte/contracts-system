@@ -6,6 +6,7 @@ import UserBadge from "../../components/UserBadge";
 import Toaster from "../../components/ui/Toaster";
 import AccessProvider, { RouteGate } from "../../components/AccessProvider";
 import { MobileNavProvider, MobileMenuButton } from "../../components/MobileNav";
+import { AppErrorBoundary, GlobalErrorCatcher } from "../../components/ErrorReporting";
 
 export default function DashboardLayout({ children }: { children: ReactNode }) {
   return (
@@ -34,7 +35,12 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
             <main className="flex-1 overflow-y-auto overflow-x-auto lg:overflow-x-hidden p-3 sm:p-4 lg:p-5">
               {/* Central section-level enforcement — every dashboard route passes
                   through this gate; no per-screen guards needed. */}
-              <RouteGate>{children}</RouteGate>
+              <GlobalErrorCatcher />
+              {/* A screen crash reports itself and shows a friendly fallback
+                  instead of the blank "Application error". */}
+              <AppErrorBoundary>
+                <RouteGate>{children}</RouteGate>
+              </AppErrorBoundary>
             </main>
           </div>
         </div>

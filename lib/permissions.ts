@@ -101,6 +101,7 @@ const FIN = ["view_finance", "manage_charges", "update_payments"];
 interface RouteRule { prefix: string; adminOnly?: boolean; masterOnly?: boolean; roles?: string[]; anyOf?: string[]; }
 export const ROUTE_RULES: RouteRule[] = [
   { prefix: "/restore",    masterOnly: true },
+  { prefix: "/errors",     masterOnly: true },
   { prefix: "/companies",  adminOnly: true },
   { prefix: "/settings",   adminOnly: true },
   { prefix: "/audit",      adminOnly: true },

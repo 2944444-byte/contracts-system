@@ -69,6 +69,13 @@ export async function GET(req: NextRequest) {
         });
       }
     }
+    // Waiting for the index is still a healthy run — stamp the heartbeat.
+    try {
+      await supabase.from("system_heartbeats").upsert({
+        job: "transfer_billing", last_run: new Date().toISOString(), last_status: "waiting",
+        details: "ממתין למדד " + (expected.getMonth() + 1) + "/" + expected.getFullYear(),
+      }, { onConflict: "job" });
+    } catch (e) { /* best-effort */ }
     return NextResponse.json({ ok: true, waiting: true, expectedIndex: (expected.getMonth() + 1) + "/" + expected.getFullYear() });
   }
 
@@ -101,6 +108,15 @@ export async function GET(req: NextRequest) {
       entity_type: "billing", entity_id: null, is_resolved: false,
     });
   }
+
+  // Heartbeat for the errors screen ("ran and failed" vs "never ran").
+  try {
+    await supabase.from("system_heartbeats").upsert({
+      job: "transfer_billing", last_run: new Date().toISOString(),
+      last_status: result.errors.length ? "errors" : "ok",
+      details: period.label + ": " + result.created + " נוצרו, " + result.skippedExisting + " קיימים",
+    }, { onConflict: "job" });
+  } catch (e) { /* best-effort */ }
 
   // Counts only in the HTTP response. The per-tenant lines carry names and
   // amounts; they belong in the alert (RLS-protected, visible only to

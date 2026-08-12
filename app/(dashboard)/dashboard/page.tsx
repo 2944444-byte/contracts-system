@@ -7,6 +7,7 @@ import { fetchCpiAdjusted, fetchHighestChainedCpi } from '@/lib/cpi-server';
 import { getKnownIndexMonth } from '@/lib/cpi-utils';
 import { graceFactorsFor, describeGrace, graceWindow } from '@/lib/store-opening';
 import CalcProgress, { CalcProgressState } from '@/components/CalcProgress';
+import { useAccess } from '@/components/AccessProvider';
 
 function fmtMoney(n: number) { return "₪" + (n ?? 0).toLocaleString("he-IL",{minimumFractionDigits:2,maximumFractionDigits:2}); }
 // Headline KPI numbers: drop the agorot once the figure is big, so long sums
@@ -67,6 +68,7 @@ function calcContractRentNow(c: any): number {
 
 export default function DashboardPage() {
   const router  = useRouter();
+  const { access } = useAccess();
   const [loading, setLoading] = useState(true);
   const [properties, setProperties] = useState<any[]>([]);
   const [propGroups, setPropGroups] = useState<any[]>([]);
@@ -79,6 +81,9 @@ export default function DashboardPage() {
   const [advances, setAdvances] = useState<any[]>([]);
   const [cpiRatios, setCpiRatios] = useState<Record<string, number>>({});
   const [cpiProgress, setCpiProgress] = useState<CalcProgressState | null>(null);
+  // Master-only banner: the nightly sync stamps a heartbeat; if it hasn't
+  // beaten in 26h, the automations are down and the owner should know today.
+  const [staleSync, setStaleSync] = useState<string | null>(null);
 
   // Filters
   const [filterGroup, setFilterGroup] = useState("all");
@@ -129,6 +134,18 @@ export default function DashboardPage() {
     setAlerts((al ?? []).filter(byCidOrProp));
     setAllCharges((ch ?? []).filter(byCid));
     setAdvances((ap ?? []).filter(byCidOrProp));
+
+    // Automation heartbeat (master sees a red banner when the nightly sync
+    // stopped running; others just get null — the row is world-readable but
+    // the banner is gated below by is_master).
+    try {
+      const { data: hb } = await supabase.from("system_heartbeats").select("last_run").eq("job", "sync_contracts").maybeSingle();
+      if (hb && (Date.now() - new Date(hb.last_run).getTime()) > 26 * 3600 * 1000) {
+        setStaleSync(new Date(hb.last_run).toLocaleString("he-IL"));
+      } else {
+        setStaleSync(null);
+      }
+    } catch (e) { /* banner is best-effort */ }
 
     // Letters waiting to be sent (draft + ready) — surfaced as a banner.
     const { data: ul } = await supabase.from("letters")
@@ -448,6 +465,12 @@ export default function DashboardPage() {
 
   return (
     <div dir="rtl">
+      {staleSync && !!access?.profile?.is_master && (
+        <div className="mb-4 rounded-xl border border-rose-300 bg-rose-50 px-4 py-3 text-sm text-rose-800 flex items-center justify-between flex-wrap gap-2">
+          <span><b>🔴 האוטומציות לא רצות:</b> הסנכרון הלילי רץ לאחרונה ב-{staleSync}. מימוש אופציות, התראות וחיובי העברה עלולים לא להתעדכן — בדוק את ה-Cron ב-Vercel.</span>
+          <a href="/errors" className="rounded-lg bg-rose-600 text-white px-3 py-1 text-xs font-bold hover:bg-rose-700 shrink-0">למסך הניטור →</a>
+        </div>
+      )}
       <div className="rounded-3xl bg-gradient-to-bl from-blue-700 via-blue-600 to-indigo-600 text-white p-6 mb-5 shadow-lg">
         <div className="flex items-start justify-between flex-wrap gap-4">
           <div>

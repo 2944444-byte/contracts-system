@@ -87,6 +87,15 @@ export async function GET(req: NextRequest) {
     } catch (e: any) { emailError = e?.message || String(e); }
   }
 
+  // Heartbeat: lets the errors screen tell "ran and failed" apart from
+  // "silently stopped running" (cron outage, schedule change).
+  try {
+    await supabase.from("system_heartbeats").upsert({
+      job: "sync_contracts", last_run: new Date().toISOString(), last_status: "ok",
+      details: statusUpdates + " עדכוני סטטוס · " + created + " התראות",
+    }, { onConflict: "job" });
+  } catch (e) { /* best-effort */ }
+
   return NextResponse.json({
     ok: true, created, statusUpdates, emailed, emailError,
     guaranteeLettersCreated: createdGuaranteeLetters.length,
