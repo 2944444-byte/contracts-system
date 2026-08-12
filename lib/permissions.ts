@@ -98,8 +98,9 @@ export function hasPerm(access: CurrentAccess, key: string): boolean {
 // alerts, calendar). anyOf = at least one of the capability flags.
 // ─────────────────────────────────────────────────────────────────────────────
 const FIN = ["view_finance", "manage_charges", "update_payments"];
-interface RouteRule { prefix: string; adminOnly?: boolean; roles?: string[]; anyOf?: string[]; }
+interface RouteRule { prefix: string; adminOnly?: boolean; masterOnly?: boolean; roles?: string[]; anyOf?: string[]; }
 export const ROUTE_RULES: RouteRule[] = [
+  { prefix: "/restore",    masterOnly: true },
   { prefix: "/companies",  adminOnly: true },
   { prefix: "/settings",   adminOnly: true },
   { prefix: "/audit",      adminOnly: true },
@@ -124,8 +125,11 @@ export const ROUTE_RULES: RouteRule[] = [
 ];
 
 export function canAccessRoute(access: CurrentAccess, pathname: string): boolean {
-  if (access.role === "admin") return true;
   const rule = ROUTE_RULES.find(function (r) { return pathname.indexOf(r.prefix) === 0; });
+  // masterOnly outranks the admin bypass — the restore screen is for the
+  // system owner alone, not every admin.
+  if (rule && rule.masterOnly) return !!access.profile?.is_master;
+  if (access.role === "admin") return true;
   if (!rule) return true;
   if (rule.adminOnly) return false;
   // roles + anyOf together = BOTH must pass (e.g. /users: a manager needs the

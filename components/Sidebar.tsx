@@ -41,6 +41,7 @@ const NAV: NavItem[] = [
   {section:"ניהול"},
   {href:"/companies",    label:"חברות",          icon:"🏛️"},
   {href:"/users",        label:"משתמשים",        icon:"👑"},
+  {href:"/restore",      label:"שחזור נתונים",   icon:"🗄"},
   {href:"/settings",     label:"הגדרות",         icon:"⚙️"},
   {href:"/guide",        label:"מדריך למשתמש",  icon:"📖"},
 ];

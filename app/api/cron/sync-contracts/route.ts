@@ -25,8 +25,22 @@ export async function GET(req: NextRequest) {
   }
 
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+  // Same hardening as transfer-billing: under the anon key every scoped
+  // query silently returns nothing and the sync "succeeds" doing zero work.
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+  if (!key) {
+    return NextResponse.json({ error: "SUPABASE_SERVICE_ROLE_KEY not configured" }, { status: 503 });
+  }
   const supabase = createClient(url, key, { auth: { autoRefreshToken: false, persistSession: false } });
+
+  // Recycle-bin retention: history older than 14 days is purged nightly.
+  let historyPurged = 0;
+  try {
+    const cutoff = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
+    const { count } = await supabase.from("row_history")
+      .delete({ count: "exact" }).lt("created_at", cutoff);
+    historyPurged = count ?? 0;
+  } catch (e) { /* best-effort — never blocks the sync */ }
 
   // Status lifecycle + auto-exercised options + visitor-parking billing dates.
   // This ran ONLY from the manual "סנכרן סטטוסים" button until now — a lease
@@ -77,5 +91,6 @@ export async function GET(req: NextRequest) {
     ok: true, created, statusUpdates, emailed, emailError,
     guaranteeLettersCreated: createdGuaranteeLetters.length,
     unsentLetters: unsent.length,
+    historyPurged,
   });
 }
