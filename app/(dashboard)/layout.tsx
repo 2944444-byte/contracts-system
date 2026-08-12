@@ -7,6 +7,7 @@ import Toaster from "../../components/ui/Toaster";
 import AccessProvider, { RouteGate } from "../../components/AccessProvider";
 import { MobileNavProvider, MobileMenuButton } from "../../components/MobileNav";
 import { AppErrorBoundary, GlobalErrorCatcher } from "../../components/ErrorReporting";
+import EnvBadge from "../../components/EnvBadge";
 import Link from "next/link";
 import { APP_VERSION } from "../../lib/version";
 
@@ -33,6 +34,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                 <GlobalSearch />
               </div>
               <div className="flex items-center gap-3">
+                <EnvBadge />
                 <AlertsBadge />
                 <UserBadge />
                 <VersionTag />
