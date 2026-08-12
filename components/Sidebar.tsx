@@ -6,6 +6,7 @@ import { supabase } from '@/lib/supabase';
 import { canAccessRoute, getScopeIds, scopeRows } from '@/lib/permissions';
 import { useAccess } from '@/components/AccessProvider';
 import { useMobileNav } from '@/components/MobileNav';
+import { APP_VERSION } from '@/lib/version';
 
 type NavItem = {href:string;label:string;icon:string} | {section:string};
 
@@ -141,7 +142,9 @@ export default function Sidebar() {
           <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-lg shrink-0">🏙️</div>
           <div>
             <div className="font-black text-slate-800 text-sm leading-tight">PropManager</div>
-            <div className="text-xs text-slate-400 leading-tight">v4.0</div>
+            <Link href="/whats-new" className="text-xs text-slate-400 leading-tight hover:text-blue-600" title={"מה חדש בגרסה " + APP_VERSION}>
+              v{APP_VERSION} 🆕
+            </Link>
           </div>
         </div>
         {/* Close button — mobile only */}

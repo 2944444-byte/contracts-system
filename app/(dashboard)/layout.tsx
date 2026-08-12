@@ -7,6 +7,17 @@ import Toaster from "../../components/ui/Toaster";
 import AccessProvider, { RouteGate } from "../../components/AccessProvider";
 import { MobileNavProvider, MobileMenuButton } from "../../components/MobileNav";
 import { AppErrorBoundary, GlobalErrorCatcher } from "../../components/ErrorReporting";
+import Link from "next/link";
+import { APP_VERSION } from "../../lib/version";
+
+function VersionTag() {
+  return (
+    <Link href="/whats-new" className="hidden md:flex items-center gap-1 text-xs text-slate-400 font-medium hover:text-blue-600" title="מה חדש">
+      <span>🆕</span>
+      <span>PropManager v{APP_VERSION}</span>
+    </Link>
+  );
+}
 
 export default function DashboardLayout({ children }: { children: ReactNode }) {
   return (
@@ -24,10 +35,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
               <div className="flex items-center gap-3">
                 <AlertsBadge />
                 <UserBadge />
-                <div className="hidden md:flex items-center gap-1 text-xs text-slate-400 font-medium">
-                  <span>🔄</span>
-                  <span>PropManager v4</span>
-                </div>
+                <VersionTag />
               </div>
             </header>
             {/* Mobile: allow wide tables to scroll horizontally within the content

@@ -3,6 +3,7 @@ import { useState, useEffect } from "react";
 import { supabase } from '@/lib/supabase';
 import { authHeaders } from '@/lib/api-auth-client';
 import { PageHero } from '@/components/ui';
+import { APP_VERSION, BUILD_DATE } from '@/lib/version';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 const TABS = [{id:"general",l:"כללי",icon:"⚙️"},{id:"sync",l:"סנכרון",icon:"🔄"},{id:"vat",l:'מע"מ',icon:"📊"},{id:"templates",l:"תבניות",icon:"📝"}];
@@ -144,9 +145,9 @@ export default function SettingsPage() {
             </div>
             <div className="pt-2">
               <div className="rounded-xl bg-slate-50 border p-3 text-xs text-slate-500 space-y-1">
-                <div>גרסה: PropManager v4</div>
+                <div>גרסה: PropManager v{APP_VERSION}{BUILD_DATE ? " · build " + BUILD_DATE : ""} · <a href="/whats-new" className="text-blue-600 hover:underline">מה חדש</a></div>
                 <div>Supabase: ndvcqgrpsqykhodiyrhx</div>
-                <div>Deploy: Vercel — main branch</div>
+                <div>Deploy: Vercel — main (משתמשים) / dev (בדיקות)</div>
               </div>
             </div>
           </div>
