@@ -2,7 +2,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from '@/lib/supabase';
-import { syncContractStatuses } from '@/lib/contractSync';
+import { authHeaders } from '@/lib/api-auth-client';
 import { logAudit } from '@/lib/audit-log';
 import { PageHero } from '@/components/ui';
 import { fetchCpiAdjusted, fetchHighestChainedCpi } from '@/lib/cpi-server';
@@ -836,7 +836,16 @@ export default function ContractsPage() {
 
   async function handleSync() {
     setSyncing(true);
-    const n = await syncContractStatuses();
+    // Server-side: the sync writes contracts/spaces/options with the service
+    // key, so it works (and covers the whole portfolio) no matter which
+    // capabilities the clicking user holds.
+    var n = 0;
+    try {
+      const res = await fetch("/api/sync-status", { method: "POST", headers: await authHeaders() });
+      const d = await res.json();
+      if (!res.ok || d.error) throw new Error(d.error || "sync failed");
+      n = d.updates || 0;
+    } catch (e: any) { alert("שגיאה בסנכרון: " + (e?.message || e)); }
     await loadContracts();
     setSyncing(false);
     if (n>0) alert(`✅ עודכנו ${n} חוזים`);

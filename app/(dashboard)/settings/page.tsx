@@ -2,7 +2,6 @@
 import { useState, useEffect } from "react";
 import { supabase } from '@/lib/supabase';
 import { authHeaders } from '@/lib/api-auth-client';
-import { syncContractStatuses } from '@/lib/contractSync';
 import { PageHero } from '@/components/ui';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
@@ -40,7 +39,13 @@ export default function SettingsPage() {
 
   async function syncContracts() {
     setSyncing("contracts");
-    const n = await syncContractStatuses();
+    var n = 0;
+    try {
+      const res = await fetch("/api/sync-status", { method: "POST", headers: await authHeaders() });
+      const d = await res.json();
+      if (!res.ok || d.error) throw new Error(d.error || "sync failed");
+      n = d.updates || 0;
+    } catch (e: any) { showMsg("שגיאה בסנכרון: " + (e?.message || e)); setSyncing(null); return; }
     setSyncing(null);
     showMsg(n>0 ? `✅ עודכנו ${n} חוזים` : "✅ כל הסטטוסים מעודכנים");
   }
