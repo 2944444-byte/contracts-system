@@ -1,7 +1,7 @@
 // גרסת המערכת — מקור אמת יחיד. עולה רק בשחרור גרסה (מיזוג dev → main),
 // לא בכל commit: תיקונים ותוספות מצטברים ב-dev, וכשבעלי המערכת מאשרים
 // שחרור — מעלים כאן את המספר, מוסיפים רשומת changelog, וממזגים.
-export const APP_VERSION = "4.2.0-dev";
+export const APP_VERSION = "4.2.0";
 
 // מוצג לצד הגרסה: תאריך ה-build נקבע בזמן הבנייה ב-Vercel (next.config).
 export const BUILD_DATE: string = process.env.NEXT_PUBLIC_BUILD_DATE || "";
@@ -12,7 +12,7 @@ export interface ReleaseNote { v: string; date: string; highlights: string[]; }
 // רק דברים שמשתמש רואה או מרגיש (לא ריפקטורים פנימיים).
 export const CHANGELOG: ReleaseNote[] = [
   {
-    v: "4.2.0", date: "בבדיקות — טרם שוחרר",
+    v: "4.2.0", date: "14.08.2026",
     highlights: [
       "📎 ביטחון ללא מסמך מצורף או קישור מסומן \"לא תקין\" בכל המסכים, עם הנחיה להוסיף קובץ — ביטחון שאינו ניתן לאימות אינו ביטחון. ביטחון שמועד המצאתו טרם הגיע (למשל בסיום עבודות) אינו נדרש למסמך עד המועד.",
     ],
