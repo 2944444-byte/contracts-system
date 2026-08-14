@@ -2631,7 +2631,10 @@ export default function ContractsPage() {
                       // "Required by the contract" is not "in our hands": a row with
                       // nothing received, no expiry and no document was showing as
                       // valid. The badge now reflects what is actually missing.
-                      const gaps = guaranteeGaps(g);
+                      // Pass the contract so delivery milestones ("יימסר בסיום
+                      // עבודות") and open-value semantics resolve — same rules
+                      // as the guarantees screen and the nightly alerts.
+                      const gaps = guaranteeGaps(g, undefined, selContract);
                       const blocking = gaps.filter(function(x:any){ return x.blocking; });
                       const notInPlace = blocking.length > 0;
                       return (
