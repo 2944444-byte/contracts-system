@@ -7,6 +7,8 @@ import { loadCompanyInfo, letterContent } from '@/lib/letter-format';
 import { computeGuaranteeRenewal, buildGuaranteeRenewalBody } from '@/lib/guarantee-letters';
 import { PageHero } from '@/components/ui';
 import { getScopeIds, scopeRows } from '@/lib/permissions';
+import { hasDocument } from '@/lib/guarantee-status';
+import { deliveryStatus } from '@/lib/guarantee-delivery';
 
 // Minimum months of rent that a guarantee should cover. Below this, the
 // row is flagged "underinsured". Industry norm in Israel is ~3 months.
@@ -41,8 +43,9 @@ function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL")
 function fmtMoney(n: number) { return n ? "₪" + n.toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"; }
 
 // Determines display health of a guarantee: expired (past end_date but still
-// "active"), gap (actual < required), expiring30/60, ok.
-type Health = "expired" | "gap" | "expiring30" | "expiring60" | "ok" | "inactive";
+// "active"), gap (actual < required), no_doc (no file/link on record —
+// unverifiable, so NOT OK by decision), expiring30/60, ok.
+type Health = "expired" | "gap" | "no_doc" | "expiring30" | "expiring60" | "ok" | "inactive";
 function healthOf(g: any): Health {
   if (g.status !== "active") return "inactive";
   if (g.end_date && daysLeft(g.end_date) < 0) return "expired";
@@ -52,13 +55,20 @@ function healthOf(g: any): Health {
   var req = Number(g.amount_required ?? 0);
   var hasActual = g.amount_actual !== null && g.amount_actual !== undefined && Number(g.amount_actual) > 0;
   if (req > 0 && hasActual && Number(g.amount_actual) < req) return "gap";
+  // Due only at a future milestone ("יימסר בסיום עבודות") — nothing can be
+  // missing yet, document included. Same rule as the contracts screen and
+  // the nightly alerts.
+  if (g.delivery_trigger && g.delivery_trigger !== "signing" && g.contracts) {
+    try { if (deliveryStatus({ guarantee: g, contract: g.contracts }).notYetDue) return "ok"; } catch (e) { /* fall through */ }
+  }
+  if (!hasDocument(g)) return "no_doc";
   if (g.end_date && daysLeft(g.end_date) <= 30) return "expiring30";
   if (g.end_date && daysLeft(g.end_date) <= 60) return "expiring60";
   return "ok";
 }
 // Sort priority: lower number = more urgent → appears first.
 function healthOrder(h: Health): number {
-  return { expired: 0, gap: 1, expiring30: 2, expiring60: 3, ok: 4, inactive: 5 }[h];
+  return { expired: 0, gap: 1, no_doc: 2, expiring30: 3, expiring60: 4, ok: 5, inactive: 6 }[h];
 }
 
 export default function GuaranteesPage() {
@@ -107,7 +117,7 @@ export default function GuaranteesPage() {
   async function loadAll() {
     const [{ data: g }, { data: c }] = await Promise.all([
       supabase.from("guarantees")
-        .select("*, contracts(id, property_id, start_date, end_date, status, tenants(name), properties(name), contract_spaces(charge_method, fixed_rent, price_per_sqm, revenue_pct, min_rent, spaces(space_name, area)))")
+        .select("*, contracts(id, property_id, start_date, end_date, status, signing_date, planned_handover_date, actual_handover_date, planned_opening_date, actual_opening_date, works_start_date, works_end_date, grace_months, grace_days, grace_phase2_days, grace_type, grace_ends_on_opening, tenants(name), properties(name), contract_spaces(charge_method, fixed_rent, price_per_sqm, revenue_pct, min_rent, spaces(space_name, area)))")
         .order("end_date"),
       supabase.from("contracts")
         .select("id, property_id, start_date, end_date, status, is_amendment, parent_contract_id, no_guarantee_required, guarantee_type, guarantee_amount, guarantee_months, tenants(name), properties(name), contract_spaces(charge_method, fixed_rent, price_per_sqm, revenue_pct, min_rent, spaces(space_name, area)), guarantees(id, status, end_date, guarantee_type)")
@@ -386,7 +396,7 @@ export default function GuaranteesPage() {
     if (filterPropIds.length > 0 && !filterPropIds.includes(g.contracts?.property_id)) return false;
     if (filterSt === "all") return true;
     if (filterSt === "expired")   return h === "expired";
-    if (filterSt === "gap")       return h === "gap";
+    if (filterSt === "gap")       return h === "gap" || h === "no_doc";
     if (filterSt === "expiring")  return h === "expiring30" || h === "expiring60";
     if (filterSt === "returned")  return g.status === "returned";
     if (filterSt === "forfeited") return g.status === "forfeited";
@@ -413,7 +423,7 @@ export default function GuaranteesPage() {
   const expired       = active.filter(function (g) { return healthOf(g) === "expired"; });
   const expiring30    = active.filter(function (g) { return healthOf(g) === "expiring30"; });
   const expiring60    = active.filter(function (g) { return healthOf(g) === "expiring60"; });
-  const hasGap        = active.filter(function (g) { return healthOf(g) === "gap"; });
+  const hasGap        = active.filter(function (g) { var h = healthOf(g); return h === "gap" || h === "no_doc"; });
   const totalActive   = active.reduce(function (s, g) { return s + (g.amount_actual ?? 0); }, 0);
   const totalRequired = active.reduce(function (s, g) { return s + (g.amount_required ?? 0); }, 0);
   const typeInfo = function (v: string) {
@@ -542,7 +552,7 @@ export default function GuaranteesPage() {
           { f: "active",    label: "פעילות",     value: active.length,     sub: fmtMoney(totalActive),    color: "text-slate-800",  bg: "bg-white" },
           { f: "expired",   label: "פג תוקף",    value: expired.length,    sub: "בתוקף 'פעיל' אך עברה תקפותם", color: expired.length > 0 ? "text-red-700" : "text-slate-400", bg: expired.length > 0 ? "bg-red-50" : "bg-white" },
           { f: "expiring",  label: "פגות בקרוב", value: expiring30.length + expiring60.length, sub: "ב-60 הימים הקרובים", color: (expiring30.length + expiring60.length) > 0 ? "text-yellow-700" : "text-slate-400", bg: (expiring30.length + expiring60.length) > 0 ? "bg-yellow-50" : "bg-white" },
-          { f: "gap",       label: "עם פער",     value: hasGap.length,     sub: "בפועל < נדרש",            color: hasGap.length > 0 ? "text-orange-700" : "text-slate-400", bg: hasGap.length > 0 ? "bg-orange-50" : "bg-white" },
+          { f: "gap",       label: "לא תקין",    value: hasGap.length,     sub: "פער בסכום או חסר מסמך",   color: hasGap.length > 0 ? "text-orange-700" : "text-slate-400", bg: hasGap.length > 0 ? "bg-orange-50" : "bg-white" },
           { f: "underinsured", label: "כיסוי נמוך", value: underinsured.length, sub: "מתחת לסף שבהסכם", color: underinsured.length > 0 ? "text-amber-700" : "text-slate-400", bg: underinsured.length > 0 ? "bg-amber-50" : "bg-white" },
         ].map(function (k) {
           return (
@@ -654,7 +664,7 @@ export default function GuaranteesPage() {
           { v: "active",    l: "פעילות" },
           { v: "expired",   l: "פג תוקף" },
           { v: "expiring",  l: "פגות בקרוב" },
-          { v: "gap",       l: "עם פער" },
+          { v: "gap",       l: "לא תקין" },
           { v: "underinsured", l: "כיסוי נמוך" },
           { v: "returned",  l: "הוחזרו" },
           { v: "forfeited", l: "מומשו" },
@@ -698,6 +708,7 @@ export default function GuaranteesPage() {
                 const h = healthOf(g);
                 const rowColor = h === "expired" ? "bg-red-50 border-r-4 border-red-500"
                   : h === "gap" ? "bg-orange-50 border-r-4 border-orange-500"
+                  : h === "no_doc" ? "bg-orange-50/60 border-r-4 border-orange-400"
                   : h === "expiring30" ? "bg-yellow-50 border-r-4 border-yellow-400"
                   : h === "expiring60" ? "bg-yellow-50/40"
                   : h === "inactive" ? "opacity-60"
@@ -707,6 +718,7 @@ export default function GuaranteesPage() {
                     <td className="px-4 py-3 whitespace-nowrap">
                       {h === "expired"   && <span className="text-[10px] bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full font-bold">⚠ פג תוקף</span>}
                       {h === "gap"       && <span className="text-[10px] bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded-full font-bold">⚠ פער</span>}
+                      {h === "no_doc"    && <span className="text-[10px] bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded-full font-bold" title="ביטחון ללא מסמך מצורף אינו ניתן לאימות — צרף סריקה או קישור דרך עריכת הביטחון">📎 לא תקין — יש להוסיף קובץ או קישור למסמך</span>}
                       {h === "expiring30"&& <span className="text-[10px] bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded-full font-bold">⏰ ≤30 ימים</span>}
                       {h === "expiring60"&& <span className="text-[10px] bg-yellow-50 text-yellow-700 px-1.5 py-0.5 rounded-full font-semibold">⏰ ≤60 ימים</span>}
                       {h === "ok"        && <span className="text-[10px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full font-semibold">✓ תקין</span>}
