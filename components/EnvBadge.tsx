@@ -10,7 +10,10 @@ export default function EnvBadge() {
   useEffect(function () {
     var env = process.env.NEXT_PUBLIC_VERCEL_ENV;
     var host = typeof window !== "undefined" ? window.location.hostname : "";
-    setStaging(env === "preview" || host.indexOf("-git-") !== -1 || host === "localhost");
+    // כתובת ענף = בדיקות — למעט כתובת העזר של main עצמו
+    // (contracts-system-git-MAIN-*), שמגישה את הגרסה המשוחררת.
+    var isBranchUrl = host.indexOf("-git-") !== -1 && host.indexOf("-git-main-") === -1;
+    setStaging(env === "preview" || isBranchUrl || host === "localhost");
   }, []);
   if (!staging) return null;
   return (
