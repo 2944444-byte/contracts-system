@@ -24,6 +24,13 @@ export type GuaranteeGap = { code: GuaranteeGapCode; label: string; blocking: bo
 // are open-ended by nature, so a missing date is not a gap for them.
 export const TYPES_WITH_EXPIRY = ["bank", "insurance", "check"];
 
+// Open-value instruments: their face value IS the requirement, so nobody types
+// an "amount received" for them — a signed promissory note in hand shows up as
+// an attached scan or a delivery date, not as amount_actual. For these types,
+// evidence of receipt replaces the amount (same semantics as the guarantees
+// screen). A bank guarantee, by contrast, always has a concrete amount.
+export const OPEN_VALUE_TYPES = ["promissory_note", "personal", "check"];
+
 const TYPE_LABELS: Record<string, string> = {
   bank: "ערבות בנקאית", promissory_note: "שטר חוב", check: "שיקים",
   cash: "פיקדון מזומן", insurance: "ביטוח", personal: "ערבות אישית",
@@ -59,7 +66,14 @@ export function guaranteeGaps(g: any, today?: Date, contract?: any): GuaranteeGa
   if (required <= 0 && actual <= 0) return out;
 
   if (actual <= 0) {
-    out.push({ code: "not_received", label: label + " טרם התקבל", blocking: true });
+    // Open-value instrument with evidence it was received → in place, at its
+    // face value. Without any evidence (no scan, no delivery date) it is still
+    // genuinely missing — the module's original purpose.
+    const openValueReceived = OPEN_VALUE_TYPES.indexOf(g.guarantee_type) !== -1
+      && (!!g.delivered_at || hasDocument(g));
+    if (!openValueReceived) {
+      out.push({ code: "not_received", label: label + " טרם התקבל", blocking: true });
+    }
   } else if (required > 0 && actual + 0.005 < required) {
     out.push({ code: "shortfall", label: "התקבל ₪" + actual.toLocaleString("he-IL") + " מתוך ₪" + required.toLocaleString("he-IL"), blocking: true });
   }

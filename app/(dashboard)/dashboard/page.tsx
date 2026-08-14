@@ -8,6 +8,7 @@ import { getKnownIndexMonth } from '@/lib/cpi-utils';
 import { graceFactorsFor, describeGrace, graceWindow } from '@/lib/store-opening';
 import CalcProgress, { CalcProgressState } from '@/components/CalcProgress';
 import { useAccess } from '@/components/AccessProvider';
+import { guaranteeInPlace } from '@/lib/guarantee-status';
 
 function fmtMoney(n: number) { return "₪" + (n ?? 0).toLocaleString("he-IL",{minimumFractionDigits:2,maximumFractionDigits:2}); }
 // Headline KPI numbers: drop the agorot once the figure is big, so long sums
@@ -101,7 +102,7 @@ export default function DashboardPage() {
       supabase.from("properties").select("id,name,group_id,city,total_area,property_type"),
       supabase.from("contracts").select("id,status,rent_per_sqm,charged_area,investment_addition,property_id,end_date,start_date,index_base_date,indexation_method,index_mechanism,is_amendment,grace_months,grace_days,grace_phase2_days,grace_type,grace_discount_pct,grace_mgmt_discount_pct,grace_ends_on_opening,rent_type,revenue_pct,min_rent_per_sqm,minimum_rent,planned_handover_date,actual_handover_date,planned_opening_date,actual_opening_date,tenants(name),properties(name),contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area))").in("status",["active","extended","expiring","upcoming","future"]),
       supabase.from("spaces").select("id,property_id,status,space_name,area"),
-      supabase.from("guarantees").select("id,contract_id,amount_required,amount_actual,end_date,guarantee_type").eq("status","active"),
+      supabase.from("guarantees").select("id,contract_id,amount_required,amount_actual,end_date,guarantee_type,status,delivered_at,document_url,documents").eq("status","active"),
       supabase.from("alerts").select("id,title,severity,due_date,entity_type,contract_id,property_id").eq("is_resolved",false).order("due_date", { ascending: true }).limit(60),
       // All charges — drives the open-charges KPI, the 12-month trend and the
       // YTD collection rate. Small table, so one fetch covers all three.
@@ -434,7 +435,10 @@ export default function DashboardPage() {
 
   // Guarantee analysis
   const totalGuarantees = filteredGuarantees.reduce(function(s,g){return s+(Number(g.amount_required)||0);},0);
-  const guaranteeGaps = filteredGuarantees.filter(function(g){return (Number(g.amount_actual)||0) < (Number(g.amount_required)||0);});
+  // Shared gap logic (lib/guarantee-status) — a promissory note with its scan
+  // attached is IN PLACE even with no amount_actual; the old inline comparison
+  // counted every such note as a gap, contradicting the guarantees screen.
+  const guaranteeGaps = filteredGuarantees.filter(function(g){ return !guaranteeInPlace(g); });
   const expiringGuarantees = filteredGuarantees.filter(function(g){
     if (!g.end_date) return false;
     var diff = new Date(g.end_date).getTime() - Date.now();
