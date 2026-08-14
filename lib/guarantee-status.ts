@@ -38,7 +38,7 @@ const TYPE_LABELS: Record<string, string> = {
 
 export function guaranteeTypeLabel(t: string): string { return TYPE_LABELS[t] || t || "ביטחון"; }
 
-function hasDocument(g: any): boolean {
+export function hasDocument(g: any): boolean {
   if (g?.document_url) return true;
   const docs = g?.documents;
   return Array.isArray(docs) && docs.some(function (d: any) { return d && d.url; });
@@ -90,8 +90,10 @@ export function guaranteeGaps(g: any, today?: Date, contract?: any): GuaranteeGa
     if (!g.bank) out.push({ code: "no_issuer", label: "לא הוזן בנק מוציא", blocking: false });
   }
 
+  // A security without its paper trail is not verifiable — by decision
+  // (2026-08-14) this marks the guarantee NOT OK, not merely "details missing".
   if (!hasDocument(g)) {
-    out.push({ code: "no_document", label: "לא צורף מסמך", blocking: false });
+    out.push({ code: "no_document", label: "לא צורף מסמך — יש להוסיף קובץ או קישור למסמך", blocking: true });
   }
 
   return out;
