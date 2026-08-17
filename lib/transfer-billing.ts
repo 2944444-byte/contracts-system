@@ -22,6 +22,7 @@ import { minimumApplies } from "@/lib/project-occupancy";
 import { minRentPerSqmAtDate } from "@/lib/min-rent";
 import { fetchCpiAdjustedWithRetry, fetchHighestChainedCpiWithRetry } from "@/lib/cpi-server";
 import { getVatRates, vatPctAt } from "@/lib/vat";
+import { isParkingOnly, parkingMonthlyTotal, parkingSpotCount, parkingRentSchedule } from "@/lib/parking-rent";
 
 // CBS wants MM-DD-YYYY. The 15th is the publication day itself and is
 // ambiguous — bumped to the 16th, matching the cheque path, so both paths
@@ -74,6 +75,7 @@ export async function generateTransferCharges(params: {
       "min_rent_per_sqm, minimum_rent, min_rent_condition_type, min_rent_condition_pct, min_rent_condition_met_at, " +
       "payment_method, payment_day, vat_type, indexation_method, index_base_date, index_base_value, index_mechanism, " +
       "start_date, end_date, signing_date, mgmt_fee_per_sqm, mgmt_included_in_revenue, " +
+      "contract_type, mgmt_parking_fee_per_spot, properties(parking_mgmt_fee_per_spot), " +
       "grace_months, grace_days, grace_phase2_days, grace_type, grace_discount_pct, grace_mgmt_discount_pct, grace_ends_on_opening, " +
       "mgmt_charge_starts, mgmt_free_max_days, works_start_date, works_end_date, " +
       "planned_handover_date, actual_handover_date, planned_opening_date, actual_opening_date, " +
@@ -111,6 +113,24 @@ export async function generateTransferCharges(params: {
     (tiersByContract[t.contract_id] = tiersByContract[t.contract_id] || []).push(t);
   });
 
+  // Parking for the whole batch: subscriptions may hang on the base contract
+  // OR one of its amendments — map them all back to the base, exactly as the
+  // cheque (advances) path does.
+  const { data: amendRows } = await supabase.from("contracts")
+    .select("id, parent_contract_id").eq("is_amendment", true)
+    .in("parent_contract_id", list.map(function (c) { return c.id; }));
+  const amendToBase: Record<string, string> = {};
+  (amendRows || []).forEach(function (a: any) { amendToBase[a.id] = a.parent_contract_id; });
+  const parkScanIds = list.map(function (c) { return c.id; }).concat((amendRows || []).map(function (a: any) { return a.id; }));
+  const { data: allParking } = await supabase.from("parking_subscriptions")
+    .select("contract_id, subscription_type, monthly_fee, quantity, is_included_in_rent, status")
+    .in("contract_id", parkScanIds).eq("status", "active");
+  const parkingByBase: Record<string, any[]> = {};
+  (allParking || []).forEach(function (p: any) {
+    const base = amendToBase[p.contract_id] || p.contract_id;
+    (parkingByBase[base] = parkingByBase[base] || []).push(p);
+  });
+
   for (const c of list) {
     const name = (c.tenants as any)?.name || c.id.slice(0, 8);
     try {
@@ -124,10 +144,29 @@ export async function generateTransferCharges(params: {
       }
 
       const noteLines: string[] = [];
-      const isRev = c.rent_type === "revenue_pct" || c.rent_type === "revenue_based" || Number(c.revenue_pct) > 0;
+      const parkRows = parkingByBase[c.id] || [];
+      const parkFee = parkingMonthlyTotal(parkRows);
+      const parkSpots = parkingSpotCount(parkRows);
+      const parkingOnly = isParkingOnly(c);
+      const isRev = !parkingOnly && (c.rent_type === "revenue_pct" || c.rent_type === "revenue_based" || Number(c.revenue_pct) > 0);
       var baseMonthly = 0;
 
-      if (isRev) {
+      if (parkingOnly) {
+        // Parking-only agreement: the parking base runs through the SAME
+        // tier/option engine as a fixed-rent unit; CPI applies below like any
+        // other contract.
+        if (parkFee <= 0) {
+          res.skippedZero++;
+          res.lines.push(name + " — הסכם חניות ללא מנויי חניה מקושרים · אין מה לחייב");
+          continue;
+        }
+        const pExercised = (c.contract_options || []).filter(function (o: any) { return o && (o.is_exercised || o.status === "exercised"); });
+        baseMonthly = rentAtDate(parkingRentSchedule({
+          contract: c, parkingRows: parkRows,
+          contractTiers: tiersByContract[c.id] || [], exercisedOptions: pExercised,
+        }), period.start);
+        noteLines.push("דמי חניה (" + parkSpots + " מקומות, כולל מדרגות): ₪" + r2(baseMonthly).toLocaleString("he-IL"));
+      } else if (isRev) {
         // The advance on a turnover lease is the MINIMUM — when it applies.
         const cond = minimumApplies({ contract: c, date: period.start });
         if (!cond.applies) {
@@ -252,12 +291,22 @@ export async function generateTransferCharges(params: {
           ' → שכ"ד ₪' + rentDue.toLocaleString("he-IL"));
       }
 
+      // Parking riding on a UNIT lease: added FLAT on top — outside CPI, tiers
+      // and grace — exactly the cheque path's long-standing rule. (A parking-
+      // ONLY contract took the parking as its BASE above instead.)
+      if (!parkingOnly && parkFee > 0) {
+        var parkPart = parkFee;
+        if (inForceDays < daysInMonth) parkPart = r2(parkFee * inForceDays / daysInMonth);
+        rentDue = r2(rentDue + parkPart);
+        noteLines.push("חניות (" + parkSpots + " מקומות): ₪" + r2(parkPart).toLocaleString("he-IL"));
+      }
+
       // Management advance. Rate: the contract's own figure (the first-year
       // advance until a budget takes over — the budget/group path runs through
       // the yearly reconciliation). Skipped when management is inside the
       // turnover percentage.
       var mgmtDue = 0;
-      if (!c.mgmt_included_in_revenue && Number(c.mgmt_fee_per_sqm) > 0) {
+      if (!c.mgmt_included_in_revenue && !parkingOnly && Number(c.mgmt_fee_per_sqm) > 0) {
         const area = (c.contract_spaces || []).reduce(function (s: number, cs: any) {
           return s + (Number(cs?.spaces?.area) || 0);
         }, 0) || Number(c.charged_area) || 0;
@@ -267,6 +316,21 @@ export async function generateTransferCharges(params: {
           '/מ"ר × ' + area.toLocaleString("he-IL") + ' מ"ר' +
           (gf.mgmtFactor < 1 ? " × " + Math.round(gf.mgmtFactor * 100) + "% (גרייס/פטור)" : "") +
           " = ₪" + mgmtDue.toLocaleString("he-IL"));
+      }
+
+      // Parking management fee — its OWN rate: contract override, else the
+      // property's rate set at property setup. Null on both (every property
+      // today) = no charge; the plumbing is ready for a future property that
+      // does charge management on parking.
+      if (!c.mgmt_included_in_revenue && parkSpots > 0) {
+        const propParkRate = Number((c.properties as any)?.parking_mgmt_fee_per_spot) || 0;
+        const parkMgmtRate = Number(c.mgmt_parking_fee_per_spot) > 0 ? Number(c.mgmt_parking_fee_per_spot) : propParkRate;
+        if (parkMgmtRate > 0) {
+          const pm = r2(parkMgmtRate * parkSpots * gf.mgmtFactor);
+          mgmtDue = r2(mgmtDue + pm);
+          noteLines.push("דמי ניהול חניות: ₪" + parkMgmtRate.toLocaleString("he-IL") + " × " + parkSpots +
+            " מקומות = ₪" + pm.toLocaleString("he-IL"));
+        }
       }
 
       const baseTotal = r2(rentDue + mgmtDue);
@@ -288,7 +352,7 @@ export async function generateTransferCharges(params: {
       const { error: iErr } = await supabase.from("charges").insert({
         contract_id: c.id,
         charge_type: "rent_transfer",
-        description: 'שכ"ד' + (mgmtDue > 0 ? " ודמי ניהול" : "") + " " + period.label + " — " + methodHe,
+        description: (parkingOnly ? "דמי חניה" : 'שכ"ד') + (mgmtDue > 0 ? " ודמי ניהול" : "") + " " + period.label + " — " + methodHe,
         base_amount: baseTotal,
         vat_amount: vatAmount,
         total_amount: r2(baseTotal + vatAmount),

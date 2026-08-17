@@ -65,6 +65,8 @@ export default function PropertiesPage() {
   const [fNotes,      setFNotes]      = useState("");
   const [fYardArea,   setFYardArea]   = useState("");
   const [fParking,    setFParking]    = useState("");
+  // דמי ניהול לחניה (₪/מקום/חודש) — ברירת מחדל לכל חוזי הנכס; ריק = אין.
+  const [fParkingMgmt, setFParkingMgmt] = useState("");
   const [fInsurCost,  setFInsurCost]  = useState("");
   const [fInsurDate,  setFInsurDate]  = useState("");
   const [fInsurPolicy,setFInsurPolicy]= useState("");
@@ -211,7 +213,7 @@ export default function PropertiesPage() {
   function openNew() {
     setIsNew(true); setEditingId("new");
     setFName(""); setFCompanyId(""); setFGroupId(""); setFType("office"); setFAddress(""); setFCity(""); setFArea(""); setFFloors(""); setFNotes("");
-    setFYardArea(""); setFParking(""); setFInsurCost(""); setFInsurDate(""); setFInsurPolicy(""); setFMgmtBudget(""); setFWasteCost("");
+    setFYardArea(""); setFParking(""); setFParkingMgmt(""); setFInsurCost(""); setFInsurDate(""); setFInsurPolicy(""); setFMgmtBudget(""); setFWasteCost("");
   }
 
   function openEdit(p: any) {
@@ -220,6 +222,7 @@ export default function PropertiesPage() {
     setFAddress(p.address??""); setFCity(p.city??""); setFArea(p.total_area?.toString()??"");
     setFFloors(p.floors?.toString()??""); setFNotes(p.notes??"");
     setFYardArea(p.yard_terrace_area?.toString()??""); setFParking(p.parking_spaces?.toString()??"");
+    setFParkingMgmt(p.parking_mgmt_fee_per_spot?.toString()??"");
     setFInsurCost(p.annual_insurance_cost?.toString()??""); setFInsurDate(p.insurance_renewal_date??"");
     setFInsurPolicy(p.insurance_policy_number??""); setFMgmtBudget(p.annual_management_budget?.toString()??"");
     setFWasteCost(p.annual_waste_cost?.toString()??"");
@@ -238,6 +241,7 @@ export default function PropertiesPage() {
         notes: fNotes||null,
         yard_terrace_area: fYardArea ? Number(fYardArea) : null,
         parking_spaces: fParking ? Number(fParking) : null,
+        parking_mgmt_fee_per_spot: fParkingMgmt ? Number(fParkingMgmt) : null,
         annual_insurance_cost: fInsurCost ? Number(fInsurCost) : null,
         insurance_renewal_date: fInsurDate||null,
         insurance_policy_number: fInsurPolicy||null,
@@ -783,6 +787,10 @@ export default function PropertiesPage() {
                 <div>
                   <label className="mb-1 block text-xs font-semibold text-slate-700">מקומות חניה</label>
                   <input type="number" value={fParking} onChange={function(e){setFParking(e.target.value);}} className={ic} />
+                  <label className="mb-1 mt-2 block text-xs font-semibold text-slate-700">דמי ניהול לחניה (₪/מקום לחודש)</label>
+                  <input type="number" value={fParkingMgmt} onChange={function(e){setFParkingMgmt(e.target.value);}}
+                    placeholder="ריק = אין דמי ניהול על חניות" className={ic} />
+                  <div className="text-[10px] text-slate-400 mt-0.5">ברירת מחדל לכל חוזי הנכס עם חניות; חוזה יכול לקבוע תעריף משלו.</div>
                 </div>
               </div>
 

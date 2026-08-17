@@ -142,6 +142,10 @@ export default function ContractsNewPage() {
   const [propertyId, setPropertyId] = useState("");
   const [selSpaces, setSelSpaces] = useState<string[]>([]);
   const [contractType, setContractType] = useState("regular");
+  // הסכם חניות טהור: אין יחידות ואין מ"ר — הבסיס לחיוב הוא מנויי החניה.
+  const isParkingContract = contractType === "parking";
+  // דמי ניהול לחניה — עקיפת חוזה; ריק = לפי הגדרת הנכס (parking_mgmt_fee_per_spot).
+  const [mgmtParkingFee, setMgmtParkingFee] = useState("");
   const [showNewTenant, setShowNewTenant] = useState(false);
   const [showNewProperty, setShowNewProperty] = useState(false);
   const [showNewUnit, setShowNewUnit] = useState(false);
@@ -657,7 +661,7 @@ export default function ContractsNewPage() {
 
   useEffect(function() {
     if (propertyId) {
-      supabase.from("parking_subscriptions").select("id,spot_number,quantity,monthly_fee,vehicle_number,status,tenant_id,is_marked,is_included_in_rent,tenants(name)")
+      supabase.from("parking_subscriptions").select("id,spot_number,quantity,monthly_fee,vehicle_number,status,tenant_id,contract_id,is_marked,is_included_in_rent,tenants(name)")
         .eq("property_id", propertyId).order("created_at")
         .then(function({ data }) { setParkingSpots(data ?? []); });
     } else {
@@ -767,7 +771,7 @@ export default function ContractsNewPage() {
 
   async function reloadParking() {
     if (!propertyId) return;
-    const { data } = await supabase.from("parking_subscriptions").select("id,spot_number,quantity,monthly_fee,vehicle_number,status,tenant_id,is_marked,is_included_in_rent,tenants(name)")
+    const { data } = await supabase.from("parking_subscriptions").select("id,spot_number,quantity,monthly_fee,vehicle_number,status,tenant_id,contract_id,is_marked,is_included_in_rent,tenants(name)")
       .eq("property_id", propertyId).order("created_at");
     setParkingSpots(data ?? []);
   }
@@ -1009,9 +1013,15 @@ export default function ContractsNewPage() {
 
   // === Submit ===
   async function handleSubmit() {
-    var hasAnyRent = rentType === "revenue_pct" ? !!revenuePct : (rentPerSqm || Object.keys(unitRentOverrides).some(function(k) { return unitRentOverrides[k]; }));
+    // הסכם חניות: הבסיס לחיוב הוא מנויי החניה — לא נדרש שכ"ד למ"ר/יחידות.
+    var tenantParkingRows = parkingSpots.filter(function(p) { return p.tenant_id === tenantId && !p.contract_id; });
+    var hasAnyRent = isParkingContract
+      ? tenantParkingRows.some(function(p) { return Number(p.monthly_fee) > 0; })
+      : (rentType === "revenue_pct" ? !!revenuePct : (rentPerSqm || Object.keys(unitRentOverrides).some(function(k) { return unitRentOverrides[k]; })));
     if (!tenantId || !propertyId || !startDate || !endDate || !hasAnyRent) {
-      alert("נא מלא כל שדות חובה");
+      alert(isParkingContract && !hasAnyRent
+        ? "הסכם חניות: הוסף לפחות הקצאת חניה אחת לשוכר (עם דמי חניה) בשלב תנאי השכירות"
+        : "נא מלא כל שדות חובה");
       return;
     }
     setSaving(true);
@@ -1080,7 +1090,8 @@ export default function ContractsNewPage() {
         ...baseIndexRuleToRow(baseIndexRule),
         ...mgmtProtectionToRow(mgmtProtection),
         index_base_resolved_at: baseIndexRule.mode === "derived" && baseCPIDate ? new Date().toISOString() : null,
-        mgmt_fee_per_sqm: mgmtFeePct ? Number(mgmtFeePct) : null,
+        mgmt_fee_per_sqm: isParkingContract ? null : (mgmtFeePct ? Number(mgmtFeePct) : null),
+        mgmt_parking_fee_per_spot: mgmtParkingFee ? Number(mgmtParkingFee) : null,
         mgmt_cost_plus_pct: mgmtCostPlus ? Number(mgmtCostPlus) : null,
         document_url: documentUrl || null,
         status,
@@ -1596,7 +1607,14 @@ export default function ContractsNewPage() {
               </div>
             </div>
 
-            {propertyId && (
+            {propertyId && isParkingContract && (
+              <div className="rounded-xl border-2 border-blue-200 bg-blue-50/40 p-3 text-xs text-blue-800">
+                🅿️ <b>הסכם להשכרת חניות בלבד</b> — אין בחירת יחידות ואין שטח במ&quot;ר.
+                הקצאת החניות ודמי החניה יוזנו בשלב &quot;תנאי שכירות&quot;, והחיוב ייגזר מהן
+                (כולל הצמדה, מדרגות ואופציות אם יוגדרו).
+              </div>
+            )}
+            {propertyId && !isParkingContract && (
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <label className="block text-xs font-semibold text-slate-700">
@@ -1823,7 +1841,14 @@ export default function ContractsNewPage() {
               </div>
             )}
 
-            {/* Rent type toggle */}
+            {/* Rent type toggle — a parking-only agreement has neither: its
+                base is the parking allocations below. */}
+            {isParkingContract ? (
+              <div className="rounded-xl border-2 border-blue-300 bg-blue-50/50 p-3 mb-3 text-xs text-blue-800">
+                🅿️ <b>הסכם חניות</b> — דמי השכירות הם סך דמי החניה של המנויים שבהמשך המסך.
+                הצמדה למדד, מדרגות מחיר ואופציות חלות עליהם כרגיל.
+              </div>
+            ) : (
             <div className="flex gap-2 mb-3">
               <button type="button" onClick={() => setRentType("fixed")}
                 className={"rounded-lg border px-4 py-2 text-sm font-bold transition-all " +
@@ -1836,6 +1861,7 @@ export default function ContractsNewPage() {
                 📊 אחוז ממחזור (פדיון)
               </button>
             </div>
+            )}
 
             {/* Revenue-based rent fields */}
             {rentType === "revenue_pct" && (
@@ -2073,7 +2099,7 @@ export default function ContractsNewPage() {
                 They used to sit inside a fixed-rent-only block, so a revenue
                 contract had no way to record any of them. */}
             <div className="grid grid-cols-2 gap-4">
-              {rentType === "fixed" && (
+              {rentType === "fixed" && !isParkingContract && (
               <>
               <div>
                 <label className="mb-1 block text-xs font-semibold text-slate-700">
@@ -2099,6 +2125,7 @@ export default function ContractsNewPage() {
               </div>
               </>
               )}
+              {!isParkingContract && (
               <div>
                 <label className="mb-1 block text-xs font-semibold text-slate-700">
                   תוספת שכ&quot;ד בגין השקעות בינוי (₪/חודש)
@@ -2112,6 +2139,7 @@ export default function ContractsNewPage() {
                 />
                 <p className="mt-1 text-[11px] text-slate-400">תוספת חודשית לשכ&quot;ד תמורת השקעות בינוי שביצע המשכיר. מוצמדת למדד ככל שכ&quot;ד.</p>
               </div>
+              )}
               <div>
                 <label className="mb-1 block text-xs font-semibold text-slate-700">
                   מע&quot;מ
@@ -2533,6 +2561,7 @@ export default function ContractsNewPage() {
                   else alert("מדד החודש הנגזר טרם פורסם — התאריך נקבע, יש להשלים את הערך כשיפורסם.");
                 }}
               />
+              {!isParkingContract ? (
               <div>
                 <label className="mb-1 block text-xs font-semibold text-slate-700">
                   דמי ניהול — מקדמה (₪/מ&quot;ר לחודש)
@@ -2556,6 +2585,23 @@ export default function ContractsNewPage() {
                   אם ההסכם קובע עלות בפועל + אחוז — ההתחשבנות השנתית תוסיף את המרווח על חלק השוכר בעלות.
                 </div>
               </div>
+              ) : (
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">
+                  דמי ניהול לחניה (₪/מקום לחודש) — לא חובה
+                </label>
+                <input
+                  type="number"
+                  value={mgmtParkingFee}
+                  onChange={(e) => setMgmtParkingFee(e.target.value)}
+                  placeholder="ריק = לפי הגדרת הנכס"
+                  className={ic}
+                />
+                <div className="text-[10px] text-slate-400 mt-0.5">
+                  תעריף נפרד מדמי הניהול למ&quot;ר. ריק = לפי מה שהוגדר בנכס (אם לא הוגדר — אין דמי ניהול על חניות).
+                </div>
+              </div>
+              )}
               <MgmtProtectionFields
                 value={mgmtProtection}
                 onChange={setMgmtProtection}
@@ -2582,9 +2628,14 @@ export default function ContractsNewPage() {
 
             {/* Parking */}
             {propertyId && (
-              <div className="mt-6 pt-4 border-t border-slate-200">
+              <div className={"mt-6 pt-4 border-t " + (isParkingContract ? "border-blue-300" : "border-slate-200")}>
+                {isParkingContract && (
+                  <div className="rounded-lg bg-blue-50 border border-blue-200 px-3 py-2 mb-3 text-xs text-blue-800 font-semibold">
+                    🅿️ זהו לב ההסכם: הוסף את הקצאות החניה של השוכר — החיוב החודשי הוא סכום דמי החניה שכאן. חובה לפחות הקצאה אחת עם דמי חניה.
+                  </div>
+                )}
                 <div className="flex items-center justify-between mb-3">
-                  <label className="text-xs font-semibold text-slate-700">חניות</label>
+                  <label className="text-xs font-semibold text-slate-700">{isParkingContract ? "חניות ההסכם *" : "חניות"}</label>
                   <button type="button" onClick={() => setShowNewParking(!showNewParking)}
                     className="rounded-lg bg-green-600 text-white px-3 py-1.5 text-xs font-bold hover:bg-green-700">
                     + חניה חדשה
@@ -4267,14 +4318,24 @@ export default function ContractsNewPage() {
                     ? new Date(endDate).toLocaleDateString("he-IL")
                     : "",
                 },
-                { l: 'שכ"ד', v: rentType === "revenue_pct"
+                { l: isParkingContract ? "דמי חניה" : 'שכ"ד', v: isParkingContract
+                    ? (function(){ var rows = parkingSpots.filter(function(p){ return p.tenant_id === tenantId && !p.contract_id; });
+                        var tot = rows.reduce(function(s, p){ return p.is_included_in_rent ? s : s + (Number(p.monthly_fee)||0) * (Number(p.quantity)||1); }, 0);
+                        var spots = rows.reduce(function(s, p){ return s + (Number(p.quantity)||1); }, 0);
+                        return spots + " מקומות · " + fmtMoney(tot) + "/חודש"; })()
+                    : rentType === "revenue_pct"
                     ? `${revenuePct}% ממחזור` + (minRentMonthly > 0
                         ? " | מינימום " + fmtMoney(minRentMonthly) + "/חודש" +
                           (minRentSqm > 0 ? " (" + fmtMoney(minRentSqm) + '/מ"ר)' : "")
                         : " | ללא מינימום")
                     : fmtMoney(totalRent) + "/חודש" },
-                ...(rentType === "revenue_pct" ? [{ l: "התחשבנות פדיון", v: ({monthly:"חודשית",quarterly:"רבעונית",semiannual:"חצי שנתית",annual:"שנתית"} as any)[revSettleFreq] + " · דו\"ח " + ({monthly:"חודשי",quarterly:"רבעוני",semiannual:"חצי שנתי",annual:"שנתי"} as any)[revReportFreq] }] : []),
-                { l: "שנתי", v: fmtMoney(annualRent) },
+                ...(rentType === "revenue_pct" && !isParkingContract ? [{ l: "התחשבנות פדיון", v: ({monthly:"חודשית",quarterly:"רבעונית",semiannual:"חצי שנתית",annual:"שנתית"} as any)[revSettleFreq] + " · דו\"ח " + ({monthly:"חודשי",quarterly:"רבעוני",semiannual:"חצי שנתי",annual:"שנתי"} as any)[revReportFreq] }] : []),
+                ...(isParkingContract ? [{ l: "דמי ניהול חניות", v: mgmtParkingFee ? fmtMoney(Number(mgmtParkingFee)) + "/מקום לחודש" : "לפי הגדרת הנכס" }] : []),
+                { l: "שנתי", v: isParkingContract
+                    ? (function(){ var rows = parkingSpots.filter(function(p){ return p.tenant_id === tenantId && !p.contract_id; });
+                        var tot = rows.reduce(function(s, p){ return p.is_included_in_rent ? s : s + (Number(p.monthly_fee)||0) * (Number(p.quantity)||1); }, 0);
+                        return fmtMoney(tot * 12); })()
+                    : fmtMoney(annualRent) },
                 {
                   l: "תדירות",
                   v: PAYMENT_FREQS.find((p) => p.v === paymentFreq)?.l,
@@ -4447,7 +4508,10 @@ export default function ContractsNewPage() {
                   // handover date stands in for it, so requiring one here left
                   // the user stuck on step 2 with no way forward.
                   (!startDate && !(hasFutureHandover && (plannedHandover || actualHandover))) ||
-                  (rentType === "revenue_pct" ? !revenuePct : (!rentPerSqm && Object.keys(unitRentOverrides).filter(function(k){return unitRentOverrides[k];}).length === 0))))
+                  // הסכם חניות: נדרשת הקצאת חניה עם דמי חניה במקום שכ"ד למ"ר.
+                  (isParkingContract
+                    ? !parkingSpots.some(function(p){ return p.tenant_id === tenantId && !p.contract_id && Number(p.monthly_fee) > 0; })
+                    : (rentType === "revenue_pct" ? !revenuePct : (!rentPerSqm && Object.keys(unitRentOverrides).filter(function(k){return unitRentOverrides[k];}).length === 0)))))
               }
               className="rounded-xl bg-blue-700 px-6 py-2.5 text-sm font-bold text-white hover:bg-blue-800 disabled:opacity-40"
             >

@@ -143,6 +143,8 @@ export default function ContractsPage() {
   const [mgmtInfo, setMgmtInfo] = useState<any>(null);
   const [amendments, setAmendments] = useState<any[]>([]);
   const [parkingSubs, setParkingSubs] = useState<any[]>([]);
+  // סכומי חניה חודשיים לכרטיסי הרשימה, ממופים לחוזה הבסיס (כולל תוספות).
+  const [listParkingTotals, setListParkingTotals] = useState<Record<string, number>>({});
   const [spaceOverlaps, setSpaceOverlaps] = useState<any[]>([]);
 
   // Amendment modal state
@@ -287,6 +289,24 @@ export default function ContractsPage() {
     var scope = await getScopeIds();
     var scoped = scopeRows(data ?? [], scope, function(c: any){ return c.property_id; });
     setContracts(scoped);
+
+    // Parking totals for the list cards: one query, folded amendment→base —
+    // the same monthly figure the details view and the billing engines use.
+    try {
+      var amendBase: Record<string, string> = {};
+      (data ?? []).forEach(function(c: any){ if (c.is_amendment && c.parent_contract_id) amendBase[c.id] = c.parent_contract_id; });
+      const { data: pk } = await supabase.from("parking_subscriptions")
+        .select("contract_id, monthly_fee, quantity, is_included_in_rent, subscription_type, status")
+        .not("contract_id", "is", null).eq("status", "active");
+      var totals: Record<string, number> = {};
+      (pk ?? []).forEach(function(p: any) {
+        if (p.is_included_in_rent || p.subscription_type === "visitor") return;
+        var base = amendBase[p.contract_id] || p.contract_id;
+        totals[base] = (totals[base] || 0) + (Number(p.monthly_fee) || 0) * (Number(p.quantity) || 1);
+      });
+      setListParkingTotals(totals);
+    } catch (e) { /* card totals are cosmetic — never block the list */ }
+
     setLoading(false);
     // Don't override a deep-linked selection (?select=) with the default pick —
     // this async callback closes over a stale `selected` (null on mount).
@@ -1264,6 +1284,9 @@ export default function ContractsPage() {
             if (mon === 0) mon = (Number(c.rent_per_sqm)||0)*contractArea(c);
             if (mon === 0) mon = (Number(c.min_rent_per_sqm)||0)*contractArea(c) || (Number(c.minimum_rent)||0);
             mon += (c.investment_addition??0);
+            // חניות: לחוזה חניות זה כל השכ"ד; לחוזה יחידות — תוספת מעל,
+            // בהתאמה לתצוגת הפרטים ולחיוב בפועל.
+            mon += listParkingTotals[c.id] || 0;
             const rem  = cEffEnd ? yearsMonthsLeft(cEffEnd) : null;
             const isSel = selected===c.id;
             return (
@@ -1271,7 +1294,9 @@ export default function ContractsPage() {
                 className={"rounded-xl border p-3 cursor-pointer transition-all " +
                   (isSel?"border-blue-500 bg-blue-50 shadow-sm":"border-slate-200 bg-white hover:shadow-sm")}>
                 <div className="flex items-start justify-between mb-1">
-                  <div className="font-semibold text-slate-800 text-sm">{c.tenants?.name}</div>
+                  <div className="font-semibold text-slate-800 text-sm">{c.tenants?.name}
+                    {c.contract_type === "parking" && <span className="text-[10px] bg-blue-100 text-blue-700 rounded-full px-1.5 py-0.5 font-bold mr-1">🅿️ חניות</span>}
+                  </div>
                   <span className={"text-xs px-2 py-0.5 rounded-full font-semibold "+si.color}>{si.label}</span>
                 </div>
                 <div className="text-xs text-slate-400">
@@ -1326,7 +1351,9 @@ export default function ContractsPage() {
               <div className="rounded-xl border border-slate-200 bg-white shadow-sm p-5">
                 <div className="flex items-start justify-between mb-4">
                   <div>
-                    <h2 className="text-xl font-bold text-slate-800 cursor-pointer hover:underline hover:text-blue-700" onClick={function(){router.push("/tenants");}}>{selContract.tenants?.name} <span className="text-sm font-normal text-blue-500">→</span></h2>
+                    <h2 className="text-xl font-bold text-slate-800 cursor-pointer hover:underline hover:text-blue-700" onClick={function(){router.push("/tenants");}}>{selContract.tenants?.name} <span className="text-sm font-normal text-blue-500">→</span>
+                      {selContract.contract_type === "parking" && <span className="text-xs bg-blue-100 text-blue-700 border border-blue-200 rounded-full px-2 py-0.5 font-bold mr-2 align-middle" title="הסכם להשכרת חניות בלבד — ללא יחידות ושטח; החיוב נגזר ממנויי החניה">🅿️ הסכם חניות</span>}
+                    </h2>
                     <div className="text-sm text-slate-500 cursor-pointer hover:underline hover:text-blue-600" onClick={function(){router.push("/properties");}}>{selContract.properties?.name}{selContract.properties?.city?" — "+selContract.properties.city:""} <span className="text-blue-400">→</span></div>
                     {selContract.tenants?.company_name&&<div className="text-xs text-slate-400">{selContract.tenants.company_name}</div>}
                   </div>
