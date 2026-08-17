@@ -522,7 +522,9 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
           // Indexed rent for before/after anniversary
           var indexedAfter = rentAfterAnniversary * cpiRatio;
           var indexedMonthly = hasRentChange ? indexedAfter : rentAfterAnniversary * cpiRatio;
-          var totalMonthly = indexedMonthly + mgmtMonthly + thisParkingMonthly;
+          // חניות צמודות למדד ככל שכ"ד (החלטת 14.08.2026 — דוגמת ג'ובניל):
+          // אותו יחס מדד של החוזה חל גם על דמי החניה, בכל שיק.
+          var totalMonthly = indexedMonthly + mgmtMonthly + thisParkingMonthly * cpiRatio;
 
           // Determine start date for this unit in the target year.
           // Each space has its own entry_date (= earliest date it appeared in the
@@ -620,7 +622,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
               var gf = graceFactors(periodStart, periodEnd);
               rentBV = rentBV * gf.rentFactor;
               var mgmtBV = mgmtMonthly * 3 * ratio * gf.mgmtFactor;
-              var parkingBV = thisParkingMonthly * 3 * ratio;
+              var parkingBV = thisParkingMonthly * cpiRatio * 3 * ratio;
               var totalBV = rentBV + mgmtBV + parkingBV;
               var vat = isVat ? totalBV * vatPctAt(vatRates, periodStart) : 0;
 
@@ -684,7 +686,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
               var gfM = graceFactors(periodStartM, periodEndM);
               rentBVM = rentBVM * gfM.rentFactor;
               var mgmtBVM = mgmtMonthly * ratioM * gfM.mgmtFactor;
-              var parkingBVM = thisParkingMonthly * ratioM;
+              var parkingBVM = thisParkingMonthly * cpiRatio * ratioM;
               var totalBVM = rentBVM + mgmtBVM + parkingBVM;
               var vatM = isVat ? totalBVM * vatPctAt(vatRates, periodStartM) : 0;
 
@@ -736,7 +738,8 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
               isQuarterly: isQuarterly,
               investmentMonthly: thisInvestMonthly,
               mgmtAdvanceMonthly: mgmtMonthly,
-              parkingMonthly: thisParkingMonthly,
+              // הערך הצמוד — כך שהתצוגה, המכתבים והשמירה משקפים את מה שמחויב בפועל.
+              parkingMonthly: thisParkingMonthly * cpiRatio,
               parkingSpots: thisParkingSpots,
               totalMonthly: totalMonthly,
               cpiBaseValue: cpiBaseValue,

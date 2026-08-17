@@ -178,6 +178,7 @@ export default function ContractEditPage() {
   const [mgmtProtection, setMgmtProtection] = useState<MgmtProtection>(emptyMgmtProtection());
   const [revProtection, setRevProtection] = useState<RevenueProtection>(emptyRevenueProtection());
   const [mgmtFeePct, setMgmtFeePct] = useState("");
+  const [mgmtParkingFee, setMgmtParkingFee] = useState("");
   const [mgmtCostPlus, setMgmtCostPlus] = useState("");
   const [documentUrl, setDocumentUrl] = useState("");
 
@@ -489,6 +490,7 @@ export default function ContractEditPage() {
     setMgmtProtection(mgmtProtectionFromRow(c));
     setRevProtection(revenueProtectionFromRow(c));
     setMgmtFeePct(c.mgmt_fee_per_sqm?.toString() ?? "");
+    setMgmtParkingFee(c.mgmt_parking_fee_per_spot?.toString() ?? "");
     setMgmtCostPlus(c.mgmt_cost_plus_pct != null ? String(c.mgmt_cost_plus_pct) : "");
     setDocumentUrl(c.document_url ?? "");
 
@@ -845,6 +847,7 @@ export default function ContractEditPage() {
         ...revenueProtectionToRow(revProtection),
         index_base_resolved_at: baseIndexRule.mode === "derived" && baseCPIDate ? new Date().toISOString() : null,
         mgmt_fee_per_sqm: mgmtFeePct ? Number(mgmtFeePct) : null,
+        mgmt_parking_fee_per_spot: mgmtParkingFee ? Number(mgmtParkingFee) : null,
         mgmt_cost_plus_pct: mgmtCostPlus ? Number(mgmtCostPlus) : null,
         document_url: documentUrl || null,
         status,
@@ -1559,6 +1562,9 @@ export default function ContractEditPage() {
               <div>
                 <label className="mb-1 block text-xs font-semibold text-slate-700">דמי ניהול (₪/מ&quot;ר)</label>
                 <input type="number" value={mgmtFeePct} onChange={(e) => setMgmtFeePct(e.target.value)} className={ic} />
+                <label className="mb-1 mt-2 block text-[11px] font-semibold text-slate-600">דמי ניהול לחניה (₪/מקום לחודש) — ריק = לפי הגדרת הנכס</label>
+                <input type="number" value={mgmtParkingFee} onChange={(e) => setMgmtParkingFee(e.target.value)}
+                  placeholder="ריק = לפי הנכס" className={ic} />
                 <label className="mb-1 mt-2 block text-[11px] font-semibold text-slate-600">קוסט פלוס (%) — לא חובה</label>
                 <input type="number" min="0" max="100" step="0.5" value={mgmtCostPlus}
                   onChange={(e) => setMgmtCostPlus(e.target.value)} placeholder="למשל 15" className={ic} />
@@ -1586,8 +1592,10 @@ export default function ContractEditPage() {
                     var spot = prompt("מספר מקומות:");
                     if (!spot) return;
                     var fee = prompt("דמי חניה למקום/חודש (0 אם כלול):");
+                    // contract_id הוא מה שמחבר את החניה לחיובי החוזה (מקדמות
+                    // והעברות סורקים לפי חוזה) — בלעדיו החניה "צפה" ולא מחויבת.
                     await supabase.from("parking_subscriptions").insert({
-                      property_id: propertyId, tenant_id: tenantId || null,
+                      property_id: propertyId, tenant_id: tenantId || null, contract_id: id,
                       quantity: Number(spot) || 1, monthly_fee: Number(fee) || 0,
                       subscription_type: "monthly", status: "active",
                     });

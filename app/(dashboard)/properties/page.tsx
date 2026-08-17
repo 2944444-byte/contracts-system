@@ -8,8 +8,12 @@ import { PageHero } from '@/components/ui';
 import { getScopeIds, getCompanyScopeIds, getTenantScopeIds, scopeRows, scopeGroups } from '@/lib/permissions';
 import { getKnownIndexMonth } from '@/lib/cpi-utils';
 import { graceFactorsFor, graceWindow } from '@/lib/store-opening';
+import { buildSpaceRentSchedule, rentAtDate } from '@/lib/contract-utils';
+import { minRentPerSqmAtDate } from '@/lib/min-rent';
+import { parkingRentAtDate } from '@/lib/parking-rent';
 import CalcProgress, { CalcProgressState } from '@/components/CalcProgress';
 import PropertyBudgetManager from '@/components/PropertyBudgetManager';
+import OrgContactsEditor from '@/components/OrgContactsEditor';
 
 function formatDateForCbs(dateStr: string): string | null {
   const d = new Date(dateStr);
@@ -65,6 +69,8 @@ export default function PropertiesPage() {
   const [fNotes,      setFNotes]      = useState("");
   const [fYardArea,   setFYardArea]   = useState("");
   const [fParking,    setFParking]    = useState("");
+  // דמי ניהול לחניה (₪/מקום/חודש) — ברירת מחדל לכל חוזי הנכס; ריק = אין.
+  const [fParkingMgmt, setFParkingMgmt] = useState("");
   const [fInsurCost,  setFInsurCost]  = useState("");
   const [fInsurDate,  setFInsurDate]  = useState("");
   const [fInsurPolicy,setFInsurPolicy]= useState("");
@@ -169,7 +175,7 @@ export default function PropertiesPage() {
       supabase.from("properties").select("*, companies(company_name)").order("name"),
       // upcoming/future included so a signed-not-started lease HOLDS its units
       // in the occupancy figures. Income sums filter them back out below.
-      supabase.from("contracts").select("id, status, start_date, rent_type, revenue_pct, min_rent_per_sqm, minimum_rent, rent_per_sqm, charged_area, investment_addition, property_id, end_date, indexation_method, index_mechanism, index_base_date, index_base_value, is_amendment, parent_contract_id, mgmt_fee_per_sqm, mgmt_included_in_revenue, grace_months, grace_days, grace_phase2_days, grace_type, grace_discount_pct, grace_mgmt_discount_pct, grace_ends_on_opening, mgmt_charge_starts, mgmt_free_max_days, works_start_date, planned_handover_date, actual_handover_date, planned_opening_date, actual_opening_date, opening_rule, opening_max_days_from_handover, tenants(name), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area))").in("status",["active","expiring","extended","upcoming","future"]),
+      supabase.from("contracts").select("id, status, contract_type, start_date, rent_type, revenue_pct, min_rent_per_sqm, minimum_rent, rent_per_sqm, charged_area, investment_addition, property_id, end_date, indexation_method, index_mechanism, index_base_date, index_base_value, is_amendment, parent_contract_id, mgmt_fee_per_sqm, mgmt_included_in_revenue, grace_months, grace_days, grace_phase2_days, grace_type, grace_discount_pct, grace_mgmt_discount_pct, grace_ends_on_opening, mgmt_charge_starts, mgmt_free_max_days, works_start_date, planned_handover_date, actual_handover_date, planned_opening_date, actual_opening_date, opening_rule, opening_max_days_from_handover, tenants(name, contact_name, phone, primary_email), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area))").in("status",["active","expiring","extended","upcoming","future"]),
       supabase.from("spaces").select("id, property_id, status, space_name, area").order("space_name"),
       supabase.from("companies").select("id,company_name").order("company_name"),
     ]);
@@ -211,7 +217,7 @@ export default function PropertiesPage() {
   function openNew() {
     setIsNew(true); setEditingId("new");
     setFName(""); setFCompanyId(""); setFGroupId(""); setFType("office"); setFAddress(""); setFCity(""); setFArea(""); setFFloors(""); setFNotes("");
-    setFYardArea(""); setFParking(""); setFInsurCost(""); setFInsurDate(""); setFInsurPolicy(""); setFMgmtBudget(""); setFWasteCost("");
+    setFYardArea(""); setFParking(""); setFParkingMgmt(""); setFInsurCost(""); setFInsurDate(""); setFInsurPolicy(""); setFMgmtBudget(""); setFWasteCost("");
   }
 
   function openEdit(p: any) {
@@ -220,6 +226,7 @@ export default function PropertiesPage() {
     setFAddress(p.address??""); setFCity(p.city??""); setFArea(p.total_area?.toString()??"");
     setFFloors(p.floors?.toString()??""); setFNotes(p.notes??"");
     setFYardArea(p.yard_terrace_area?.toString()??""); setFParking(p.parking_spaces?.toString()??"");
+    setFParkingMgmt(p.parking_mgmt_fee_per_spot?.toString()??"");
     setFInsurCost(p.annual_insurance_cost?.toString()??""); setFInsurDate(p.insurance_renewal_date??"");
     setFInsurPolicy(p.insurance_policy_number??""); setFMgmtBudget(p.annual_management_budget?.toString()??"");
     setFWasteCost(p.annual_waste_cost?.toString()??"");
@@ -238,6 +245,7 @@ export default function PropertiesPage() {
         notes: fNotes||null,
         yard_terrace_area: fYardArea ? Number(fYardArea) : null,
         parking_spaces: fParking ? Number(fParking) : null,
+        parking_mgmt_fee_per_spot: fParkingMgmt ? Number(fParkingMgmt) : null,
         annual_insurance_cost: fInsurCost ? Number(fInsurCost) : null,
         insurance_renewal_date: fInsurDate||null,
         insurance_policy_number: fInsurPolicy||null,
@@ -332,6 +340,118 @@ export default function PropertiesPage() {
   const totalArea    = selSpaces.reduce(function(s,sp){return s + (Number(sp.area) || 0);}, 0);
   const occupiedArea = selSpaces.filter(function(s){return heldSpaceIds.has(s.id);}).reduce(function(s,sp){return s + (Number(sp.area) || 0);}, 0);
   const selOccPct    = totalArea > 0 ? Math.round(occupiedArea/totalArea*100) : (selSpaces.length > 0 ? Math.round(selOccupied/selSpaces.length*100) : 0);
+
+  // ── Annual income forecast ─────────────────────────────────────────
+  // Per-month walk over the year: each signed contract contributes its
+  // schedule-aware monthly rent (tiers, exercised options, revenue minimum,
+  // parking) × grace factor × in-force day ratio. This year AND next year,
+  // signed contracts only — no speculative CPI, no unexercised options.
+  const [annData, setAnnData] = useState<{ tiers: Record<string, any[]>; options: Record<string, any[]>; parking: Record<string, any[]> } | null>(null);
+  useEffect(function() {
+    if (!selected) { setAnnData(null); return; }
+    var propAll = contracts.filter(function(c) { return c.property_id === selected; });
+    var ids = propAll.map(function(c) { return c.id; });
+    if (ids.length === 0) { setAnnData({ tiers: {}, options: {}, parking: {} }); return; }
+    var amendBase: Record<string, string> = {};
+    propAll.forEach(function(c) { if (c.is_amendment && c.parent_contract_id) amendBase[c.id] = c.parent_contract_id; });
+    Promise.all([
+      supabase.from("contract_price_tiers").select("*").in("contract_id", ids).is("option_id", null),
+      supabase.from("contract_options").select("id,contract_id,option_number,is_exercised,status,start_date,end_date,rent_mechanism,rent_increase_pct,new_rent_value,price_tiers").in("contract_id", ids),
+      supabase.from("parking_subscriptions").select("contract_id,monthly_fee,quantity,is_included_in_rent,subscription_type,status").in("contract_id", ids).eq("status", "active"),
+    ]).then(function(res) {
+      var t: Record<string, any[]> = {}, o: Record<string, any[]> = {}, p: Record<string, any[]> = {};
+      (res[0].data || []).forEach(function(x: any) { (t[x.contract_id] = t[x.contract_id] || []).push(x); });
+      (res[1].data || []).forEach(function(x: any) { (o[x.contract_id] = o[x.contract_id] || []).push(x); });
+      (res[2].data || []).forEach(function(x: any) {
+        var base = amendBase[x.contract_id] || x.contract_id;
+        (p[base] = p[base] || []).push(x);
+      });
+      setAnnData({ tiers: t, options: o, parking: p });
+    });
+  }, [selected, contracts]);
+
+  function forecastMonthly(c: any, date: Date): number {
+    var tiers = annData?.tiers[c.id] || [];
+    var exercised = (annData?.options[c.id] || []).filter(function(x: any) { return x.is_exercised || x.status === "exercised"; });
+    var parkRows = annData?.parking[c.id] || [];
+    if (c.contract_type === "parking") {
+      return parkingRentAtDate({ contract: c, parkingRows: parkRows, contractTiers: tiers, exercisedOptions: exercised, date: date });
+    }
+    var total = 0;
+    (c.contract_spaces || []).forEach(function(cs: any) {
+      var area = Number(cs.spaces?.area) || 0;
+      var isFixed = cs.charge_method === "fixed" && Number(cs.fixed_rent) > 0;
+      var base = isFixed ? Number(cs.fixed_rent) : (Number(cs.price_per_sqm) || Number(c.rent_per_sqm) || 0) * area;
+      var sched = buildSpaceRentSchedule({ contractStartDate: c.start_date, spaceArea: area, isFixed: isFixed, spaceBaseRent: base, spaceTiers: [], contractTiers: tiers, exercisedOptions: exercised });
+      total += rentAtDate(sched, date);
+    });
+    if (total === 0) total = (Number(c.rent_per_sqm) || 0) * (Number(c.charged_area) || 0);
+    if (total === 0 && (c.rent_type === "revenue_pct" || Number(c.revenue_pct) > 0)) {
+      var mArea = (c.contract_spaces || []).reduce(function (a: number, x: any) { return a + (Number(x?.spaces?.area) || 0); }, 0) || Number(c.charged_area) || 0;
+      var minNow = Number(c.min_rent_per_sqm) > 0
+        ? minRentPerSqmAtDate({ baseMinPerSqm: Number(c.min_rent_per_sqm), tiers: tiers, contractStart: c.start_date, date: date })
+        : 0;
+      total = minNow > 0 ? minNow * mArea : (Number(c.minimum_rent) || 0);
+    }
+    total += Number(c.investment_addition) || 0;
+    // חניות בחוזה יחידות — תוספת מעל (בסיס, ללא הצמדה עתידית)
+    if (c.contract_type !== "parking") {
+      parkRows.forEach(function(x: any) {
+        if (x.is_included_in_rent || x.subscription_type === "visitor") return;
+        total += (Number(x.monthly_fee) || 0) * (Number(x.quantity) || 1);
+      });
+    }
+    return total;
+  }
+
+  function annualForecast(year: number): number {
+    if (!annData) return 0;
+    var total = 0;
+    selAllContracts.forEach(function(c: any) {
+      var start = c.start_date ? new Date(c.start_date) : null;
+      if (!start) return;
+      // תום התקופה האפקטיבי: הארכות תוספת ואופציות ממומשות מאריכות
+      var effEnd: Date | null = c.end_date ? new Date(c.end_date) : null;
+      contracts.forEach(function(a) {
+        if (a.parent_contract_id === c.id && a.is_amendment && a.end_date) {
+          var d = new Date(a.end_date);
+          if (!effEnd || d > effEnd) effEnd = d;
+        }
+      });
+      (annData!.options[c.id] || []).forEach(function(o: any) {
+        if ((o.is_exercised || o.status === "exercised") && o.end_date) {
+          var d = new Date(o.end_date);
+          if (!effEnd || d > effEnd) effEnd = d;
+        }
+      });
+      for (var m = 0; m < 12; m++) {
+        var mS = new Date(year, m, 1), mE = new Date(year, m + 1, 1);
+        if (start >= mE) continue;
+        if (effEnd && effEnd < mS) continue;
+        var from = start > mS ? start : mS;
+        var to = effEnd && effEnd < mE ? new Date(effEnd.getFullYear(), effEnd.getMonth(), effEnd.getDate() + 1) : mE;
+        var days = Math.round((to.getTime() - from.getTime()) / 86400000);
+        if (days <= 0) continue;
+        var dim = Math.round((mE.getTime() - mS.getTime()) / 86400000);
+        var gf = graceFactorsFor({ contract: c, periodStart: mS, periodEnd: mE });
+        total += forecastMonthly(c, mS) * gf.rentFactor * Math.min(1, days / dim);
+      }
+    });
+    return total;
+  }
+  const thisYear = new Date().getFullYear();
+  const annualThis = annData ? annualForecast(thisYear) : null;
+  const annualNext = annData ? annualForecast(thisYear + 1) : null;
+
+  // אנשי קשר לפאנל דף הנכס: מכותבי הארגון (נכס + חברה) — RLS תוחם ממילא.
+  const [propOrgContacts, setPropOrgContacts] = useState<any[]>([]);
+  useEffect(function() {
+    if (!selected) { setPropOrgContacts([]); return; }
+    var cid = properties.find(function(p){ return p.id === selected; })?.company_id;
+    var orQ = cid ? "property_id.eq." + selected + ",company_id.eq." + cid : "property_id.eq." + selected;
+    supabase.from("org_contacts").select("*").or(orQ).eq("is_active", true).order("created_at")
+      .then(function({ data }) { setPropOrgContacts(data ?? []); });
+  }, [selected, properties]);
 
   // ── The income picture ─────────────────────────────────────────────
   // Three answers side by side: what the contracts are WORTH at full term
@@ -567,6 +687,30 @@ export default function PropertiesPage() {
                 {incomePicture.futurePending > 0.5 && (
                   <div className="text-[11px] text-amber-800 mt-1.5">🔜 עוד {fmtMoney(incomePicture.futurePending)}/חודש מחוזים חתומים שטרם החלו</div>
                 )}
+
+                {/* צפי הכנסות שנתי — השנה ושנה הבאה, לפי החוזים החתומים */}
+                <div className="mt-2 pt-2 border-t border-emerald-100">
+                  <div className="text-xs font-bold text-emerald-900 mb-1.5">📅 צפי הכנסות שנתי — לפי ההסכמים החתומים</div>
+                  {annualThis == null ? (
+                    <div className="text-[11px] text-slate-400">מחשב...</div>
+                  ) : (
+                    <>
+                      <div className="grid grid-cols-2 gap-2 text-center">
+                        <div className="rounded-lg bg-white border border-emerald-100 p-2">
+                          <div className="text-sm font-black text-emerald-800" title="חודש-בחודש: תחילת/סיום תקופה, מדרגות מחיר, אופציות ממומשות, גרייס, מינימום פדיון וחניות">{fmtMoney(annualThis)}</div>
+                          <div className="text-[10px] text-slate-500">צפי {thisYear}</div>
+                        </div>
+                        <div className="rounded-lg bg-white border border-emerald-100 p-2">
+                          <div className="text-sm font-black text-emerald-800" title="כולל חוזים חתומים שמתחילים בשנה הבאה; חוזה שמסתיים בלי אופציה ממומשת נספר עד תום תקופתו בלבד">{fmtMoney(annualNext ?? 0)}</div>
+                          <div className="text-[10px] text-slate-500">צפי {thisYear + 1} (חתומים)</div>
+                        </div>
+                      </div>
+                      <div className="text-[10px] text-slate-400 mt-1">
+                        שכ&quot;ד + חניות, לפי מדרגות, אופציות ממומשות, גרייס וחלקיות תקופה · ללא הצמדה עתידית ודמי ניהול
+                      </div>
+                    </>
+                  )}
+                </div>
                 {incomePicture.mgmtFull > 0.5 && (
                   <div className="mt-2 pt-2 border-t border-emerald-100">
                     <div className="text-xs font-bold text-emerald-900 mb-1.5">🔧 דמי ניהול (נכס בניהולנו)</div>
@@ -587,6 +731,58 @@ export default function PropertiesPage() {
                   </div>
                 )}
               </div>
+
+              {/* אנשי קשר של הנכס: השוכרים (מהחוזים החיים) + המכותבים
+                  הפנימיים של הארגון (נכס + חברה) */}
+              {(selAllContracts.length > 0 || propOrgContacts.length > 0) && (
+                <div className="rounded-xl border border-slate-200 bg-white p-3">
+                  <div className="text-sm font-bold text-slate-800 mb-2">👥 אנשי קשר</div>
+                  {selAllContracts.length > 0 && (
+                    <div className="mb-2">
+                      <div className="text-[11px] font-bold text-slate-500 mb-1">שוכרים</div>
+                      <div className="space-y-1">
+                        {selAllContracts.map(function(c: any) {
+                          var t = c.tenants || {};
+                          return (
+                            <div key={c.id} className="rounded-lg bg-slate-50 border border-slate-100 px-2.5 py-1.5 text-xs flex items-center justify-between gap-2 flex-wrap">
+                              <span className="font-semibold text-slate-800">{t.name || "—"}{t.contact_name ? <span className="text-slate-400 font-normal"> · {t.contact_name}</span> : null}</span>
+                              <span className="text-slate-500 flex items-center gap-2" dir="ltr">
+                                {t.phone && <a href={"tel:" + t.phone} className="hover:text-blue-600">📞 {t.phone}</a>}
+                                {t.primary_email && <a href={"mailto:" + t.primary_email} className="hover:text-blue-600">✉️ {t.primary_email}</a>}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                  {propOrgContacts.length > 0 && (
+                    <div>
+                      <div className="text-[11px] font-bold text-indigo-600 mb-1">📧 מכותבים פנימיים (הארגון שלנו)</div>
+                      <div className="space-y-1">
+                        {propOrgContacts.map(function(r: any) {
+                          var topicIcons = (Array.isArray(r.topics) ? r.topics : []).map(function(tp: string) {
+                            return tp === "finance" ? "💰" : tp === "insurance" ? "🛡️" : tp === "safety" ? "🔒" : "📧";
+                          }).join(" ");
+                          return (
+                            <div key={r.id} className="rounded-lg bg-indigo-50/50 border border-indigo-100 px-2.5 py-1.5 text-xs flex items-center justify-between gap-2 flex-wrap">
+                              <span className="font-semibold text-slate-800">
+                                {r.name || r.email}
+                                {r.role_label ? <span className="text-slate-400 font-normal"> · {r.role_label}</span> : null}
+                                {!r.property_id && <span className="text-[10px] text-indigo-500 mr-1">(כל נכסי החברה)</span>}
+                              </span>
+                              <span className="text-slate-500 flex items-center gap-2">
+                                <span title="הנושאים שבהם מקבל עותק">{topicIcons}</span>
+                                <a href={"mailto:" + r.email} className="hover:text-blue-600" dir="ltr">✉️ {r.email}</a>
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Signed leases whose term hasn't begun: they hold units and
                   must be VISIBLE — the user's exact complaint was that they
@@ -783,6 +979,10 @@ export default function PropertiesPage() {
                 <div>
                   <label className="mb-1 block text-xs font-semibold text-slate-700">מקומות חניה</label>
                   <input type="number" value={fParking} onChange={function(e){setFParking(e.target.value);}} className={ic} />
+                  <label className="mb-1 mt-2 block text-xs font-semibold text-slate-700">דמי ניהול לחניה (₪/מקום לחודש)</label>
+                  <input type="number" value={fParkingMgmt} onChange={function(e){setFParkingMgmt(e.target.value);}}
+                    placeholder="ריק = אין דמי ניהול על חניות" className={ic} />
+                  <div className="text-[10px] text-slate-400 mt-0.5">ברירת מחדל לכל חוזי הנכס עם חניות; חוזה יכול לקבוע תעריף משלו.</div>
                 </div>
               </div>
 
@@ -824,6 +1024,10 @@ export default function PropertiesPage() {
                 <label className="mb-1 block text-xs font-semibold text-slate-700">הערות</label>
                 <textarea value={fNotes} onChange={function(e){setFNotes(e.target.value);}} rows={2} className={ic} />
               </div>
+
+              {/* מכותבים פנימיים — עותק מייל לפי נושא, לנכס הזה */}
+              <OrgContactsEditor propertyId={isNew ? undefined : editingId} />
+
               <div className="flex gap-3 pt-2">
                 <button onClick={function(){setEditingId("");}} className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm text-slate-600">ביטול</button>
                 <button onClick={handleSave} disabled={saving} className="flex-1 rounded-xl bg-blue-700 py-2.5 text-sm font-bold text-white disabled:opacity-50">

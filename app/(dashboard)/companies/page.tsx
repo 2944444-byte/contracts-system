@@ -3,6 +3,7 @@ import { useState, useEffect } from "react";
 import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit-log';
 import { PageHero } from '@/components/ui';
+import OrgContactsEditor from '@/components/OrgContactsEditor';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 
@@ -208,6 +209,9 @@ export default function CompaniesPage() {
                   </div>
                 </div>
               </div>
+              {/* מכותבים פנימיים — עותק מייל לפי נושא, לכל נכסי החברה */}
+              <OrgContactsEditor companyId={isNew ? undefined : editingId} />
+
               <div className="flex gap-3 pt-2">
                 <button onClick={function(){setEditingId("");}} className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm text-slate-600">ביטול</button>
                 <button onClick={handleSave} disabled={saving} className="flex-1 rounded-xl bg-blue-700 py-2.5 text-sm font-bold text-white disabled:opacity-50">{saving?"שומר...":"שמור"}</button>
