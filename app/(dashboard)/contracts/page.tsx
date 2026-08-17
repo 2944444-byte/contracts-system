@@ -599,8 +599,17 @@ export default function ContractsPage() {
     setCpiPending("");
 
     // A turnover lease links its MINIMUM to the index — that is the figure to
-    // adjust when there is no per-sqm rent.
-    const origRent = Number(selContract.rent_per_sqm) || Number(selContract.min_rent_per_sqm);
+    // adjust when there is no per-sqm rent. A PARKING agreement links its
+    // parking total: the "rent" fed to the CBS calculator is the monthly sum
+    // of the billable subscriptions (the result is a TOTAL, not per-sqm).
+    const cpiIsParking = selContract.contract_type === "parking";
+    var origRent = Number(selContract.rent_per_sqm) || Number(selContract.min_rent_per_sqm);
+    if (cpiIsParking) {
+      origRent = parkingSubs.reduce(function (s: number, p: any) {
+        if (p.is_included_in_rent || p.subscription_type === "visitor") return s;
+        return s + (Number(p.monthly_fee) || 0) * (Number(p.quantity) || 1);
+      }, 0);
+    }
     if (!origRent) { resetCpi(); return; }
 
     // Rent rate in effect TODAY. The timeline can have GAPS (a tier's period
@@ -611,7 +620,7 @@ export default function ContractsPage() {
     // forward the LATEST period that has already started (the rate truly in
     // effect now), matching how the rent timeline reads.
     var currentRent = origRent;
-    if (priceTimeline.length > 0) {
+    if (priceTimeline.length > 0 && !cpiIsParking) {
       var nowT = new Date().getTime();
       var bestStart = -Infinity;
       for (var i = 0; i < priceTimeline.length; i++) {
@@ -763,7 +772,7 @@ export default function ContractsPage() {
         }).catch(function() { if (!cancelled) { setCpiResult(null); setCpiLoading(false); setCpiProgress(null); } });
       });
     return function() { cancelled = true; };
-  }, [selected, priceTimeline]);
+  }, [selected, priceTimeline, parkingSubs]);
 
   // Per-unit CPI: compute CPI ratio per space (handles different CPI bases + indexation method)
   useEffect(function() {
@@ -1140,8 +1149,21 @@ export default function ContractsPage() {
   var revenueFloorMonthly = selContract?.rent_type === "revenue_pct"
     ? (Number(selContract?.min_rent_per_sqm) || 0) * contractArea(selContract) || (Number(selContract?.minimum_rent) || 0)
     : 0;
+  // הצמדה על חניות (החלטת 14.08.2026): דמי החניה צמודים כמו שכ"ד —
+  // בחוזה יחידות לפי יחס המדד של החוזה; בחוזה חניות טהור התוצאה הצמודה
+  // מגיעה מחישוב ההצמדה הראשי (cpiResult) על בסיס החניות עצמו.
+  var isParkingOnlySel = selContract?.contract_type === "parking";
+  var contractCpiRatio = 1;
+  var puKeys = Object.keys(perUnitCpi);
+  if (puKeys.length > 0 && perUnitCpi[puKeys[0]]?.ratio > 1) contractCpiRatio = perUnitCpi[puKeys[0]].ratio;
+  if (isParkingOnlySel && cpiResult && Number(cpiResult.adjustedRentPerSqm) > 0) {
+    // adjustedRentPerSqm מחזיק כאן את סך דמי החניה הצמוד (בסיס = הסכום החודשי).
+    cpiAdjustedRent = Number(cpiResult.adjustedRentPerSqm);
+  }
   var rentBeforeParking = cpiAdjustedRent > 0 ? cpiAdjustedRent : adjustedBaseRent > 0 ? adjustedBaseRent : (baseRent || revenueFloorMonthly);
-  var displayRent = rentBeforeParking + parkingMonthlyTotal;
+  var displayRent = isParkingOnlySel
+    ? (cpiAdjustedRent > 0 ? cpiAdjustedRent : parkingMonthlyTotal)
+    : rentBeforeParking + parkingMonthlyTotal * contractCpiRatio;
   const vat         = selContract?.vat_type==="taxable" ? displayRent*vatPct : 0;
   const remaining   = effectiveEndDate ? yearsMonthsLeft(effectiveEndDate) : null;
 
@@ -1834,16 +1856,33 @@ export default function ContractsPage() {
                     </div>
 
                     <div className="grid grid-cols-2 gap-2">
-                      {/* CPI-adjusted rent per sqm */}
-                      <div className="rounded-lg bg-white border border-amber-200 p-2.5 text-center">
-                        <div className="text-lg font-black text-amber-900">₪{cpiResult.adjustedRentPerSqm.toFixed(2)}/מ&quot;ר</div>
-                        <div className="text-[10px] text-amber-600">שכ&quot;ד צמוד למדד היום</div>
-                      </div>
-                      {/* Total monthly CPI-adjusted */}
-                      <div className="rounded-lg bg-white border border-amber-200 p-2.5 text-center">
-                        <div className="text-lg font-black text-amber-900">₪{Math.round(cpiResult.adjustedRentPerSqm * contractArea(selContract)).toLocaleString()}</div>
-                        <div className="text-[10px] text-amber-600">סה&quot;כ שכ&quot;ד צמוד לחודש (לפני מע&quot;מ)</div>
-                      </div>
+                      {selContract.contract_type === "parking" ? (
+                        <>
+                          {/* חוזה חניות: הבסיס שהוזן למחשבון הוא סך דמי החניה,
+                              כך שהתוצאה היא הסכום החודשי הצמוד — לא למ"ר. */}
+                          <div className="rounded-lg bg-white border border-amber-200 p-2.5 text-center">
+                            <div className="text-lg font-black text-amber-900">₪{Math.round(cpiResult.adjustedRentPerSqm).toLocaleString()}</div>
+                            <div className="text-[10px] text-amber-600">🅿️ דמי חניה צמודים לחודש (לפני מע&quot;מ)</div>
+                          </div>
+                          <div className="rounded-lg bg-white border border-amber-200 p-2.5 text-center">
+                            <div className="text-lg font-black text-amber-900">₪{Math.round(cpiResult.adjustedRentPerSqm * (selContract.vat_type === "taxable" ? 1 + vatPct : 1)).toLocaleString()}</div>
+                            <div className="text-[10px] text-amber-600">כולל מע&quot;מ</div>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          {/* CPI-adjusted rent per sqm */}
+                          <div className="rounded-lg bg-white border border-amber-200 p-2.5 text-center">
+                            <div className="text-lg font-black text-amber-900">₪{cpiResult.adjustedRentPerSqm.toFixed(2)}/מ&quot;ר</div>
+                            <div className="text-[10px] text-amber-600">שכ&quot;ד צמוד למדד היום</div>
+                          </div>
+                          {/* Total monthly CPI-adjusted */}
+                          <div className="rounded-lg bg-white border border-amber-200 p-2.5 text-center">
+                            <div className="text-lg font-black text-amber-900">₪{Math.round(cpiResult.adjustedRentPerSqm * contractArea(selContract)).toLocaleString()}</div>
+                            <div className="text-[10px] text-amber-600">סה&quot;כ שכ&quot;ד צמוד לחודש (לפני מע&quot;מ)</div>
+                          </div>
+                        </>
+                      )}
                     </div>
 
                     <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-[10px] text-amber-600">
@@ -1990,12 +2029,16 @@ export default function ContractsPage() {
                   {[
                     {l:"תחילה",   v:fmtDate(selContract.start_date)},
                     {l:"סיום",    v:fmtEndDate(effectiveEndDate, selContract.start_date)},
-                    {l:"שטח",    v:selContract.charged_area?selContract.charged_area+' מ"ר':"—"},
+                    selContract.contract_type === "parking"
+                      ? {l:"חניות", v: (function(){ var n = parkingSubs.reduce(function(s:number,p:any){ return (p.is_included_in_rent||p.subscription_type==="visitor") ? s : s + (Number(p.quantity)||1); }, 0); return n > 0 ? n + " מקומות" : "—"; })()}
+                      : {l:"שטח",  v:selContract.charged_area?selContract.charged_area+' מ"ר':"—"},
                     {l:"הצמדה",  v:selContract.indexation_method==="highest_in_period"?"מדד גבוה":selContract.indexation_method==="none"?"ללא":"t-2"},
                     {l:"מדד בסיס",v:selContract.index_base_value ? ("📊 מדד " + (selContract.index_base_date ? baseIndexLabel(selContract.index_base_date) + " = " : "= ") + selContract.index_base_value) : "—"},
                     {l:'מע"מ',  v:selContract.vat_type==="taxable"?(Math.round(vatPct*100)+"%"):"פטור"},
-                    {l:"סוג שכ\"ד", v: selContract.rent_type==="revenue_pct" ? selContract.revenue_pct+"% ממחזור" : "קבוע"},
+                    {l:"סוג שכ\"ד", v: selContract.contract_type === "parking" ? "🅿️ דמי חניה" : selContract.rent_type==="revenue_pct" ? selContract.revenue_pct+"% ממחזור" : "קבוע"},
                     {l:"שיטת תשלום", v: selContract.payment_method==="checks_advance"?"שיקים מראש":selContract.payment_method==="bank_transfer"?"העברה בנקאית":selContract.payment_method==="cash"?"מזומן":selContract.payment_method==="credit_card"?"כרטיס אשראי":"הוראת קבע"},
+                    {l:"תדירות תשלום", v: selContract.payment_frequency==="quarterly"?"רבעוני":selContract.payment_frequency==="semiannual"?"חצי שנתי":selContract.payment_frequency==="annual"?"שנתי":selContract.payment_frequency==="one_time"?"חד פעמי":"חודשי"},
+                    {l:"יום תשלום", v: selContract.payment_day ? selContract.payment_day + " לחודש" : "—"},
                   ].map(function(r){return <div key={r.l} className="flex justify-between border-b border-slate-50 py-1"><span className="text-slate-400">{r.l}</span><span className="font-medium">{r.v}</span></div>;})}
                 </div>
 

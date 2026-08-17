@@ -216,6 +216,12 @@ export async function generateTransferCharges(params: {
         }
         baseMonthly += Number(c.investment_addition) || 0;
         noteLines.push('שכ"ד בסיס (כולל מדרגות): ₪' + r2(baseMonthly).toLocaleString("he-IL"));
+        // חניות בחוזה יחידות: מצטרפות לבסיס לפני ההצמדה — דמי החניה צמודים
+        // למדד כמו שכ"ד (החלטת מוצר 14.08.2026, דוגמת ג'ובניל).
+        if (parkFee > 0) {
+          baseMonthly += parkFee;
+          noteLines.push("חניות (" + parkSpots + " מקומות): ₪" + r2(parkFee).toLocaleString("he-IL") + " — צמוד למדד ככל שכ\"ד");
+        }
       }
 
       // CPI — from the contract's base index to the index KNOWN at billing,
@@ -291,15 +297,6 @@ export async function generateTransferCharges(params: {
           ' → שכ"ד ₪' + rentDue.toLocaleString("he-IL"));
       }
 
-      // Parking riding on a UNIT lease: added FLAT on top — outside CPI, tiers
-      // and grace — exactly the cheque path's long-standing rule. (A parking-
-      // ONLY contract took the parking as its BASE above instead.)
-      if (!parkingOnly && parkFee > 0) {
-        var parkPart = parkFee;
-        if (inForceDays < daysInMonth) parkPart = r2(parkFee * inForceDays / daysInMonth);
-        rentDue = r2(rentDue + parkPart);
-        noteLines.push("חניות (" + parkSpots + " מקומות): ₪" + r2(parkPart).toLocaleString("he-IL"));
-      }
 
       // Management advance. Rate: the contract's own figure (the first-year
       // advance until a budget takes over — the budget/group path runs through
