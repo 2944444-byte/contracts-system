@@ -2,11 +2,17 @@
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
 import { CC_TOPICS } from "@/lib/letter-cc";
+import { useAccess } from "@/components/AccessProvider";
+import { hasPerm } from "@/lib/permissions";
 
 // עורך אנשי הקשר הפנימיים (מכותבי CC) — משובץ בטופס עריכת נכס וחברה.
 // כל שורה: שם, תפקיד, אימייל, ולאילו נושאים היא מנויה. השמירה מיידית
 // (לא תלויה בשמירת הטופס המארח).
 export default function OrgContactsEditor(props: { companyId?: string; propertyId?: string }) {
+  // עריכת מכותבים = הגדרות נכס: דורשת "הקמת ועריכת נכסים". בלעדיה — תצוגה
+  // בלבד (ה-DB חוסם ממילא במדיניות cap; זה מיישר את הממשק עם האכיפה).
+  const { access } = useAccess();
+  const canEdit = !access || hasPerm(access, "manage_properties");
   const [rows, setRows] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
@@ -66,11 +72,14 @@ export default function OrgContactsEditor(props: { companyId?: string; propertyI
     <div className="rounded-xl border border-indigo-200 bg-indigo-50/40 p-3 space-y-2">
       <div className="flex items-center justify-between">
         <div className="text-xs font-bold text-indigo-900">📧 מכותבים פנימיים (עותק למייל לפי נושא)</div>
+        {canEdit && (
         <button type="button" onClick={function(){ setAdding(!adding); }}
           className="rounded-lg bg-indigo-600 text-white px-2.5 py-1 text-[11px] font-bold hover:bg-indigo-700">
           {adding ? "✕ סגור" : "+ איש קשר"}
         </button>
+        )}
       </div>
+      {!canEdit && <div className="text-[10px] text-slate-400">תצוגה בלבד — עריכת מכותבים דורשת הרשאת "הקמת ועריכת נכסים".</div>}
       <div className="text-[10px] text-indigo-700">
         כשנשלח מכתב לשוכר בנושא שסומן — איש הקשר מקבל עותק (CC) באותו מייל.
         {props.companyId && !props.propertyId ? " איש קשר ברמת החברה מכותב לכל נכסי החברה." : ""}
@@ -118,14 +127,17 @@ export default function OrgContactsEditor(props: { companyId?: string; propertyI
                 <div className="flex items-center gap-1 flex-wrap">
                   {CC_TOPICS.map(function(t) {
                     var on = Array.isArray(r.topics) && r.topics.indexOf(t.v) !== -1;
-                    return <button key={t.v} type="button" title={t.desc + " — לחץ להחלפה"}
-                      onClick={function(){ toggleTopic(r, t.v); }}
-                      className={"rounded-full px-1.5 py-0.5 text-[10px] font-bold border " + (on ? "bg-indigo-100 text-indigo-700 border-indigo-200" : "bg-slate-50 text-slate-300 border-slate-100")}>
+                    return <button key={t.v} type="button" disabled={!canEdit}
+                      title={t.desc + (canEdit ? " — לחץ להחלפה" : "")}
+                      onClick={function(){ if (canEdit) toggleTopic(r, t.v); }}
+                      className={"rounded-full px-1.5 py-0.5 text-[10px] font-bold border " + (on ? "bg-indigo-100 text-indigo-700 border-indigo-200" : "bg-slate-50 text-slate-300 border-slate-100") + (canEdit ? "" : " cursor-default")}>
                       {t.icon}
                     </button>;
                   })}
+                  {canEdit && (
                   <button type="button" onClick={function(){ removeContact(r); }}
                     className="text-red-400 hover:text-red-600 text-xs px-1" title="הסר">🗑</button>
+                  )}
                 </div>
               </div>
             );

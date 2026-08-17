@@ -175,7 +175,7 @@ export default function PropertiesPage() {
       supabase.from("properties").select("*, companies(company_name)").order("name"),
       // upcoming/future included so a signed-not-started lease HOLDS its units
       // in the occupancy figures. Income sums filter them back out below.
-      supabase.from("contracts").select("id, status, contract_type, start_date, rent_type, revenue_pct, min_rent_per_sqm, minimum_rent, rent_per_sqm, charged_area, investment_addition, property_id, end_date, indexation_method, index_mechanism, index_base_date, index_base_value, is_amendment, parent_contract_id, mgmt_fee_per_sqm, mgmt_included_in_revenue, grace_months, grace_days, grace_phase2_days, grace_type, grace_discount_pct, grace_mgmt_discount_pct, grace_ends_on_opening, mgmt_charge_starts, mgmt_free_max_days, works_start_date, planned_handover_date, actual_handover_date, planned_opening_date, actual_opening_date, opening_rule, opening_max_days_from_handover, tenants(name), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area))").in("status",["active","expiring","extended","upcoming","future"]),
+      supabase.from("contracts").select("id, status, contract_type, start_date, rent_type, revenue_pct, min_rent_per_sqm, minimum_rent, rent_per_sqm, charged_area, investment_addition, property_id, end_date, indexation_method, index_mechanism, index_base_date, index_base_value, is_amendment, parent_contract_id, mgmt_fee_per_sqm, mgmt_included_in_revenue, grace_months, grace_days, grace_phase2_days, grace_type, grace_discount_pct, grace_mgmt_discount_pct, grace_ends_on_opening, mgmt_charge_starts, mgmt_free_max_days, works_start_date, planned_handover_date, actual_handover_date, planned_opening_date, actual_opening_date, opening_rule, opening_max_days_from_handover, tenants(name, contact_name, phone, primary_email), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area))").in("status",["active","expiring","extended","upcoming","future"]),
       supabase.from("spaces").select("id, property_id, status, space_name, area").order("space_name"),
       supabase.from("companies").select("id,company_name").order("company_name"),
     ]);
@@ -442,6 +442,16 @@ export default function PropertiesPage() {
   const thisYear = new Date().getFullYear();
   const annualThis = annData ? annualForecast(thisYear) : null;
   const annualNext = annData ? annualForecast(thisYear + 1) : null;
+
+  // אנשי קשר לפאנל דף הנכס: מכותבי הארגון (נכס + חברה) — RLS תוחם ממילא.
+  const [propOrgContacts, setPropOrgContacts] = useState<any[]>([]);
+  useEffect(function() {
+    if (!selected) { setPropOrgContacts([]); return; }
+    var cid = properties.find(function(p){ return p.id === selected; })?.company_id;
+    var orQ = cid ? "property_id.eq." + selected + ",company_id.eq." + cid : "property_id.eq." + selected;
+    supabase.from("org_contacts").select("*").or(orQ).eq("is_active", true).order("created_at")
+      .then(function({ data }) { setPropOrgContacts(data ?? []); });
+  }, [selected, properties]);
 
   // ── The income picture ─────────────────────────────────────────────
   // Three answers side by side: what the contracts are WORTH at full term
@@ -721,6 +731,58 @@ export default function PropertiesPage() {
                   </div>
                 )}
               </div>
+
+              {/* אנשי קשר של הנכס: השוכרים (מהחוזים החיים) + המכותבים
+                  הפנימיים של הארגון (נכס + חברה) */}
+              {(selAllContracts.length > 0 || propOrgContacts.length > 0) && (
+                <div className="rounded-xl border border-slate-200 bg-white p-3">
+                  <div className="text-sm font-bold text-slate-800 mb-2">👥 אנשי קשר</div>
+                  {selAllContracts.length > 0 && (
+                    <div className="mb-2">
+                      <div className="text-[11px] font-bold text-slate-500 mb-1">שוכרים</div>
+                      <div className="space-y-1">
+                        {selAllContracts.map(function(c: any) {
+                          var t = c.tenants || {};
+                          return (
+                            <div key={c.id} className="rounded-lg bg-slate-50 border border-slate-100 px-2.5 py-1.5 text-xs flex items-center justify-between gap-2 flex-wrap">
+                              <span className="font-semibold text-slate-800">{t.name || "—"}{t.contact_name ? <span className="text-slate-400 font-normal"> · {t.contact_name}</span> : null}</span>
+                              <span className="text-slate-500 flex items-center gap-2" dir="ltr">
+                                {t.phone && <a href={"tel:" + t.phone} className="hover:text-blue-600">📞 {t.phone}</a>}
+                                {t.primary_email && <a href={"mailto:" + t.primary_email} className="hover:text-blue-600">✉️ {t.primary_email}</a>}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                  {propOrgContacts.length > 0 && (
+                    <div>
+                      <div className="text-[11px] font-bold text-indigo-600 mb-1">📧 מכותבים פנימיים (הארגון שלנו)</div>
+                      <div className="space-y-1">
+                        {propOrgContacts.map(function(r: any) {
+                          var topicIcons = (Array.isArray(r.topics) ? r.topics : []).map(function(tp: string) {
+                            return tp === "finance" ? "💰" : tp === "insurance" ? "🛡️" : tp === "safety" ? "🔒" : "📧";
+                          }).join(" ");
+                          return (
+                            <div key={r.id} className="rounded-lg bg-indigo-50/50 border border-indigo-100 px-2.5 py-1.5 text-xs flex items-center justify-between gap-2 flex-wrap">
+                              <span className="font-semibold text-slate-800">
+                                {r.name || r.email}
+                                {r.role_label ? <span className="text-slate-400 font-normal"> · {r.role_label}</span> : null}
+                                {!r.property_id && <span className="text-[10px] text-indigo-500 mr-1">(כל נכסי החברה)</span>}
+                              </span>
+                              <span className="text-slate-500 flex items-center gap-2">
+                                <span title="הנושאים שבהם מקבל עותק">{topicIcons}</span>
+                                <a href={"mailto:" + r.email} className="hover:text-blue-600" dir="ltr">✉️ {r.email}</a>
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Signed leases whose term hasn't begun: they hold units and
                   must be VISIBLE — the user's exact complaint was that they

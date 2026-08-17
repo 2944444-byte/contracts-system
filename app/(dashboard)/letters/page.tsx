@@ -287,6 +287,26 @@ export default function LettersPage() {
   // CC list for a set of property ids: ONLY users who both can bill AND are
   // assigned to one of those properties, plus the owning company email. No
   // fallback — an unassigned billing user is never CC'd.
+  // גרסה חיה לרגע השליחה: שולפת את אנשי הקשר מה-DB עכשיו — כך שינוי
+  // שנעשה בטופס הנכס תופס מיד, גם אם מסך המכתבים היה פתוח קודם.
+  async function ccForPropsLive(propIds: string[], excludeEmail?: string, letterForTopic?: any): Promise<string[]> {
+    var out = ccForProps(propIds, excludeEmail, letterForTopic);
+    try {
+      const { data: fresh } = await supabase.from("org_contacts")
+        .select("id,company_id,property_id,email,topics,is_active").eq("is_active", true);
+      var companyIds: string[] = [];
+      (propIds || []).forEach(function(pid) {
+        var cid = (ccDir.companyIdByProp || {})[pid];
+        if (cid && companyIds.indexOf(cid) === -1) companyIds.push(cid);
+      });
+      orgCcFor({
+        contacts: fresh ?? [], propertyIds: propIds || [], companyIds: companyIds,
+        topic: letterForTopic ? topicForLetter(letterForTopic) : "general",
+      }).forEach(function(e) { if (e !== excludeEmail && out.indexOf(e) === -1) out.push(e); });
+    } catch (e) { /* הרשימה מה-mount עדיין בתוקף */ }
+    return out;
+  }
+
   function ccForProps(propIds: string[], excludeEmail?: string, letterForTopic?: any): string[] {
     var out: string[] = [];
     (propIds || []).forEach(function(pid) {
@@ -874,6 +894,11 @@ export default function LettersPage() {
     // All domain recipients (deduped); first is "to", the rest go to Cc.
     var toList: string[] = (g.emails && g.emails.length) ? g.emails : (g.email ? [g.email] : []);
     if (!toList.length) { return false; }
+    // רענון עותקים חי לרגע השליחה (המכותבים הפנימיים לפי נושא המכתב הראשון בקבוצה).
+    try {
+      var liveCc = await ccForPropsLive(g.propIds || [], toList[0], (g.letters && g.letters[0]) || null);
+      g = { ...g, cc: Array.from(new Set((g.cc || []).concat(liveCc))) };
+    } catch (e) { /* keep precomputed cc */ }
     // PDF filename = subject + tenant, so each attachment is self-identifying.
     var fileBase = g.subject + " - " + (g.tenant || "");
     // Test mode: open the local mail client with the unified text, addressing
@@ -933,7 +958,11 @@ export default function LettersPage() {
     var propIds = [l.property_id || l.contracts?.properties?.id].filter(Boolean) as string[];
     // Filename = subject + tenant; Cc = remaining domain emails + authorized users.
     var fileBase = subject + " - " + tenant;
-    var cc = Array.from(new Set(toList.slice(1).concat(ccForProps(propIds, toList[0], l))));
+    var cc = Array.from(new Set(toList.slice(1).concat(await ccForPropsLive(propIds, toList[0], l))));
+    // שקיפות לפני שליחה: מי הנמען ומי מקבל עותק — כך ברור מיד אם מכותב חסר.
+    if (!confirm("שליחה אל: " + toList[0] +
+      (cc.length ? "\nעותקים (CC): " + cc.join(", ") : "\nללא עותקים") +
+      "\n\nלשלוח?")) return;
     setSending(l.id);
     try {
       var pdf = await letterToPdfBase64(l);
@@ -980,7 +1009,7 @@ export default function LettersPage() {
 
   // Open the user's LOCAL mail program (mailto) pre-filled with the real
   // letter content, then mark the letter as sent for traceability.
-  function handleEmail(l: any) {
+  async function handleEmail(l: any) {
     var title = l.title || l.subject || "מכתב";
     var tenant = l.contracts?.tenants?.name || "";
     // Every address marked for this letter's domain, not just the first.
@@ -990,7 +1019,11 @@ export default function LettersPage() {
       ("שלום " + tenant + ",\n\nמצורף בזאת " + title + ".\nנא לעיין ולפעול בהתאם.\n\nבברכה,\nהנהלת הנכס");
     // In test mode no CC — don't pre-fill owners/authorized users.
     var propIds = [l.property_id || l.contracts?.properties?.id].filter(Boolean);
-    var cc = testMode ? "" : ccForProps(propIds as string[], toList[0] || "", l).join(",");
+    var cc = testMode ? "" : (await ccForPropsLive(propIds as string[], toList[0] || "", l)).join(",");
+    if (testMode && propIds.length) {
+      // שלא ייראה כתקלה: במצב בדיקה עותקים מנוטרלים בכוונה.
+      console.info("מצב בדיקה — עותקים (CC) לא צורפו בכוונה");
+    }
     var mailto = "mailto:" + encodeURIComponent(toStr) + "?" +
       (cc ? "cc=" + encodeURIComponent(cc) + "&" : "") +
       "subject=" + encodeURIComponent(title) +
