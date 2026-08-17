@@ -13,6 +13,7 @@ import { minRentPerSqmAtDate } from '@/lib/min-rent';
 import { parkingRentAtDate } from '@/lib/parking-rent';
 import CalcProgress, { CalcProgressState } from '@/components/CalcProgress';
 import PropertyBudgetManager from '@/components/PropertyBudgetManager';
+import OrgContactsEditor from '@/components/OrgContactsEditor';
 
 function formatDateForCbs(dateStr: string): string | null {
   const d = new Date(dateStr);
@@ -961,6 +962,10 @@ export default function PropertiesPage() {
                 <label className="mb-1 block text-xs font-semibold text-slate-700">הערות</label>
                 <textarea value={fNotes} onChange={function(e){setFNotes(e.target.value);}} rows={2} className={ic} />
               </div>
+
+              {/* מכותבים פנימיים — עותק מייל לפי נושא, לנכס הזה */}
+              <OrgContactsEditor propertyId={isNew ? undefined : editingId} />
+
               <div className="flex gap-3 pt-2">
                 <button onClick={function(){setEditingId("");}} className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm text-slate-600">ביטול</button>
                 <button onClick={handleSave} disabled={saving} className="flex-1 rounded-xl bg-blue-700 py-2.5 text-sm font-bold text-white disabled:opacity-50">

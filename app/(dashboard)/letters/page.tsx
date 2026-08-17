@@ -5,6 +5,7 @@ import { authHeaders } from '@/lib/api-auth-client';
 import { logAudit } from '@/lib/audit-log';
 import { PageHero } from '@/components/ui';
 import { getScopeIds, scopeRows } from '@/lib/permissions';
+import { topicForLetter, orgCcFor } from '@/lib/letter-cc';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 
@@ -208,7 +209,7 @@ export default function LettersPage() {
   // CC directory: who gets a tracking copy of each send. A user qualifies ONLY
   // when BOTH conditions hold — a billing-capable role AND assignment to that
   // property. accessByProp already encodes the intersection.
-  const [ccDir, setCcDir] = useState<{ accessByProp: Record<string, string[]>; companyByProp: Record<string, string> }>({ accessByProp: {}, companyByProp: {} });
+  const [ccDir, setCcDir] = useState<{ accessByProp: Record<string, string[]>; companyByProp: Record<string, string>; companyIdByProp?: Record<string, string>; orgContacts?: any[] }>({ accessByProp: {}, companyByProp: {} });
 
   function toggleGroup(key: string) {
     setCollapsedGroups(function(prev) { return { ...prev, [key]: !prev[key] }; });
@@ -252,10 +253,12 @@ export default function LettersPage() {
   async function loadCcDirectory() {
     try {
       var BILLING_ROLES = ["admin", "owner", "manager", "accountant", "billing"];
-      const [{ data: profs }, { data: access }, { data: props }] = await Promise.all([
+      const [{ data: profs }, { data: access }, { data: props }, { data: orgC }] = await Promise.all([
         supabase.from("user_profiles").select("id,email,role,is_active").eq("is_active", true),
         supabase.from("user_property_access").select("user_id,property_id"),
-        supabase.from("properties").select("id,companies(email)"),
+        supabase.from("properties").select("id,company_id,companies(email)"),
+        // מכותבים פנימיים לפי נושא — אנשי הקשר של הארגון (RLS תוחם לנכסים שלנו)
+        supabase.from("org_contacts").select("id,company_id,property_id,email,topics,is_active").eq("is_active", true),
       ]);
       // Only billing-capable users are eligible at all — so accessByProp is the
       // intersection (assigned-to-property AND can-bill).
@@ -271,24 +274,39 @@ export default function LettersPage() {
         if (accessByProp[a.property_id].indexOf(em) === -1) accessByProp[a.property_id].push(em);
       });
       var companyByProp: Record<string, string> = {};
+      var companyIdByProp: Record<string, string> = {};
       (props ?? []).forEach(function(p: any) {
         var ce = p.companies?.email;
         if (ce) companyByProp[p.id] = ce;
+        if (p.company_id) companyIdByProp[p.id] = p.company_id;
       });
-      setCcDir({ accessByProp: accessByProp, companyByProp: companyByProp });
+      setCcDir({ accessByProp: accessByProp, companyByProp: companyByProp, companyIdByProp: companyIdByProp, orgContacts: orgC ?? [] });
     } catch (e) { /* best-effort */ }
   }
 
   // CC list for a set of property ids: ONLY users who both can bill AND are
   // assigned to one of those properties, plus the owning company email. No
   // fallback — an unassigned billing user is never CC'd.
-  function ccForProps(propIds: string[], excludeEmail?: string): string[] {
+  function ccForProps(propIds: string[], excludeEmail?: string, letterForTopic?: any): string[] {
     var out: string[] = [];
     (propIds || []).forEach(function(pid) {
       (ccDir.accessByProp[pid] || []).forEach(function(e) { if (out.indexOf(e) === -1) out.push(e); });
       var ce = ccDir.companyByProp[pid];
       if (ce && out.indexOf(ce) === -1) out.push(ce);
     });
+    // מכותבים פנימיים לפי נושא: אנשי קשר שהוגדרו בנכס/בחברה ומנויים על
+    // נושא המכתב (או על "כל ההתכתבויות") מקבלים עותק.
+    var companyIds: string[] = [];
+    (propIds || []).forEach(function(pid) {
+      var cid = (ccDir.companyIdByProp || {})[pid];
+      if (cid && companyIds.indexOf(cid) === -1) companyIds.push(cid);
+    });
+    orgCcFor({
+      contacts: ccDir.orgContacts || [],
+      propertyIds: propIds || [],
+      companyIds: companyIds,
+      topic: letterForTopic ? topicForLetter(letterForTopic) : "general",
+    }).forEach(function(e) { if (out.indexOf(e) === -1) out.push(e); });
     return out.filter(function(e) { return e && e !== excludeEmail; });
   }
 
@@ -826,7 +844,7 @@ export default function LettersPage() {
         resolveRecipientEmails(l).forEach(function(e: string){ if (e && !emailSeen[e]) { emailSeen[e] = true; emails.push(e); } });
       });
       var primaryEmail = emails[0] || g.email;
-      var cc = ccForProps(propIds as string[], primaryEmail);
+      var cc = ccForProps(propIds as string[], primaryEmail, first);
       var units = unitsLabel(first);
       return { key: g.key, email: primaryEmail, emails: emails, tenant: g.tenant, units: units, subject: subject, body: body, grand: grand, multi: multi, letters: g.letters, printLetter: printLetter, propIds: propIds, cc: cc };
     });
@@ -915,7 +933,7 @@ export default function LettersPage() {
     var propIds = [l.property_id || l.contracts?.properties?.id].filter(Boolean) as string[];
     // Filename = subject + tenant; Cc = remaining domain emails + authorized users.
     var fileBase = subject + " - " + tenant;
-    var cc = Array.from(new Set(toList.slice(1).concat(ccForProps(propIds, toList[0]))));
+    var cc = Array.from(new Set(toList.slice(1).concat(ccForProps(propIds, toList[0], l))));
     setSending(l.id);
     try {
       var pdf = await letterToPdfBase64(l);
@@ -972,7 +990,7 @@ export default function LettersPage() {
       ("שלום " + tenant + ",\n\nמצורף בזאת " + title + ".\nנא לעיין ולפעול בהתאם.\n\nבברכה,\nהנהלת הנכס");
     // In test mode no CC — don't pre-fill owners/authorized users.
     var propIds = [l.property_id || l.contracts?.properties?.id].filter(Boolean);
-    var cc = testMode ? "" : ccForProps(propIds as string[], toList[0] || "").join(",");
+    var cc = testMode ? "" : ccForProps(propIds as string[], toList[0] || "", l).join(",");
     var mailto = "mailto:" + encodeURIComponent(toStr) + "?" +
       (cc ? "cc=" + encodeURIComponent(cc) + "&" : "") +
       "subject=" + encodeURIComponent(title) +
