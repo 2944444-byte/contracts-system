@@ -4435,7 +4435,14 @@ export default function ContractsNewPage() {
               // increase (+10) instead of the resulting price (75).
               // A flat monthly minimum used to leave this at rentPerSqm (0 on a
               // turnover lease), so every period in the timeline showed "—".
-              const tlBase = rentType === "revenue_pct"
+              // הסכם חניות: הציר נבנה על סך דמי החניה החודשי של השוכר.
+              const tlBase = isParkingContract
+                ? parkingSpots.reduce(function(s: number, p: any) {
+                    if (p.tenant_id !== tenantId || p.contract_id) return s;
+                    if (p.is_included_in_rent || p.subscription_type === "visitor") return s;
+                    return s + (Number(p.monthly_fee) || 0) * (Number(p.quantity) || 1);
+                  }, 0)
+                : rentType === "revenue_pct"
                 ? minRentSqm : (Number(rentPerSqm) || 0);
               const timeline = buildPriceTimeline({
                 contractStart: startDate,
@@ -4451,8 +4458,13 @@ export default function ContractsNewPage() {
               if (timeline.length === 0) return null;
               return (
                 <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                  <div className="text-sm font-bold text-slate-800 mb-3 flex items-center gap-2">📊 {rentType === "revenue_pct" ? 'ציר זמן שכ"ד מינימום' : "ציר זמן מחירים"}</div>
-                  {rentType === "revenue_pct" && (
+                  <div className="text-sm font-bold text-slate-800 mb-3 flex items-center gap-2">📊 {isParkingContract ? "ציר זמן דמי חניה" : rentType === "revenue_pct" ? 'ציר זמן שכ"ד מינימום' : "ציר זמן מחירים"}</div>
+                  {isParkingContract && (
+                    <div className="text-[11px] text-slate-500 mb-2 leading-relaxed">
+                      הסכומים הם <b>סך דמי החניה לחודש</b> — מדרגות ואופציות חלות עליהם ככל שכ&quot;ד.
+                    </div>
+                  )}
+                  {rentType === "revenue_pct" && !isParkingContract && (
                     <div className="text-[11px] text-slate-500 mb-2 leading-relaxed">
                       הסכומים הם ה<b>מינימום</b> למ&quot;ר לחודש. שכ&quot;ד בפועל = הגבוה מבין {revenuePct || 0}% מהפדיון לבין המינימום.
                     </div>
@@ -4472,7 +4484,9 @@ export default function ContractsNewPage() {
                           </div>
                           <span className={"font-black text-sm " + textColor}>
                             {entry.rentPerSqm
-                              ? (leasedArea > 0
+                              ? (isParkingContract
+                                  ? <>{fmtMoney(entry.rentPerSqm)}<span className="font-normal text-[11px] text-slate-400">/חודש</span></>
+                                  : leasedArea > 0
                                   ? <>{fmtMoney(entry.rentPerSqm * leasedArea)}<span className="font-normal text-[11px] text-slate-400">/חודש · {fmtMoney(entry.rentPerSqm)}/מ&quot;ר</span></>
                                   : <>{fmtMoney(entry.rentPerSqm)}/מ&quot;ר</>)
                               : entry.fixedAmount ? `${fmtMoney(entry.fixedAmount)}/חודש` : "—"}

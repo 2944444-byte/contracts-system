@@ -453,13 +453,23 @@ export default function ContractsPage() {
         }
         setPriceTiers(loadedTiers);
         if (selContract.start_date && selContract.end_date) {
+          // הסכם חניות: הבסיס לציר הוא סך דמי החניה החודשי — המדרגות
+          // והאופציות חלות עליו, והמאמת מול מחשבון ההצמדה משווה תפוחים
+          // לתפוחים (עד עכשיו הציר הראה ₪0 והוקפצה אזהרת אי-התאמה).
+          var tlParkingBase = selContract.contract_type === "parking"
+            ? parkingSubs.reduce(function (s: number, p: any) {
+                if (p.is_included_in_rent || p.subscription_type === "visitor") return s;
+                return s + (Number(p.monthly_fee) || 0) * (Number(p.quantity) || 1);
+              }, 0)
+            : 0;
           var tl = buildPriceTimeline({
             contractStart: selContract.start_date,
             contractEnd: selContract.end_date,
             // A turnover lease has no rent_per_sqm — what steps over the years
             // is the MINIMUM, so that is the figure the timeline is built on.
             // Reading the empty column showed every period as ₪0.00.
-            baseRentPerSqm: Number(selContract.rent_per_sqm)
+            baseRentPerSqm: tlParkingBase
+              || Number(selContract.rent_per_sqm)
               || Number(selContract.min_rent_per_sqm)
               || 0,
             mainTiers: loadedTiers,
@@ -470,7 +480,7 @@ export default function ContractsPage() {
           setPriceTimeline(tl);
         }
       });
-  }, [selected]);
+  }, [selected, parkingSubs]);
 
   // Revenue-% contracts: derive rent-per-sqm from reported turnover — the LATEST
   // month and the AVERAGE — using the stored final_rent (already net of the mgmt
@@ -1977,8 +1987,13 @@ export default function ContractsPage() {
                   if (priceTimeline.length <= 1) return null;
                   return <div className="rounded-lg border border-blue-200 bg-blue-50/30 p-3 mb-3">
                     <div className="text-xs font-bold text-blue-800 mb-2">
-                      📊 {selContract.rent_type === "revenue_pct" ? 'ציר זמן שכ"ד מינימום' : "ציר זמן מחירים"}
+                      📊 {selContract.contract_type === "parking" ? "ציר זמן דמי חניה" : selContract.rent_type === "revenue_pct" ? 'ציר זמן שכ"ד מינימום' : "ציר זמן מחירים"}
                     </div>
+                    {selContract.contract_type === "parking" && (
+                      <div className="text-[11px] text-blue-700 mb-2 leading-relaxed">
+                        הסכומים הם <b>סך דמי החניה לחודש</b> (לא למ&quot;ר) — מדרגות ואופציות חלות עליהם ככל שכ&quot;ד.
+                      </div>
+                    )}
                     {selContract.rent_type === "revenue_pct" && (
                       <div className="text-[11px] text-blue-700 mb-2 leading-relaxed">
                         בחוזה אחוז-מפדיון הסכומים כאן הם ה<b>מינימום</b> למ&quot;ר לחודש (הרצפה). שכ&quot;ד בפועל = הגבוה מבין
@@ -2013,8 +2028,8 @@ export default function ContractsPage() {
                                 <span>{entry.label}</span>
                                 <span className="text-blue-500 mr-1 font-semibold">({yearLabel})</span>
                               </td>
-                              <td className="py-1 text-right">₪{rentWithInvest.toFixed(2)}/מ&quot;ר</td>
-                              {cpiResult && <td className="py-1 text-right text-amber-700">₪{cpiRentVal.toFixed(2)}/מ&quot;ר</td>}
+                              <td className="py-1 text-right">₪{rentWithInvest.toFixed(2)}{selContract.contract_type === "parking" ? "/חודש" : '/מ"ר'}</td>
+                              {cpiResult && <td className="py-1 text-right text-amber-700">₪{cpiRentVal.toFixed(2)}{selContract.contract_type === "parking" ? "/חודש" : '/מ"ר'}</td>}
                               <td className="py-1 text-center">{isCurrent ? "◀" : ""}</td>
                             </tr>
                           );
