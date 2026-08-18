@@ -328,7 +328,7 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
             var area = Number(cs.spaces?.area) || 0;
             var isFixed = cs.charge_method === "fixed";
             var baseRentPerSqm = Number(cs.price_per_sqm) || Number(c.rent_per_sqm) || 0;
-            var spaceStart = isFixed ? (Number(cs.fixed_rent) || 0) : baseRentPerSqm * area;
+            var spaceStart = cs.charge_method === "included" ? 0 : isFixed ? (Number(cs.fixed_rent) || 0) : baseRentPerSqm * area;
             var spaceTiers = (allTiers ?? []).filter(function(t: any) { return t.contract_id === c.id && t.space_id === cs.space_id; });
             var sched = buildSpaceRentSchedule({
               contractStartDate: c.start_date,
@@ -358,7 +358,7 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
           var area = Number(cs.spaces?.area) || 0;
           var isFixed = cs.charge_method === "fixed";
           var baseRentPerSqm = Number(cs.price_per_sqm) || Number(c.rent_per_sqm) || 0;
-          var spaceStart = isFixed ? (Number(cs.fixed_rent) || 0) : baseRentPerSqm * area;
+          var spaceStart = cs.charge_method === "included" ? 0 : isFixed ? (Number(cs.fixed_rent) || 0) : baseRentPerSqm * area;
           startMonthly += spaceStart;
 
           var spaceTiers = (allTiers ?? []).filter(function(t: any) { return t.contract_id === c.id && t.space_id === cs.space_id; });

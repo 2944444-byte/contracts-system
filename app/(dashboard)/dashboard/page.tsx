@@ -45,7 +45,7 @@ function calcContractRent(c: any): number {
   var total = 0;
   if (c.contract_spaces?.length > 0) {
     c.contract_spaces.forEach(function(cs: any) {
-      if (cs.charge_method === "fixed" && cs.fixed_rent) total += Number(cs.fixed_rent);
+      if (cs.charge_method === "included") { } else if (cs.charge_method === "fixed" && cs.fixed_rent) total += Number(cs.fixed_rent);
       else total += (Number(cs.price_per_sqm) || Number(c.rent_per_sqm) || 0) * (cs.spaces?.area || 0);
     });
   }

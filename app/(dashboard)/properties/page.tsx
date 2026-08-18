@@ -11,6 +11,7 @@ import { graceFactorsFor, graceWindow } from '@/lib/store-opening';
 import { buildSpaceRentSchedule, rentAtDate } from '@/lib/contract-utils';
 import { minRentPerSqmAtDate } from '@/lib/min-rent';
 import { parkingRentAtDate } from '@/lib/parking-rent';
+import { AUX_SPACE_TYPES } from '@/lib/space-billing';
 import CalcProgress, { CalcProgressState } from '@/components/CalcProgress';
 import PropertyBudgetManager from '@/components/PropertyBudgetManager';
 import OrgContactsEditor from '@/components/OrgContactsEditor';
@@ -71,6 +72,8 @@ export default function PropertiesPage() {
   const [fParking,    setFParking]    = useState("");
   // דמי ניהול לחניה (₪/מקום/חודש) — ברירת מחדל לכל חוזי הנכס; ריק = אין.
   const [fParkingMgmt, setFParkingMgmt] = useState("");
+  // מטריצת שטחי עזר: {shed: {mgmt: false, ...}} — ריק = הכול נכלל.
+  const [fSpaceTypeBilling, setFSpaceTypeBilling] = useState<any>(null);
   const [fInsurCost,  setFInsurCost]  = useState("");
   const [fInsurDate,  setFInsurDate]  = useState("");
   const [fInsurPolicy,setFInsurPolicy]= useState("");
@@ -199,7 +202,7 @@ export default function PropertiesPage() {
     var total = 0;
     if (c.contract_spaces?.length > 0) {
       c.contract_spaces.forEach(function(cs: any) {
-        if (cs.charge_method === "fixed" && cs.fixed_rent) total += Number(cs.fixed_rent);
+        if (cs.charge_method === "included") { } else if (cs.charge_method === "fixed" && cs.fixed_rent) total += Number(cs.fixed_rent);
         else total += (Number(cs.price_per_sqm) || Number(c.rent_per_sqm) || 0) * (cs.spaces?.area || 0);
       });
     }
@@ -217,7 +220,7 @@ export default function PropertiesPage() {
   function openNew() {
     setIsNew(true); setEditingId("new");
     setFName(""); setFCompanyId(""); setFGroupId(""); setFType("office"); setFAddress(""); setFCity(""); setFArea(""); setFFloors(""); setFNotes("");
-    setFYardArea(""); setFParking(""); setFParkingMgmt(""); setFInsurCost(""); setFInsurDate(""); setFInsurPolicy(""); setFMgmtBudget(""); setFWasteCost("");
+    setFYardArea(""); setFParking(""); setFParkingMgmt(""); setFSpaceTypeBilling(null); setFInsurCost(""); setFInsurDate(""); setFInsurPolicy(""); setFMgmtBudget(""); setFWasteCost("");
   }
 
   function openEdit(p: any) {
@@ -227,6 +230,7 @@ export default function PropertiesPage() {
     setFFloors(p.floors?.toString()??""); setFNotes(p.notes??"");
     setFYardArea(p.yard_terrace_area?.toString()??""); setFParking(p.parking_spaces?.toString()??"");
     setFParkingMgmt(p.parking_mgmt_fee_per_spot?.toString()??"");
+    setFSpaceTypeBilling(p.space_type_billing ?? null);
     setFInsurCost(p.annual_insurance_cost?.toString()??""); setFInsurDate(p.insurance_renewal_date??"");
     setFInsurPolicy(p.insurance_policy_number??""); setFMgmtBudget(p.annual_management_budget?.toString()??"");
     setFWasteCost(p.annual_waste_cost?.toString()??"");
@@ -246,6 +250,7 @@ export default function PropertiesPage() {
         yard_terrace_area: fYardArea ? Number(fYardArea) : null,
         parking_spaces: fParking ? Number(fParking) : null,
         parking_mgmt_fee_per_spot: fParkingMgmt ? Number(fParkingMgmt) : null,
+        space_type_billing: fSpaceTypeBilling,
         annual_insurance_cost: fInsurCost ? Number(fInsurCost) : null,
         insurance_renewal_date: fInsurDate||null,
         insurance_policy_number: fInsurPolicy||null,
@@ -381,7 +386,7 @@ export default function PropertiesPage() {
     (c.contract_spaces || []).forEach(function(cs: any) {
       var area = Number(cs.spaces?.area) || 0;
       var isFixed = cs.charge_method === "fixed" && Number(cs.fixed_rent) > 0;
-      var base = isFixed ? Number(cs.fixed_rent) : (Number(cs.price_per_sqm) || Number(c.rent_per_sqm) || 0) * area;
+      var base = cs.charge_method === "included" ? 0 : isFixed ? Number(cs.fixed_rent) : (Number(cs.price_per_sqm) || Number(c.rent_per_sqm) || 0) * area;
       var sched = buildSpaceRentSchedule({ contractStartDate: c.start_date, spaceArea: area, isFixed: isFixed, spaceBaseRent: base, spaceTiers: [], contractTiers: tiers, exercisedOptions: exercised });
       total += rentAtDate(sched, date);
     });
@@ -983,6 +988,36 @@ export default function PropertiesPage() {
                   <input type="number" value={fParkingMgmt} onChange={function(e){setFParkingMgmt(e.target.value);}}
                     placeholder="ריק = אין דמי ניהול על חניות" className={ic} />
                   <div className="text-[10px] text-slate-400 mt-0.5">ברירת מחדל לכל חוזי הנכס עם חניות; חוזה יכול לקבוע תעריף משלו.</div>
+
+                  {/* מטריצת שטחי עזר: אילו חישובים כוללים סככות וחצרות בנכס זה */}
+                  <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-2.5">
+                    <div className="text-xs font-bold text-slate-700 mb-1">שטחי עזר בחישובים (סככה / חצר צמודה)</div>
+                    <div className="text-[10px] text-slate-400 mb-1.5">סמן אילו חישובים כוללים את שטחי העזר. ההגדרה תקפה לכל היחידות מהסוג בנכס זה. הכול מסומן = נכלל (ברירת המחדל).</div>
+                    {AUX_SPACE_TYPES.map(function(t){
+                      return (
+                        <div key={t.v} className="flex items-center gap-3 py-0.5 text-xs text-slate-600">
+                          <span className="w-24 font-semibold">{t.icon} {t.l}</span>
+                          {(["mgmt","insurance","waste"] as const).map(function(k){
+                            var lbls: Record<string,string> = { mgmt: "דמי ניהול", insurance: "ביטוח", waste: "אשפה" };
+                            var on = !(fSpaceTypeBilling?.[t.v]?.[k] === false);
+                            return (
+                              <label key={k} className="flex items-center gap-1 cursor-pointer">
+                                <input type="checkbox" checked={on} onChange={function(e){
+                                  setFSpaceTypeBilling(function(prev: any){
+                                    var n = JSON.parse(JSON.stringify(prev || {}));
+                                    if (!n[t.v]) n[t.v] = {};
+                                    n[t.v][k] = e.target.checked;
+                                    return n;
+                                  });
+                                }} className="w-3.5 h-3.5" />
+                                {lbls[k]}
+                              </label>
+                            );
+                          })}
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               </div>
 

@@ -3,6 +3,7 @@ import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
 import { logAudit } from "@/lib/audit-log";
 import { graceFactorsFor } from "@/lib/store-opening";
+import { spaceCountsFor } from "@/lib/space-billing";
 import { fetchCpiAdjusted, fetchCpiAdjustedWithRetry, fetchHighestChainedCpiWithRetry } from "@/lib/cpi-server";
 import { fetchHighestCPI } from "@/lib/cpi-utils";
 import { formatPeriod } from "@/lib/cpi-utils";
@@ -266,7 +267,13 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
         .eq("property_id", propId).eq("group_type", "management").eq("year", year);
       var { data: budget } = await supabase.from("property_budgets")
         .select("management_budget").eq("property_id", propId).eq("year", year).maybeSingle();
-      var { data: propSpaces } = await supabase.from("spaces").select("id,area").eq("property_id", propId);
+      var { data: propSpaces } = await supabase.from("spaces").select("id,area,space_type").eq("property_id", propId);
+      // מטריצת סוגי שטח של הנכס: סככה/חצר המוחרגות מדמי ניהול — התעריף
+      // עליהן 0 בכל השיקים (תקף לכל היחידות מהסוג באותו נכס).
+      var { data: stbRowAdv } = await supabase.from("properties").select("space_type_billing").eq("id", propId).maybeSingle();
+      var stbAdvMatrix = stbRowAdv?.space_type_billing || null;
+      var spaceTypeById: Record<string, string> = {};
+      (propSpaces ?? []).forEach(function(sp: any) { if (sp.space_type) spaceTypeById[sp.id] = sp.space_type; });
       var totalPropArea = (propSpaces ?? []).reduce(function(s: number, sp: any) { return s + (Number(sp.area) || 0); }, 0);
       var defaultMgmtRate = budget?.management_budget && totalPropArea > 0 ? Number(budget.management_budget) / totalPropArea / 12 : 0;
 
@@ -369,7 +376,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
           // Base monthly rent for this space — detect step-rent changes
           var baseRentPerSqm = Number(cs.price_per_sqm) || Number(c.rent_per_sqm) || 0;
           var isFixed = cs.charge_method === "fixed";
-          var baseMonthly = isFixed ? Number(cs.fixed_rent) || 0 : baseRentPerSqm * area;
+          var baseMonthly = cs.charge_method === "included" ? 0 : isFixed ? Number(cs.fixed_rent) || 0 : baseRentPerSqm * area;
           var contractStartDate = new Date(c.start_date);
 
           // ─── SINGLE SOURCE OF TRUTH ───
@@ -443,6 +450,8 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
           // double-billed it. Guarded on every rate source, not only the
           // contract-figure fallback.
           if (c.mgmt_included_in_revenue) mgmtRate = 0;
+          // סוג שטח מוחרג מדמי ניהול (מטריצת הנכס: סככה/חצר) → תעריף 0.
+          if (!spaceCountsFor("mgmt", spaceTypeById[cs.space_id], stbAdvMatrix)) mgmtRate = 0;
           var mgmtMonthly = mgmtRate * area;
 
           // CPI: use space-specific base or contract base

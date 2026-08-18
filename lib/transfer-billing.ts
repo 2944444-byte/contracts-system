@@ -30,6 +30,7 @@ import { minRentPerSqmAtDate } from "@/lib/min-rent";
 import { fetchCpiAdjustedWithRetry, fetchHighestChainedCpiWithRetry } from "@/lib/cpi-server";
 import { getVatRates, vatPctAt } from "@/lib/vat";
 import { isParkingOnly, parkingMonthlyTotal, parkingSpotCount, parkingRentSchedule } from "@/lib/parking-rent";
+import { spaceMonthlyBase, billableAreaFor } from "@/lib/space-billing";
 
 // CBS wants MM-DD-YYYY. The 15th is the publication day itself and is
 // ambiguous — bumped to the 16th, matching the cheque path, so both paths
@@ -133,12 +134,12 @@ export async function generateTransferCharges(params: {
       "min_rent_per_sqm, minimum_rent, min_rent_condition_type, min_rent_condition_pct, min_rent_condition_met_at, " +
       "payment_method, payment_frequency, payment_day, first_charge_mode, vat_type, indexation_method, index_base_date, index_base_value, index_mechanism, " +
       "start_date, end_date, signing_date, created_at, mgmt_fee_per_sqm, mgmt_included_in_revenue, " +
-      "contract_type, mgmt_parking_fee_per_spot, properties(parking_mgmt_fee_per_spot), " +
+      "contract_type, mgmt_parking_fee_per_spot, properties(parking_mgmt_fee_per_spot, space_type_billing), " +
       "grace_months, grace_days, grace_phase2_days, grace_type, grace_discount_pct, grace_mgmt_discount_pct, grace_ends_on_opening, " +
       "mgmt_charge_starts, mgmt_free_max_days, works_start_date, works_end_date, " +
       "planned_handover_date, actual_handover_date, planned_opening_date, actual_opening_date, " +
       "opening_rule, opening_max_days_from_handover, term_starts_at, " +
-      "tenants(name), contract_spaces(space_id, charge_method, fixed_rent, price_per_sqm, spaces(space_name, area)), " +
+      "tenants(name), contract_spaces(space_id, charge_method, fixed_rent, price_per_sqm, spaces(space_name, area, space_type)), " +
       "contract_options(id, is_exercised, status, start_date, end_date, rent_mechanism, rent_increase_pct, new_rent_value, price_tiers, option_group)")
     .in("payment_method", TRANSFER_METHODS)
     .in("status", ["active", "extended", "expiring"])
@@ -209,7 +210,9 @@ export async function generateTransferCharges(params: {
       const spaceScheds = (parkingOnly ? [] : ((c.contract_spaces || []) as any[])).map(function (cs: any) {
         const area = Number(cs?.spaces?.area) || 0;
         const isFixed = cs.charge_method === "fixed" && Number(cs.fixed_rent) > 0;
-        const spaceBase = isFixed ? Number(cs.fixed_rent) : (Number(cs.price_per_sqm) || Number(c.rent_per_sqm) || 0) * area;
+        // spaceMonthlyBase: יחידת "כלול במחיר" (סככה/חצר) תורמת ₪0 —
+        // ולא נופלת ל-fallback של מחיר החוזה למ"ר.
+        const spaceBase = spaceMonthlyBase(cs, Number(c.rent_per_sqm) || 0);
         return buildSpaceRentSchedule({
           contractStartDate: c.start_date, spaceArea: area, isFixed: isFixed,
           spaceBaseRent: spaceBase, spaceTiers: [], contractTiers: tiers, exercisedOptions: exercised,
@@ -286,9 +289,9 @@ export async function generateTransferCharges(params: {
           if (!c.mgmt_included_in_revenue) {
             var mgmtMonth = 0;
             if (!parkingOnly && Number(c.mgmt_fee_per_sqm) > 0) {
-              const area = (c.contract_spaces || []).reduce(function (s: number, cs: any) {
-                return s + (Number(cs?.spaces?.area) || 0);
-              }, 0) || Number(c.charged_area) || 0;
+              // שטח לדמי ניהול: סוגי עזר מוחרגים לפי מטריצת הנכס (סככה/חצר).
+              const area = billableAreaFor("mgmt", c.contract_spaces || [], (c.properties as any)?.space_type_billing)
+                || Number(c.charged_area) || 0;
               mgmtMonth += Number(c.mgmt_fee_per_sqm) * area;
             }
             if (parkSpots > 0) {

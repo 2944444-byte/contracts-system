@@ -1066,12 +1066,12 @@ export default function ContractsPage() {
     var hasPerUnitPricing = effectiveSpaces.some(function(cs: any) { return cs.charge_method === "fixed" || cs.price_per_sqm; });
     if (hasPerUnitPricing && !effectiveRentPerSqm) {
       effectiveSpaces.forEach(function(cs: any) {
-        if (cs.charge_method === "fixed" && cs.fixed_rent) baseRent += Number(cs.fixed_rent);
+        if (cs.charge_method === "included") { } else if (cs.charge_method === "fixed" && cs.fixed_rent) baseRent += Number(cs.fixed_rent);
         else baseRent += (Number(cs.price_per_sqm) || 0) * (cs.spaces?.area || 0);
       });
     } else if (effectiveSpaces.length > 0 && effectiveSpaces.some(function(cs: any){ return cs.price_per_sqm; })) {
       effectiveSpaces.forEach(function(cs: any) {
-        if (cs.charge_method === "fixed" && cs.fixed_rent) baseRent += Number(cs.fixed_rent);
+        if (cs.charge_method === "included") { } else if (cs.charge_method === "fixed" && cs.fixed_rent) baseRent += Number(cs.fixed_rent);
         else baseRent += (Number(cs.price_per_sqm) || trueRentPerSqm) * (cs.spaces?.area || 0);
       });
     } else {
@@ -1082,7 +1082,7 @@ export default function ContractsPage() {
   var originalBaseRent = 0;
   if (selContract && latestAmendment) {
     (selContract.contract_spaces || []).forEach(function(cs: any) {
-      if (cs.charge_method === "fixed" && cs.fixed_rent) originalBaseRent += Number(cs.fixed_rent);
+      if (cs.charge_method === "included") { } else if (cs.charge_method === "fixed" && cs.fixed_rent) originalBaseRent += Number(cs.fixed_rent);
       else originalBaseRent += (Number(cs.price_per_sqm) || Number(selContract.rent_per_sqm) || 0) * (cs.spaces?.area || 0);
     });
     if (originalBaseRent === 0) originalBaseRent = (Number(selContract.rent_per_sqm) || 0) * contractArea(selContract);
@@ -1109,7 +1109,7 @@ export default function ContractsPage() {
   function unitSteppedMonthly(cs: any): number {
     var isFx = cs.charge_method === "fixed";
     var area = cs.spaces?.area || 0;
-    var raw = isFx
+    var raw = cs.charge_method === "included" ? 0 : isFx
       ? (Number(cs.fixed_rent) || 0)
       : (Number(cs.price_per_sqm) || Number(effectiveRentPerSqm) || 0) * area;
     if (!selContract) return raw;
@@ -1307,7 +1307,7 @@ export default function ContractsPage() {
             var mon = 0;
             if (cEffSpaces?.length > 0) {
               cEffSpaces.forEach(function(cs: any) {
-                if (cs.charge_method === "fixed" && cs.fixed_rent) mon += Number(cs.fixed_rent);
+                if (cs.charge_method === "included") { } else if (cs.charge_method === "fixed" && cs.fixed_rent) mon += Number(cs.fixed_rent);
                 else mon += (Number(cs.price_per_sqm) || Number(c.rent_per_sqm) || 0) * (cs.spaces?.area || 0);
               });
             }
@@ -1941,7 +1941,7 @@ export default function ContractsPage() {
                         {effectiveSpaces.map(function(cs: any) {
                           var spaceName = cs.spaces?.space_name || "—";
                           var area = cs.spaces?.area || 0;
-                          var baseRent = cs.charge_method === "fixed" ? Number(cs.fixed_rent) || 0 : (Number(cs.price_per_sqm) || 0);
+                          var baseRent = cs.charge_method === "included" ? 0 : cs.charge_method === "fixed" ? Number(cs.fixed_rent) || 0 : (Number(cs.price_per_sqm) || 0);
                           var isFixed = cs.charge_method === "fixed";
                           var spaceTiersList = rawTiersWithSpace.filter(function(t: any) { return t.space_id === cs.space_id; });
                           if (spaceTiersList.length === 0) {
@@ -2184,7 +2184,7 @@ export default function ContractsPage() {
                         var spArea = cs.spaces?.area || 0;
                         var isFixed = cs.charge_method === "fixed";
                         // Raw base price
-                        var rawMonthly = isFixed
+                        var rawMonthly = cs.charge_method === "included" ? 0 : isFixed
                           ? Number(cs.fixed_rent) || 0
                           : (Number(cs.price_per_sqm) || Number(effectiveRentPerSqm) || 0) * spArea;
                         // Step-rent adjusted — via the canonical per-unit
@@ -2296,7 +2296,7 @@ export default function ContractsPage() {
                       var amSpaces = am.contract_spaces || [];
                       var amRent = 0;
                       amSpaces.forEach(function(cs: any) {
-                        if (cs.charge_method === "fixed" && cs.fixed_rent) amRent += Number(cs.fixed_rent);
+                        if (cs.charge_method === "included") { } else if (cs.charge_method === "fixed" && cs.fixed_rent) amRent += Number(cs.fixed_rent);
                         else amRent += (Number(cs.price_per_sqm) || Number(am.rent_per_sqm) || 0) * (cs.spaces?.area || 0);
                       });
                       if (amRent === 0) amRent = (Number(am.rent_per_sqm) || 0) * contractArea(am);
@@ -2313,7 +2313,7 @@ export default function ContractsPage() {
                       // Previous rent for comparison
                       var prevRent = 0;
                       prevSpaces.forEach(function(cs: any) {
-                        if (cs.charge_method === "fixed" && cs.fixed_rent) prevRent += Number(cs.fixed_rent);
+                        if (cs.charge_method === "included") { } else if (cs.charge_method === "fixed" && cs.fixed_rent) prevRent += Number(cs.fixed_rent);
                         else prevRent += (Number(cs.price_per_sqm) || Number(selContract.rent_per_sqm) || 0) * (cs.spaces?.area || 0);
                       });
                       if (prevRent === 0) prevRent = (Number(selContract.rent_per_sqm) || 0) * contractArea(selContract);

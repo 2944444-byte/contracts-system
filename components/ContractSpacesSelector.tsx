@@ -21,11 +21,13 @@ export interface SpaceCharge {
 }
 
 const SPACE_TYPE_ICONS: Record<string,string> = {
-  unit: "🚪", operational: "⚙️", open_storage: "📦", parking: "🅿️", other: "📐",
+  unit: "🚪", operational: "⚙️", open_storage: "📦", parking: "🅿️",
+  shed: "🏚", yard: "🌳", office: "💼", retail: "🏪", store: "🏬", warehouse: "📦", industrial: "🏭", other: "📐",
 };
 const SPACE_TYPE_LABELS: Record<string,string> = {
   unit: "יחידה סגורה", operational: "שטח תפעולי",
-  open_storage: "שטח פתוח", parking: "חניה", other: "אחר",
+  open_storage: "שטח פתוח", parking: "חניה",
+  shed: "סככה", yard: "חצר צמודה", office: "משרדים", retail: "מסחר", store: "חנות", warehouse: "מחסן", industrial: "תעשיה", other: "אחר",
 };
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";

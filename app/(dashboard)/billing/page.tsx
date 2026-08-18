@@ -13,6 +13,7 @@ import { getVatPct, getVatTypeMap, applyVat } from '@/lib/vat';
 import { loadCompanyInfo, letterContent } from '@/lib/letter-format';
 import { PageHero } from '@/components/ui';
 import { getScopeIds, scopeRows } from '@/lib/permissions';
+import { spaceCountsFor } from '@/lib/space-billing';
 import AdvancesTab from '@/components/AdvancesTab';
 import CpiDiffTab from '@/components/CpiDiffTab';
 import SavedAdvancesTab from '@/components/SavedAdvancesTab';
@@ -483,7 +484,7 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
           if ((!segSpaces || segSpaces.length === 0) && i > 0) segSpaces = points[i - 1].spaces;
           (segSpaces || []).forEach(function (cs: any) {
             if (!cs.space_id) return;
-            if (!held[cs.space_id]) held[cs.space_id] = { days: 0, area: Number(cs.spaces?.area) || 0, name: cs.spaces?.space_name || "" };
+            if (!held[cs.space_id]) held[cs.space_id] = { days: 0, area: spaceAreaMap.has(cs.space_id) ? (spaceAreaMap.get(cs.space_id) || 0) : (Number(cs.spaces?.area) || 0), name: cs.spaces?.space_name || "" };
             held[cs.space_id].days += d;
           });
         }
@@ -500,10 +501,14 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
 
       const annualBudget = Number(budget?.management_budget) || 0;
 
-      // Load all spaces for this property to get areas
-      const { data: propSpaces } = await supabase.from("spaces").select("id,area").eq("property_id", propId);
+      // Load all spaces for this property to get areas. שטחי עזר המוחרגים
+      // מדמי ניהול במטריצת הנכס (סככה/חצר) נספרים כשטח 0 — וכך כל
+      // ההתחשבנות (קבוצות, חלקי שוכרים, ריק) מכבדת את ההחרגה מנקודה אחת.
+      const { data: propSpaces } = await supabase.from("spaces").select("id,area,space_type").eq("property_id", propId);
+      const { data: stbRow } = await supabase.from("properties").select("space_type_billing").eq("id", propId).maybeSingle();
+      const stbMatrix = stbRow?.space_type_billing || null;
       const spaceAreaMap = new Map<string, number>();
-      (propSpaces ?? []).forEach((sp: any) => spaceAreaMap.set(sp.id, Number(sp.area) || 0));
+      (propSpaces ?? []).forEach((sp: any) => spaceAreaMap.set(sp.id, spaceCountsFor("mgmt", sp.space_type, stbMatrix) ? (Number(sp.area) || 0) : 0));
 
       // Cost-plus: the property's uniform percent. The entered actual figure
       // is usually WITH the plus already ("דרכ עם ה+"), so the default strips
@@ -1593,8 +1598,16 @@ function InsuranceTab({ properties, initialPropId, initialYear }: { properties: 
       // גרליה + ממד + מדרגות (422) = 6,011 while charged_area still said 5,589,
       // so the insurance split billed the gallery to nobody. The units are the
       // source of truth; charged_area is only the fallback when none are listed.
+      // שטחים המוחרגים מביטוח במטריצת הנכס (סככה/חצר) — לא נספרים בכלל
+      // חישובי הביטוח (ימי-מ"ר, חלוקות, ריק).
+      var { data: stbInsRow } = await supabase.from("properties").select("space_type_billing").eq("id", propId).maybeSingle();
+      var { data: insTypeRows } = await supabase.from("spaces").select("id, space_type").eq("property_id", propId);
+      var insExcluded = new Set((insTypeRows ?? [])
+        .filter(function(sp: any) { return !spaceCountsFor("insurance", sp.space_type, stbInsRow?.space_type_billing || null); })
+        .map(function(sp: any) { return sp.id; }));
       var areaOf = function(row: any): number {
         var sum = (row?.contract_spaces || []).reduce(function(a: number, x: any) {
+          if (x?.space_id && insExcluded.has(x.space_id)) return a;
           return a + (Number(x?.spaces?.area) || 0);
         }, 0);
         return sum > 0 ? sum : (Number(row?.charged_area) || 0);
@@ -1743,8 +1756,15 @@ function InsuranceTab({ properties, initialPropId, initialYear }: { properties: 
       // the owner's share, and toggle them to redistribute to tenants.
       var { data: propSpaces } = await supabase
         .from("spaces")
-        .select("id, space_name, area")
+        .select("id, space_name, area, space_type")
         .eq("property_id", propId);
+      // שטח מוחרג מביטוח במטריצת הנכס נספר 0 — ההחרגה זורמת לכל חישובי
+      // ימי-מ"ר, המקדמות והריק של הביטוח מנקודה אחת.
+      var { data: stbRowIns } = await supabase.from("properties").select("space_type_billing").eq("id", propId).maybeSingle();
+      var stbInsMatrix = stbRowIns?.space_type_billing || null;
+      (propSpaces ?? []).forEach(function(sp: any) {
+        if (!spaceCountsFor("insurance", sp.space_type, stbInsMatrix)) sp.area = 0;
+      });
 
       type Snapshot = { startDate: Date; endDate: Date; spaceIds: Record<string, boolean>; };
       var snapshotsByContract: Record<string, Snapshot[]> = {};
@@ -2480,6 +2500,7 @@ function WasteTab({ properties }: { properties: any[] }) {
   const [year, setYear] = useState(currentYear);
   const [period, setPeriod] = useState<"annual" | "Q1" | "Q2" | "Q3" | "Q4">("annual");
   const [wasteCost, setWasteCost] = useState("");
+  const [wasteTypeMatrix, setWasteTypeMatrix] = useState<any>(null);
   const [spaces, setSpaces] = useState<any[]>([]);
   const [results, setResults] = useState<WasteResult[]>([]);
   const [computing, setComputing] = useState(false);
@@ -2538,12 +2559,15 @@ function WasteTab({ properties }: { properties: any[] }) {
   }
 
   async function loadSpaces() {
-    const { data } = await supabase
-      .from("spaces")
-      .select("id, space_name, space_type, area, uses_waste_service")
-      .eq("property_id", propId)
-      .order("space_name");
+    const [{ data }, { data: stbRow }] = await Promise.all([
+      supabase.from("spaces")
+        .select("id, space_name, space_type, area, uses_waste_service")
+        .eq("property_id", propId)
+        .order("space_name"),
+      supabase.from("properties").select("space_type_billing").eq("id", propId).maybeSingle(),
+    ]);
     setSpaces(data ?? []);
+    setWasteTypeMatrix(stbRow?.space_type_billing || null);
     setResults([]);
   }
 
@@ -2557,8 +2581,10 @@ function WasteTab({ properties }: { properties: any[] }) {
   }
 
   // Legacy: spaces filtered by uses_waste_service flag (fallback when no groups defined)
-  const participatingSpaces = spaces.filter(function (s) { return s.uses_waste_service !== false; });
-  const nonParticipating = spaces.filter(function (s) { return s.uses_waste_service === false; });
+  // + החרגת סוגי שטח (סככה/חצר) לפי מטריצת הנכס — תקף לכל היחידות מהסוג.
+  const wasteTypeOk = function (s: any) { return spaceCountsFor("waste", s.space_type, wasteTypeMatrix); };
+  const participatingSpaces = spaces.filter(function (s) { return s.uses_waste_service !== false && wasteTypeOk(s); });
+  const nonParticipating = spaces.filter(function (s) { return s.uses_waste_service === false || !wasteTypeOk(s); });
   const totalWasteArea = participatingSpaces.reduce(function (s, sp) { return s + (sp.area ?? 0); }, 0);
   const hasGroups = wasteGroups.length > 0;
 
@@ -2655,7 +2681,10 @@ function WasteTab({ properties }: { properties: any[] }) {
           (segSpaces || []).forEach(function(x:any){
             if (!x.spaces) return;
             const sid = x.space_id;
-            if (!held[sid]) held[sid] = { area: Number(x.spaces?.area) || 0, days: 0, name: x.spaces?.space_name || "" };
+            // שטח שאינו משתתף באשפה (דגל היחידה או מטריצת סוג השטח) — 0.
+            var sRow = spaces.find(function(s0: any){ return s0.id === sid; });
+            var wasteOk = (!sRow || sRow.uses_waste_service !== false) && (!sRow || spaceCountsFor("waste", sRow.space_type, wasteTypeMatrix));
+            if (!held[sid]) held[sid] = { area: wasteOk ? (Number(x.spaces?.area) || 0) : 0, days: 0, name: x.spaces?.space_name || "" };
             held[sid].days += d;
           });
         }

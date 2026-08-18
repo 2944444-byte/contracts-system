@@ -10,7 +10,8 @@ export function monthlyRentFromSpaces(spaces: any[]): number {
   let total = 0, counted = 0;
   spaces.forEach(function (cs: any) {
     const area = cs?.spaces?.area ?? 0;
-    if (cs.charge_method === "fixed" || (cs.fixed_rent && cs.fixed_rent > 0)) { total += Number(cs.fixed_rent || 0); counted++; }
+    if (cs.charge_method === "included") { }
+    else if (cs.charge_method === "fixed" || (cs.fixed_rent && cs.fixed_rent > 0)) { total += Number(cs.fixed_rent || 0); counted++; }
     else if (cs.charge_method === "per_sqm" || (cs.price_per_sqm && cs.price_per_sqm > 0)) { total += Number(cs.price_per_sqm || 0) * Number(area); counted++; }
     else if (cs.min_rent && cs.min_rent > 0) { total += Number(cs.min_rent); counted++; }
   });

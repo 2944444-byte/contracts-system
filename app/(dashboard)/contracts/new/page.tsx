@@ -135,7 +135,7 @@ export default function ContractsNewPage() {
   const [cpiRecords, setCpiRecords] = useState<any[]>([]);
   const [currentVatPct, setCurrentVatPct] = useState(18);
   const [unitRentOverrides, setUnitRentOverrides] = useState<Record<string, string>>({});
-  const [unitRentTypes, setUnitRentTypes] = useState<Record<string, "per_sqm" | "fixed">>({});
+  const [unitRentTypes, setUnitRentTypes] = useState<Record<string, "per_sqm" | "fixed" | "included">>({});
 
   // Step 1 — Tenant & Property
   const [tenantId, setTenantId] = useState("");
@@ -2396,7 +2396,7 @@ export default function ContractsNewPage() {
                     if (!sp) return null;
                     const rType = unitRentTypes[sid] || "per_sqm";
                     const rVal = unitRentOverrides[sid] || "";
-                    const unitTotal = rType === "fixed" ? (Number(rVal) || 0) : (Number(rVal || rentPerSqm) || 0) * (sp.area || 0);
+                    const unitTotal = rType === "included" ? 0 : rType === "fixed" ? (Number(rVal) || 0) : (Number(rVal || rentPerSqm) || 0) * (sp.area || 0);
                     return (
                       <div key={sid} className="rounded-lg border border-slate-100 p-2 space-y-1">
                         <div className="flex items-center gap-2">
@@ -2407,8 +2407,14 @@ export default function ContractsNewPage() {
                               className={"rounded border px-2 py-0.5 text-[10px] " + (rType === "per_sqm" ? "border-blue-500 bg-blue-50 text-blue-700 font-bold" : "border-slate-200 text-slate-500")}>למ&quot;ר</button>
                             <button type="button" onClick={() => setUnitRentTypes(prev => ({...prev, [sid]: "fixed"}))}
                               className={"rounded border px-2 py-0.5 text-[10px] " + (rType === "fixed" ? "border-blue-500 bg-blue-50 text-blue-700 font-bold" : "border-slate-200 text-slate-500")}>סכום קבוע</button>
+                            <button type="button" onClick={() => setUnitRentTypes(prev => ({...prev, [sid]: "included"}))}
+                              title="שכ&quot;ד היחידה הזו כלול במחיר היחידה הראשית — תורמת ₪0 (מתאים לסככה / חצר צמודה)"
+                              className={"rounded border px-2 py-0.5 text-[10px] " + (rType === "included" ? "border-emerald-500 bg-emerald-50 text-emerald-700 font-bold" : "border-slate-200 text-slate-500")}>כלול במחיר</button>
                           </div>
                         </div>
+                        {rType === "included" ? (
+                          <div className="text-[11px] text-emerald-700">✓ כלול בשכ&quot;ד של היחידה הראשית — ללא חיוב נפרד</div>
+                        ) : (
                         <div className="flex items-center gap-2">
                           <input
                             type="number"
@@ -2420,6 +2426,7 @@ export default function ContractsNewPage() {
                           <span className="text-xs text-slate-400">{rType === "fixed" ? "₪/חודש" : "₪/מ\"ר"}</span>
                           {unitTotal > 0 && <span className="text-xs font-semibold text-green-700 mr-2">= {fmtMoney(unitTotal)}/חודש</span>}
                         </div>
+                        )}
                       </div>
                     );
                   })}
@@ -2432,7 +2439,8 @@ export default function ContractsNewPage() {
                     if (!sp) return;
                     var rType = unitRentTypes[sid] || "per_sqm";
                     var rVal = Number(unitRentOverrides[sid]) || 0;
-                    if (rType === "fixed") total += rVal;
+                    if (rType === "included") { /* כלול במחיר היחידה הראשית */ }
+                    else if (rType === "fixed") total += rVal;
                     else total += (rVal || Number(rentPerSqm) || 0) * (sp.area || 0);
                   });
                   if (total > 0) return (
