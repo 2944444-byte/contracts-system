@@ -1,6 +1,39 @@
 import { supabase as browserClient } from "./supabase";
 import { logAudit } from "./audit-log";
 
+// סטטוסים חיים שמחזיקים יחידה: גם חוזה חתום שטרם החל תופס אותה.
+const HOLDING_STATUSES = ["active", "extended", "expiring", "upcoming", "future"];
+
+// שחרור היחידות של חוזה שהסתיים — אלא אם חוזה חי ממשפחה אחרת עדיין מחזיק
+// בהן. המשפחה של החוזה עצמו (בסיס + תוספות) לעולם אינה חוסמת שחרור:
+// התוספות הן צילומי-מצב של אותה שכירות שהסתיימה — למשל תוספת הארכה ישנה
+// שסטטוסה עוד "active" אינה שכירות בפני עצמה. מיוצא כדי שתהליך סיום מוקדם
+// ישחרר את היחידות מיד, בלי להמתין לסנכרון הלילי.
+export async function freeContractSpaces(contractId: string, client?: any): Promise<number> {
+  const supabase = client || browserClient;
+  const { data: me } = await supabase.from("contracts")
+    .select("id,parent_contract_id").eq("id", contractId).single();
+  const familyId = (me as any)?.parent_contract_id || contractId;
+  const { data: mySpaces } = await supabase.from("contract_spaces")
+    .select("space_id").eq("contract_id", contractId);
+  const sids = (mySpaces ?? []).map(function (x: any) { return x.space_id; }).filter(Boolean);
+  if (sids.length === 0) return 0;
+  const { data: holders } = await supabase.from("contract_spaces")
+    .select("space_id, contracts!inner(id,status,parent_contract_id)")
+    .in("space_id", sids)
+    .in("contracts.status", HOLDING_STATUSES);
+  const stillHeld = new Set((holders ?? []).filter(function (h: any) {
+    const hc = h.contracts;
+    return (hc?.parent_contract_id || hc?.id) !== familyId;
+  }).map(function (h: any) { return h.space_id; }));
+  const toFree = sids.filter(function (sid: string) { return !stillHeld.has(sid); });
+  if (toFree.length > 0) {
+    await supabase.from("spaces").update({ status: "vacant" })
+      .in("id", toFree).eq("status", "occupied");
+  }
+  return toFree.length;
+}
+
 // Runs from two places: the contracts screen's "🔄 סנכרן סטטוסים" button (the
 // browser client) and the nightly cron (service-role client). Until the cron
 // was wired in, auto-exercising options and status transitions happened ONLY
@@ -179,23 +212,61 @@ export async function syncContractStatuses(client?: any): Promise<number> {
       // spaces.status stayed "occupied" forever after both a natural end and
       // an agreed early termination, and the unit read as let with no tenant.
       if (newStatus === "ended") {
-        const { data: mySpaces } = await supabase.from("contract_spaces")
-          .select("space_id").eq("contract_id", c.id);
-        const sids = (mySpaces ?? []).map(function (x: any) { return x.space_id; }).filter(Boolean);
-        if (sids.length > 0) {
-          const { data: holders } = await supabase.from("contract_spaces")
-            .select("space_id, contracts!inner(id,status,is_amendment)")
-            .in("space_id", sids)
-            .in("contracts.status", ["active", "extended", "expiring", "upcoming", "future"]);
-          const stillHeld = new Set((holders ?? []).map(function (h: any) { return h.space_id; }));
-          const toFree = sids.filter(function (sid: string) { return !stillHeld.has(sid); });
-          if (toFree.length > 0) {
-            await supabase.from("spaces").update({ status: "vacant" })
-              .in("id", toFree).eq("status", "occupied");
-          }
-        }
+        await freeContractSpaces(c.id, supabase);
       }
     }
+  }
+
+  // ── Repair stale unit flags ──
+  // spaces.status הוא דגל מטמון; תהליכים שמסיימים חוזה ישירות (סיום מוקדם)
+  // השאירו אותו תקוע לנצח, כי השחרור למעלה רץ רק על מעבר שהסנכרון עצמו ביצע.
+  // מתקנים בכל ריצה מול המצב האפקטיבי: לכל משפחת חוזים (בסיס + תוספות)
+  // צילום-המצב האחרון שיש לו יחידות קובע מה מוחזק; משפחה בלי בסיס חי אינה
+  // מחזיקה דבר (התוספות הן תיעוד של שכירות שהסתיימה). occupied שאיש אינו
+  // מחזיק → vacant; vacant שמשפחה שכבר החלה מחזיקה → occupied. יחידה
+  // שתוספת remove_units/swap שחררה אינה נתפסת מחדש (הצילום האחרון בלעדיה),
+  // ו-maintenance הוא מצב ידני — לא נוגעים בו.
+  const [{ data: allSpaces }, { data: liveFam }] = await Promise.all([
+    supabase.from("spaces").select("id,status").in("status", ["occupied", "vacant"]),
+    supabase.from("contracts")
+      .select("id,status,start_date,is_amendment,parent_contract_id,amendment_number,amendment_date,contract_spaces(space_id)")
+      .in("status", HOLDING_STATUSES),
+  ]);
+  const fams: Record<string, any[]> = {};
+  for (const c of liveFam ?? []) {
+    const fid = (c as any).parent_contract_id || (c as any).id;
+    (fams[fid] = fams[fid] || []).push(c);
+  }
+  const heldAny = new Set<string>();
+  const heldStarted = new Set<string>();
+  Object.keys(fams).forEach(function (fid) {
+    const snaps = fams[fid];
+    const base = snaps.find(function (s: any) { return !s.is_amendment; });
+    if (!base) return;
+    // תוספות ותיקות נשמרו בלי יחידות משלהן — צילום ריק אינו משחרר כלום.
+    const withSpaces = snaps.filter(function (s: any) { return (s.contract_spaces ?? []).length > 0; });
+    if (withSpaces.length === 0) return;
+    const rank = function (c: any): number {
+      const dt = c.amendment_date || c.start_date;
+      return (dt ? new Date(dt).getTime() : 0) * 1000 + (c.amendment_number || 0);
+    };
+    const latest = withSpaces.slice().sort(function (a: any, b: any) { return rank(a) - rank(b); })[withSpaces.length - 1];
+    const started = base.status !== "upcoming" && base.status !== "future";
+    (latest.contract_spaces ?? []).forEach(function (cs: any) {
+      if (!cs.space_id) return;
+      heldAny.add(cs.space_id);
+      if (started) heldStarted.add(cs.space_id);
+    });
+  });
+  const toVacant = (allSpaces ?? []).filter(function (s: any) { return s.status === "occupied" && !heldAny.has(s.id); }).map(function (s: any) { return s.id; });
+  const toOccupied = (allSpaces ?? []).filter(function (s: any) { return s.status === "vacant" && heldStarted.has(s.id); }).map(function (s: any) { return s.id; });
+  if (toVacant.length > 0) {
+    await supabase.from("spaces").update({ status: "vacant" }).in("id", toVacant);
+    updated += toVacant.length;
+  }
+  if (toOccupied.length > 0) {
+    await supabase.from("spaces").update({ status: "occupied" }).in("id", toOccupied);
+    updated += toOccupied.length;
   }
   return updated;
 }

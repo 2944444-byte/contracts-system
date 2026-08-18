@@ -125,7 +125,7 @@ export default function Sidebar() {
   return (
     <>
       {/* Mobile overlay — tap to close. Never shown on desktop. */}
-      {open && <div className="fixed inset-0 z-40 bg-slate-900/40 lg:hidden" onClick={function(){ setOpen(false); }} aria-hidden="true" />}
+      {open && <div className="fixed inset-0 z-40 bg-slate-900/40 lg:hidden" onMouseDown={function(e){ if (e.target !== e.currentTarget) return; setOpen(false); }} aria-hidden="true" />}
       <aside
         dir="rtl"
         className={

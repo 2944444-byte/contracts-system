@@ -608,7 +608,7 @@ export default function InsurancesPage() {
           bill the tenants for their share. Declining is safe — the same
           handoff sits on every building row ("צור חיוב"). */}
       {billPrompt && (
-        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={function(){setBillPrompt(null);}}>
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onMouseDown={function(e){ if (e.target !== e.currentTarget) return; setBillPrompt(null); }}>
           <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6" onClick={function(e:any){e.stopPropagation();}}>
             <div className="text-lg font-bold text-slate-800 mb-1">💸 להוציא חיובי ביטוח לשוכרים?</div>
             <div className="text-sm text-slate-600 leading-relaxed mb-4">
@@ -645,7 +645,7 @@ export default function InsurancesPage() {
           ? (historyOf.properties?.name || "")
           : (historyOf.contracts?.tenants?.name || "");
         return (
-          <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={function(){setHistoryOf(null);}}>
+          <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onMouseDown={function(e){ if (e.target !== e.currentTarget) return; setHistoryOf(null); }}>
             <div className="bg-white rounded-2xl shadow-xl max-w-2xl w-full p-6 max-h-[80vh] overflow-auto" onClick={function(e:any){e.stopPropagation();}}>
               <div className="flex items-center justify-between mb-3">
                 <div className="text-lg font-bold text-slate-800">📊 היסטוריית פוליסות ופרמיות</div>
@@ -961,7 +961,7 @@ export default function InsurancesPage() {
 
       {/* Modal */}
       {editingId && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={function(){setEditingId("");}}>
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onMouseDown={function(e){ if (e.target !== e.currentTarget) return; setEditingId(""); }}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={function(e){e.stopPropagation();}} dir="rtl">
             <div className="sticky top-0 bg-white border-b px-6 py-4 flex items-center justify-between">
               <h2 className="font-bold text-slate-800 text-lg">
@@ -1064,7 +1064,7 @@ export default function InsurancesPage() {
 
       {/* Requirements editor modal */}
       {reqEditContract && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={function(){setReqEditContract(null);}}>
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onMouseDown={function(e){ if (e.target !== e.currentTarget) return; setReqEditContract(null); }}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto" onClick={function(e){e.stopPropagation();}} dir="rtl">
             <div className="sticky top-0 bg-white border-b px-6 py-4 flex items-center justify-between">
               <h2 className="font-bold text-slate-800 text-lg">⚙ דרישות ביטוח להסכם</h2>

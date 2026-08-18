@@ -351,28 +351,39 @@ export default function PropertiesPage() {
   // schedule-aware monthly rent (tiers, exercised options, revenue minimum,
   // parking) × grace factor × in-force day ratio. This year AND next year,
   // signed contracts only — no speculative CPI, no unexercised options.
-  const [annData, setAnnData] = useState<{ tiers: Record<string, any[]>; options: Record<string, any[]>; parking: Record<string, any[]> } | null>(null);
+  const [annData, setAnnData] = useState<{ tiers: Record<string, any[]>; options: Record<string, any[]>; parking: Record<string, any[]>; ended: any[] } | null>(null);
   useEffect(function() {
     if (!selected) { setAnnData(null); return; }
     var propAll = contracts.filter(function(c) { return c.property_id === selected; });
-    var ids = propAll.map(function(c) { return c.id; });
-    if (ids.length === 0) { setAnnData({ tiers: {}, options: {}, parking: {} }); return; }
-    var amendBase: Record<string, string> = {};
-    propAll.forEach(function(c) { if (c.is_amendment && c.parent_contract_id) amendBase[c.id] = c.parent_contract_id; });
-    Promise.all([
-      supabase.from("contract_price_tiers").select("*").in("contract_id", ids).is("option_id", null),
-      supabase.from("contract_options").select("id,contract_id,option_number,is_exercised,status,start_date,end_date,rent_mechanism,rent_increase_pct,new_rent_value,price_tiers").in("contract_id", ids),
-      supabase.from("parking_subscriptions").select("contract_id,monthly_fee,quantity,is_included_in_rent,subscription_type,status").in("contract_id", ids).eq("status", "active"),
-    ]).then(function(res) {
-      var t: Record<string, any[]> = {}, o: Record<string, any[]> = {}, p: Record<string, any[]> = {};
-      (res[0].data || []).forEach(function(x: any) { (t[x.contract_id] = t[x.contract_id] || []).push(x); });
-      (res[1].data || []).forEach(function(x: any) { (o[x.contract_id] = o[x.contract_id] || []).push(x); });
-      (res[2].data || []).forEach(function(x: any) {
-        var base = amendBase[x.contract_id] || x.contract_id;
-        (p[base] = p[base] || []).push(x);
+    // חוזים שהסתיימו במהלך השנה (סיום טבעי או מוקדם) אינם בשאילתת המסך החיה,
+    // אבל החודשים שכבר נצברו להם שייכים לתמונה השנתית. נטענים בנפרד —
+    // לצפי בלבד, לא לתפוסה ולא להכנסה החודשית הנוכחית.
+    var yearStart = new Date().getFullYear() + "-01-01";
+    supabase.from("contracts")
+      .select("id, status, contract_type, start_date, rent_type, revenue_pct, min_rent_per_sqm, minimum_rent, rent_per_sqm, charged_area, investment_addition, property_id, end_date, is_amendment, parent_contract_id, grace_months, grace_days, grace_phase2_days, grace_type, grace_discount_pct, grace_mgmt_discount_pct, grace_ends_on_opening, mgmt_charge_starts, mgmt_free_max_days, works_start_date, planned_handover_date, actual_handover_date, planned_opening_date, actual_opening_date, opening_rule, opening_max_days_from_handover, contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area))")
+      .eq("property_id", selected).eq("is_amendment", false)
+      .eq("status", "ended").gte("end_date", yearStart)
+      .then(function(endedRes) {
+        var ended = endedRes.data || [];
+        var ids = propAll.map(function(c) { return c.id; }).concat(ended.map(function(c: any) { return c.id; }));
+        if (ids.length === 0) { setAnnData({ tiers: {}, options: {}, parking: {}, ended: [] }); return; }
+        var amendBase: Record<string, string> = {};
+        propAll.forEach(function(c) { if (c.is_amendment && c.parent_contract_id) amendBase[c.id] = c.parent_contract_id; });
+        Promise.all([
+          supabase.from("contract_price_tiers").select("*").in("contract_id", ids).is("option_id", null),
+          supabase.from("contract_options").select("id,contract_id,option_number,is_exercised,status,start_date,end_date,rent_mechanism,rent_increase_pct,new_rent_value,price_tiers").in("contract_id", ids),
+          supabase.from("parking_subscriptions").select("contract_id,monthly_fee,quantity,is_included_in_rent,subscription_type,status").in("contract_id", ids).eq("status", "active"),
+        ]).then(function(res) {
+          var t: Record<string, any[]> = {}, o: Record<string, any[]> = {}, p: Record<string, any[]> = {};
+          (res[0].data || []).forEach(function(x: any) { (t[x.contract_id] = t[x.contract_id] || []).push(x); });
+          (res[1].data || []).forEach(function(x: any) { (o[x.contract_id] = o[x.contract_id] || []).push(x); });
+          (res[2].data || []).forEach(function(x: any) {
+            var base = amendBase[x.contract_id] || x.contract_id;
+            (p[base] = p[base] || []).push(x);
+          });
+          setAnnData({ tiers: t, options: o, parking: p, ended: ended });
+        });
       });
-      setAnnData({ tiers: t, options: o, parking: p });
-    });
   }, [selected, contracts]);
 
   function forecastMonthly(c: any, date: Date): number {
@@ -412,7 +423,8 @@ export default function PropertiesPage() {
   function annualForecast(year: number): number {
     if (!annData) return 0;
     var total = 0;
-    selAllContracts.forEach(function(c: any) {
+    // כולל חוזים שהסתיימו השנה: החודשים שלהם עד תאריך הסיום הם חלק מהצפי.
+    selAllContracts.concat(annData.ended).forEach(function(c: any) {
       var start = c.start_date ? new Date(c.start_date) : null;
       if (!start) return;
       // תום התקופה האפקטיבי: הארכות תוספת ואופציות ממומשות מאריכות
@@ -903,7 +915,7 @@ export default function PropertiesPage() {
 
       {/* מודל */}
       {editingId && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={function(){setEditingId("");}}>
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onMouseDown={function(e){ if (e.target !== e.currentTarget) return; setEditingId(""); }}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={function(e){e.stopPropagation();}} dir="rtl">
             <div className="sticky top-0 bg-white border-b px-6 py-4 flex items-center justify-between">
               <h2 className="font-bold text-slate-800 text-lg">{isNew?"נכס חדש":"עריכת נכס"}</h2>
@@ -1076,7 +1088,7 @@ export default function PropertiesPage() {
 
       {/* Budget manager modal */}
       {budgetFor && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setBudgetFor(null)}>
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onMouseDown={function(e){ if (e.target !== e.currentTarget) return; setBudgetFor(null); }}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xl max-h-[90vh] overflow-y-auto p-6" onClick={(e) => e.stopPropagation()}>
             <PropertyBudgetManager propertyId={budgetFor.id} propertyName={budgetFor.name} onClose={() => setBudgetFor(null)} />
           </div>

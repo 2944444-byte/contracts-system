@@ -14,6 +14,7 @@ import { buildPriceTimeline, calculateTierPreviews, buildSpaceRentSchedule, rent
 import { penaltyTermsFromRow, hasPenalty, describePenaltyTerms, penaltyMonths } from '@/lib/option-penalty';
 import { contractArea } from '@/lib/contract-area';
 import { classifyAmendment, describeAmendment } from '@/lib/amendment-kind';
+import { freeContractSpaces } from '@/lib/contractSync';
 import { previewOptionDecline, applyOptionDecline } from '@/lib/option-decline';
 import { baseIndexRuleFromRow, describeBaseIndexRule, baseIndexPending, resolveBaseIndexMonth } from '@/lib/base-index-rule';
 import { pctTiersFromRow, describePctTiers } from '@/lib/revenue-pct-steps';
@@ -2789,7 +2790,7 @@ export default function ContractsPage() {
       {/* הנחה לתקופה — a contract-level discount applied to billing as it is
           produced, rather than a waiver on a charge that already exists. */}
       {showConc && selContract && (
-        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={function(){ if(!scSaving) setShowConc(false); }}>
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onMouseDown={function(e){ if (e.target !== e.currentTarget) return; if(!scSaving) setShowConc(false); }}>
           <div className="bg-white rounded-2xl shadow-xl max-w-lg w-full p-6 max-h-[85vh] overflow-auto" dir="rtl" onClick={function(e:any){e.stopPropagation();}}>
             <div className="text-lg font-bold text-slate-800 mb-1">🤝 הנחה לתקופה</div>
             <div className="text-xs text-slate-500 mb-4">
@@ -2869,7 +2870,7 @@ export default function ContractsPage() {
         var mf = mgmtFreeWindow({ contract: draft });
         var gs = (selContract.guarantees || []);
         return (
-          <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={function(){ if(!worksSaving) setShowWorks(false); }}>
+          <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onMouseDown={function(e){ if (e.target !== e.currentTarget) return; if(!worksSaving) setShowWorks(false); }}>
             <div className="bg-white rounded-2xl shadow-xl max-w-lg w-full p-6 max-h-[90vh] overflow-y-auto" dir="rtl" onClick={function(e:any){e.stopPropagation();}}>
               <div className="text-lg font-bold text-slate-800 mb-1">🔨 עבודות השוכר</div>
               <div className="text-xs text-slate-500 mb-4">
@@ -2954,7 +2955,7 @@ export default function ContractsPage() {
         var pen = lateOpeningPenalty({ contract: draft, monthlyRent: displayRent });
         var hasPenTerm = selContract.late_opening_penalty_type && selContract.late_opening_penalty_type !== "none";
         return (
-          <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={function(){ if(!openingSaving) { setShowOpening(false); setPenPreview(null); } }}>
+          <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onMouseDown={function(e){ if (e.target !== e.currentTarget) return; if(!openingSaving) { setShowOpening(false); setPenPreview(null); } }}>
             <div className="bg-white rounded-2xl shadow-xl max-w-lg w-full p-6" dir="rtl" onClick={function(e:any){e.stopPropagation();}}>
               <div className="text-lg font-bold text-slate-800 mb-1">🏬 פתיחת המושכר</div>
               <div className="text-xs text-slate-500 mb-4">
@@ -3063,7 +3064,7 @@ export default function ContractsPage() {
           ? resolveBaseIndexMonth({ rule: rule, contract: { ...selContract, actual_handover_date: handoverDate } })
           : null;
         return (
-          <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={function(){ if(!handoverSaving) setShowHandover(false); }}>
+          <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onMouseDown={function(e){ if (e.target !== e.currentTarget) return; if(!handoverSaving) setShowHandover(false); }}>
             <div className="bg-white rounded-2xl shadow-xl max-w-lg w-full p-6" dir="rtl" onClick={function(e:any){e.stopPropagation();}}>
               <div className="text-lg font-bold text-slate-800 mb-1">📦 מסירה בפועל</div>
               <div className="text-xs text-slate-500 mb-4">
@@ -3117,7 +3118,7 @@ export default function ContractsPage() {
       })()}
 
       {showAmendModal && selContract && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={function(){setShowAmendModal(false);}}>
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onMouseDown={function(e){ if (e.target !== e.currentTarget) return; setShowAmendModal(false); }}>
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-xl max-h-[85vh] overflow-y-auto" onClick={function(e){e.stopPropagation();}}>
             <div className="p-5">
               <div className="flex items-center justify-between mb-4">
@@ -3656,7 +3657,10 @@ export default function ContractsPage() {
                         indexation_method: selContract.indexation_method,
                         index_base_value: selContract.index_base_value,
                         index_base_date: selContract.index_base_date,
-                        status: "active",
+                        // תוספת סיום מוקדם שתאריכה כבר עבר נולדת "ended": תוספת
+                        // active הייתה ממשיכה להחזיק את היחידות במסך היחידות
+                        // (ובסריקות התפוסה) עד שהסנכרון הלילי היה מיישר אותה.
+                        status: (amendType === "terminate_early" && amendNewEndDate && amendNewEndDate <= new Date().toISOString().split("T")[0]) ? "ended" : "active",
                         parent_contract_id: selContract.id,
                         is_amendment: true,
                         amendment_number: (count ?? 0) + 1,
@@ -3880,6 +3884,13 @@ export default function ContractsPage() {
                           entity_type: "contract", entity_id: selContract.id, contract_id: selContract.id,
                           property_id: selContract.property_id ?? null, due_date: amendNewEndDate, is_resolved: false,
                         });
+
+                        // שחרור היחידות מיד — הסנכרון הלילי משחרר רק במעברים
+                        // שהוא עצמו מבצע, וכאן הבסיס קיבל "ended" ישירות.
+                        // סיום עתידי נשאר מוחזק עד יום הסיום (הסנכרון יטפל).
+                        if (amendNewEndDate <= todayStr0) {
+                          await freeContractSpaces(selContract.id);
+                        }
                       }
 
                       // Mark new spaces as occupied, removed as vacant

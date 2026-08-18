@@ -394,7 +394,7 @@ export default function GroupsPage() {
 
       {/* Edit modal */}
       {editingId && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={function(){setEditingId("");}}>
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onMouseDown={function(e){ if (e.target !== e.currentTarget) return; setEditingId(""); }}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md" onClick={function(e){e.stopPropagation();}} dir="rtl">
             <div className="px-6 py-4 border-b flex items-center justify-between">
               <h2 className="font-bold text-slate-800 text-lg">{isNew?"קבוצה חדשה":"עריכה"}</h2>
