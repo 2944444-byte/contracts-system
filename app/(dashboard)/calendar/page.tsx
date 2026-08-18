@@ -382,7 +382,7 @@ function SubscribeModal(props: { feedUrl: string; propFilter: string; propName?:
   const webcal = url.replace(/^https?:\/\//, "webcal://");
   function copy() { if (url) { navigator.clipboard.writeText(url); setCopied(true); setTimeout(function () { setCopied(false); }, 2000); } }
   return (
-    <div className="fixed inset-0 z-50 bg-slate-900/40 flex items-center justify-center p-4" onClick={props.onClose}>
+    <div className="fixed inset-0 z-50 bg-slate-900/40 flex items-center justify-center p-4" onMouseDown={function(e){ if (e.target !== e.currentTarget) return; (props.onClose)(); }}>
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-6" dir="rtl" onClick={function (e) { e.stopPropagation(); }}>
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-lg font-black text-slate-800">🔗 סנכרון יומן ל-Google / Outlook</h2>

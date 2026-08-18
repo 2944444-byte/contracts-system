@@ -429,7 +429,7 @@ export default function DocumentsPage() {
 
       {/* ── In-app viewer ── */}
       {preview && (
-        <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-sm flex items-center justify-center p-4" onClick={function(){ setPreview(null); }}>
+        <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-sm flex items-center justify-center p-4" onMouseDown={function(e){ if (e.target !== e.currentTarget) return; setPreview(null); }}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl h-[85vh] flex flex-col overflow-hidden" onClick={function(e){ e.stopPropagation(); }} dir="rtl">
             <div className="px-5 py-3 border-b border-slate-100 flex items-center justify-between shrink-0">
               <div className="flex items-center gap-2 min-w-0">

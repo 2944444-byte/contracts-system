@@ -524,7 +524,7 @@ export default function UsersPage() {
 
       {/* ── Create-user modal ── */}
       {showCreate && (
-        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4" onClick={function(){ setShowCreate(false); }}>
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4" onMouseDown={function(e){ if (e.target !== e.currentTarget) return; setShowCreate(false); }}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={function(e){ e.stopPropagation(); }} dir="rtl">
             <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between sticky top-0 bg-white">
               <h2 className="text-lg font-bold text-slate-800">משתמש חדש</h2>
@@ -585,7 +585,7 @@ export default function UsersPage() {
 
       {/* ── Edit-access modal ── */}
       {accessUser && (
-        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4" onClick={function(){ setAccessUser(null); }}>
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4" onMouseDown={function(e){ if (e.target !== e.currentTarget) return; setAccessUser(null); }}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={function(e){ e.stopPropagation(); }} dir="rtl">
             <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between sticky top-0 bg-white">
               <h2 className="text-lg font-bold text-slate-800">🔐 הרשאות — {accessUser.full_name || accessUser.email}</h2>

@@ -836,7 +836,7 @@ export default function GuaranteesPage() {
 
       {/* Create / edit / replace modal */}
       {editingId && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={function () { setEditingId(""); }}>
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onMouseDown={function(e){ if (e.target !== e.currentTarget) return; setEditingId(""); }}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={function (e) { e.stopPropagation(); }} dir="rtl">
             <div className="sticky top-0 bg-white border-b px-6 py-4 flex items-center justify-between">
               <h2 className="font-bold text-slate-800 text-lg">
@@ -932,7 +932,7 @@ export default function GuaranteesPage() {
 
       {/* Extend dialog — only changes end_date */}
       {extendingId && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={function () { setExtendingId(""); }}>
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onMouseDown={function(e){ if (e.target !== e.currentTarget) return; setExtendingId(""); }}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md" onClick={function (e) { e.stopPropagation(); }} dir="rtl">
             <div className="border-b px-6 py-4 flex items-center justify-between">
               <h2 className="font-bold text-slate-800 text-lg">⏰ הארכת תוקף הערבות</h2>
@@ -997,7 +997,7 @@ export default function GuaranteesPage() {
 
       {/* ─── Guarantee-renewal letter modal ─── */}
       {guarLetter && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={function(){setGuarLetter(null);}}>
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onMouseDown={function(e){ if (e.target !== e.currentTarget) return; setGuarLetter(null); }}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={function(e){e.stopPropagation();}} dir="rtl">
             <div className="sticky top-0 bg-white border-b px-6 py-4 flex items-center justify-between">
               <div>

@@ -473,7 +473,7 @@ export default function SavedAdvancesTab({ properties }: Props) {
       {/* Manual Add Modal */}
       {/* Edit Check Modal */}
       {editModal && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4 overflow-y-auto" onClick={function () { setEditModal(null); }}>
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4 overflow-y-auto" onMouseDown={function(e){ if (e.target !== e.currentTarget) return; setEditModal(null); }}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6 space-y-4 my-8" onClick={function (e) { e.stopPropagation(); }}>
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-bold text-slate-800">✏️ עריכת פרטי שייק</h3>
@@ -596,7 +596,7 @@ export default function SavedAdvancesTab({ properties }: Props) {
       )}
 
       {showAddModal && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={function () { setShowAddModal(false); }}>
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onMouseDown={function(e){ if (e.target !== e.currentTarget) return; setShowAddModal(false); }}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6 space-y-4" onClick={function (e) { e.stopPropagation(); }}>
             <div className="flex items-center justify-between mb-2">
               <h3 className="text-lg font-bold text-slate-800">➕ הוספת שייקים ידנית</h3>

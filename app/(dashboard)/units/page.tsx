@@ -118,7 +118,10 @@ export default function UnitsPage() {
     const map: Record<string, { name: string; started: boolean }> = {};
     Object.keys(families).forEach(function(fid) {
       const snaps = families[fid];
-      const baseEntry = snaps.find(function(s) { return !s.contract.is_amendment; }) || snaps[0];
+      // משפחה שהבסיס שלה כבר לא חי (סיום מוקדם מסמן "ended" ישירות) אינה
+      // מחזיקה יחידות: התוספות שנותרו בשאילתה הן תיעוד של שכירות שהסתיימה.
+      const baseEntry = snaps.find(function(s) { return !s.contract.is_amendment; });
+      if (!baseEntry) return;
       const latest = snaps.slice().sort(function(a, b) { return rank(a) - rank(b); })[snaps.length - 1];
       const name = baseEntry.contract.tenants?.name || null;
       if (!name) return;
@@ -263,7 +266,7 @@ export default function UnitsPage() {
 
       {/* Edit/Create modal */}
       {editingId && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={function(){setEditingId("");}}>
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onMouseDown={function(e){ if (e.target !== e.currentTarget) return; setEditingId(""); }}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto" onClick={function(e){e.stopPropagation();}} dir="rtl">
             <div className="sticky top-0 bg-white border-b px-6 py-4 flex items-center justify-between"><h2 className="font-bold text-slate-800 text-lg">{isNew?"יחידה חדשה":"עריכה"}</h2><button onClick={function(){setEditingId("");}} className="text-2xl text-slate-400">×</button></div>
             <div className="p-6 space-y-3">

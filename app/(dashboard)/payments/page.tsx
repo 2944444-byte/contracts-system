@@ -956,7 +956,7 @@ export default function PaymentsPage() {
         });
         var newBalance = Math.max(0, (Number(concFor.balance) || 0) - v.total);
         return (
-          <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={function () { if (!cSaving) setConcFor(null); }}>
+          <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onMouseDown={function(e){ if (e.target !== e.currentTarget) return; if (!cSaving) setConcFor(null); }}>
             <div className="bg-white rounded-2xl shadow-xl max-w-lg w-full p-6 max-h-[85vh] overflow-auto" onClick={function (e: any) { e.stopPropagation(); }}>
               <div className="text-lg font-bold text-slate-800 mb-1">🤝 ויתור / הסדר</div>
               <div className="text-xs text-slate-500 mb-4">{concFor.tenantName} · {concFor.description} · חיוב {fmtMoney(concFor.totalAmount)}</div>
@@ -1391,7 +1391,7 @@ export default function PaymentsPage() {
 
       {/* Create modal */}
       {editingId && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={function() { setEditingId(""); }}>
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onMouseDown={function(e){ if (e.target !== e.currentTarget) return; setEditingId(""); }}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={function(e) { e.stopPropagation(); }} dir="rtl">
             <div className="sticky top-0 bg-white border-b px-6 py-4 flex items-center justify-between">
               <h2 className="font-bold text-slate-800 text-lg">חיוב חדש</h2>
