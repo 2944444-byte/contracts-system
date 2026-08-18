@@ -170,6 +170,7 @@ export default function ContractEditPage() {
   const [vatType, setVatType] = useState("taxable");
   const [paymentFreq, setPaymentFreq] = useState("monthly");
   const [paymentMethod, setPaymentMethod] = useState("checks_advance");
+  const [firstChargeMode, setFirstChargeMode] = useState("stub_plus_period");
   const [paymentDay, setPaymentDay] = useState("1");
   const [indexMethod, setIndexMethod] = useState("standard");
   const [baseCPI, setBaseCPI] = useState("");
@@ -482,6 +483,7 @@ export default function ContractEditPage() {
     setVatType(c.vat_type ?? "taxable");
     setPaymentFreq(c.payment_frequency ?? "monthly");
     setPaymentMethod(c.payment_method ?? "checks_advance");
+    setFirstChargeMode(c.first_charge_mode ?? "stub_plus_period");
     setPaymentDay(c.payment_day?.toString() ?? "1");
     setIndexMethod(c.indexation_method ?? "standard");
     setBaseCPI(c.index_base_value?.toString() ?? "");
@@ -838,6 +840,7 @@ export default function ContractEditPage() {
         vat_type: vatType,
         payment_frequency: paymentFreq,
         payment_method: paymentMethod,
+        first_charge_mode: (paymentMethod === "bank_transfer" || paymentMethod === "standing_order") ? firstChargeMode : null,
         payment_day: Number(paymentDay) || 1,
         indexation_method: indexMethod,
         index_base_value: baseCPI ? Number(baseCPI) : null,
@@ -1425,6 +1428,15 @@ export default function ContractEditPage() {
                 <label className="mb-1 block text-xs font-semibold text-slate-700">יום תשלום בחודש</label>
                 <input type="number" min="1" max="28" value={paymentDay} onChange={(e) => setPaymentDay(e.target.value)} className={ic} />
               </div>
+              {(paymentMethod === "bank_transfer" || paymentMethod === "standing_order") && (
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">חיוב ראשון (תחילה באמצע תקופה)</label>
+                  <select value={firstChargeMode} onChange={(e) => setFirstChargeMode(e.target.value)} className={ic}>
+                    <option value="stub_plus_period">ימי השארית + התקופה הראשונה יחד (מקובל)</option>
+                    <option value="stub_only">ימי השארית בנפרד, ואז תקופות מלאות</option>
+                  </select>
+                </div>
+              )}
             </div>
             {baseRent > 0 && (
               <div className="rounded-xl bg-blue-50 border border-blue-200 p-4">

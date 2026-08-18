@@ -5,6 +5,10 @@
       "schedule": "0 2 * * *"
     },
     {
+      "path": "/api/cpi-cron",
+      "schedule": "30 4 * * *"
+    },
+    {
       "path": "/api/cron/transfer-billing",
       "schedule": "0 5 16-20 * *"
     }

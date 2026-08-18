@@ -244,6 +244,8 @@ export default function ContractsNewPage() {
   const [revReportFreq, setRevReportFreq] = useState("monthly");
   const [revLateHigherIndex, setRevLateHigherIndex] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState("checks_advance");
+  // חיוב ראשון בהעברה/ה"ק: שארית+תקופה יחד (ברירת מחדל) או שארית בנפרד.
+  const [firstChargeMode, setFirstChargeMode] = useState("stub_plus_period");
   const [paymentDay, setPaymentDay] = useState("1");
   const [indexMethod, setIndexMethod] = useState("standard");
   const [baseCPI, setBaseCPI] = useState("");
@@ -1080,6 +1082,7 @@ export default function ContractsNewPage() {
         vat_type: vatType,
         payment_frequency: paymentFreq,
         payment_method: paymentMethod,
+        first_charge_mode: (paymentMethod === "bank_transfer" || paymentMethod === "standing_order") ? firstChargeMode : null,
         payment_day: Number(paymentDay) || 1,
         early_termination_allowed: earlyTermination,
         termination_notice_days: earlyTermination ? Number(terminationNoticeDays) || 30 : null,
@@ -2188,6 +2191,20 @@ export default function ContractsNewPage() {
                   ))}
                 </select>
               </div>
+              {(paymentMethod === "bank_transfer" || paymentMethod === "standing_order") && (
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">
+                    חיוב ראשון (תחילה באמצע {paymentFreq === "quarterly" ? "רבעון" : "חודש"})
+                  </label>
+                  <select value={firstChargeMode} onChange={(e) => setFirstChargeMode(e.target.value)} className={ic}>
+                    <option value="stub_plus_period">ימי השארית + התקופה הראשונה יחד (מקובל)</option>
+                    <option value="stub_only">ימי השארית בנפרד, ואז תקופות מלאות</option>
+                  </select>
+                  <div className="text-[10px] text-slate-400 mt-0.5">
+                    לפי נוסח ההסכם: האם התשלום הראשון מכסה רק את הימים עד תחילת ה{paymentFreq === "quarterly" ? "רבעון" : "חודש"} הקרוב, או גם את התקופה המלאה שאחריו.
+                  </div>
+                </div>
+              )}
               <div>
                 <label className="mb-1 block text-xs font-semibold text-slate-700">
                   יום תשלום בחודש

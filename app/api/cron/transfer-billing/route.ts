@@ -48,9 +48,30 @@ export async function GET(req: NextRequest) {
   // The index that must exist before billing: the month BEFORE the run month.
   // Running on 16.9 → August's index, published ~15.9.
   const expected = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-  const { data: idx } = await supabase.from("cpi_records")
+  var { data: idx } = await supabase.from("cpi_records")
     .select("year, month, value").eq("base_year", BASE_YEAR)
     .eq("year", expected.getFullYear()).eq("month", expected.getMonth() + 1).limit(1);
+
+  // Self-heal: if the expected index isn't ingested yet, try fetching it from
+  // the CBS right now instead of just waiting for the nightly cpi-cron —
+  // July 2026 sat unpublished-locally for days exactly this way.
+  if (!idx || idx.length === 0) {
+    try {
+      const p = expected.getFullYear() + "-" + String(expected.getMonth() + 1).padStart(2, "0");
+      const cbsRes = await fetch("https://api.cbs.gov.il/index/data/price?id=120010&startperiod=" + p + "&endperiod=" + p + "&lang=he&format=json", { cache: "no-store" });
+      if (cbsRes.ok) {
+        const cbsData = await cbsRes.json();
+        const val = cbsData?.month?.[0]?.date?.[0]?.currBase?.value;
+        if (val) {
+          await supabase.from("cpi_records").upsert({
+            year: expected.getFullYear(), month: expected.getMonth() + 1,
+            value: Number(val), base_year: BASE_YEAR,
+          }, { onConflict: "year,month,base_year" });
+          idx = [{ year: expected.getFullYear(), month: expected.getMonth() + 1, value: Number(val) } as any];
+        }
+      }
+    } catch (e) { /* fall through to the waiting path */ }
+  }
 
   if (!idx || idx.length === 0) {
     // Not published yet — tomorrow's run will try again. Past the 20th this
