@@ -177,6 +177,8 @@ export default function PaymentsPage() {
   const [filterType,     setFilterType]     = useState<string>("");
   const [filterProperty, setFilterProperty] = useState<string>("");
   const [filterSearch,   setFilterSearch]   = useState<string>("");
+  // סינון-בלחיצה: קליק על שם שוכר/נכס בשורה מציג רק אותו — בלי להקליד בחיפוש.
+  const [focusFilter,    setFocusFilter]    = useState<{ kind: "tenant" | "property"; value: string } | null>(null);
   const [includeAdvances, setIncludeAdvances] = useState<boolean>(true);
   // Collapsed month sections
   const [collapsedMonths, setCollapsedMonths] = useState<Record<string, boolean>>({});
@@ -748,6 +750,25 @@ export default function PaymentsPage() {
     await loadAll();
   }
 
+  // ביטול סימון "שולם" — לטעות בקליק יש דרך חזרה. מחזיר את השורה ל"לתשלום"
+  // ומנקה את נתוני התשלום; מתועד ביומן הפעולות ונתפס בסל המיחזור.
+  async function unmarkPaid(row: Row) {
+    if (!confirm('לבטל את סימון התשלום?\n"' + row.description + '" יחזור למצב "לתשלום".')) return;
+    if (row.source === "charge") {
+      await supabase.from("charges").update({ status: "pending", paid_at: null }).eq("id", row.id);
+      await logAudit({ entity_type: "charge", entity_id: row.id, action: "unmark_paid" });
+    } else if (row.source === "rent_check" && row.underlyingAdvanceIds) {
+      for (var i = 0; i < row.underlyingAdvanceIds.length; i++) {
+        await supabase.from("advance_payments").update({ actual_paid: null, actual_paid_date: null }).eq("id", row.underlyingAdvanceIds[i]);
+      }
+      await logAudit({ entity_type: "charge", entity_id: row.id, action: "unmark_paid", notes: 'שיק שכ"ד' });
+    } else if (row.source === "revenue" && row.revenueReportId) {
+      await supabase.from("revenue_reports").update({ actual_paid: null, actual_paid_date: null }).eq("id", row.revenueReportId);
+      await logAudit({ entity_type: "charge", entity_id: row.revenueReportId, action: "unmark_paid", notes: 'שכ"ד פידיון' });
+    }
+    await loadAll();
+  }
+
   // Bulk mark: when a single tenant payment covers multiple debts (rent
   // check + CPI diff + insurance), the user selects them all and clicks
   // "סמן את הנבחרים כשולמו". One round-trip per row.
@@ -866,6 +887,10 @@ export default function PaymentsPage() {
     else if (filterStatus === "paid") { if (r.status !== "paid") return false; }
     if (filterType && r.chargeType !== filterType) return false;
     if (filterProperty && r.propertyName !== filterProperty) return false;
+    if (focusFilter) {
+      if (focusFilter.kind === "tenant" && r.tenantName !== focusFilter.value) return false;
+      if (focusFilter.kind === "property" && r.propertyName !== focusFilter.value) return false;
+    }
     if (filterSearch) {
       var q = filterSearch.toLowerCase();
       var hay = (r.tenantName + " " + r.propertyName + " " + r.description).toLowerCase();
@@ -1182,6 +1207,18 @@ export default function PaymentsPage() {
         </div>
       )}
 
+      {/* צ'יפ סינון-בלחיצה: מזכיר מה מסונן ומאפשר חזרה מיידית להכל */}
+      {focusFilter && (
+        <div className="mb-3 flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-sm">
+          <span className="text-blue-800">
+            מציג רק {focusFilter.kind === "tenant" ? "שוכר" : "נכס"}: <b>{focusFilter.value}</b>
+          </span>
+          <button onClick={function(){ setFocusFilter(null); }}
+            className="rounded-lg bg-white border border-blue-200 px-2.5 py-0.5 text-xs font-bold text-blue-700 hover:bg-blue-100">
+            ✕ הצג הכל
+          </button>
+        </div>
+      )}
       {loading ? (
         <div className="flex items-center justify-center gap-2 py-12 text-slate-400 text-sm"><span className="inline-block w-4 h-4 rounded-full border-2 border-slate-200 border-t-blue-600 animate-spin" aria-label="loading"></span>טוען...</div>
       ) : monthKeys.length === 0 ? (
@@ -1268,8 +1305,12 @@ export default function PaymentsPage() {
                                 />
                               </td>
                               <td className="px-4 py-2.5">
-                                <div className="font-semibold text-slate-800">{r.tenantName}</div>
-                                <div className="text-xs text-slate-400">{r.propertyName}</div>
+                                <button onClick={function(){ setFocusFilter({ kind: "tenant", value: r.tenantName }); }}
+                                  className="font-semibold text-slate-800 hover:text-blue-700 hover:underline text-right block"
+                                  title="הצג רק את החיובים של השוכר הזה">{r.tenantName}</button>
+                                <button onClick={function(){ setFocusFilter({ kind: "property", value: r.propertyName }); }}
+                                  className="text-xs text-slate-400 hover:text-blue-600 hover:underline text-right block"
+                                  title="הצג רק את החיובים של הנכס הזה">{r.propertyName}</button>
                               </td>
                               <td className="px-4 py-2.5">
                                 <div className="flex items-center gap-1.5">
@@ -1352,6 +1393,11 @@ export default function PaymentsPage() {
                                     <button onClick={function() { openRevenueReport(r); }}
                                       className="text-xs bg-purple-600 text-white px-2 py-1 rounded font-semibold hover:bg-purple-700"
                                       title="פתח את טופס דיווח הפדיון לחודש הזה">📊 הזן דיווח</button>
+                                  )}
+                                  {r.status === "paid" && (r.source === "charge" || r.source === "rent_check" || r.source === "revenue") && (
+                                    <button onClick={function() { unmarkPaid(r); }}
+                                      className="text-xs border border-slate-200 rounded px-2 py-1 text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+                                      title="סומן בטעות? החזרה למצב 'לתשלום'">↩️ בטל סימון</button>
                                   )}
                                   <button onClick={function() { sendLetter(r); }} className="text-xs border border-amber-200 bg-amber-50 rounded px-2 py-1 text-amber-700 hover:bg-amber-100" title="צור טיוטת מכתב דרישה">📧</button>
                                   {r.source === "charge" && (
