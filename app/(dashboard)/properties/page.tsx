@@ -11,7 +11,7 @@ import { graceFactorsFor, graceWindow } from '@/lib/store-opening';
 import { buildSpaceRentSchedule, rentAtDate } from '@/lib/contract-utils';
 import { minRentPerSqmAtDate } from '@/lib/min-rent';
 import { parkingRentAtDate } from '@/lib/parking-rent';
-import { AUX_SPACE_TYPES } from '@/lib/space-billing';
+import { AUX_SPACE_TYPES, spaceCountsFor } from '@/lib/space-billing';
 import CalcProgress, { CalcProgressState } from '@/components/CalcProgress';
 import PropertyBudgetManager from '@/components/PropertyBudgetManager';
 import OrgContactsEditor from '@/components/OrgContactsEditor';
@@ -992,14 +992,14 @@ export default function PropertiesPage() {
                   {/* מטריצת שטחי עזר: אילו חישובים כוללים סככות וחצרות בנכס זה */}
                   <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-2.5">
                     <div className="text-xs font-bold text-slate-700 mb-1">שטחי עזר בחישובים (סככה / חצר צמודה)</div>
-                    <div className="text-[10px] text-slate-400 mb-1.5">סמן אילו חישובים כוללים את שטחי העזר. ההגדרה תקפה לכל היחידות מהסוג בנכס זה. הכול מסומן = נכלל (ברירת המחדל).</div>
+                    <div className="text-[10px] text-slate-400 mb-1.5">ברירת המחדל: שטחי עזר <b>אינם נכללים</b> בחלוקות דמי ניהול / ביטוח / אשפה. סמן כדי לכלול. ההגדרה תקפה לכל היחידות מהסוג בנכס זה.</div>
                     {AUX_SPACE_TYPES.map(function(t){
                       return (
                         <div key={t.v} className="flex items-center gap-3 py-0.5 text-xs text-slate-600">
                           <span className="w-24 font-semibold">{t.icon} {t.l}</span>
                           {(["mgmt","insurance","waste"] as const).map(function(k){
                             var lbls: Record<string,string> = { mgmt: "דמי ניהול", insurance: "ביטוח", waste: "אשפה" };
-                            var on = !(fSpaceTypeBilling?.[t.v]?.[k] === false);
+                            var on = spaceCountsFor(k, t.v, fSpaceTypeBilling);
                             return (
                               <label key={k} className="flex items-center gap-1 cursor-pointer">
                                 <input type="checkbox" checked={on} onChange={function(e){

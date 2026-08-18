@@ -6,8 +6,9 @@
 //
 // 2. הכללה בחישובי עלות ברמת הנכס (properties.space_type_billing):
 //    לכל סוג שטח עזר מסמנים האם שטחו נספר בדמי ניהול / ביטוח / אשפה.
-//    ריק/חסר = נכלל (ברירת המחדל ההיסטורית). הסימון תקף לכל היחידות
-//    מאותו סוג באותו נכס.
+//    ברירת המחדל (החלטת 18.08.2026): שטח עזר (סככה/חצר) **אינו נספר**
+//    בחלוקות אלא אם סומן במפורש; סוג שטח רגיל נספר תמיד אלא אם הוחרג.
+//    הסימון תקף לכל היחידות מאותו סוג באותו נכס.
 
 // סוגי שטח העזר שעליהם חלה מטריצת ההכללה.
 export const AUX_SPACE_TYPES = [
@@ -18,11 +19,15 @@ export const AUX_SPACE_TYPES = [
 export type BillingKind = "mgmt" | "insurance" | "waste";
 
 // האם שטח מסוג זה נספר בחישוב מהסוג הנתון, לפי מטריצת הנכס.
+// ללא סימון מפורש: סוג עזר (סככה/חצר) מוחרג, סוג רגיל נכלל.
 export function spaceCountsFor(kind: BillingKind, spaceType: string | null | undefined, matrix: any): boolean {
   if (!spaceType) return true;
+  const isAux = AUX_SPACE_TYPES.some(function (t) { return t.v === spaceType; });
   const m = matrix && typeof matrix === "object" ? matrix[spaceType] : null;
-  if (!m || typeof m !== "object") return true;
-  return m[kind] !== false;
+  const v = m && typeof m === "object" ? m[kind] : undefined;
+  if (v === true) return true;
+  if (v === false) return false;
+  return !isAux;
 }
 
 // שטח יחידות החוזה הנספר לחישוב נתון (מסנן סוגים מוחרגים לפי מטריצת הנכס).
