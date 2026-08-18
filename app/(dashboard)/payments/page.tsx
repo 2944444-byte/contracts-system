@@ -233,7 +233,7 @@ export default function PaymentsPage() {
         // relationship between charges and contracts makes PostgREST refuse to
         // resolve the embed and the query returns nothing — which silently
         // emptied this screen of every charge row once such a key existed.
-        .select("*, contracts!charges_contract_id_fkey(property_id,tenants(name),properties(name),vat_type)")
+        .select("*, contracts!charges_contract_id_fkey(property_id,contract_type,tenants(name),properties(name),vat_type)")
         .or("due_date.gte." + yearStart + ",billing_period_start.gte." + yearStart)
         .or("due_date.lt." + yearEnd + ",billing_period_start.lt." + yearEnd)
         .order("due_date", { ascending: true }),
@@ -299,7 +299,11 @@ export default function PaymentsPage() {
     ch.forEach(function(c: any) {
       var tenant = (c.contracts?.tenants as any)?.name || "—";
       var property = (c.contracts?.properties as any)?.name || "";
-      var t = typeInfo(c.charge_type);
+      // חיוב העברה של הסכם חניות הוא דמי חניה — מסונן ומוצג תחת 🅿️ חניה,
+      // לא תחת "שכ"ד — העברה" (סטימצקי לא הופיע במסנן חניה).
+      var effType = c.charge_type === "rent_transfer" && c.contracts?.contract_type === "parking"
+        ? "parking" : (c.charge_type || "other");
+      var t = typeInfo(effType);
       var description = c.description || c.notes || t.l;
       allRows.push({
         id: c.id,
@@ -307,7 +311,7 @@ export default function PaymentsPage() {
         contractId: c.contract_id,
         tenantName: tenant,
         propertyName: property,
-        chargeType: c.charge_type || "other",
+        chargeType: effType,
         description: description,
         baseAmount: Number(c.base_amount) || 0,
         vatAmount: Number(c.vat_amount) || 0,
