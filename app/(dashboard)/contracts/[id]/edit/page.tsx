@@ -182,6 +182,11 @@ export default function ContractEditPage() {
   const [mgmtParkingFee, setMgmtParkingFee] = useState("");
   const [mgmtCostPlus, setMgmtCostPlus] = useState("");
   const [documentUrl, setDocumentUrl] = useState("");
+  // סעיף יציאה (Break clause) — נקבע באשף אך לא היה ניתן לעריכה כאן,
+  // כך שחוזה שהוקם בלעדיו לא יכול היה לקבל אותו בדיעבד.
+  const [earlyTermination, setEarlyTermination] = useState(false);
+  const [terminationNoticeDays, setTerminationNoticeDays] = useState("30");
+  const [terminationBy, setTerminationBy] = useState("both");
 
   // Step 3
   const [hasGrace, setHasGrace] = useState(false);
@@ -495,6 +500,9 @@ export default function ContractEditPage() {
     setMgmtParkingFee(c.mgmt_parking_fee_per_spot?.toString() ?? "");
     setMgmtCostPlus(c.mgmt_cost_plus_pct != null ? String(c.mgmt_cost_plus_pct) : "");
     setDocumentUrl(c.document_url ?? "");
+    setEarlyTermination(!!c.early_termination_allowed);
+    setTerminationNoticeDays(c.termination_notice_days?.toString() ?? "30");
+    setTerminationBy(c.termination_by ?? "both");
 
     // Populate Step 3
     if (c.grace_months || Number(c.grace_days) > 0) {
@@ -853,6 +861,9 @@ export default function ContractEditPage() {
         mgmt_parking_fee_per_spot: mgmtParkingFee ? Number(mgmtParkingFee) : null,
         mgmt_cost_plus_pct: mgmtCostPlus ? Number(mgmtCostPlus) : null,
         document_url: documentUrl || null,
+        early_termination_allowed: earlyTermination,
+        termination_notice_days: earlyTermination ? Number(terminationNoticeDays) || 30 : null,
+        termination_by: earlyTermination ? terminationBy : null,
         status,
       };
 
@@ -1593,6 +1604,32 @@ export default function ContractEditPage() {
               <label className="mb-1 block text-xs font-semibold text-slate-700">קישור לחוזה מקורי (URL)</label>
               <input type="url" value={documentUrl} onChange={(e) => setDocumentUrl(e.target.value)}
                 placeholder="https://drive.google.com/..." className={ic} dir="ltr" />
+            </div>
+
+            {/* Early termination clause — mirrors the wizard */}
+            <div className="rounded-xl border border-slate-200 p-4 mt-3">
+              <div className="flex items-center gap-2 mb-3">
+                <input type="checkbox" id="earlyTermEdit" checked={earlyTermination}
+                  onChange={(e) => setEarlyTermination(e.target.checked)} className="w-4 h-4" />
+                <label htmlFor="earlyTermEdit" className="text-sm font-bold text-slate-700">סיום מוקדם בהודעה מראש</label>
+              </div>
+              {earlyTermination && (
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-slate-700">ימי הודעה מראש</label>
+                    <input type="number" min="1" value={terminationNoticeDays}
+                      onChange={(e) => setTerminationNoticeDays(e.target.value)} className={ic} />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-slate-700">מי רשאי לסיים</label>
+                    <select value={terminationBy} onChange={(e) => setTerminationBy(e.target.value)} className={ic}>
+                      <option value="both">שני הצדדים</option>
+                      <option value="landlord">משכיר בלבד</option>
+                      <option value="tenant">שוכר בלבד</option>
+                    </select>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Parking section */}
