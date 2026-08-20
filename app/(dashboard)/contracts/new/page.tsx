@@ -431,7 +431,13 @@ export default function ContractsNewPage() {
   // Target opening = handover + grace, unless deliberately overridden.
   useEffect(function () {
     if (plannedOpeningTouched) return;
-    if (!hasGrace) return;
+    if (!hasGrace) {
+      // כיבוי הגרייס מנקה יעד פתיחה שנגזר ממנו: בלי זה נשאר יעד-רפאים
+      // "מסוף הגרייס" (ברירת המחדל הפנימית — 3 חודשים) שהוצג ואף נשמר
+      // בחוזה שאין בו גרייס כלל.
+      if (plannedOpening) setPlannedOpening("");
+      return;
+    }
     var base = actualHandover || plannedHandover || startDate;
     var amount = Number(graceMonths) || 0;
     if (!plausibleDate(base) || amount <= 0) return;
@@ -3002,20 +3008,24 @@ export default function ContractsNewPage() {
                       function the billing uses, so the form can't promise
                       something the calculation won't do. */}
                   {(function(){
+                    // תצוגת האמת של החיוב — חייבת לשקף את מה שיישמר: שדות
+                    // הגרייס נשמרים רק כשהתיבה מסומנת, אז גם כאן הם אפס
+                    // בלעדיה. בלי השער הזה ברירת המחדל הפנימית (3 חודשים)
+                    // ציירה "גרייס 91 ימים" בחוזה שאין בו גרייס.
                     var draft = {
-                      grace_months: graceUnit === "months" ? (Number(graceMonths) || 0) : 0,
-                      grace_days:   graceUnit === "days"   ? (Number(graceMonths) || 0) : 0,
+                      grace_months: hasGrace && graceUnit === "months" ? (Number(graceMonths) || 0) : 0,
+                      grace_days:   hasGrace && graceUnit === "days"   ? (Number(graceMonths) || 0) : 0,
                       grace_type: graceType,
                       grace_discount_pct: Number(graceDiscountPct) || 0,
                       grace_mgmt_discount_pct: graceMgmtDiscount === "" ? null : Number(graceMgmtDiscount),
-                      grace_ends_on_opening: graceEndsOnOpening,
+                      grace_ends_on_opening: hasGrace && graceEndsOnOpening,
                       actual_handover_date: actualHandover || null, planned_handover_date: plannedHandover || null,
                       start_date: startDate || null,
                       planned_opening_date: plannedOpening || null, actual_opening_date: actualOpening || null,
                       late_opening_penalty_type: latePenType === "none" ? null : latePenType,
                       late_opening_penalty_value: Number(latePenValue) || 0,
                       late_opening_grace_days: Number(latePenGraceDays) || 0,
-                      mgmt_charge_starts: mgmtStartsMode === "works_start_or_days" ? "works_start_or_days" : null,
+                      mgmt_charge_starts: hasGrace && mgmtStartsMode === "works_start_or_days" ? "works_start_or_days" : null,
                       mgmt_free_max_days: Number(mgmtFreeMaxDays) || null,
                       works_start_date: worksStartDate || null,
                     };
