@@ -3,7 +3,9 @@ import { emptyPenaltyTerms, type PenaltyTerms } from "@/lib/option-penalty";
 
 /**
  * Calculate contract end date from start date + period.
- * Ported from BS44 LeaseForm.jsx lines 153-178.
+ * הסיום הוא היום האחרון של התקופה (כלול), לא יום השנה עצמו: 10 שנים
+ * מ-1.9.2026 מסתיימות ב-31.8.2036 בסוף היום — לא ב-1.9.2036, שהיה
+ * מוסיף יום שכירות מלא מעבר לתקופה החוזית.
  */
 export function calculateEndDate(
   startDate: string,
@@ -14,10 +16,11 @@ export function calculateEndDate(
   try {
     const start = new Date(startDate);
     if (isNaN(start.getTime())) return "";
-    const end =
+    const plus =
       periodUnit === "months"
         ? addMonths(start, periodValue)
         : addYears(start, periodValue);
+    const end = new Date(plus.getFullYear(), plus.getMonth(), plus.getDate() - 1);
     return format(end, "yyyy-MM-dd");
   } catch {
     return "";

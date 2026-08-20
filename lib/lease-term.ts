@@ -97,13 +97,18 @@ export type LeaseTerm = {
 // The term, derived when the contract says it runs from a milestone.
 export function leaseTerm(params: {
   contract: any;
-  // The wizard passes the length being typed, before anything is saved.
+  // The wizard passes the length being typed, ALREADY converted to months.
+  // המרת שנים→חודשים חלה רק על lease_period_value מהחוזה — הפרמטר הזה
+  // הוא חודשים גמורים, והכפלה נוספת לפי היחידה הציגה 1440 חודשים וסיום
+  // בשנת 2146 להסכם של 10 שנים.
   months?: number;
 }): LeaseTerm {
   const c = params.contract || {};
   const unit = c.lease_period_unit || "months";
-  const raw = params.months != null ? params.months : Number(c.lease_period_value) || 0;
-  const months = unit === "years" ? raw * 12 : raw;
+  const fromContract = Number(c.lease_period_value) || 0;
+  const months = params.months != null
+    ? params.months
+    : (unit === "years" ? fromContract * 12 : fromContract);
 
   const startsAt = c.term_starts_at;
   var start: Date | null = null;
