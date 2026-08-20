@@ -108,7 +108,8 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
     if (!pid) { setAvailableContracts([]); return; }
     supabase.from("contracts")
       .select("id, tenants(name), payment_method, contract_spaces(spaces(space_name))")
-      .eq("property_id", pid).in("status", ["active", "extended"]).eq("is_amendment", false)
+      // upcoming/future כלולים: פנקס שיקים מראש מוכן בחתימה — לפני תחילת התקופה.
+      .eq("property_id", pid).in("status", ["active", "extended", "upcoming", "future"]).eq("is_amendment", false)
       .then(function({ data }) {
         setAvailableContracts((data ?? []).filter(function(c: any) { return c.payment_method === "checks_advance"; }));
       });
@@ -205,7 +206,9 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
       var query = supabase.from("contracts")
         .select("id, rent_per_sqm, charged_area, investment_addition, payment_method, payment_frequency, vat_type, indexation_method, index_mechanism, index_base_date, index_base_value, start_date, end_date, is_amendment, mgmt_fee_per_sqm, grace_months, grace_days, grace_phase2_days, grace_type, grace_discount_pct, grace_mgmt_discount_pct, grace_ends_on_opening, mgmt_charge_starts, mgmt_free_max_days, works_start_date, works_end_date, planned_handover_date, actual_handover_date, planned_opening_date, actual_opening_date, rent_type, minimum_rent, mgmt_included_in_revenue, tenants(name), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,index_base_date,index_base_value,use_original_index,spaces(space_name,area))")
         .eq("property_id", propId)
-        .in("status", ["active", "extended"])
+        // חוזה חתום שטרם התחיל (upcoming/future) מקבל פנקס שיקים כרגיל —
+        // החודשים שלפני תחילת התקופה ממילא נופלים בפרו-רטה של כל יחידה.
+        .in("status", ["active", "extended", "upcoming", "future"])
         .eq("is_amendment", false);
       if (contractFilter !== "all") query = query.eq("id", contractFilter);
       var { data: contracts } = await query;
@@ -324,12 +327,19 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
         // Build entry_date / exit_date per space_id
         var spaceEntry: Record<string, Date> = {};
         var spaceExit: Record<string, Date | null> = {};
+        // יחידה שנוספה בתוספת מאוחרת "לא קיימת" מנקודת מבטו של פנקס שהוכן
+        // קודם — נרשם לה תאריך ההוספה. יחידות הבסיס ידועות מרגע החתימה
+        // (גם כשהתקופה מתחילה בעתיד) ולכן לא נרשמות כאן.
+        var spaceAddedByAmendAt: Record<string, Date> = {};
         for (var i = 0; i < snapshots.length; i++) {
           var snap = snapshots[i];
           var prevIds = i > 0 ? snapshots[i-1].spaceIds : new Set();
           // New spaces = in this snap but not previously seen ever
           snap.spaceIds.forEach(function(sid: string) {
-            if (spaceEntry[sid] === undefined) spaceEntry[sid] = snap.date;
+            if (spaceEntry[sid] === undefined) {
+              spaceEntry[sid] = snap.date;
+              if (i > 0) spaceAddedByAmendAt[sid] = snap.date;
+            }
           });
           // Spaces removed in this amendment (present in prev, absent now)
           if (i > 0) {
@@ -568,10 +578,13 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
           }
 
           if (effectiveStart > effectiveEnd) continue; // Not active in this year
-          // Skip units that enter AFTER the CPI calc date — those units didn't
-          // exist yet when the advances were being prepared, so they can't be
-          // part of this year's check book.
-          if (unitEntry > cutoffDate) continue;
+          // Skip units ADDED BY AMENDMENT after the CPI calc date — those units
+          // didn't exist yet when the advances were being prepared, so they
+          // can't be part of this year's check book. Base units are known from
+          // signing: a signed lease starting NEXT month still gets its cheques
+          // now — that is exactly when the checkbook is collected.
+          var addedAt = spaceAddedByAmendAt[cs.space_id];
+          if (addedAt && addedAt > cutoffDate) continue;
 
           // Grace helper: given a period [pStart, pEnd], compute how much of
           // the rent and management should actually be charged.

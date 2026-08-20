@@ -1,7 +1,7 @@
 // גרסת המערכת — מקור אמת יחיד. עולה רק בשחרור גרסה (מיזוג dev → main),
 // לא בכל commit: תיקונים ותוספות מצטברים ב-dev, וכשבעלי המערכת מאשרים
 // שחרור — מעלים כאן את המספר, מוסיפים רשומת changelog, וממזגים.
-export const APP_VERSION = "4.4.3";
+export const APP_VERSION = "4.4.4";
 
 // מוצג לצד הגרסה: תאריך ה-build נקבע בזמן הבנייה ב-Vercel (next.config).
 export const BUILD_DATE: string = process.env.NEXT_PUBLIC_BUILD_DATE || "";
@@ -11,6 +11,12 @@ export interface ReleaseNote { v: string; date: string; highlights: string[]; }
 // "מה חדש" — מוצג לכל המשתמשים במסך ייעודי. שורות קצרות, בשפת המשתמש,
 // רק דברים שמשתמש רואה או מרגיש (לא ריפקטורים פנימיים).
 export const CHANGELOG: ReleaseNote[] = [
+  {
+    v: "4.4.4", date: "20.08.2026",
+    highlights: [
+      "🧾 מקדמות שכ\"ד — שיקים: חוזה חתום שטרם התחיל (עתידי) מופיע עכשיו בחישוב ומקבל פנקס שיקים מתחילת התקופה — בדיוק המצב שבו גובים שיקים מראש. עד היום המסך הציג רק חוזים פעילים, וחוזה שנחתם לספטמבר לא הופיע כלל.",
+    ],
+  },
   {
     v: "4.4.3", date: "18.08.2026",
     highlights: [
