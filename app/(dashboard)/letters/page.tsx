@@ -622,22 +622,6 @@ export default function LettersPage() {
     return doc;
   }
 
-  // הורדת ה-PDF למחשב — כשהשליחה עוברת דרך תוכנת המייל המקומית (שאליה
-  // דפדפן אינו יכול לצרף קובץ), המשתמש מצרף אותו ידנית. מחזיר את שם הקובץ.
-  async function downloadLetterPdf(l: any, fileBase: string): Promise<string> {
-    var b64 = await letterToPdfBase64(l);
-    var bin = atob(b64);
-    var bytes = new Uint8Array(bin.length);
-    for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    var blob = new Blob([bytes], { type: "application/pdf" });
-    var name = safeFilename(fileBase) + ".pdf";
-    var url = URL.createObjectURL(blob);
-    var a = document.createElement("a");
-    a.href = url; a.download = name; document.body.appendChild(a); a.click();
-    setTimeout(function(){ document.body.removeChild(a); URL.revokeObjectURL(url); }, 2000);
-    return name;
-  }
-
   function handlePrint(l: any) {
     var w = window.open("", "_blank", "width=800,height=1000");
     if (!w) return;
@@ -646,24 +630,79 @@ export default function LettersPage() {
   }
 
   // Render a letter to PDF in the browser (correct Hebrew/RTL) and return base64.
+  // משמש רק את ערוץ השליחה מהשרת (Resend). מגבלה ידועה: html2canvas
+  // מרנדר עברית עם רווחים חסרים במקומות — לשליחה דרך תוכנת המייל
+  // משתמשים במנוע ההדפסה של הדפדפן (handlePrint) שמפיק מסמך מדויק.
   async function letterToPdfBase64(l: any): Promise<string> {
     var mod: any = await import("html2pdf.js");
     var html2pdf = mod.default || mod;
     var docHtml = buildLetterHtmlDoc(l, false);
+    // html2pdf משכפל רק את האלמנט שניתן לו לתוך מסמך משלו — ה-<style> שב-<head>
+    // של המכתב לא הגיע איתו והקובץ יצא ללא עיצוב. לכן הסגנונות מוזרקים לתוך
+    // האלמנט עצמו, וכללי body מועתקים לעוטף (ל-body של הספרייה אין גישה).
+    var styleMatch = /<style>([\s\S]*?)<\/style>/.exec(docHtml);
+    var css = styleMatch ? styleMatch[1] : "";
+    var bodyMatch = /<body>([\s\S]*?)<\/body>/.exec(docHtml);
+    var bodyHtml = bodyMatch ? bodyMatch[1] : docHtml;
+    // כמו בהדפסה: גוף המכתב בפורטרט, הנספח בעמודים לרוחב (או פורטרט
+    // לנספח מסכם). מפרידים את הנספח ומוסיפים אותו כחלק נפרד עם אוריינטציה משלו.
+    var apxIdx = bodyHtml.indexOf('<div class="appendix');
+    var footIdx = bodyHtml.indexOf('<div class="footer-bar">');
+    var footerHtml = footIdx >= 0 ? bodyHtml.slice(footIdx) : "";
+    var mainHtml = bodyHtml.slice(0, apxIdx >= 0 ? apxIdx : (footIdx >= 0 ? footIdx : bodyHtml.length)) + footerHtml;
+    var apxHtml = apxIdx >= 0 ? bodyHtml.slice(apxIdx, footIdx >= 0 ? footIdx : bodyHtml.length) : "";
+    var rootStyle = 'font-family:"David","Arial";direction:rtl;font-size:11.5px;line-height:1.4;color:#1e293b;background:#fff;margin:0';
+    var wrap = function(inner: string, extraCss: string) {
+      return '<div class="pdf-root" dir="rtl" style="' + rootStyle + '"><style>' + css + extraCss + '</style>' + inner + '</div>';
+    };
+    var apxLandscape = apxHtml !== "" && apxHtml.indexOf('class="appendix appendix-p"') === -1;
     var iframe = document.createElement("iframe");
     iframe.style.position = "fixed"; iframe.style.left = "-10000px"; iframe.style.top = "0";
-    iframe.style.width = "794px"; iframe.style.height = "1123px"; iframe.style.border = "0";
+    iframe.style.width = "1123px"; iframe.style.height = "1123px"; iframe.style.border = "0";
     document.body.appendChild(iframe);
     try {
       var idoc = iframe.contentDocument as Document;
-      idoc.open(); idoc.write(docHtml); idoc.close();
-      await new Promise(function(res){ setTimeout(res, 400); }); // let the logo/image load
-      var dataUri: string = await html2pdf().set({
+      idoc.open();
+      idoc.write('<html><head><meta charset="utf-8"></head><body style="margin:0;background:#fff">' +
+        '<div id="pdf-main" style="width:794px">' + wrap(mainHtml, "") + '</div>' +
+        (apxHtml ? '<div id="pdf-apx" style="width:' + (apxLandscape ? 1123 : 794) + 'px">' +
+          // הנספח הוא חלק נפרד שמתחיל ממילא בעמוד חדש — בלי מעבר-עמוד ריק לפניו.
+          wrap(apxHtml, '.appendix{page-break-before:auto}') + '</div>' : '') +
+        '</body></html>');
+      idoc.close();
+      // לתת ללוגו להיטען (עד 1.5 שניות), ואז להתאים את גובה ה-iframe לתוכן —
+      // אחרת html2canvas מצלם רק את מה שבחלון ותחתית המכתב נחתכת.
+      var imgs = Array.prototype.slice.call(idoc.images) as HTMLImageElement[];
+      await Promise.race([
+        Promise.all(imgs.map(function(im){ return im.complete ? Promise.resolve() : new Promise<void>(function(res){ im.onload = function(){ res(); }; im.onerror = function(){ res(); }; }); })),
+        new Promise(function(res){ setTimeout(res, 1500); }),
+      ]);
+      iframe.style.height = (idoc.documentElement.scrollHeight + 40) + "px";
+      var mainEl = idoc.getElementById("pdf-main") as HTMLElement;
+      var apxEl = idoc.getElementById("pdf-apx") as HTMLElement | null;
+      var baseOpt = {
         margin: [10, 12, 10, 12],
         image: { type: "jpeg", quality: 0.95 },
-        html2canvas: { scale: 2, useCORS: true, backgroundColor: "#ffffff" },
+        html2canvas: { scale: 2, useCORS: true, backgroundColor: "#ffffff", windowWidth: 794 },
         jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
-      }).from(idoc.body).outputPdf("datauristring");
+        // מכבד page-break-before/inside מה-CSS (סעיפי נספח, כרטיסי יחידות).
+        pagebreak: { mode: ["css", "legacy"] },
+      };
+      var worker: any = html2pdf().set(baseOpt).from(mainEl).toPdf();
+      if (apxEl) {
+        var orient = apxLandscape ? "landscape" : "portrait";
+        worker = worker.get("pdf").then(function(pdf: any) {
+          // הספרייה מוסיפה עמודי-המשך ב-addPage() בלי פרמטרים — שחוזר
+          // לפורטרט. עוטפים כך שכל עמודי הנספח יישארו באוריינטציה שלו.
+          var orig = pdf.addPage.bind(pdf);
+          pdf.addPage = function() { return orig("a4", orient); };
+          orig("a4", orient);
+        }).set({
+          jsPDF: { unit: "mm", format: "a4", orientation: orient },
+          html2canvas: { scale: 2, useCORS: true, backgroundColor: "#ffffff", windowWidth: apxLandscape ? 1123 : 794 },
+        }).from(apxEl).toContainer().toCanvas().toPdf();
+      }
+      var dataUri: string = await worker.outputPdf("datauristring");
       var idx = dataUri.indexOf("base64,");
       return idx >= 0 ? dataUri.slice(idx + 7) : dataUri;
     } finally {
@@ -946,11 +985,8 @@ export default function LettersPage() {
         (ccM.length ? "cc=" + encodeURIComponent(ccM.join(",")) + "&" : "") +
         "subject=" + encodeURIComponent(g.subject) + "&body=" + encodeURIComponent(bodyM);
       if (!pureTestM) {
-        var fnameM = "";
-        try { fnameM = await downloadLetterPdf(g.printLetter, fileBase); } catch (e) { /* נופל להודעת הדפסה */ }
-        alert(fnameM
-          ? "📎 קובץ המכתב המאוחד הורד למחשב:\n" + fnameM + "\n\nתוכנת המייל נפתחת עכשיו — אל תשכח לצרף את הקובץ להודעה."
-          : "📎 לא הצלחתי להוריד את ה-PDF אוטומטית. לחץ 🖨, שמור כ-PDF וצרף להודעה.");
+        alert("📄 " + (g.tenant || "") + ": ייפתח חלון ההדפסה של המכתב המאוחד — בחר בו \"שמור כ-PDF\" ושמור את הקובץ.\n\nלאחר מכן תיפתח תוכנת המייל: צרף אליה את הקובץ ששמרת לפני השליחה.");
+        handlePrint(g.printLetter);
       }
       window.open(mt, "_blank");
       for (var k = 0; k < g.letters.length; k++) {
@@ -1074,6 +1110,15 @@ export default function LettersPage() {
       var companyL = parseCj(l).companyName || "הנהלת הנכס";
       body = "שלום " + tenant + ",\n\nרצ\"ב מכתב בנושא " + title + ".\nנא לעיין במסמך המצורף ולפעול בהתאם.\n\nבברכה,\n" + companyL;
     }
+    // דפדפן אינו יכול לצרף קובץ למייל שנפתח בתוכנה המקומית, ומנוע צילום-
+    // HTML (html2canvas) בולע רווחים בעברית — לכן ה-PDF נוצר על ידי מנוע
+    // ההדפסה של הדפדפן, בדיוק כמו כפתור 🖨: נפתח חלון ההדפסה של המכתב
+    // (המשתמש בוחר "שמור כ-PDF"), ואז תוכנת המייל, עם תזכורת לצרף.
+    // נפתח לפני כל await — בתוך מחוות הלחיצה, שלא ייחסם כחלון קופץ.
+    if (!pureTest) {
+      alert("📄 לפני השליחה ייפתח חלון ההדפסה של המכתב — בחר בו \"שמור כ-PDF\" ושמור את הקובץ.\n\nלאחר מכן תיפתח תוכנת המייל: אל תשכח לצרף אליה את הקובץ ששמרת לפני השליחה.");
+      handlePrint(l);
+    }
     var propIds = [l.property_id || l.contracts?.properties?.id].filter(Boolean);
     var cc = pureTest ? "" : (await ccForPropsLive(propIds as string[], toList[0] || "", l)).join(",");
     if (pureTest && propIds.length) {
@@ -1084,15 +1129,6 @@ export default function LettersPage() {
       (cc ? "cc=" + encodeURIComponent(cc) + "&" : "") +
       "subject=" + encodeURIComponent(title) +
       "&body=" + encodeURIComponent(body);
-    // דפדפן אינו יכול לצרף קובץ למייל שנפתח בתוכנה המקומית: מורידים את
-    // ה-PDF למחשב ומזכירים למשתמש לצרף אותו — לפני שהמייל נפתח.
-    if (!pureTest) {
-      var fname = "";
-      try { fname = await downloadLetterPdf(l, title + " - " + tenant); } catch (e) { /* נופל להודעת הדפסה */ }
-      alert(fname
-        ? "📎 קובץ המכתב הורד למחשב:\n" + fname + "\n\nתוכנת המייל נפתחת עכשיו — אל תשכח לצרף את הקובץ להודעה לפני השליחה."
-        : "📎 לא הצלחתי להוריד את ה-PDF אוטומטית. לפני השליחה: לחץ 🖨, שמור כ-PDF וצרף את הקובץ להודעה.");
-    }
     // window.location triggers the OS mail handler reliably without leaving the app.
     window.location.href = mailto;
     // Record the send (recipient + timestamp) so it's traceable in the list.
@@ -1130,7 +1166,7 @@ export default function LettersPage() {
 
       {emailReady === false && (
         <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50 px-4 py-2.5 text-xs text-blue-900" dir="rtl">
-          📎 השליחה מתבצעת דרך תוכנת המייל שלך. בכל לחיצה על &quot;שלח&quot; קובץ ה-PDF של המכתב יורד למחשב — צרף אותו להודעה לפני השליחה.
+          📎 השליחה מתבצעת דרך תוכנת המייל שלך. בכל לחיצה על &quot;שלח&quot; נפתח חלון ההדפסה של המכתב — בחר &quot;שמור כ-PDF&quot; וצרף את הקובץ להודעה לפני השליחה.
         </div>
       )}
 

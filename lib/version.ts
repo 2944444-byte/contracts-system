@@ -1,7 +1,7 @@
 // גרסת המערכת — מקור אמת יחיד. עולה רק בשחרור גרסה (מיזוג dev → main),
 // לא בכל commit: תיקונים ותוספות מצטברים ב-dev, וכשבעלי המערכת מאשרים
 // שחרור — מעלים כאן את המספר, מוסיפים רשומת changelog, וממזגים.
-export const APP_VERSION = "4.4.7";
+export const APP_VERSION = "4.4.8";
 
 // מוצג לצד הגרסה: תאריך ה-build נקבע בזמן הבנייה ב-Vercel (next.config).
 export const BUILD_DATE: string = process.env.NEXT_PUBLIC_BUILD_DATE || "";
@@ -11,6 +11,12 @@ export interface ReleaseNote { v: string; date: string; highlights: string[]; }
 // "מה חדש" — מוצג לכל המשתמשים במסך ייעודי. שורות קצרות, בשפת המשתמש,
 // רק דברים שמשתמש רואה או מרגיש (לא ריפקטורים פנימיים).
 export const CHANGELOG: ReleaseNote[] = [
+  {
+    v: "4.4.8", date: "20.08.2026",
+    highlights: [
+      "🖨️ מסך מכתבים: ה-PDF לצירוף למייל נוצר עכשיו באותו מנוע של כפתור ההדפסה — בלחיצה על \"שלח\" נפתח חלון ההדפסה של המכתב (בחר \"שמור כ-PDF\"), ואז תוכנת המייל עם תזכורת לצרף. הקובץ שירד אוטומטית בגרסה הקודמת יצא ללא עיצוב — הוחלף.",
+    ],
+  },
   {
     v: "4.4.7", date: "20.08.2026",
     highlights: [
