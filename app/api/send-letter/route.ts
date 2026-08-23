@@ -8,6 +8,16 @@ export const maxDuration = 30;
 // Send a letter as an email with the rendered PDF attached and a short body.
 // The PDF is generated client-side (correct Hebrew/RTL via the browser) and sent
 // here as base64. Body: { to, cc?, subject, shortHtml, pdfBase64, filename }.
+// האם ערוץ השליחה מהשרת מוגדר בכלל? מסך המכתבים שואל לפני שהוא מציע
+// "שליחה אמיתית": בלי RESEND_API_KEY בסביבה כל שליחה הייתה נכשלת בשגיאה.
+export async function GET(req: NextRequest) {
+  if (!(await requireUser(req))) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  return NextResponse.json({
+    configured: !!process.env.RESEND_API_KEY,
+    from: process.env.EMAIL_FROM || null,
+  });
+}
+
 export async function POST(req: NextRequest) {
   try {
     if (!(await requireUser(req))) return NextResponse.json({ error: "unauthorized" }, { status: 401 });

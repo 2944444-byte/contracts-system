@@ -234,7 +234,21 @@ export default function LettersPage() {
 
   useEffect(function() { loadAll(); }, []);
   useEffect(function() { try { var v = localStorage.getItem("letters_test_mode_v2"); if (v !== null) setTestMode(v === "1"); } catch (e) {} }, []);
+  // null = טרם נבדק; false = שירות הדואר (Resend) לא מוגדר בסביבה — אז אין
+  // ערוץ שליחה עם PDF, והמסך נשאר במייל המקומי ומסביר מה חסר במקום להיכשל.
+  const [emailReady, setEmailReady] = useState<boolean | null>(null);
+  useEffect(function() {
+    (async function() {
+      try {
+        var res = await fetch("/api/send-letter", { headers: await authHeaders() });
+        var d = res.ok ? await res.json() : { configured: false };
+        setEmailReady(!!d.configured);
+        if (!d.configured) setTestMode(true);
+      } catch (e) { setEmailReady(false); setTestMode(true); }
+    })();
+  }, []);
   function toggleTestMode() {
+    if (emailReady === false) return;
     setTestMode(function(prev){ var n = !prev; try { localStorage.setItem("letters_test_mode_v2", n ? "1" : "0"); } catch (e) {} return n; });
   }
 
@@ -1058,14 +1072,25 @@ export default function LettersPage() {
         </span>}
         actions={
           <>
-            <button onClick={toggleTestMode}
-              className={"rounded-xl px-3 py-2 text-xs font-bold border " + (testMode ? "bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100" : "bg-white text-green-700 border-white hover:bg-green-50")}
+            <button onClick={toggleTestMode} disabled={emailReady === false}
+              className={"rounded-xl px-3 py-2 text-xs font-bold border disabled:opacity-70 disabled:cursor-not-allowed " + (testMode ? "bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100" : "bg-white text-green-700 border-white hover:bg-green-50")}
               title={testMode ? "מצב בדיקה: שליחה דרך תוכנת המייל המקומית בלבד, ללא PDF וללא עותקים. לחץ למעבר לשליחה אמיתית." : "מצב שליחה אמיתית: PDF מצורף + עותקים למורשים (דורש Resend). לחץ לחזרה למצב בדיקה."}>
               {testMode ? "🧪 מצב בדיקה (מייל מקומי)" : "🚀 שליחה אמיתית (PDF + עותקים)"}
             </button>
             <button onClick={openNew} className="rounded-xl bg-white text-blue-700 px-4 py-2 text-sm font-bold hover:bg-blue-50 shadow-sm">+ מכתב חדש</button>
           </>
         } />
+
+      {emailReady === false && (
+        <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900" dir="rtl">
+          <div className="font-bold mb-1">📎 שליחת מכתבים עם קובץ PDF מצורף טרם הופעלה</div>
+          <div>
+            המערכת יכולה לשלוח את המכתב כמייל עם ה-PDF מצורף ועותקים למורשים — דרך שירות דואר (Resend) שנדרש להגדירו פעם אחת
+            (מפתח API וכתובת שולח בדומיין של הארגון). עד אז הכפתור &quot;שלח&quot; פותח את תוכנת המייל המקומית עם טקסט המכתב,
+            ודפדפן אינו יכול לצרף אליו קובץ: להורדת ה-PDF השתמש בכפתור 🖨 וצרף אותו ידנית. להפעלה — פנה לבעלי המערכת.
+          </div>
+        </div>
+      )}
 
       {loading ? <div className="flex items-center justify-center gap-2 py-12 text-slate-400 text-sm"><span className="inline-block w-4 h-4 rounded-full border-2 border-slate-200 border-t-blue-600 animate-spin" aria-label="loading"></span>טוען...</div> : letters.length===0 ? (
         <div className="rounded-xl border-2 border-dashed border-slate-200 bg-white p-12 text-center text-slate-400">
