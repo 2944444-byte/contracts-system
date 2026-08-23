@@ -25,6 +25,7 @@ export async function POST(req: NextRequest) {
       },
     });
   } catch (e: any) {
+    console.error("letter-pdf failed:", e?.stack || e);
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
   }
 }

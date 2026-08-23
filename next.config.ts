@@ -6,7 +6,7 @@ const nextConfig: NextConfig = {
   // יצירת PDF בשרת (Chromium): החבילות נטענות כפי שהן (לא נארזות ב-webpack),
   // וקובצי הגופנים נכללים בפונקציה של המסלול שקורא אותם מהדיסק.
   serverExternalPackages: ["@sparticuz/chromium", "puppeteer-core"],
-  outputFileTracingIncludes: { "/api/letter-pdf": ["./lib/fonts/**"] },
+  outputFileTracingIncludes: { "/api/letter-pdf": ["./lib/fonts/**", "./node_modules/@sparticuz/chromium/bin/**"] },
   env: {
     // Stamped at build time — shown next to the version in the sidebar and
     // settings, so "which build am I on" is answerable at a glance.

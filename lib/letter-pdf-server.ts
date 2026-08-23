@@ -35,9 +35,13 @@ async function launchBrowser(): Promise<any> {
   const onServerless = !!(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
   if (onServerless) {
     const chromium = (await import("@sparticuz/chromium")).default;
+    // ללא WebGL/GPU — מומלץ לסביבות שרת ומונע כשלי אתחול.
+    chromium.setGraphicsMode = false;
+    const exe = await chromium.executablePath();
+    console.info("letter-pdf: chromium at", exe);
     return puppeteer.launch({
       args: chromium.args,
-      executablePath: await chromium.executablePath(),
+      executablePath: exe,
       headless: true,
     });
   }
