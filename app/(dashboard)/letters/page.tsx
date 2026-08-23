@@ -550,7 +550,9 @@ export default function LettersPage() {
       }
     }
 
-    var doc = '<!DOCTYPE html><html dir="rtl"><head><meta charset="UTF-8"><style>' +
+    // <title> = שם הקובץ שהדפדפן מציע ב"שמור כ-PDF" מחלון ההדפסה.
+    var docTitle = safeFilename(title + " - " + tenant);
+    var doc = '<!DOCTYPE html><html dir="rtl"><head><meta charset="UTF-8"><title>' + docTitle.replace(/&/g, "&amp;").replace(/</g, "&lt;") + '</title><style>' +
       // Cover page stays portrait; each appendix section automatically prints
       // landscape via a named @page rule. The recipient sees a portrait cover
       // letter then a landscape page per appendix — no manual rotation needed
