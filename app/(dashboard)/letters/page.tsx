@@ -622,6 +622,22 @@ export default function LettersPage() {
     return doc;
   }
 
+  // הורדת ה-PDF למחשב — כשהשליחה עוברת דרך תוכנת המייל המקומית (שאליה
+  // דפדפן אינו יכול לצרף קובץ), המשתמש מצרף אותו ידנית. מחזיר את שם הקובץ.
+  async function downloadLetterPdf(l: any, fileBase: string): Promise<string> {
+    var b64 = await letterToPdfBase64(l);
+    var bin = atob(b64);
+    var bytes = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    var blob = new Blob([bytes], { type: "application/pdf" });
+    var name = safeFilename(fileBase) + ".pdf";
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url; a.download = name; document.body.appendChild(a); a.click();
+    setTimeout(function(){ document.body.removeChild(a); URL.revokeObjectURL(url); }, 2000);
+    return name;
+  }
+
   function handlePrint(l: any) {
     var w = window.open("", "_blank", "width=800,height=1000");
     if (!w) return;
@@ -922,7 +938,20 @@ export default function LettersPage() {
     // Test mode: open the local mail client with the unified text, addressing
     // ALL domain recipients (mailto can't attach the PDF — use the 🖨 button).
     if (testMode) {
-      var mt = "mailto:" + encodeURIComponent(toList.join(",")) + "?subject=" + encodeURIComponent(g.subject) + "&body=" + encodeURIComponent(g.body);
+      var pureTestM = emailReady !== false;
+      var ccM = pureTestM ? [] : (g.cc || []);
+      var bodyM = pureTestM ? g.body
+        : "שלום " + (g.tenant || "") + ",\n\nרצ\"ב מכתב בנושא " + g.subject + ".\nנא לעיין במסמך המצורף ולפעול בהתאם.\n\nבברכה,\n" + (parseCj(g.letters[0]).companyName || "הנהלת הנכס");
+      var mt = "mailto:" + encodeURIComponent(toList.join(",")) + "?" +
+        (ccM.length ? "cc=" + encodeURIComponent(ccM.join(",")) + "&" : "") +
+        "subject=" + encodeURIComponent(g.subject) + "&body=" + encodeURIComponent(bodyM);
+      if (!pureTestM) {
+        var fnameM = "";
+        try { fnameM = await downloadLetterPdf(g.printLetter, fileBase); } catch (e) { /* נופל להודעת הדפסה */ }
+        alert(fnameM
+          ? "📎 קובץ המכתב המאוחד הורד למחשב:\n" + fnameM + "\n\nתוכנת המייל נפתחת עכשיו — אל תשכח לצרף את הקובץ להודעה."
+          : "📎 לא הצלחתי להוריד את ה-PDF אוטומטית. לחץ 🖨, שמור כ-PDF וצרף להודעה.");
+      }
       window.open(mt, "_blank");
       for (var k = 0; k < g.letters.length; k++) {
         await supabase.from("letters").update({ status: "sent", sent_at: new Date().toISOString(), sent_to: toList.join(", ") }).eq("id", g.letters[k].id);
@@ -1035,10 +1064,19 @@ export default function LettersPage() {
     var toStr = toList.join(",");
     var body = letterBodyText(l).trim() ||
       ("שלום " + tenant + ",\n\nמצורף בזאת " + title + ".\nנא לעיין ולפעול בהתאם.\n\nבברכה,\nהנהלת הנכס");
-    // In test mode no CC — don't pre-fill owners/authorized users.
+    // כששירות הדואר לא מופעל, תוכנת המייל המקומית היא ערוץ השליחה האמיתי —
+    // ולכן העותקים (מורשים + מכותבים פנימיים) כן ממולאים. "מצב בדיקה" בלי
+    // עותקים קיים רק כשיש ערוץ אמיתי אחר להשוות אליו.
+    var pureTest = testMode && emailReady !== false;
+    // כשה-PDF מצורף (ידנית) גוף המייל הוא מעטפת קצרה לפי נושא המכתב —
+    // לא כל טקסט המכתב עם הסכומים. הטקסט המלא נשאר רק במצב בדיקה טהור.
+    if (!pureTest) {
+      var companyL = parseCj(l).companyName || "הנהלת הנכס";
+      body = "שלום " + tenant + ",\n\nרצ\"ב מכתב בנושא " + title + ".\nנא לעיין במסמך המצורף ולפעול בהתאם.\n\nבברכה,\n" + companyL;
+    }
     var propIds = [l.property_id || l.contracts?.properties?.id].filter(Boolean);
-    var cc = testMode ? "" : (await ccForPropsLive(propIds as string[], toList[0] || "", l)).join(",");
-    if (testMode && propIds.length) {
+    var cc = pureTest ? "" : (await ccForPropsLive(propIds as string[], toList[0] || "", l)).join(",");
+    if (pureTest && propIds.length) {
       // שלא ייראה כתקלה: במצב בדיקה עותקים מנוטרלים בכוונה.
       console.info("מצב בדיקה — עותקים (CC) לא צורפו בכוונה");
     }
@@ -1046,6 +1084,15 @@ export default function LettersPage() {
       (cc ? "cc=" + encodeURIComponent(cc) + "&" : "") +
       "subject=" + encodeURIComponent(title) +
       "&body=" + encodeURIComponent(body);
+    // דפדפן אינו יכול לצרף קובץ למייל שנפתח בתוכנה המקומית: מורידים את
+    // ה-PDF למחשב ומזכירים למשתמש לצרף אותו — לפני שהמייל נפתח.
+    if (!pureTest) {
+      var fname = "";
+      try { fname = await downloadLetterPdf(l, title + " - " + tenant); } catch (e) { /* נופל להודעת הדפסה */ }
+      alert(fname
+        ? "📎 קובץ המכתב הורד למחשב:\n" + fname + "\n\nתוכנת המייל נפתחת עכשיו — אל תשכח לצרף את הקובץ להודעה לפני השליחה."
+        : "📎 לא הצלחתי להוריד את ה-PDF אוטומטית. לפני השליחה: לחץ 🖨, שמור כ-PDF וצרף את הקובץ להודעה.");
+    }
     // window.location triggers the OS mail handler reliably without leaving the app.
     window.location.href = mailto;
     // Record the send (recipient + timestamp) so it's traceable in the list.
@@ -1072,23 +1119,18 @@ export default function LettersPage() {
         </span>}
         actions={
           <>
-            <button onClick={toggleTestMode} disabled={emailReady === false}
-              className={"rounded-xl px-3 py-2 text-xs font-bold border disabled:opacity-70 disabled:cursor-not-allowed " + (testMode ? "bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100" : "bg-white text-green-700 border-white hover:bg-green-50")}
+            {emailReady !== false && <button onClick={toggleTestMode}
+              className={"rounded-xl px-3 py-2 text-xs font-bold border " + (testMode ? "bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100" : "bg-white text-green-700 border-white hover:bg-green-50")}
               title={testMode ? "מצב בדיקה: שליחה דרך תוכנת המייל המקומית בלבד, ללא PDF וללא עותקים. לחץ למעבר לשליחה אמיתית." : "מצב שליחה אמיתית: PDF מצורף + עותקים למורשים (דורש Resend). לחץ לחזרה למצב בדיקה."}>
               {testMode ? "🧪 מצב בדיקה (מייל מקומי)" : "🚀 שליחה אמיתית (PDF + עותקים)"}
-            </button>
+            </button>}
             <button onClick={openNew} className="rounded-xl bg-white text-blue-700 px-4 py-2 text-sm font-bold hover:bg-blue-50 shadow-sm">+ מכתב חדש</button>
           </>
         } />
 
       {emailReady === false && (
-        <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900" dir="rtl">
-          <div className="font-bold mb-1">📎 שליחת מכתבים עם קובץ PDF מצורף טרם הופעלה</div>
-          <div>
-            המערכת יכולה לשלוח את המכתב כמייל עם ה-PDF מצורף ועותקים למורשים — דרך שירות דואר (Resend) שנדרש להגדירו פעם אחת
-            (מפתח API וכתובת שולח בדומיין של הארגון). עד אז הכפתור &quot;שלח&quot; פותח את תוכנת המייל המקומית עם טקסט המכתב,
-            ודפדפן אינו יכול לצרף אליו קובץ: להורדת ה-PDF השתמש בכפתור 🖨 וצרף אותו ידנית. להפעלה — פנה לבעלי המערכת.
-          </div>
+        <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50 px-4 py-2.5 text-xs text-blue-900" dir="rtl">
+          📎 השליחה מתבצעת דרך תוכנת המייל שלך. בכל לחיצה על &quot;שלח&quot; קובץ ה-PDF של המכתב יורד למחשב — צרף אותו להודעה לפני השליחה.
         </div>
       )}
 
