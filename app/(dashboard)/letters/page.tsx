@@ -205,7 +205,11 @@ export default function LettersPage() {
   // Test mode (default ON): send via the LOCAL mail client (mailto), no PDF
   // attachment and NO CC to owners/authorized users — safe while still testing.
   // Turn OFF once Resend is configured to send real emails (PDF + CC).
-  const [testMode, setTestMode] = useState(true);
+  // ברירת המחדל: שליחה אמיתית — PDF מצורף + מעטפת קצרה + עותקים. מצב
+  // הבדיקה (mailto מקומי: כל טקסט המכתב בגוף ההודעה, בלי קובץ ובלי עותקים)
+  // היה ברירת המחדל בכל כניסה למסך, והמשתמשים שלחו מכתבים בלי ה-PDF
+  // בלי לדעת שקיים מצב אחר. בחירה מפורשת במצב בדיקה נשמרת בדפדפן.
+  const [testMode, setTestMode] = useState(false);
   // CC directory: who gets a tracking copy of each send. A user qualifies ONLY
   // when BOTH conditions hold — a billing-capable role AND assignment to that
   // property. accessByProp already encodes the intersection.
@@ -229,9 +233,9 @@ export default function LettersPage() {
   const selectedIds = function() { return Object.keys(selected).filter(function(k){ return selected[k]; }); };
 
   useEffect(function() { loadAll(); }, []);
-  useEffect(function() { try { var v = localStorage.getItem("letters_test_mode"); if (v !== null) setTestMode(v === "1"); } catch (e) {} }, []);
+  useEffect(function() { try { var v = localStorage.getItem("letters_test_mode_v2"); if (v !== null) setTestMode(v === "1"); } catch (e) {} }, []);
   function toggleTestMode() {
-    setTestMode(function(prev){ var n = !prev; try { localStorage.setItem("letters_test_mode", n ? "1" : "0"); } catch (e) {} return n; });
+    setTestMode(function(prev){ var n = !prev; try { localStorage.setItem("letters_test_mode_v2", n ? "1" : "0"); } catch (e) {} return n; });
   }
 
   async function loadAll() {
