@@ -1,4 +1,7 @@
 {
+  "functions": {
+    "app/api/letter-pdf/route.ts": { "memory": 1536, "maxDuration": 60 }
+  },
   "crons": [
     {
       "path": "/api/cron/sync-contracts",

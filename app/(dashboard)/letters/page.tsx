@@ -614,9 +614,11 @@ export default function LettersPage() {
       headerHtml +
       '<div class="date">' + fmtDate(l.created_at) + '</div>' +
       '<div class="content">' + htmlParts.join("\n") + '</div>' +
+      // הפוטר שייך לעמוד המכתב (לא אחרי הנספח — שם הוא יצר עמוד ריק נוסף),
+      // ורק כשיש לו תוכן.
+      ((companyAddress || companyPhone) ? '<div class="footer-bar">' + (companyAddress ? companyAddress + ' | ' : '') + (companyPhone ? 'טל: ' + companyPhone : '') + '</div>' : '') +
       '</div>' +
       appendixHtml +
-      '<div class="footer-bar">' + (companyAddress ? companyAddress + ' | ' : '') + (companyPhone ? 'טל: ' + companyPhone : '') + '</div>' +
       (withPrintScript ?
         ('<script>function doPrint(){window.print();}var img=document.getElementById("company-logo");if(img){if(img.complete)doPrint();else{img.onload=doPrint;img.onerror=doPrint;setTimeout(doPrint,3000);}}else{setTimeout(doPrint,200);}<\/script>')
         : '') +
@@ -632,84 +634,37 @@ export default function LettersPage() {
   }
 
   // Render a letter to PDF in the browser (correct Hebrew/RTL) and return base64.
-  // משמש רק את ערוץ השליחה מהשרת (Resend). מגבלה ידועה: html2canvas
-  // מרנדר עברית עם רווחים חסרים במקומות — לשליחה דרך תוכנת המייל
-  // משתמשים במנוע ההדפסה של הדפדפן (handlePrint) שמפיק מסמך מדויק.
-  async function letterToPdfBase64(l: any): Promise<string> {
-    var mod: any = await import("html2pdf.js");
-    var html2pdf = mod.default || mod;
-    var docHtml = buildLetterHtmlDoc(l, false);
-    // html2pdf משכפל רק את האלמנט שניתן לו לתוך מסמך משלו — ה-<style> שב-<head>
-    // של המכתב לא הגיע איתו והקובץ יצא ללא עיצוב. לכן הסגנונות מוזרקים לתוך
-    // האלמנט עצמו, וכללי body מועתקים לעוטף (ל-body של הספרייה אין גישה).
-    var styleMatch = /<style>([\s\S]*?)<\/style>/.exec(docHtml);
-    var css = styleMatch ? styleMatch[1] : "";
-    var bodyMatch = /<body>([\s\S]*?)<\/body>/.exec(docHtml);
-    var bodyHtml = bodyMatch ? bodyMatch[1] : docHtml;
-    // כמו בהדפסה: גוף המכתב בפורטרט, הנספח בעמודים לרוחב (או פורטרט
-    // לנספח מסכם). מפרידים את הנספח ומוסיפים אותו כחלק נפרד עם אוריינטציה משלו.
-    var apxIdx = bodyHtml.indexOf('<div class="appendix');
-    var footIdx = bodyHtml.indexOf('<div class="footer-bar">');
-    var footerHtml = footIdx >= 0 ? bodyHtml.slice(footIdx) : "";
-    var mainHtml = bodyHtml.slice(0, apxIdx >= 0 ? apxIdx : (footIdx >= 0 ? footIdx : bodyHtml.length)) + footerHtml;
-    var apxHtml = apxIdx >= 0 ? bodyHtml.slice(apxIdx, footIdx >= 0 ? footIdx : bodyHtml.length) : "";
-    var rootStyle = 'font-family:"David","Arial";direction:rtl;font-size:11.5px;line-height:1.4;color:#1e293b;background:#fff;margin:0';
-    var wrap = function(inner: string, extraCss: string) {
-      return '<div class="pdf-root" dir="rtl" style="' + rootStyle + '"><style>' + css + extraCss + '</style>' + inner + '</div>';
-    };
-    var apxLandscape = apxHtml !== "" && apxHtml.indexOf('class="appendix appendix-p"') === -1;
-    var iframe = document.createElement("iframe");
-    iframe.style.position = "fixed"; iframe.style.left = "-10000px"; iframe.style.top = "0";
-    iframe.style.width = "1123px"; iframe.style.height = "1123px"; iframe.style.border = "0";
-    document.body.appendChild(iframe);
-    try {
-      var idoc = iframe.contentDocument as Document;
-      idoc.open();
-      idoc.write('<html><head><meta charset="utf-8"></head><body style="margin:0;background:#fff">' +
-        '<div id="pdf-main" style="width:794px">' + wrap(mainHtml, "") + '</div>' +
-        (apxHtml ? '<div id="pdf-apx" style="width:' + (apxLandscape ? 1123 : 794) + 'px">' +
-          // הנספח הוא חלק נפרד שמתחיל ממילא בעמוד חדש — בלי מעבר-עמוד ריק לפניו.
-          wrap(apxHtml, '.appendix{page-break-before:auto}') + '</div>' : '') +
-        '</body></html>');
-      idoc.close();
-      // לתת ללוגו להיטען (עד 1.5 שניות), ואז להתאים את גובה ה-iframe לתוכן —
-      // אחרת html2canvas מצלם רק את מה שבחלון ותחתית המכתב נחתכת.
-      var imgs = Array.prototype.slice.call(idoc.images) as HTMLImageElement[];
-      await Promise.race([
-        Promise.all(imgs.map(function(im){ return im.complete ? Promise.resolve() : new Promise<void>(function(res){ im.onload = function(){ res(); }; im.onerror = function(){ res(); }; }); })),
-        new Promise(function(res){ setTimeout(res, 1500); }),
-      ]);
-      iframe.style.height = (idoc.documentElement.scrollHeight + 40) + "px";
-      var mainEl = idoc.getElementById("pdf-main") as HTMLElement;
-      var apxEl = idoc.getElementById("pdf-apx") as HTMLElement | null;
-      var baseOpt = {
-        margin: [10, 12, 10, 12],
-        image: { type: "jpeg", quality: 0.95 },
-        html2canvas: { scale: 2, useCORS: true, backgroundColor: "#ffffff", windowWidth: 794 },
-        jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
-        // מכבד page-break-before/inside מה-CSS (סעיפי נספח, כרטיסי יחידות).
-        pagebreak: { mode: ["css", "legacy"] },
-      };
-      var worker: any = html2pdf().set(baseOpt).from(mainEl).toPdf();
-      if (apxEl) {
-        var orient = apxLandscape ? "landscape" : "portrait";
-        worker = worker.get("pdf").then(function(pdf: any) {
-          // הספרייה מוסיפה עמודי-המשך ב-addPage() בלי פרמטרים — שחוזר
-          // לפורטרט. עוטפים כך שכל עמודי הנספח יישארו באוריינטציה שלו.
-          var orig = pdf.addPage.bind(pdf);
-          pdf.addPage = function() { return orig("a4", orient); };
-          orig("a4", orient);
-        }).set({
-          jsPDF: { unit: "mm", format: "a4", orientation: orient },
-          html2canvas: { scale: 2, useCORS: true, backgroundColor: "#ffffff", windowWidth: apxLandscape ? 1123 : 794 },
-        }).from(apxEl).toContainer().toCanvas().toPdf();
-      }
-      var dataUri: string = await worker.outputPdf("datauristring");
-      var idx = dataUri.indexOf("base64,");
-      return idx >= 0 ? dataUri.slice(idx + 7) : dataUri;
-    } finally {
-      document.body.removeChild(iframe);
+  // יצירת ה-PDF בשרת (Chromium — אותו מנוע של כפתור ההדפסה): עיצוב מלא,
+  // נספח לרוחב, רווחים תקינים בעברית. מחליף את צילום ה-HTML (html2canvas)
+  // שאיבד סגנונות ובלע רווחים. הקריאה הראשונה אחרי זמן שקט אורכת כמה שניות.
+  async function fetchLetterPdf(l: any, fileBase: string): Promise<Blob> {
+    var res = await fetch("/api/letter-pdf", {
+      method: "POST", headers: { ...(await authHeaders()), "Content-Type": "application/json" },
+      body: JSON.stringify({ html: buildLetterHtmlDoc(l, false), filename: safeFilename(fileBase) }),
+    });
+    if (!res.ok) {
+      var msg = "יצירת ה-PDF נכשלה";
+      try { var d = await res.json(); msg = d.error || msg; } catch (e) { /* לא JSON */ }
+      throw new Error(msg);
     }
+    return await res.blob();
+  }
+  async function letterToPdfBase64(l: any): Promise<string> {
+    var blob = await fetchLetterPdf(l, (l.title || l.subject || "מכתב") + " - " + (l.contracts?.tenants?.name || ""));
+    var buf = new Uint8Array(await blob.arrayBuffer());
+    var bin = "";
+    for (var i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode.apply(null, Array.prototype.slice.call(buf, i, i + 0x8000));
+    return btoa(bin);
+  }
+  // הורדת ה-PDF למחשב (לצירוף ידני למייל שנפתח בתוכנה המקומית). מחזיר את שם הקובץ.
+  async function downloadLetterPdf(l: any, fileBase: string): Promise<string> {
+    var blob = await fetchLetterPdf(l, fileBase);
+    var name = safeFilename(fileBase) + ".pdf";
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url; a.download = name; document.body.appendChild(a); a.click();
+    setTimeout(function(){ document.body.removeChild(a); URL.revokeObjectURL(url); }, 2000);
+    return name;
   }
 
   async function deleteLetter(id: string) {
@@ -987,8 +942,13 @@ export default function LettersPage() {
         (ccM.length ? "cc=" + encodeURIComponent(ccM.join(",")) + "&" : "") +
         "subject=" + encodeURIComponent(g.subject) + "&body=" + encodeURIComponent(bodyM);
       if (!pureTestM) {
-        alert("📄 " + (g.tenant || "") + ": ייפתח חלון ההדפסה של המכתב המאוחד — בחר בו \"שמור כ-PDF\" ושמור את הקובץ.\n\nלאחר מכן תיפתח תוכנת המייל: צרף אליה את הקובץ ששמרת לפני השליחה.");
-        handlePrint(g.printLetter);
+        try {
+          var fnameM = await downloadLetterPdf(g.printLetter, fileBase);
+          alert("📎 " + (g.tenant || "") + ": קובץ המכתב המאוחד ירד למחשב:\n" + fnameM + "\n\nתוכנת המייל נפתחת עכשיו — צרף את הקובץ להודעה לפני השליחה.");
+        } catch (e: any) {
+          alert("📄 לא הצלחתי ליצור את ה-PDF בשרת (" + (e?.message || e) + ").\nייפתח חלון ההדפסה — בחר \"שמור כ-PDF\" וצרף למייל.");
+          handlePrint(g.printLetter);
+        }
       }
       window.open(mt, "_blank");
       for (var k = 0; k < g.letters.length; k++) {
@@ -1112,14 +1072,18 @@ export default function LettersPage() {
       var companyL = parseCj(l).companyName || "הנהלת הנכס";
       body = "שלום " + tenant + ",\n\nרצ\"ב מכתב בנושא " + title + ".\nנא לעיין במסמך המצורף ולפעול בהתאם.\n\nבברכה,\n" + companyL;
     }
-    // דפדפן אינו יכול לצרף קובץ למייל שנפתח בתוכנה המקומית, ומנוע צילום-
-    // HTML (html2canvas) בולע רווחים בעברית — לכן ה-PDF נוצר על ידי מנוע
-    // ההדפסה של הדפדפן, בדיוק כמו כפתור 🖨: נפתח חלון ההדפסה של המכתב
-    // (המשתמש בוחר "שמור כ-PDF"), ואז תוכנת המייל, עם תזכורת לצרף.
-    // נפתח לפני כל await — בתוך מחוות הלחיצה, שלא ייחסם כחלון קופץ.
+    // דפדפן אינו יכול לצרף קובץ למייל שנפתח בתוכנה המקומית: ה-PDF נוצר
+    // בשרת (זהה להדפסה) ויורד למחשב, ואז תוכנת המייל נפתחת עם תזכורת לצרף.
+    // אם השרת נכשל — נופלים לחלון ההדפסה (שמור כ-PDF).
     if (!pureTest) {
-      alert("📄 לפני השליחה ייפתח חלון ההדפסה של המכתב — בחר בו \"שמור כ-PDF\" ושמור את הקובץ.\n\nלאחר מכן תיפתח תוכנת המייל: אל תשכח לצרף אליה את הקובץ ששמרת לפני השליחה.");
-      handlePrint(l);
+      setSending(l.id);
+      try {
+        var fname = await downloadLetterPdf(l, title + " - " + tenant);
+        alert("📎 קובץ המכתב ירד למחשב:\n" + fname + "\n\nתוכנת המייל נפתחת עכשיו — אל תשכח לצרף את הקובץ להודעה לפני השליחה.");
+      } catch (e: any) {
+        alert("📄 לא הצלחתי ליצור את ה-PDF בשרת (" + (e?.message || e) + ").\nייפתח חלון ההדפסה של המכתב — בחר בו \"שמור כ-PDF\", ואז צרף את הקובץ למייל.");
+        handlePrint(l);
+      } finally { setSending(""); }
     }
     var propIds = [l.property_id || l.contracts?.properties?.id].filter(Boolean);
     var cc = pureTest ? "" : (await ccForPropsLive(propIds as string[], toList[0] || "", l)).join(",");
@@ -1168,7 +1132,7 @@ export default function LettersPage() {
 
       {emailReady === false && (
         <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50 px-4 py-2.5 text-xs text-blue-900" dir="rtl">
-          📎 השליחה מתבצעת דרך תוכנת המייל שלך. בכל לחיצה על &quot;שלח&quot; נפתח חלון ההדפסה של המכתב — בחר &quot;שמור כ-PDF&quot; וצרף את הקובץ להודעה לפני השליחה.
+          📎 השליחה מתבצעת דרך תוכנת המייל שלך. בכל לחיצה על &quot;שלח&quot; קובץ ה-PDF של המכתב יורד למחשב (הפעם הראשונה אורכת כמה שניות) — צרף אותו להודעה לפני השליחה.
         </div>
       )}
 
@@ -1360,7 +1324,7 @@ export default function LettersPage() {
                                       {!isSent && (isReady
                                         ? <button onClick={function(){setLetterStatus(l, "draft");}} className="text-xs border border-slate-200 rounded px-2 py-1 text-slate-500 hover:bg-slate-50" title="החזר לטיוטה">✎</button>
                                         : <button onClick={function(){setLetterStatus(l, "ready");}} className="text-xs border border-blue-200 rounded px-2 py-1 text-blue-600 hover:bg-blue-50" title="סמן כמוכן לשליחה">📤</button>)}
-                                      <button onClick={function(){sendPrimary(l);}} disabled={sending===l.id} className="text-xs border border-green-300 bg-green-50 rounded px-2 py-1 text-green-700 hover:bg-green-100 disabled:opacity-50 font-semibold" title={testMode ? "שלח דרך תוכנת המייל המקומית" : "שלח במייל עם PDF מצורף + עותקים (דרך המערכת)"}>{sending===l.id ? "שולח…" : (testMode ? "📧 שלח" : "📎 שלח")}</button>
+                                      <button onClick={function(){sendPrimary(l);}} disabled={sending===l.id} className="text-xs border border-green-300 bg-green-50 rounded px-2 py-1 text-green-700 hover:bg-green-100 disabled:opacity-50 font-semibold" title={testMode ? "שלח דרך תוכנת המייל המקומית" : "שלח במייל עם PDF מצורף + עותקים (דרך המערכת)"}>{sending===l.id ? (testMode ? "מכין קובץ…" : "שולח…") : (testMode ? "📧 שלח" : "📎 שלח")}</button>
                                       {!testMode && <button onClick={function(){handleEmail(l);}} className="text-xs border border-slate-200 rounded px-2 py-1 text-slate-500 hover:bg-slate-50" title="פתח בתוכנת המייל המקומית (ללא קובץ מצורף)">✉️</button>}
                                       {isSent
                                         ? <button onClick={function(){unmarkSent(l);}} className="text-xs border border-slate-200 rounded px-2 py-1 text-slate-500 hover:bg-slate-50" title="החזר ל'מוכן לשליחה'">↩</button>
