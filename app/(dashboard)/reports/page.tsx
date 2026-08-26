@@ -4,6 +4,7 @@ import { supabase } from '@/lib/supabase';
 import { PageHero } from '@/components/ui';
 import { getScopeIds, getCompanyScopeIds, getTenantScopeIds, scopeRows, scopeGroups } from '@/lib/permissions';
 import { REASON_LABELS, APPLIES_LABELS, describeConcession } from '@/lib/concessions';
+import { buildAppraiserWorkbook } from '@/lib/appraiser-report';
 
 const TABS = [
   {id:"contracts",  label:"חוזים",       icon:"📄"},
@@ -13,6 +14,7 @@ const TABS = [
   {id:"guarantees", label:"ערבויות",     icon:"🏦"},
   {id:"expiring",   label:"פוגים בקרוב", icon:"⚠️"},
   {id:"concessions",label:"ויתורים והנחות", icon:"🤝"},
+  {id:"appraiser",  label:"ריכוז לשמאי",  icon:"🏛️"},
 ];
 
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
@@ -30,6 +32,10 @@ export default function ReportsPage() {
   const [loading,   setLoading]   = useState(false);
   const [data,      setData]      = useState<any[]>([]);
   const [filterYear,setFilterYear]= useState(new Date().getFullYear());
+  // דוח ריכוז לשמאי — חיתוך לפי נכס בודד או חברה (כל נכסיה)
+  const [apCompanyId, setApCompanyId] = useState("");
+  const [apPropId,    setApPropId]    = useState("");
+  const [apBusy,      setApBusy]      = useState(false);
 
   useEffect(function() { loadTab(tab); }, [tab, filterYear]);
 
@@ -61,6 +67,9 @@ export default function ReportsPage() {
         .gte("granted_at", filterYear+"-01-01").lt("granted_at", (filterYear+1)+"-01-01")
         .order("granted_at", { ascending: false });
       setData(scopeRows(cn ?? [], await getScopeIds(), function(x: any){ return x.property_id || x.contracts?.property_id; }));
+    } else if (t==="appraiser") {
+      const { data: pr } = await supabase.from("properties").select("id,name,city,company_id,companies(company_name)").order("name");
+      setData(scopeRows(pr ?? [], await getScopeIds(), function(x: any){ return x.id; }));
     } else if (t==="guarantees") {
       const { data: g } = await supabase.from("guarantees")
         .select("id,guarantee_type,amount_required,amount_actual,status,end_date,contracts(property_id,tenants(name),properties(name))")
@@ -114,6 +123,35 @@ export default function ReportsPage() {
 
   const activeData = tab==="expiring" ? expiringData() : data;
 
+  async function handleAppraiser() {
+    var pids: string[] = [];
+    var title = "";
+    if (apPropId) {
+      var pp = data.find(function(x: any){ return x.id === apPropId; });
+      pids = [apPropId]; title = pp?.name || "נכס";
+    } else if (apCompanyId) {
+      var cps = data.filter(function(x: any){ return x.company_id === apCompanyId; });
+      pids = cps.map(function(x: any){ return x.id; });
+      title = cps[0]?.companies?.company_name || "חברה";
+    } else {
+      pids = data.map(function(x: any){ return x.id; });
+      title = "כל הנכסים";
+    }
+    if (pids.length === 0) { alert("לא נמצאו נכסים לחיתוך שנבחר"); return; }
+    setApBusy(true);
+    try {
+      var res = await buildAppraiserWorkbook({ propertyIds: pids, title: title });
+      if (res.contracts === 0) { alert("אין הסכמים פעילים בחיתוך שנבחר"); return; }
+      var url = URL.createObjectURL(res.blob);
+      var a = document.createElement("a");
+      a.href = url; a.download = (title + " - ריכוז הסכמי שכירות.xlsx").replace(/[\/:*?"<>|]/g, "_");
+      document.body.appendChild(a); a.click();
+      setTimeout(function(){ document.body.removeChild(a); URL.revokeObjectURL(url); }, 2000);
+    } catch (e: any) {
+      alert("שגיאה בהפקת הדוח: " + (e?.message || e));
+    } finally { setApBusy(false); }
+  }
+
   const StatusBadge = function({s}:{s:string}) {
     const m:Record<string,string>={active:"bg-green-100 text-green-700",expiring:"bg-yellow-100 text-yellow-700",ended:"bg-slate-100 text-slate-500",paid:"bg-green-100 text-green-700",approved:"bg-blue-100 text-blue-700",pending:"bg-slate-100 text-slate-600"};
     const l:Record<string,string>={active:"פעיל",expiring:"פוגה",ended:"הסתיים",paid:"שולם",approved:"מאושר",pending:"ממתין"};
@@ -131,9 +169,9 @@ export default function ReportsPage() {
                 {[2023,2024,2025,2026].map(function(y){return <option key={y} value={y}>{y}</option>;})}
               </select>
             )}
-            <button onClick={handleCSV} className="rounded-xl bg-white text-slate-700 px-4 py-2 text-sm font-bold hover:bg-slate-100 shadow-sm">
+            {tab !== "appraiser" && <button onClick={handleCSV} className="rounded-xl bg-white text-slate-700 px-4 py-2 text-sm font-bold hover:bg-slate-100 shadow-sm">
               ⬇ CSV
-            </button>
+            </button>}
           </div>
         } />
 
@@ -153,6 +191,41 @@ export default function ReportsPage() {
 
       {loading ? (
         <div className="flex items-center justify-center gap-2 py-12 text-slate-400 text-sm"><span className="inline-block w-4 h-4 rounded-full border-2 border-slate-200 border-t-blue-600 animate-spin" aria-label="loading"></span>טוען...</div>
+      ) : tab === "appraiser" ? (
+        <div className="rounded-xl border border-slate-200 bg-white shadow-sm p-6 max-w-2xl">
+          <div className="text-lg font-bold text-slate-800 mb-1">🏛️ ריכוז הסכמי שכירות — דוח לשמאי</div>
+          <div className="text-xs text-slate-500 mb-4 leading-relaxed">
+            קובץ Excel עם ארבעה גיליונות: <b>ריכוז הסכמים</b> ברמת יחידה (שטח, שכ&quot;ד בסיס וצמוד למ&quot;ר, תקופות, מדד בסיס, מדרגות והערות),
+            <b> צפי 12 חודשים</b> קדימה לפי ההסכמים החתומים, <b>ריכוז יחידות</b> (תפוסה ושטחים) ו<b>הנחות</b>. הנתונים נשלפים ישירות מהמערכת.
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-slate-700">חברה</label>
+              <select value={apCompanyId} onChange={function(e){ setApCompanyId(e.target.value); setApPropId(""); }}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm bg-white">
+                <option value="">— כל החברות —</option>
+                {Array.from(new Map(data.filter(function(x: any){ return x.company_id; }).map(function(x: any){ return [x.company_id, x.companies?.company_name || "חברה"]; })).entries()).map(function(e: any){
+                  return <option key={e[0]} value={e[0]}>{e[1]}</option>;
+                })}
+              </select>
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-slate-700">נכס</label>
+              <select value={apPropId} onChange={function(e){ setApPropId(e.target.value); }}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm bg-white">
+                <option value="">{apCompanyId ? "— כל נכסי החברה —" : "— כל הנכסים —"}</option>
+                {data.filter(function(x: any){ return !apCompanyId || x.company_id === apCompanyId; }).map(function(x: any){
+                  return <option key={x.id} value={x.id}>{x.name}{x.city ? " — " + x.city : ""}</option>;
+                })}
+              </select>
+            </div>
+          </div>
+          <button onClick={handleAppraiser} disabled={apBusy}
+            className="rounded-xl bg-blue-700 text-white px-5 py-2.5 text-sm font-bold hover:bg-blue-800 disabled:opacity-50">
+            {apBusy ? "מפיק…" : "⬇️ הפק קובץ Excel"}
+          </button>
+          <div className="text-[11px] text-slate-400 mt-3">הדוח כולל הסכמים פעילים והסכמים חתומים שטרם החלו. דמי ניהול, ביטוח ואשפה אינם כלולים.</div>
+        </div>
       ) : (
         <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
           <div className="px-5 py-2.5 border-b border-slate-100 text-xs text-slate-400 flex items-center justify-between flex-wrap gap-2">
