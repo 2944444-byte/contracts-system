@@ -43,10 +43,10 @@ export async function buildAppraiserWorkbook(params: { propertyIds: string[]; ti
   const knownIdx = (cpiRes.data && cpiRes.data[0]) ? { y: Number(cpiRes.data[0].year), m: Number(cpiRes.data[0].month), v: Number(cpiRes.data[0].value) } : null;
 
   const [{ data: amends }, { data: tiers }, { data: options }, { data: parking }] = await Promise.all([
-    cids.length ? supabase.from("contracts").select("parent_contract_id,end_date,amendment_date").eq("is_amendment", true).in("parent_contract_id", cids) : Promise.resolve({ data: [] } as any),
+    cids.length ? supabase.from("contracts").select("id,parent_contract_id,end_date,amendment_date,amendment_number,start_date,rent_per_sqm,contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area,space_type))").eq("is_amendment", true).in("parent_contract_id", cids) : Promise.resolve({ data: [] } as any),
     cids.length ? supabase.from("contract_price_tiers").select("*").in("contract_id", cids).is("option_id", null) : Promise.resolve({ data: [] } as any),
     cids.length ? supabase.from("contract_options").select("id,contract_id,option_number,is_exercised,status,start_date,end_date,duration_months,duration_years").in("contract_id", cids) : Promise.resolve({ data: [] } as any),
-    cids.length ? supabase.from("parking_subscriptions").select("contract_id,monthly_fee,quantity,is_included_in_rent,subscription_type,status").in("contract_id", cids).eq("status", "active") : Promise.resolve({ data: [] } as any),
+    cids.length ? supabase.from("parking_subscriptions").select("contract_id,monthly_fee,quantity,is_included_in_rent,subscription_type,status").eq("status", "active") : Promise.resolve({ data: [] } as any),
   ]);
   const byC = function (rows: any[], key: string) {
     const m: Record<string, any[]> = {};
@@ -56,13 +56,21 @@ export async function buildAppraiserWorkbook(params: { propertyIds: string[]; ti
   const amendsBy = byC(amends ?? [], "parent_contract_id");
   const tiersBy = byC(tiers ?? [], "contract_id");
   const optsBy = byC(options ?? [], "contract_id");
-  const parkBy = byC(parking ?? [], "contract_id");
+  // חניות שנוספו בתוספת רשומות תחת מזהה התוספת — מקופלות לחוזה הבסיס.
+  const amendParent: Record<string, string> = {};
+  (amends ?? []).forEach(function (a: any) { amendParent[a.id] = a.parent_contract_id; });
+  const parkBy: Record<string, any[]> = {};
+  (parking ?? []).forEach(function (x: any) {
+    const base = amendParent[x.contract_id] || x.contract_id;
+    if (cids.indexOf(base) === -1) return;
+    (parkBy[base] = parkBy[base] || []).push(x);
+  });
 
   // ── חישובים לכל חוזה ──
   type UnitRow = { unit: string; area: number | null; basePsm: number | null; idxPsm: number | null; monthly: number; note: string };
   type CRow = {
     c: any; num: number; tenant: string; effEnd: Date | null; ratio: number; ratioNote: string;
-    units: UnitRow[]; monthlyNow: number; forecast12: number; notes: string[];
+    units: UnitRow[]; unitsSummary: string; monthlyNow: number; forecast12: number; notes: string[];
   };
   const perProp: Record<string, CRow[]> = {};
 
@@ -72,9 +80,34 @@ export async function buildAppraiserWorkbook(params: { propertyIds: string[]; ti
     const exercised = cOpts.filter(function (o: any) { return o.is_exercised || o.status === "exercised"; });
     const parkRows = billableParkingRows(parkBy[c.id] || []);
 
+    // המצב האפקטיבי של ההסכם: תוספת שמצרפת/מחליפה יחידות יוצרת צילום-מצב
+    // חדש, והאחרון קובע (כמו במסך היחידות). צילום ללא יחידות אינו מחליף.
+    const fam = (amendsBy[c.id] || []).slice();
+    const rank = function (x: any): number {
+      const dt = d(x.amendment_date || x.start_date);
+      return (dt ? dt.getTime() : 0) * 1000 + (Number(x.amendment_number) || 0);
+    };
+    fam.sort(function (a: any, b: any) { return rank(a) - rank(b); });
+    let effSpaces: any[] = c.contract_spaces || [];
+    let effRps: number = Number(c.rent_per_sqm) || 0;
+    fam.forEach(function (a: any) {
+      if ((a.contract_spaces || []).length > 0) {
+        effSpaces = a.contract_spaces;
+        if (Number(a.rent_per_sqm) > 0) effRps = Number(a.rent_per_sqm);
+      }
+    });
+    // מתי כל יחידה הצטרפה (להערת "נוסף בתוספת" ולקיטום בצפי)
+    const unitEntry: Record<string, Date | null> = {};
+    (c.contract_spaces || []).forEach(function (cs: any) { if (cs.space_id && unitEntry[cs.space_id] === undefined) unitEntry[cs.space_id] = d(c.start_date); });
+    fam.forEach(function (a: any) {
+      (a.contract_spaces || []).forEach(function (cs: any) {
+        if (cs.space_id && unitEntry[cs.space_id] === undefined) unitEntry[cs.space_id] = d(a.amendment_date || a.start_date);
+      });
+    });
+
     // תום תקופה אפקטיבי
     let effEnd = d(c.end_date);
-    (amendsBy[c.id] || []).forEach(function (a: any) { const e = d(a.end_date); if (e && (!effEnd || e > effEnd)) effEnd = e; });
+    fam.forEach(function (a: any) { const e = d(a.end_date); if (e && (!effEnd || e > effEnd)) effEnd = e; });
     exercised.forEach(function (o: any) { const e = d(o.end_date); if (e && (!effEnd || e > effEnd)) effEnd = e; });
 
     // יחס הצמדה נוכחי
@@ -88,15 +121,18 @@ export async function buildAppraiserWorkbook(params: { propertyIds: string[]; ti
     // שורות יחידות (בסיס לפי לוח המדרגות נכון להיום)
     const units: UnitRow[] = [];
     const schedByCs: Record<string, any> = {};
-    (c.contract_spaces || []).forEach(function (cs: any, i: number) {
+    const baseStart = d(c.start_date);
+    effSpaces.forEach(function (cs: any, i: number) {
       const area = Number(cs.spaces?.area) || 0;
       const name = cs.spaces?.space_name || "יחידה";
+      const ent = unitEntry[cs.space_id];
+      const addedNote = ent && baseStart && ent.getTime() > baseStart.getTime() ? "נוסף בתוספת מ-" + fmtD(ent) : "";
       if (cs.charge_method === "included") {
-        units.push({ unit: name, area: area || null, basePsm: null, idxPsm: null, monthly: 0, note: "כלול במחיר יחידה אחרת בהסכם" });
+        units.push({ unit: name, area: area || null, basePsm: null, idxPsm: null, monthly: 0, note: ["כלול במחיר יחידה אחרת בהסכם", addedNote].filter(Boolean).join(" · ") });
         return;
       }
       const isFixed = cs.charge_method === "fixed" && Number(cs.fixed_rent) > 0;
-      const baseRent = isFixed ? Number(cs.fixed_rent) : (Number(cs.price_per_sqm) || Number(c.rent_per_sqm) || 0) * area;
+      const baseRent = isFixed ? Number(cs.fixed_rent) : (Number(cs.price_per_sqm) || effRps || 0) * area;
       const sched = buildSpaceRentSchedule({ contractStartDate: c.start_date, spaceArea: area, isFixed: isFixed, spaceBaseRent: baseRent, spaceTiers: [], contractTiers: cTiers, exercisedOptions: exercised });
       schedByCs["u" + i] = sched;
       const mNow = rentAtDate(sched, today);
@@ -105,13 +141,13 @@ export async function buildAppraiserWorkbook(params: { propertyIds: string[]; ti
         basePsm: area > 0 && !isFixed ? r2(mNow / area) : null,
         idxPsm: area > 0 && !isFixed ? r2((mNow * ratio) / area) : null,
         monthly: r2(mNow * ratio),
-        note: isFixed ? "שכ\"ד קבוע (לא למ\"ר)" : "",
+        note: [isFixed ? "שכ\"ד קבוע (לא למ\"ר)" : "", addedNote].filter(Boolean).join(" · "),
       });
     });
     // מינימום פדיון (חוזה אחוז ממחזור ללא שכ"ד יחידות)
     const unitsMonthly = units.reduce(function (a, u) { return a + u.monthly; }, 0);
     if (unitsMonthly === 0 && (c.rent_type === "revenue_pct" || Number(c.revenue_pct) > 0)) {
-      const mArea = (c.contract_spaces || []).reduce(function (a: number, x: any) { return a + (Number(x?.spaces?.area) || 0); }, 0) || Number(c.charged_area) || 0;
+      const mArea = effSpaces.reduce(function (a: number, x: any) { return a + (Number(x?.spaces?.area) || 0); }, 0) || Number(c.charged_area) || 0;
       const minPsm = Number(c.min_rent_per_sqm) > 0 ? minRentPerSqmAtDate({ baseMinPerSqm: Number(c.min_rent_per_sqm), tiers: cTiers, contractStart: c.start_date, date: today }) : 0;
       const minMonthly = minPsm > 0 ? minPsm * mArea : (Number(c.minimum_rent) || 0);
       if (minMonthly > 0) units.push({ unit: "מינימום פדיון (" + (Number(c.revenue_pct) || 0) + "% ממחזור)", area: mArea || null, basePsm: minPsm > 0 ? r2(minPsm) : null, idxPsm: minPsm > 0 ? r2(minPsm * ratio) : null, monthly: r2(minMonthly * ratio), note: "שכ\"ד פדיון — מוצג המינימום החוזי" });
@@ -139,12 +175,14 @@ export async function buildAppraiserWorkbook(params: { propertyIds: string[]; ti
       if (cStart && cStart >= mE) continue;
       if (effEnd && effEnd < mS) continue;
       let baseM = 0;
-      (c.contract_spaces || []).forEach(function (cs: any, i: number) {
+      effSpaces.forEach(function (cs: any, i: number) {
         const sched = schedByCs["u" + i];
+        const ent = unitEntry[cs.space_id];
+        if (ent && ent >= mE) return; // היחידה טרם הצטרפה בחודש זה
         if (sched) baseM += rentAtDate(sched, mS);
       });
       if (baseM === 0 && (c.rent_type === "revenue_pct" || Number(c.revenue_pct) > 0)) {
-        const mArea2 = (c.contract_spaces || []).reduce(function (a: number, x: any) { return a + (Number(x?.spaces?.area) || 0); }, 0) || Number(c.charged_area) || 0;
+        const mArea2 = effSpaces.reduce(function (a: number, x: any) { return a + (Number(x?.spaces?.area) || 0); }, 0) || Number(c.charged_area) || 0;
         const minPsm2 = Number(c.min_rent_per_sqm) > 0 ? minRentPerSqmAtDate({ baseMinPerSqm: Number(c.min_rent_per_sqm), tiers: cTiers, contractStart: c.start_date, date: mS }) : 0;
         baseM = minPsm2 > 0 ? minPsm2 * mArea2 : (Number(c.minimum_rent) || 0);
       }
@@ -180,9 +218,10 @@ export async function buildAppraiserWorkbook(params: { propertyIds: string[]; ti
     if (isParkingOnly(c)) notes.push("הסכם חניות בלבד");
     if (ratioNote) notes.push(ratioNote);
 
+    const unitsSummary = units.map(function (u) { return u.unit + (u.area ? " (" + u.area + ' מ"ר)' : ""); }).join(" · ");
     (perProp[c.property_id] = perProp[c.property_id] || []).push({
       c: c, num: 0, tenant: c.tenants?.name || "—", effEnd: effEnd, ratio: ratio, ratioNote: ratioNote,
-      units: units, monthlyNow: monthlyNow, forecast12: r2(forecast), notes: notes,
+      units: units, unitsSummary: unitsSummary, monthlyNow: monthlyNow, forecast12: r2(forecast), notes: notes,
     });
   });
   Object.keys(perProp).forEach(function (pid) {
@@ -273,7 +312,7 @@ export async function buildAppraiserWorkbook(params: { propertyIds: string[]; ti
   const f0 = new Date(today.getFullYear(), today.getMonth() + 1, 1);
   const fEnd = new Date(f0.getFullYear(), f0.getMonth() + 11, 1);
   const ws2 = wb.addWorksheet("צפי 12 חודשים", { views: [{ rightToLeft: true }] });
-  ws2.columns = [{ width: 7 }, { width: 26 }, { width: 22 }, { width: 15 }, { width: 15 }, { width: 40 }];
+  ws2.columns = [{ width: 7 }, { width: 26 }, { width: 38 }, { width: 15 }, { width: 15 }, { width: 40 }];
   titleRow(ws2, "צפי הכנסות שכ\"ד — 12 חודשים קדימה (" + String(f0.getMonth() + 1).padStart(2, "0") + "/" + f0.getFullYear() + " – " + String(fEnd.getMonth() + 1).padStart(2, "0") + "/" + fEnd.getFullYear() + ")", 6);
   const sub2 = ws2.addRow(["ללא מע\"מ · לפי רמת המדד הידועה היום (ללא הצמדה עתידית) · מדרגות חוזיות במועדן · קיצוץ בתאריכי סיום · חוזים חתומים עתידיים מתחילתם"]);
   ws2.mergeCells(sub2.number, 1, sub2.number, 6);
@@ -287,13 +326,13 @@ export async function buildAppraiserWorkbook(params: { propertyIds: string[]; ti
       ws2.mergeCells(pr.number, 1, pr.number, 6);
       pr.getCell(1).font = font({ size: 12, bold: true, color: { argb: NAVY } });
     }
-    headerRow(ws2, ["מס'", "שוכר", "נכס / הסכם", 'שכ"ד חודשי נוכחי', "צפי 12 חודשים", "הערות"]);
+    headerRow(ws2, ["מס'", "שוכר", "יחידות בהסכם", 'שכ"ד חודשי נוכחי', "צפי 12 חודשים", "הערות"]);
     let pF = 0; let pRun = 0;
     rows.forEach(function (cr) {
-      const r = ws2.addRow([cr.num, cr.tenant, p.name, cr.monthlyNow, cr.forecast12, cr.notes.join(" · ")]);
+      const r = ws2.addRow([cr.num, cr.tenant, cr.unitsSummary, cr.monthlyNow, cr.forecast12, cr.notes.join(" · ")]);
       r.eachCell(function (cell: any, col: number) {
         cell.font = font({});
-        cell.alignment = { horizontal: col === 6 ? "right" : (col <= 3 ? "right" : "center"), wrapText: col === 6 };
+        cell.alignment = { horizontal: col === 6 ? "right" : (col <= 3 ? "right" : "center"), wrapText: col === 6 || col === 3 };
         if (col === 4 || col === 5) cell.numFmt = money;
         if (cr.num % 2 === 0) cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: LIGHT } };
       });
@@ -323,7 +362,14 @@ export async function buildAppraiserWorkbook(params: { propertyIds: string[]; ti
   const holderFuture: Record<string, string> = {};
   cs0.forEach(function (c: any) {
     const started = c.status !== "upcoming" && c.status !== "future";
-    (c.contract_spaces || []).forEach(function (cs: any) {
+    // המצב האפקטיבי — הצילום האחרון עם יחידות (בסיס או תוספת)
+    let eff: any[] = c.contract_spaces || [];
+    ((amendsBy[c.id] || []).slice().sort(function (a: any, b: any) {
+      const ra = (d(a.amendment_date || a.start_date)?.getTime() || 0) * 1000 + (Number(a.amendment_number) || 0);
+      const rb = (d(b.amendment_date || b.start_date)?.getTime() || 0) * 1000 + (Number(b.amendment_number) || 0);
+      return ra - rb;
+    })).forEach(function (a: any) { if ((a.contract_spaces || []).length > 0) eff = a.contract_spaces; });
+    eff.forEach(function (cs: any) {
       if (!cs.space_id) return;
       if (started) holder[cs.space_id] = c.tenants?.name || "";
       else if (!holder[cs.space_id]) holderFuture[cs.space_id] = c.tenants?.name || "";
