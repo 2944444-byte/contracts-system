@@ -157,7 +157,9 @@ export default function TenantsPage() {
         email: fEmail||null, address: fAddress||null,
         city: fCity||null, contact_name: fContactName||null,
         contact_phone: fContactPhone||null, notes: fNotes||null,
-        contacts: fContacts.filter(c => c.name.trim()),
+        // איש קשר עם מייל בלבד (בלי שם) הוא לגיטימי — הסינון הישן לפי שם
+        // מחק בשקט את אנשי הקשר של גולף. נשמר כל מי שיש לו שם או אימייל.
+        contacts: fContacts.filter(c => (c.name || "").trim() || (c.email || "").trim()),
       };
       if (isNew) {
         const { data, error: _ie } = await supabase.from("tenants").insert(payload).select().single();
