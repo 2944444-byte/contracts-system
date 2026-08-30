@@ -105,7 +105,7 @@ export async function runAlertSync(supabase: SupabaseClient): Promise<{ created:
 
   // 1. Contracts expiring + options
   const { data: contracts } = await supabase.from("contracts")
-    .select("id,property_id,end_date,status,is_amendment,parent_contract_id,tenant_id,planned_handover_date,actual_handover_date,planned_opening_date,actual_opening_date,works_start_date,works_end_date,grace_months,grace_days,grace_phase2_days,grace_type,grace_ends_on_opening,late_opening_penalty_type,late_opening_penalty_value,late_opening_grace_days,late_opening_penalty_notes,rent_type,rent_per_sqm,min_rent_per_sqm,minimum_rent,min_rent_condition_type,min_rent_condition_pct,min_rent_condition_met_at,min_rent_condition_notes,opening_rule,opening_max_days_from_handover,term_starts_at,contract_spaces(space_id),charged_area,investment_addition,start_date,tenants(name),properties(name),contract_options(id,status,is_exercised,start_date,end_date,notice_days_before_end,notice_type,option_number)")
+    .select("id,property_id,end_date,status,is_amendment,parent_contract_id,tenant_id,no_tenant_insurance_required,planned_handover_date,actual_handover_date,planned_opening_date,actual_opening_date,works_start_date,works_end_date,grace_months,grace_days,grace_phase2_days,grace_type,grace_ends_on_opening,late_opening_penalty_type,late_opening_penalty_value,late_opening_grace_days,late_opening_penalty_notes,rent_type,rent_per_sqm,min_rent_per_sqm,minimum_rent,min_rent_condition_type,min_rent_condition_pct,min_rent_condition_met_at,min_rent_condition_notes,opening_rule,opening_max_days_from_handover,term_starts_at,contract_spaces(space_id),charged_area,investment_addition,start_date,tenants(name),properties(name),contract_options(id,status,is_exercised,start_date,end_date,notice_days_before_end,notice_type,option_number)")
     // "future"/"upcoming" included for the handover-pending rule — but most
     // rules below assume an IN-FORCE lease (insurance, expiry/vacating,
     // late-opening, occupancy threshold) and must skip a lease whose term
@@ -501,9 +501,17 @@ export async function runAlertSync(supabase: SupabaseClient): Promise<{ created:
     // "urgent, no insurance" now would flood the screen with false alarms.
     (contracts ?? []).filter(leaseStarted).forEach(function (c: any) { const k = groupKey(c); (groups[k] = groups[k] || []).push(c); });
     for (const key of Object.keys(groups)) {
-      if (coveredGroups.has(key)) continue;
       const g = groups[key];
       const rep = g.find(function (c: any) { return !c.is_amendment; }) || g[0];
+      // "לא נדרש ביטוח שוכר" שסומן במסך הביטוחים פוטר את הקבוצה — כמו
+      // כיסוי בפועל. בשני המקרים התראה פתוחה קיימת נסגרת מעצמה.
+      const exempt = g.some(function (c: any) { return !!c.no_tenant_insurance_required; });
+      if (coveredGroups.has(key) || exempt) {
+        const ids = g.map(function (c: any) { return c.id; });
+        await supabase.from("alerts").update({ is_resolved: true, handled_at: new Date().toISOString() })
+          .in("entity_id", ids).eq("entity_type", "insurance").eq("alert_type", "insurance_missing").eq("is_resolved", false);
+        continue;
+      }
       if (await hasOpen(rep.id, "insurance")) continue;
       const cName = (rep.tenants?.name ?? "") + (rep.properties?.name ? " — " + rep.properties.name : "");
       await add({
