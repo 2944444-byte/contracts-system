@@ -1,5 +1,6 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit-log';
 import PropertyHierarchyFilter from '@/components/PropertyHierarchyFilter';
@@ -72,6 +73,7 @@ function healthOrder(h: Health): number {
 }
 
 export default function GuaranteesPage() {
+  const router = useRouter();
   const [guarantees, setGuarantees] = useState<any[]>([]);
   const [contracts,  setContracts]  = useState<any[]>([]);
   const [loading,    setLoading]    = useState(true);
@@ -79,6 +81,11 @@ export default function GuaranteesPage() {
   const [isNew,      setIsNew]      = useState(false);
   const [saving,     setSaving]     = useState(false);
   const [filterSt,   setFilterSt]   = useState<"active" | "expired" | "gap" | "expiring" | "returned" | "forfeited" | "all" | "underinsured">("active");
+  // מיקוד לחוזה בקישור עמוק (ממסך החוזים): /guarantees?contract=<id>
+  const [focusContract, setFocusContract] = useState("");
+  useEffect(function() {
+    try { var fc = new URLSearchParams(window.location.search).get("contract"); if (fc) { setFocusContract(fc); setFilterSt("all"); } } catch (e) { /* noop */ }
+  }, []);
   const [filterPropIds, setFilterPropIds] = useState<string[]>([]);
 
   // Form state — used for both create and edit
@@ -443,8 +450,12 @@ export default function GuaranteesPage() {
   }
 
   // ─── Compute filtered + sorted list ────────────────────────────────
+  const focusTenantName = focusContract
+    ? (guarantees.find(function(g: any){ return ((g.contracts?.parent_contract_id || g.contracts?.id || g.contract_id) === focusContract); })?.contracts?.tenants?.name || "")
+    : "";
   const filtered = guarantees.filter(function (g) {
     var h = healthOf(g);
+    if (focusContract && (g.contracts?.parent_contract_id || g.contracts?.id || g.contract_id) !== focusContract) return false;
     if (filterPropIds.length > 0 && !filterPropIds.includes(g.contracts?.property_id)) return false;
     if (filterSt === "all") return true;
     if (filterSt === "expired")   return h === "expired";
@@ -711,7 +722,13 @@ export default function GuaranteesPage() {
         </div>
       )}
 
-      <div className="flex gap-2 mb-4 flex-wrap">
+      {focusContract && (
+          <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 border border-blue-200 text-blue-700 text-xs font-semibold px-3 py-1.5 self-center">
+            📄 ערבויות ההסכם של {focusTenantName || "החוזה שנבחר"}
+            <button onClick={function(){ setFocusContract(""); setFilterSt("active"); }} className="text-blue-400 hover:text-blue-700 font-bold" title="הצג את כל הערבויות">✕</button>
+          </span>
+        )}
+        <div className="flex gap-2 mb-4 flex-wrap">
         {[
           { v: "active",    l: "פעילות" },
           { v: "expired",   l: "פג תוקף" },
@@ -783,7 +800,9 @@ export default function GuaranteesPage() {
                       {g.reference_number && <div className="text-[10px] text-slate-400 font-mono">{g.reference_number}</div>}
                     </td>
                     <td className="px-4 py-3">
-                      <div className="font-medium text-slate-800">{g.contracts?.tenants?.name}</div>
+                      <div className="font-medium text-slate-800 cursor-pointer hover:underline hover:text-blue-700"
+                        title="פתח את ההסכם במסך החוזים"
+                        onClick={function(){ router.push("/contracts?select=" + (g.contracts?.parent_contract_id || g.contracts?.id || g.contract_id)); }}>{g.contracts?.tenants?.name}</div>
                       <div className="text-xs text-slate-500">{g.contracts?.properties?.name}</div>
                       <div className="text-xs text-indigo-700 font-semibold mt-0.5" title="היחידות הכלולות בהסכם זה">
                         יח&apos;: {spacesLabel(g.contracts)}

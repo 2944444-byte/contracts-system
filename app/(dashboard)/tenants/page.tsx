@@ -191,6 +191,16 @@ export default function TenantsPage() {
     setSelected(null); await loadAll();
   }
 
+  // מיקוד לשוכר בקישור עמוק (ממסך החוזים): /tenants?tenant=<id> —
+  // מציב את שם השוכר בחיפוש כך שהרשימה מתמקדת בו מיד.
+  useEffect(function() {
+    var tid = "";
+    try { tid = new URLSearchParams(window.location.search).get("tenant") || ""; } catch (e) { /* noop */ }
+    if (!tid || tenants.length === 0) return;
+    var tRow = tenants.find(function(x: any){ return x.id === tid; });
+    if (tRow?.name) setSearch(tRow.name);
+  }, [tenants]);
+
   // סינון לפי חברה בקישור עמוק ממסך החברות: /tenants?companyId=<id> —
   // שוכרי החברה = מי שמחזיק חוזה על אחד מנכסיה.
   const [companyFilter, setCompanyFilter] = useState<{ id: string; name: string; propIds: string[] } | null>(null);

@@ -75,6 +75,11 @@ export default function InsurancesPage() {
   const [contracts,   setContracts]   = useState<any[]>([]);
   const [loading,     setLoading]     = useState(true);
   const [activeTab,   setActiveTab]   = useState<"building"|"tenant">("building");
+  // מיקוד לחוזה בקישור עמוק — עובר אוטומטית לטאב ביטוחי שוכר
+  const [focusContract, setFocusContract] = useState("");
+  useEffect(function() {
+    try { var fc = new URLSearchParams(window.location.search).get("contract"); if (fc) { setFocusContract(fc); setActiveTab("tenant"); setFilterSt("all"); } } catch (e) { /* noop */ }
+  }, []);
   const [editingId,   setEditingId]   = useState("");
   const [isNew,       setIsNew]       = useState(false);
   const [saving,      setSaving]      = useState(false);
@@ -603,7 +608,11 @@ export default function InsurancesPage() {
 
   // ─── Filtering + sorting ───────────────────────────────────────────
   const allList = activeTab==="building" ? buildingIns : tenantIns;
-  const propFiltered = filterPropIds.length===0 ? allList : allList.filter(function(ins) {
+  // מיקוד לחוזה בקישור עמוק (ממסך החוזים): /insurances?contract=<id>
+  const focusFiltered = !focusContract ? allList : allList.filter(function(ins: any) {
+    return ((ins.contracts as any)?.parent_contract_id || ins.contract_id) === focusContract;
+  });
+  const propFiltered = filterPropIds.length===0 ? focusFiltered : focusFiltered.filter(function(ins) {
     const pid = activeTab==="building" ? ins.property_id : ins.contracts?.property_id;
     return filterPropIds.includes(pid);
   });
@@ -913,6 +922,14 @@ export default function InsurancesPage() {
       )}
 
       {/* KPI — clickable filters */}
+      {focusContract && (
+        <div className="mb-3">
+          <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 border border-blue-200 text-blue-700 text-xs font-semibold px-3 py-1.5">
+            📄 ביטוחי ההסכם של {(propFiltered[0] as any)?.contracts?.tenants?.name || "החוזה שנבחר"}
+            <button onClick={function(){ setFocusContract(""); }} className="text-blue-400 hover:text-blue-700 font-bold" title="הצג את כל הביטוחים">✕</button>
+          </span>
+        </div>
+      )}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-5">
         {[
           {f:"all",     label:"הכל",        value:propFiltered.length, color:"text-slate-600", bg:"bg-white"},
@@ -970,7 +987,9 @@ export default function InsurancesPage() {
                 return (
                   <tr key={ins.id} className={"border-t border-slate-100 " + rowBg}>
                     <td className="px-4 py-3">
-                      <div className="font-semibold text-slate-800 text-sm">{name}</div>
+                      <div className={"font-semibold text-slate-800 text-sm" + (activeTab === "tenant" && ins.contract_id ? " cursor-pointer hover:underline hover:text-blue-700" : "")}
+                        title={activeTab === "tenant" && ins.contract_id ? "פתח את ההסכם במסך החוזים" : undefined}
+                        onClick={function(){ if (activeTab === "tenant" && ins.contract_id) router.push("/contracts?select=" + ((ins.contracts as any)?.parent_contract_id || ins.contract_id)); }}>{name}</div>
                       {sub && <div className="text-xs text-slate-500">{sub}</div>}
                       {activeTab==="tenant" && <div className="text-[10px] text-indigo-700 mt-0.5">יח&apos;: {spacesLabel(ins.contracts)}</div>}
                     </td>

@@ -1409,10 +1409,10 @@ export default function ContractsPage() {
               <div className="rounded-xl border border-slate-200 bg-white shadow-sm p-5">
                 <div className="flex items-start justify-between mb-4">
                   <div>
-                    <h2 className="text-xl font-bold text-slate-800 cursor-pointer hover:underline hover:text-blue-700" onClick={function(){router.push("/tenants");}}>{selContract.tenants?.name} <span className="text-sm font-normal text-blue-500">→</span>
+                    <h2 className="text-xl font-bold text-slate-800 cursor-pointer hover:underline hover:text-blue-700" onClick={function(){router.push("/tenants?tenant=" + (selContract.tenant_id || ""));}}>{selContract.tenants?.name} <span className="text-sm font-normal text-blue-500">→</span>
                       {selContract.contract_type === "parking" && <span className="text-xs bg-blue-100 text-blue-700 border border-blue-200 rounded-full px-2 py-0.5 font-bold mr-2 align-middle" title="הסכם להשכרת חניות בלבד — ללא יחידות ושטח; החיוב נגזר ממנויי החניה">🅿️ הסכם חניות</span>}
                     </h2>
-                    <div className="text-sm text-slate-500 cursor-pointer hover:underline hover:text-blue-600" onClick={function(){router.push("/properties");}}>{selContract.properties?.name}{selContract.properties?.city?" — "+selContract.properties.city:""} <span className="text-blue-400">→</span></div>
+                    <div className="text-sm text-slate-500 cursor-pointer hover:underline hover:text-blue-600" onClick={function(){router.push("/properties?select=" + (selContract.property_id || ""));}}>{selContract.properties?.name}{selContract.properties?.city?" — "+selContract.properties.city:""} <span className="text-blue-400">→</span></div>
                     {selContract.tenants?.company_name&&<div className="text-xs text-slate-400">{selContract.tenants.company_name}</div>}
                   </div>
                   <div className="flex gap-2 flex-wrap">
@@ -2731,7 +2731,17 @@ export default function ContractsPage() {
 
               {/* Guarantees */}
               <div className="rounded-xl border border-slate-200 bg-white shadow-sm p-4">
-                <div className="text-xs font-bold text-slate-500 mb-3">🏦 ערבויות ({(selContract.guarantees??[]).length})</div>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="text-xs font-bold text-slate-500">🏦 ערבויות ({(selContract.guarantees??[]).length})</div>
+                  <div className="flex gap-1.5">
+                    <button onClick={function(){router.push("/guarantees?contract="+selContract.id);}}
+                      className="text-[11px] rounded border border-blue-200 bg-blue-50 text-blue-700 px-2 py-1 font-semibold hover:bg-blue-100"
+                      title="כל ערבויות ההסכם — עדכון, הארכה, החלפה">🏦 מסך ערבויות ↗</button>
+                    <button onClick={function(){router.push("/insurances?contract="+selContract.id);}}
+                      className="text-[11px] rounded border border-blue-200 bg-blue-50 text-blue-700 px-2 py-1 font-semibold hover:bg-blue-100"
+                      title="אישורי הביטוח של ההסכם — עדכון וחידוש">🛡️ מסך ביטוחים ↗</button>
+                  </div>
+                </div>
                 {(selContract.guarantees??[]).length===0 ? <div className="text-xs text-slate-400">אין ערבויות</div> : (
                   <div className="space-y-2">
                     {selContract.guarantees.map(function(g:any){
@@ -2749,7 +2759,7 @@ export default function ContractsPage() {
                       const blocking = gaps.filter(function(x:any){ return x.blocking; });
                       const notInPlace = blocking.length > 0;
                       return (
-                        <div key={g.id} className={"rounded-lg border p-2.5 " + (isExpired || notInPlace ? "border-red-300 bg-red-50" : g.status !== "active" ? "border-slate-200 bg-slate-50" : gaps.length > 0 ? "border-amber-300 bg-amber-50" : "border-green-200 bg-green-50/30")}>
+                        <div key={g.id} onClick={function(){router.push("/guarantees?contract="+selContract.id);}} title="פתח במסך הערבויות לעדכון" className={"rounded-lg border p-2.5 cursor-pointer hover:shadow-sm " + (isExpired || notInPlace ? "border-red-300 bg-red-50" : g.status !== "active" ? "border-slate-200 bg-slate-50" : gaps.length > 0 ? "border-amber-300 bg-amber-50" : "border-green-200 bg-green-50/30")}>
                           <div className="flex items-center justify-between mb-1">
                             <span className="text-xs font-bold text-slate-700">{GTYPE[g.guarantee_type] ?? g.guarantee_type}</span>
                             <span className={"text-xs px-2 py-0.5 rounded-full font-semibold " +

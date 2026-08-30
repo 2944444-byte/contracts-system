@@ -296,6 +296,10 @@ export default function PropertiesPage() {
     setSelected(null); await loadAll();
   }
 
+  // בחירת נכס בקישור עמוק: /properties?select=<propertyId>
+  useEffect(function() {
+    try { var sel = new URLSearchParams(window.location.search).get("select"); if (sel) setSelected(sel); } catch (e) { /* noop */ }
+  }, []);
   // סינון לפי חברה בקישור עמוק ממסך החברות: /properties?companyId=<id>
   const [companyFilter, setCompanyFilter] = useState("");
   useEffect(function() {
@@ -907,7 +911,7 @@ export default function PropertiesPage() {
                       const monIdx = monBase * (cpiRatios[c.id] || 1);
                       const mon = monIdx;
                       return (
-                        <div key={c.id} className="px-5 py-3 flex items-center justify-between hover:bg-slate-50">
+                        <div key={c.id} onClick={function(){router.push("/contracts?select="+c.id);}} title="פתח את ההסכם במסך החוזים" className="px-5 py-3 flex items-center justify-between hover:bg-slate-50 cursor-pointer">
                           <div>
                             <div className="font-medium text-slate-800 text-sm">{c.tenants?.name}</div>
                             <span className={"text-xs px-1.5 py-0.5 rounded-full " +
