@@ -81,6 +81,10 @@ export default function GuaranteesPage() {
   const [isNew,      setIsNew]      = useState(false);
   const [saving,     setSaving]     = useState(false);
   const [filterSt,   setFilterSt]   = useState<"active" | "expired" | "gap" | "expiring" | "returned" | "forfeited" | "all" | "underinsured">("active");
+  // בעריכת ערבות קיימת (וגם בהחלפה/הוספה מהסכם נתון) השיוך לחוזה נעול —
+  // ערבות אינה עוברת בין הסכמים; מוצג ההסכם המקושר במקום בורר.
+  const [fContractLabel, setFContractLabel] = useState("");
+
   // מיקוד לחוזה בקישור עמוק (ממסך החוזים): /guarantees?contract=<id>
   const [focusContract, setFocusContract] = useState("");
   useEffect(function() {
@@ -258,6 +262,14 @@ export default function GuaranteesPage() {
     };
   }
 
+  function contractLabelOf(c: any): string {
+    if (!c) return "";
+    var parts = [ (c.tenants?.name || "—") + " — " + (c.properties?.name || "—") ];
+    var units = spacesLabel(c); if (units && units !== "—") parts.push("יח': " + units);
+    var range = contractRange(c); if (range) parts.push(range);
+    return parts.join(" | ");
+  }
+
   // Build a unit-list string from contract_spaces relations.
   function spacesLabel(contract0: any): string {
     var contract = effContractView(contract0);
@@ -286,6 +298,7 @@ export default function GuaranteesPage() {
     if (prefillFromGuarantee) {
       // "Replace" flow — copy contract + type from old, blank everything else
       setFContractId(prefillFromGuarantee.contract_id ?? "");
+      setFContractLabel(contractLabelOf(prefillFromGuarantee.contracts));
       setFType(prefillFromGuarantee.guarantee_type ?? "bank");
       setFRequired(prefillFromGuarantee.amount_required?.toString() ?? "");
       setFActual("");
@@ -297,7 +310,8 @@ export default function GuaranteesPage() {
       setFNotes("מחליפה ערבות " + (prefillFromGuarantee.reference_number || prefillFromGuarantee.bank || "קודמת"));
       setFPrevGuaranteeId(prefillFromGuarantee.id);
     } else {
-      setFContractId(prefillContractId || ""); setFType("bank"); setFRequired(""); setFActual("");
+      setFContractId(prefillContractId || "");
+      setFContractLabel(prefillContractId ? contractLabelOf(contracts.find(function(c: any){ return c.id === prefillContractId; })) : ""); setFType("bank"); setFRequired(""); setFActual("");
       setFBank(""); setFRef(""); setFStartDate(""); setFEndDate("");
       setFStatus("active"); setFNotes(""); setFPrevGuaranteeId(null);
     }
@@ -305,7 +319,8 @@ export default function GuaranteesPage() {
 
   function openEdit(g: any) {
     setIsNew(false); setEditingId(g.id);
-    setFContractId(g.contract_id ?? ""); setFType(g.guarantee_type ?? "bank");
+    setFContractId(g.contract_id ?? "");
+    setFContractLabel(contractLabelOf(g.contracts)); setFType(g.guarantee_type ?? "bank");
     setFRequired(g.amount_required?.toString() ?? ""); setFActual(g.amount_actual?.toString() ?? "");
     setFBank(g.bank ?? ""); setFRef(g.reference_number ?? "");
     setFStartDate(g.start_date?.split("T")[0] ?? ""); setFEndDate(g.end_date?.split("T")[0] ?? "");
@@ -923,6 +938,12 @@ export default function GuaranteesPage() {
               )}
               <div>
                 <label className="mb-1 block text-xs font-semibold text-slate-700">חוזה *</label>
+                {fContractLabel ? (
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                    📄 {fContractLabel}
+                    <div className="text-[10px] text-slate-400 mt-0.5">הערבות משויכת להסכם זה — השיוך אינו ניתן לשינוי</div>
+                  </div>
+                ) : (
                 <select value={fContractId} onChange={function (e) { setFContractId(e.target.value); }} className={ic}>
                   <option value="">-- בחר --</option>
                   {contracts.filter(function (c) { return !c.is_amendment; }).map(function (c) {
@@ -937,9 +958,10 @@ export default function GuaranteesPage() {
                     );
                   })}
                 </select>
-                <p className="text-[10px] text-slate-400 mt-1">
+                )}
+                {!fContractLabel && <p className="text-[10px] text-slate-400 mt-1">
                   אם לאותו שוכר ונכס יש כמה הסכמים — בחר לפי היחידות והתאריכים.
-                </p>
+                </p>}
               </div>
               <div>
                 <label className="mb-2 block text-xs font-semibold text-slate-700">סוג</label>

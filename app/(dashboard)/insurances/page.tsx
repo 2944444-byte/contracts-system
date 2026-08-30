@@ -75,6 +75,9 @@ export default function InsurancesPage() {
   const [contracts,   setContracts]   = useState<any[]>([]);
   const [loading,     setLoading]     = useState(true);
   const [activeTab,   setActiveTab]   = useState<"building"|"tenant">("building");
+  // בעריכה/חידוש השיוך לנכס או לחוזה נעול — פוליסה אינה עוברת בין הסכמים.
+  const [fRefLabel, setFRefLabel] = useState("");
+
   // מיקוד לחוזה בקישור עמוק — עובר אוטומטית לטאב ביטוחי שוכר
   const [focusContract, setFocusContract] = useState("");
   useEffect(function() {
@@ -238,9 +241,18 @@ export default function InsurancesPage() {
     } finally { setDocExtracting(false); }
   }
 
+  function refLabelOf(ins: any): string {
+    if (!ins) return "";
+    if (activeTab === "building") return ins.properties?.name || "";
+    var c: any = ins.contracts || {};
+    return (c.tenants?.name || "—") + " — " + (c.properties?.name || "—") + (spacesLabel(c) !== "—" ? " | יח': " + spacesLabel(c) : "");
+  }
   function openNew(prefillRefId?: string) {
     setIsNew(true); setEditingId("new"); setRenewFrom(null);
-    setFRefId(prefillRefId || ""); setFInsurer(""); setFPolicyNum(""); setFCoverage("");
+    setFRefId(prefillRefId || "");
+    setFRefLabel(prefillRefId ? (activeTab === "building"
+      ? (properties.find(function(pp: any){ return pp.id === prefillRefId; })?.name || "")
+      : refLabelOf({ contracts: contracts.find(function(cc: any){ return cc.id === prefillRefId; }) })) : ""); setFInsurer(""); setFPolicyNum(""); setFCoverage("");
     setFPremium(""); setFDeductible(""); setFStartDate(""); setFEndDate("");
     setFStatus("active"); setFNotes(""); setFDocUrl(""); setFCovTypes([]); setFCovLimits({});
     setDocExtractMsg("");
@@ -261,6 +273,7 @@ export default function InsurancesPage() {
       return x.toISOString().slice(0, 10);
     };
     setIsNew(true); setEditingId("new");
+    setFRefLabel(refLabelOf(ins));
     setRenewFrom(ins);
     setFRefId(ins.property_id ?? ins.contract_id ?? "");
     setFInsurer(insurerOf(ins) === "—" ? "" : insurerOf(ins));
@@ -287,6 +300,7 @@ export default function InsurancesPage() {
     setRenewFrom(null);
     setIsNew(false); setEditingId(ins.id);
     setFRefId(ins.property_id ?? ins.contract_id ?? "");
+    setFRefLabel(refLabelOf(ins));
     setFInsurer(insurerOf(ins)==="—"?"":insurerOf(ins)); setFPolicyNum(ins.policy_number??"");
     setFCoverage(ins.coverage_amount?.toString()??""); setFPremium((ins.annual_premium ?? ins.total_premium)?.toString()??"");
     setFDeductible(ins.deductible?.toString()??"");
@@ -1090,6 +1104,12 @@ export default function InsurancesPage() {
             <div className="p-6 space-y-3">
               <div>
                 <label className="mb-1 block text-xs font-semibold text-slate-700">{activeTab==="building"?"נכס *":"חוזה / שוכר *"}</label>
+                {fRefLabel ? (
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                    {activeTab==="building" ? "🏢 " : "📄 "}{fRefLabel}
+                    <div className="text-[10px] text-slate-400 mt-0.5">הפוליסה משויכת {activeTab==="building"?"לנכס זה":"להסכם זה"} — השיוך אינו ניתן לשינוי</div>
+                  </div>
+                ) : (
                 <select value={fRefId} onChange={function(e){setFRefId(e.target.value);}} className={ic}>
                   <option value="">-- בחר --</option>
                   {activeTab==="building"
@@ -1097,6 +1117,7 @@ export default function InsurancesPage() {
                     : contracts.filter(function(c){ return !c.is_amendment; }).map(function(c){return <option key={c.id} value={c.id}>{(c.tenants as any)?.name} — {(c.properties as any)?.name} | יח&apos;: {spacesLabel(c)}{contractRange(c)?" | "+contractRange(c):""}</option>;})
                   }
                 </select>
+                )}
               </div>
 
               {activeTab==="tenant" && (
