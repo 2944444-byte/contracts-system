@@ -25,6 +25,9 @@ export default function TenantsPage() {
   const [isNew, setIsNew] = useState(false);
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState("");
+  // הפרדה בין שוכרים פעילים לשוכרי עבר: פעיל = יש לו לפחות הסכם חי אחד
+  // (כולל חתום שטרם החל); עבר = כל הסכמיו הסתיימו או שאין לו הסכם כלל.
+  const [filterLife, setFilterLife] = useState<"active" | "past" | "all">("active");
   const [fName, setFName] = useState("");
   const [fCompany, setFCompany] = useState("");
   const [fIdNumber, setFIdNumber] = useState("");
@@ -46,7 +49,9 @@ export default function TenantsPage() {
       supabase.from("tenants").select("*").order("name"),
       supabase.from("contracts")
         .select("id, property_id, status, start_date, end_date, rent_per_sqm, charged_area, investment_addition, tenant_id, is_amendment, parent_contract_id, amendment_date, amendment_number, index_base_date, indexation_method, index_mechanism, properties(name), contract_spaces(spaces(space_name))")
-        .in("status", ["active","expiring","extended","upcoming"]).order("end_date"),
+        // "ended" נטען גם הוא: מסווג שוכרי עבר, מציג את ההיסטוריה שלהם,
+        // ומאפשר למשתמש מוגבל לראות שוכרי עבר של הנכסים שבהיקפו.
+        .in("status", ["active","expiring","extended","upcoming","future","ended"]).order("end_date"),
     ]);
     // Data-level scoping: a scoped user sees only tenants that hold at least
     // one contract in an allowed property.
@@ -58,7 +63,13 @@ export default function TenantsPage() {
     setTenants(scT);
     setContracts(scC);
     setLoading(false);
-    if (!selected && scT.length > 0) setSelected(scT[0].id);
+    if (!selected && scT.length > 0) {
+      // ברירת המחדל היא לשונית "פעילים" — נבחר שוכר שנראה בה
+      var liveT: Record<string, boolean> = {};
+      scC.forEach(function(x: any){ if (!x.is_amendment && x.tenant_id && ["active","expiring","extended","upcoming","future"].indexOf(x.status) !== -1) liveT[x.tenant_id] = true; });
+      var first = scT.find(function(x: any){ return !!liveT[x.id]; }) || scT[0];
+      setSelected(first.id);
+    }
     // Per-contract CPI ratios. Group by (base date + mechanism) to dedupe
     // CBS calls; each contract still gets its own ratio.
     try {
@@ -219,7 +230,7 @@ export default function TenantsPage() {
     try { tid = new URLSearchParams(window.location.search).get("tenant") || ""; } catch (e) { /* noop */ }
     if (!tid || tenants.length === 0) return;
     var tRow = tenants.find(function(x: any){ return x.id === tid; });
-    if (tRow?.name) setSearch(tRow.name);
+    if (tRow?.name) { setSearch(tRow.name); setFilterLife("all"); setSelected(tid); }
   }, [tenants]);
 
   // סינון לפי חברה בקישור עמוק ממסך החברות: /tenants?companyId=<id> —
@@ -241,7 +252,17 @@ export default function TenantsPage() {
     return s;
   })();
 
+  // סטטוסים "חיים" — קובעים אם שוכר נחשב פעיל או שוכר עבר
+  const LIVE_ST = ["active", "expiring", "extended", "upcoming", "future"];
+  const liveTenantIds = (function() {
+    var s: Record<string, boolean> = {};
+    contracts.forEach(function(c: any) { if (!c.is_amendment && c.tenant_id && LIVE_ST.indexOf(c.status) !== -1) s[c.tenant_id] = true; });
+    return s;
+  })();
+  const activeCount = tenants.filter(t => !!liveTenantIds[t.id] && (!companyTenantIds || companyTenantIds[t.id])).length;
+  const pastCount   = tenants.filter(t =>  !liveTenantIds[t.id] && (!companyTenantIds || companyTenantIds[t.id])).length;
   const filtered = tenants.filter(t =>
+    (filterLife === "all" || (filterLife === "active" ? !!liveTenantIds[t.id] : !liveTenantIds[t.id])) &&
     (!companyTenantIds || companyTenantIds[t.id]) &&
     (!search || t.name?.includes(search) || t.company_name?.includes(search) || t.id_number?.includes(search))
   );
@@ -268,10 +289,12 @@ export default function TenantsPage() {
     });
     return out;
   })();
-  const selRevenueBase = selContracts.reduce((s, c) => s + (c.rent_per_sqm ?? 0) * (c.charged_area ?? 0) + (c.investment_addition ?? 0), 0);
+  // הכנסה — רק מהסכמים חיים; הסכמי עבר מוצגים בהיסטוריה אך אינם נסכמים
+  const selLiveContracts = selContracts.filter(c => LIVE_ST.indexOf(c.status) !== -1);
+  const selRevenueBase = selLiveContracts.reduce((s, c) => s + (c.rent_per_sqm ?? 0) * (c.charged_area ?? 0) + (c.investment_addition ?? 0), 0);
   // Indexed revenue: each contract uses its own ratio (highest contracts get
   // the chained peak; standard contracts get the base→today ratio).
-  const selRevenue = selContracts.reduce((s, c) => {
+  const selRevenue = selLiveContracts.reduce((s, c) => {
     var r = cpiRatios[c.id] || 1;
     return s + ((c.rent_per_sqm ?? 0) * (c.charged_area ?? 0) + (c.investment_addition ?? 0)) * r;
   }, 0);
@@ -281,11 +304,13 @@ export default function TenantsPage() {
     expiring: { label: "פוגע",    color: "bg-yellow-100 text-yellow-700" },
     extended: { label: "מוארך",   color: "bg-blue-100 text-blue-700"     },
     upcoming: { label: "עתידי",   color: "bg-purple-100 text-purple-700" },
+    future:   { label: "עתידי",   color: "bg-purple-100 text-purple-700" },
+    ended:    { label: "הסתיים",  color: "bg-slate-100 text-slate-500"   },
   };
 
   return (
     <div dir="rtl">
-      <PageHero title="שוכרים" subtitle={tenants.length + " שוכרים"} icon="👤" tone="violet" actionLabel="+ שוכר חדש" onAction={openNew} />
+      <PageHero title="שוכרים" subtitle={activeCount + " פעילים · " + pastCount + " שוכרי עבר"} icon="👤" tone="violet" actionLabel="+ שוכר חדש" onAction={openNew} />
 
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-5">
         {/* רשימה */}
@@ -296,6 +321,20 @@ export default function TenantsPage() {
               <button onClick={() => setCompanyFilter(null)} className="text-blue-400 hover:text-blue-700 font-bold" title="הצג את כל השוכרים">✕</button>
             </span>
           )}
+          <div className="flex gap-1.5 mb-2">
+            {[
+              { v: "active", l: "פעילים (" + activeCount + ")" },
+              { v: "past",   l: "שוכרי עבר (" + pastCount + ")" },
+              { v: "all",    l: "הכל" },
+            ].map(s => (
+              <button key={s.v}
+                onClick={() => { setFilterLife(s.v as any); if (selected && ((s.v === "active" && !liveTenantIds[selected]) || (s.v === "past" && liveTenantIds[selected]))) setSelected(null); }}
+                className={"rounded-xl border px-3 py-1.5 text-xs font-semibold transition-colors " +
+                  (filterLife === s.v ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50")}>
+                {s.l}
+              </button>
+            ))}
+          </div>
           <input type="text" value={search} onChange={e => setSearch(e.target.value)}
             placeholder="חיפוש שם / חברה / ח.פ..."
             className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm mb-2" />
@@ -305,13 +344,18 @@ export default function TenantsPage() {
               // משפחות בלבד — תוספת אינה חוזה נוסף
               const tenContracts = tenRows.filter((c: any) => !c.is_amendment);
               const hasActive = tenContracts.some(c => c.status === "active");
+              const isPast = !liveTenantIds[t.id];
               return (
                 <div key={t.id} onClick={() => setSelected(selected === t.id ? null : t.id)}
                   className={"rounded-xl border p-3 cursor-pointer transition-all " +
-                    (selected === t.id ? "border-blue-500 bg-blue-50 shadow-sm" : "border-slate-200 bg-white hover:shadow-sm")}>
+                    (selected === t.id ? "border-blue-500 bg-blue-50 shadow-sm" : "border-slate-200 bg-white hover:shadow-sm") +
+                    (isPast ? " opacity-75" : "")}>
                   <div className="flex items-center justify-between">
                     <div>
-                      <div className="font-semibold text-slate-800 text-sm">{t.name}</div>
+                      <div className="font-semibold text-slate-800 text-sm">
+                        {t.name}
+                        {isPast && <span className="mr-1.5 align-middle text-[10px] font-semibold rounded-full bg-slate-100 border border-slate-200 text-slate-500 px-1.5 py-0.5">עבר</span>}
+                      </div>
                       {t.company_name && <div className="text-xs text-slate-400">{t.company_name}</div>}
                     </div>
                     <div className="flex items-center gap-1">
@@ -359,7 +403,7 @@ export default function TenantsPage() {
                 {/* KPI */}
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-4">
                   {[
-                    { label: "חוזים פעילים",    value: String(selContracts.length),  color: "text-slate-800", bg: "bg-slate-50"  },
+                    { label: "חוזים פעילים",    value: String(selLiveContracts.length),  color: "text-slate-800", bg: "bg-slate-50"  },
                     { label: "הכנסה חודשית צמודה", value: fmtMoney(selRevenue),          color: "text-green-700", bg: "bg-green-50"  },
                     { label: "נכסים",            value: String(new Set(selContracts.map(c => c.properties?.name)).size), color: "text-blue-700", bg: "bg-blue-50" },
                   ].map(k => (
