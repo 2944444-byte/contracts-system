@@ -561,6 +561,30 @@ export default function InsurancesPage() {
     } catch (e: any) { alert("שגיאה: " + (e?.message || e)); }
   }
 
+  // פוליסה שפגה אבל כבר חודשה (קיימת פוליסה חדשה בתוקף לאותו נכס / לאותה
+  // משפחת חוזה) היא היסטוריה — "עבר" — לא אזעקת "פג". רק כשאין מחליפה
+  // בתוקף הפוליסה מוצגת באדום כפי שהיה.
+  function successorKeyOf(ins: any, tab: string): string {
+    if (tab === "building") return "p|" + (ins.property_id || "");
+    return "c|" + ((ins.contracts as any)?.parent_contract_id || ins.contract_id || "");
+  }
+  function hasSuccessor(ins: any, tab: string): boolean {
+    var pool = tab === "building" ? buildingIns : tenantIns;
+    var key = successorKeyOf(ins, tab);
+    return pool.some(function(other: any) {
+      if (other.id === ins.id) return false;
+      if (successorKeyOf(other, tab) !== key) return false;
+      if (other.status !== "active" || !other.end_date || daysLeft(other.end_date) < 0) return false;
+      return !ins.end_date || other.end_date > ins.end_date;
+    });
+  }
+  type DisplayHealth = Health | "superseded";
+  function displayHealthOf(ins: any): DisplayHealth {
+    var h = healthOf(ins);
+    if (h === "expired" && hasSuccessor(ins, activeTab)) return "superseded";
+    return h;
+  }
+
   // ─── Filtering + sorting ───────────────────────────────────────────
   const allList = activeTab==="building" ? buildingIns : tenantIns;
   const propFiltered = filterPropIds.length===0 ? allList : allList.filter(function(ins) {
@@ -568,24 +592,27 @@ export default function InsurancesPage() {
     return filterPropIds.includes(pid);
   });
   const list = propFiltered.filter(function(ins) {
-    var h = healthOf(ins);
+    var h = displayHealthOf(ins);
     if (filterSt === "all") return true;
-    if (filterSt === "active")   return ins.status === "active";
+    if (filterSt === "active")   return ins.status === "active" && h !== "superseded";
     if (filterSt === "expired")  return h === "expired";
     if (filterSt === "expiring") return h === "expiring30" || h === "expiring60";
+    if (filterSt === "superseded") return h === "superseded";
     return true;
   });
   const sorted = list.slice().sort(function(a,b){
-    var ha = healthOrder(healthOf(a)), hb = healthOrder(healthOf(b));
+    var ordOf = function(x: any){ var dh = displayHealthOf(x); return dh === "superseded" ? 5 : healthOrder(dh as Health); };
+    var ha = ordOf(a), hb = ordOf(b);
     if (ha !== hb) return ha - hb;
     var ea = a.end_date ? new Date(a.end_date).getTime() : Infinity;
     var eb = b.end_date ? new Date(b.end_date).getTime() : Infinity;
     return ea - eb;
   });
 
-  const expiring = propFiltered.filter(function(ins) { var h=healthOf(ins); return h==="expiring30"||h==="expiring60"; });
-  const expired  = propFiltered.filter(function(ins) { return healthOf(ins)==="expired"; });
-  const active   = propFiltered.filter(function(ins) { return ins.status==="active"; });
+  const expiring = propFiltered.filter(function(ins) { var h=displayHealthOf(ins); return h==="expiring30"||h==="expiring60"; });
+  const expired  = propFiltered.filter(function(ins) { return displayHealthOf(ins)==="expired"; });
+  const superseded = propFiltered.filter(function(ins) { return displayHealthOf(ins)==="superseded"; });
+  const active   = propFiltered.filter(function(ins) { return ins.status==="active" && displayHealthOf(ins) !== "superseded" && healthOf(ins) !== "expired"; });
 
   // ─── Coverage gap detection ────────────────────────────────────────
   // Properties (in use via active contracts) that have NO active in-date
@@ -870,12 +897,13 @@ export default function InsurancesPage() {
       )}
 
       {/* KPI — clickable filters */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-5">
         {[
           {f:"all",     label:"הכל",        value:propFiltered.length, color:"text-slate-600", bg:"bg-white"},
           {f:"active",  label:"פעילים",     value:active.length,       color:"text-green-700", bg:"bg-white"},
           {f:"expiring",label:"פגות בקרוב", value:expiring.length,     color:expiring.length>0?"text-yellow-700":"text-slate-400", bg:expiring.length>0?"bg-yellow-50":"bg-white"},
           {f:"expired", label:"פגו",        value:expired.length,      color:expired.length>0?"text-red-700":"text-slate-400", bg:expired.length>0?"bg-red-50":"bg-white"},
+          ...(superseded.length>0?[{f:"superseded", label:"ביטוח עבר", value:superseded.length, color:"text-slate-500", bg:"bg-slate-50"}]:[]),
         ].map(function(k) {
           return (
             <button key={k.label} onClick={function(){setFilterSt(k.f as any);}}
@@ -913,10 +941,11 @@ export default function InsurancesPage() {
             <tbody>
               {sorted.map(function(ins) {
                 const d = ins.end_date ? daysLeft(ins.end_date) : null;
-                const h = healthOf(ins);
+                const h = displayHealthOf(ins);
                 const rowBg = h==="expired" ? "bg-red-50 border-r-4 border-red-500"
                   : h==="expiring30" ? "bg-orange-50 border-r-4 border-orange-400"
                   : h==="expiring60" ? "bg-yellow-50/40"
+                  : h==="superseded" ? "opacity-60 hover:opacity-100"
                   : h==="inactive" ? "opacity-60" : "hover:bg-slate-50";
                 const name = activeTab==="building" ? ins.properties?.name : ins.contracts?.tenants?.name;
                 const sub  = activeTab==="tenant"   ? ins.contracts?.properties?.name : null;
@@ -954,15 +983,18 @@ export default function InsurancesPage() {
                     <td className="px-4 py-3">
                       <div className="text-xs font-medium text-slate-700">{fmtDate(ins.end_date)}</div>
                       {d!==null && ins.status==="active" && (
-                        d<0 ? <div className="text-red-600 font-bold text-xs">פג לפני {Math.abs(d)} ימים</div>
+                        d<0 ? (h==="superseded"
+                          ? <div className="text-slate-400 text-xs">הוחלפה בפוליסה חדשה</div>
+                          : <div className="text-red-600 font-bold text-xs">פג לפני {Math.abs(d)} ימים</div>)
                         : d<=60 ? <div className={"text-xs font-bold " + (d<=30?"text-orange-600":"text-yellow-600")}>נותרו {d} ימים</div>
                         : null
                       )}
                     </td>
                     <td className="px-4 py-3">
                       <span className={"text-xs px-2 py-0.5 rounded-full font-semibold " +
-                        (h==="expired"?"bg-red-100 text-red-700":ins.status==="active"?"bg-green-100 text-green-700":"bg-slate-100 text-slate-600")}>
-                        {h==="expired"?"פג":ins.status==="active"?"פעיל":"לא פעיל"}
+                        (h==="superseded"?"bg-slate-200 text-slate-600":h==="expired"?"bg-red-100 text-red-700":ins.status==="active"?"bg-green-100 text-green-700":"bg-slate-100 text-slate-600")}
+                        title={h==="superseded"?"פוליסה קודמת — קיים ביטוח חדש בתוקף":undefined}>
+                        {h==="superseded"?"עבר":h==="expired"?"פג":ins.status==="active"?"פעיל":"לא פעיל"}
                       </span>
                     </td>
                     <td className="px-4 py-3">
