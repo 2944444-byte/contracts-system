@@ -111,7 +111,7 @@ export default function CompaniesPage() {
               const propCount=properties.filter(function(p){return p.company_id===c.id;}).length;
               return (
                 <div key={c.id} onClick={function(){setSelected(selected===c.id?null:c.id);}} className={"rounded-xl border p-3 cursor-pointer transition-all "+(selected===c.id?"border-blue-500 bg-blue-50 shadow-sm":"border-slate-200 bg-white hover:shadow-sm")}>
-                  <div className="flex items-center justify-between"><div className="font-semibold text-slate-800 text-sm">🏛️ {c.company_name}</div>{propCount>0&&<span className="text-xs bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded-full">{propCount}</span>}</div>
+                  <div className="flex items-center justify-between"><div className="font-semibold text-slate-800 text-sm">🏛️ {c.company_name}</div>{propCount>0&&<span title={propCount + " נכסים בבעלות החברה"} className="text-xs bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded-full cursor-help">{propCount}</span>}</div>
                   {c.city&&<div className="text-xs text-slate-400 mt-0.5">📍 {c.city}</div>}
                   {c.company_id&&<div className="text-xs text-slate-400 font-mono">ח.פ: {c.company_id}</div>}
                 </div>

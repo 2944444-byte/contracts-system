@@ -561,7 +561,8 @@ export default function PropertiesPage() {
           {loading ? <div className="text-center py-4 text-slate-400">טוען...</div> : (
             filtered.map(function(p) {
               const ti = typeInfo(p.property_type);
-              const propContracts = contracts.filter(function(c){return c.property_id===p.id;});
+              // הסכמים בלבד — תוספת (is_amendment) אינה נספרת כחוזה נוסף
+              const propContracts = contracts.filter(function(c){return c.property_id===p.id && !c.is_amendment;});
               return (
                 <div key={p.id} onClick={function(){setSelected(selected===p.id?null:p.id);}}
                   className={"rounded-xl border p-3 cursor-pointer transition-all " +
@@ -571,7 +572,8 @@ export default function PropertiesPage() {
                       <span>{ti.icon}</span>{p.name}
                     </div>
                     {propContracts.length > 0 && (
-                      <span className="text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full font-semibold">{propContracts.length}</span>
+                      <span title={propContracts.length + " הסכמים חיים בנכס — פעילים ועתידיים (בסיס + תוספותיו נספרים כהסכם אחד)"}
+                        className="text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full font-semibold cursor-help">{propContracts.length}</span>
                     )}
                   </div>
                   {p.city && <div className="text-xs text-slate-400">📍 {p.city}</div>}

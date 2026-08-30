@@ -359,8 +359,8 @@ export default function TenantsPage() {
                       {t.company_name && <div className="text-xs text-slate-400">{t.company_name}</div>}
                     </div>
                     <div className="flex items-center gap-1">
-                      {hasActive && <span className="w-2 h-2 rounded-full bg-green-400" />}
-                      {tenContracts.length > 0 && <span className="text-xs text-slate-400">{tenContracts.length}</span>}
+                      {hasActive && <span title="לשוכר יש הסכם פעיל" className="w-2 h-2 rounded-full bg-green-400 cursor-help" />}
+                      {tenContracts.length > 0 && <span title={tenContracts.length + " הסכמים לשוכר (בסיס + תוספותיו נספרים כהסכם אחד)"} className="text-xs text-slate-400 cursor-help">{tenContracts.length}</span>}
                     </div>
                   </div>
                 </div>

@@ -1383,7 +1383,7 @@ export default function LettersPage() {
                         <div className="mb-5">
                           <div className="flex items-center gap-2 mb-2 px-1">
                             <span className="text-sm font-bold text-slate-700">📤 ממתינים לשליחה</span>
-                            <span className="text-xs bg-blue-100 text-blue-700 rounded-full px-2 py-0.5 font-semibold">{unsentLetters.length}</span>
+                            <span title={unsentLetters.length + " מכתבים ממתינים לשליחה"} className="text-xs bg-blue-100 text-blue-700 rounded-full px-2 py-0.5 font-semibold cursor-help">{unsentLetters.length}</span>
                           </div>
                           <div className="space-y-3">{unsentGroups.map(renderGroup)}</div>
                         </div>
@@ -1392,7 +1392,7 @@ export default function LettersPage() {
                         <div>
                           <div className="flex items-center gap-2 mb-2 px-1 pt-3 border-t border-slate-200">
                             <span className="text-sm font-bold text-slate-700">✓ נשלחו</span>
-                            <span className="text-xs bg-green-100 text-green-700 rounded-full px-2 py-0.5 font-semibold">{sentLetters.length}</span>
+                            <span title={sentLetters.length + " מכתבים שנשלחו"} className="text-xs bg-green-100 text-green-700 rounded-full px-2 py-0.5 font-semibold cursor-help">{sentLetters.length}</span>
                           </div>
                           <div className="space-y-3">{sentGroups.map(renderGroup)}</div>
                         </div>
