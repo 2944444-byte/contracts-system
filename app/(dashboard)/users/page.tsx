@@ -17,6 +17,23 @@ const ROLES = [
 ];
 const roleInfo = function(v: string) { return ROLES.find(function(r){ return r.v === v; }) || ROLES[2]; };
 
+// תצוגת זמן יחסי בעברית לעמודת הפעילות
+function ago(ts: string): string {
+  var ms = Date.now() - new Date(ts).getTime();
+  if (ms < 0) ms = 0;
+  var m = Math.floor(ms / 60000);
+  if (m < 60) return "לפני " + m + " דק'";
+  var h = Math.floor(m / 60);
+  if (h < 24) return "לפני " + h + " שע'";
+  var d = Math.floor(h / 24);
+  if (d < 31) return "לפני " + d + " ימים";
+  return new Date(ts).toLocaleDateString("he-IL");
+}
+function fmtDT(ts: string): string {
+  var d = new Date(ts);
+  return d.toLocaleDateString("he-IL") + " " + d.toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" });
+}
+
 function genPassword(): string {
   // Guarantee one of each class (upper/lower/digit/symbol) so the password meets
   // Supabase's strongest "letters, digits and symbols" requirement + length ≥ 8.
@@ -55,6 +72,9 @@ export default function UsersPage() {
   // ── Edit-access modal (scope + permissions of an existing user) ──
   const [accessUser, setAccessUser] = useState<any | null>(null);
 
+  // ── פעילות משתמשים (למנהל מערכת): userId → שורת admin_user_activity ──
+  const [activity, setActivity] = useState<Record<string, any>>({});
+
   // ── Credentials panel (after create / password reset) ──
   const [creds, setCreds] = useState<{ name: string; email: string; password: string } | null>(null);
 
@@ -64,6 +84,19 @@ export default function UsersPage() {
     var access = await getCurrentAccess();
     setMe(access);
     await loadAll();
+    // נתוני התחברות ופעילות — נטענים רק למנהל מערכת (ה-route מאמת שוב בשרת)
+    if (access?.role === "admin") loadActivity();
+  }
+
+  async function loadActivity() {
+    try {
+      const res = await fetch("/api/admin/user-activity", { headers: await authHeaders() });
+      if (!res.ok) return;
+      const j = await res.json();
+      var m: Record<string, any> = {};
+      (j.rows || []).forEach(function(r: any){ m[r.user_id] = r; });
+      setActivity(m);
+    } catch (e) { /* אין פעילות להצגה — העמודה פשוט לא תופיע */ }
   }
 
   async function loadAll() {
@@ -455,6 +488,12 @@ export default function UsersPage() {
                 <th className="px-4 py-3 font-semibold text-slate-700">היקף גישה</th>
                 <th className="px-4 py-3 font-semibold text-slate-700">הרשאות</th>
                 <th className="px-4 py-3 font-semibold text-slate-700">סטטוס</th>
+                {Object.keys(activity).length > 0 && (
+                  <th className="px-4 py-3 font-semibold text-slate-700 cursor-help"
+                    title="🔑 התחברות אחרונה · 🖥 פעילות אחרונה (רענון חיבור — קירוב) · ✏️ פעולות שנרשמו ביומן ב-30 הימים האחרונים">
+                    פעילות
+                  </th>
+                )}
                 <th className="px-4 py-3 font-semibold text-slate-700">פעולות</th>
               </tr>
             </thead>
@@ -507,6 +546,24 @@ export default function UsersPage() {
                         {u.is_active ? "פעיל" : "מושבת"}
                       </button>
                     </td>
+                    {Object.keys(activity).length > 0 && (
+                      <td className="px-4 py-3 text-xs">
+                        {(function(){
+                          var a = activity[u.id];
+                          if (!a) return <span className="text-slate-300">—</span>;
+                          if (!a.last_sign_in_at) return <span className="text-amber-600 font-semibold cursor-help" title="המשתמש מעולם לא נכנס למערכת — אם ההרשאה אינה נחוצה, שקול להשבית">מעולם לא התחבר</span>;
+                          return (
+                            <div className="space-y-0.5 text-slate-600 whitespace-nowrap">
+                              <div className="cursor-help" title={"התחברות אחרונה (הזנת סיסמה): " + fmtDT(a.last_sign_in_at)}>🔑 {ago(a.last_sign_in_at)}</div>
+                              {a.last_activity && (
+                                <div className="cursor-help" title={"פעילות אחרונה — רענון החיבור (קירוב): " + fmtDT(a.last_activity) + " · " + (a.open_sessions || 0) + " חיבורים פתוחים"}>🖥 {ago(a.last_activity)}</div>
+                              )}
+                              <div className="cursor-help" title={"פעולות שנרשמו ביומן הפעולות ב-30 הימים האחרונים" + (a.last_action_at ? " · אחרונה: " + fmtDT(a.last_action_at) : "")}>✏️ {a.actions_30d || 0} פעולות</div>
+                            </div>
+                          );
+                        })()}
+                      </td>
+                    )}
                     <td className="px-4 py-3">
                       <div className="flex gap-1 flex-wrap">
                         {canEditAccess(u) && <button onClick={function(){ openAccess(u); }} className="text-xs border border-blue-200 rounded px-2 py-1 text-blue-600 hover:bg-blue-50" title="עריכת היקף גישה והרשאות">🔐 הרשאות</button>}
