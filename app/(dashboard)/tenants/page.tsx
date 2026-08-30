@@ -45,7 +45,7 @@ export default function TenantsPage() {
     const [{ data: t }, { data: c }] = await Promise.all([
       supabase.from("tenants").select("*").order("name"),
       supabase.from("contracts")
-        .select("id, property_id, status, start_date, end_date, rent_per_sqm, charged_area, investment_addition, tenant_id, index_base_date, indexation_method, index_mechanism, properties(name), contract_spaces(spaces(space_name))")
+        .select("id, property_id, status, start_date, end_date, rent_per_sqm, charged_area, investment_addition, tenant_id, is_amendment, parent_contract_id, amendment_date, amendment_number, index_base_date, indexation_method, index_mechanism, properties(name), contract_spaces(spaces(space_name))")
         .in("status", ["active","expiring","extended","upcoming"]).order("end_date"),
     ]);
     // Data-level scoping: a scoped user sees only tenants that hold at least
@@ -246,7 +246,28 @@ export default function TenantsPage() {
     (!search || t.name?.includes(search) || t.company_name?.includes(search) || t.id_number?.includes(search))
   );
   const selTenant = tenants.find(t => t.id === selected);
-  const selContracts = contracts.filter(c => c.tenant_id === selected);
+  // חוזה = משפחה אחת (בסיס + תוספותיו): התוספות אינן נספרות כחוזים
+  // נפרדים, והיחידות המוצגות הן של צילום-המצב האחרון (אחרי החלפות).
+  const selContracts = (function() {
+    var mine = contracts.filter(c => c.tenant_id === selected);
+    var groups: Record<string, any[]> = {};
+    mine.forEach(function(c: any) { var fid = c.parent_contract_id || c.id; (groups[fid] = groups[fid] || []).push(c); });
+    var out: any[] = [];
+    Object.keys(groups).forEach(function(fid) {
+      var snaps = groups[fid];
+      var base = snaps.find(function(s: any){ return !s.is_amendment; });
+      if (!base) return; // תוספת יתומה — הבסיס אינו חי
+      var rank = function(x: any){ return (x.is_amendment ? (new Date(x.amendment_date || x.start_date).getTime() || 0) : 0) * 1000 + (Number(x.amendment_number) || 0); };
+      var eff = base.contract_spaces || [];
+      var effEnd = base.end_date;
+      snaps.slice().sort(function(a: any, b: any){ return rank(a) - rank(b); }).forEach(function(s: any) {
+        if ((s.contract_spaces || []).length > 0) eff = s.contract_spaces;
+        if (s.end_date && (!effEnd || s.end_date > effEnd)) effEnd = s.end_date;
+      });
+      out.push({ ...base, contract_spaces: eff, end_date: effEnd });
+    });
+    return out;
+  })();
   const selRevenueBase = selContracts.reduce((s, c) => s + (c.rent_per_sqm ?? 0) * (c.charged_area ?? 0) + (c.investment_addition ?? 0), 0);
   // Indexed revenue: each contract uses its own ratio (highest contracts get
   // the chained peak; standard contracts get the base→today ratio).
@@ -280,7 +301,9 @@ export default function TenantsPage() {
             className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm mb-2" />
           {loading ? <div className="text-center py-4 text-slate-400">טוען...</div> : (
             filtered.map(t => {
-              const tenContracts = contracts.filter(c => c.tenant_id === t.id);
+              const tenRows = contracts.filter(c => c.tenant_id === t.id);
+              // משפחות בלבד — תוספת אינה חוזה נוסף
+              const tenContracts = tenRows.filter((c: any) => !c.is_amendment);
               const hasActive = tenContracts.some(c => c.status === "active");
               return (
                 <div key={t.id} onClick={() => setSelected(selected === t.id ? null : t.id)}
