@@ -1,5 +1,6 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { supabase } from '@/lib/supabase';
 import { authHeaders } from '@/lib/api-auth-client';
 import { logAudit } from '@/lib/audit-log';
@@ -66,6 +67,7 @@ function healthOf(ins: any): Health {
 function healthOrder(h: Health) { return ({expired:0,expiring30:1,expiring60:2,ok:3,inactive:4} as any)[h]; }
 
 export default function InsurancesPage() {
+  const router = useRouter();
   const [buildingIns, setBuildingIns] = useState<any[]>([]);
   const [tenantIns,   setTenantIns]   = useState<any[]>([]);
   const [properties,  setProperties]  = useState<any[]>([]);
@@ -534,6 +536,31 @@ export default function InsurancesPage() {
     } catch (e:any) { alert("שגיאה: " + (e?.message || e)); }
   }
 
+  // מכתב דרישת חידוש לפוליסה שעומדת לפוג — טיוטה במסך המכתבים. קיים
+  // מכתב לביטוח שכבר אינו בתוקף (sendInsuranceDemand); זה המקביל המקדים.
+  async function sendRenewalDemand(ins: any) {
+    try {
+      var c = ins.contracts || {};
+      var tName = (c?.tenants as any)?.name || "";
+      var endTxt = ins.end_date ? new Date(ins.end_date).toLocaleDateString("he-IL") : "";
+      var body = "שוכר/ת נכבד/ה " + tName + ",\n\n" +
+        "הרינו להביא לתשומת לבך כי אישור קיום הביטוחים שבידינו עבור המושכר" +
+        (ins.insurer ? " (מבטח: " + ins.insurer + (ins.policy_number ? ", פוליסה מס' " + ins.policy_number : "") + ")" : "") +
+        " עומד לפוג בתאריך " + endTxt + ".\n\n" +
+        "בהתאם להוראות נספח האחריות והביטוח שבהסכם השכירות, נבקשכם להמציא לנו אישור קיום ביטוחים מחודש ובתוקף לפני מועד הפקיעה, הכולל את כל הכיסויים וגבולות האחריות הנדרשים בהסכם.\n\nבברכה,\nהנהלת הנכס";
+      var { data, error } = await supabase.from("letters").insert({
+        contract_id: ins.contract_id,
+        letter_type: "demand",
+        title: "דרישת חידוש אישור ביטוח — " + tName,
+        content_json: { body: body, kind: "insurance_renewal_demand", end_date: ins.end_date || null },
+        status: "draft",
+      }).select().single();
+      if (error) throw error;
+      await logAudit({ entity_type: "letter", entity_id: data.id, action: "insurance_renewal_demand" });
+      if (confirm("✅ נוצרה טיוטת מכתב דרישת חידוש ביטוח.\nלעבור למסך המכתבים לשליחה?")) router.push("/letters");
+    } catch (e: any) { alert("שגיאה: " + (e?.message || e)); }
+  }
+
   // ─── Filtering + sorting ───────────────────────────────────────────
   const allList = activeTab==="building" ? buildingIns : tenantIns;
   const propFiltered = filterPropIds.length===0 ? allList : allList.filter(function(ins) {
@@ -947,6 +974,11 @@ export default function InsurancesPage() {
                         <button onClick={function(){setHistoryOf(ins);}}
                           title="כל הפוליסות שהיו לנכס/לחוזה — תקופות ופרמיות לאורך השנים"
                           className="text-xs border border-slate-200 rounded px-2 py-1 text-slate-600 hover:bg-slate-50">📊 היסטוריה</button>
+                        {activeTab==="tenant" && ins.contract_id && (h==="expiring30" || h==="expiring60" || h==="expired") && (
+                          <button onClick={function(){sendRenewalDemand(ins);}}
+                            title="צור מכתב לשוכר: הפוליסה עומדת לפוג בתאריך X — נא להמציא אישור ביטוח בתוקף"
+                            className="text-xs border border-rose-300 bg-rose-50 rounded px-2 py-1 text-rose-700 font-semibold hover:bg-rose-100">✉ דרישת חידוש</button>
+                        )}
                         {activeTab==="building" && (function(){
                           var yrs = policyYears(ins);
                           var n = insChargeCountFor(ins.property_id, yrs);

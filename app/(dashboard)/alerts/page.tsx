@@ -131,6 +131,30 @@ export default function AlertsPage() {
     setArrears({ count: outstanding.length, sum: outstanding.reduce(function(s: number, x: any){ return s + x.bal; }, 0) });
   }
 
+  // מכתב לשוכר ישירות מהתראה (אישור ביטוח, ערבות וכו'): טיוטה במסך
+  // המכתבים עם נושא ותוכן ההתראה, מקושרת לחוזה — משם שולחים כרגיל.
+  async function sendAlertLetter(a: any) {
+    if (!a?.contract_id) return;
+    try {
+      var tName = a.contracts?.tenants?.name || "";
+      var cleanTitle = String(a.title || "").replace(/^[^\u0590-\u05FFA-Za-z0-9"']+/, "").trim();
+      var body = "שוכר/ת נכבד/ה " + tName + ",\n\n" +
+        "בהמשך למעקב השוטף אחר הסכם השכירות שבנדון, נבקש את טיפולך בנושא הבא:\n\n" +
+        cleanTitle + (a.message ? "\n" + a.message : "") + "\n\n" +
+        "נודה לטיפולך ולהמצאת המסמכים או ההסדרה הנדרשת בהקדם.\n\nבברכה,\nהנהלת הנכס";
+      var { data, error } = await supabase.from("letters").insert({
+        contract_id: a.contract_id,
+        letter_type: "demand",
+        title: "פנייה בנושא: " + cleanTitle,
+        content_json: { body: body, kind: "alert_letter", alert_id: a.id, alert_type: a.alert_type || null },
+        status: "draft",
+      }).select().single();
+      if (error) throw error;
+      await logAudit({ entity_type: "letter", entity_id: data.id, action: "alert_letter", notes: cleanTitle });
+      if (confirm("✅ נוצרה טיוטת מכתב לשוכר בנושא ההתראה.\nלעבור למסך המכתבים לשליחה?")) router.push("/letters");
+    } catch (e: any) { alert("שגיאה: " + (e?.message || e)); }
+  }
+
   async function closeAlert(id: string) {
     // Closing implies read.
     var now = new Date().toISOString();
@@ -567,6 +591,11 @@ export default function AlertsPage() {
                   )}
                   {isUnread && (
                     <button onClick={function(){markRead(a.id);}} className="rounded-lg border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100" title="סמן כנקראה — נשארת פתוחה, תקפוץ שוב כ'חדש' אם תסלים (למשל 30 יום לפני מועד)">👁 נקראה</button>
+                  )}
+                  {isOpen && a.contract_id && (
+                    <button onClick={function(){sendAlertLetter(a);}} disabled={!!working}
+                      title="צור מכתב לשוכר בנושא ההתראה — טיוטה במסך המכתבים"
+                      className="rounded-lg border border-indigo-200 bg-indigo-50 px-2.5 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 disabled:opacity-50">✉ מכתב לשוכר</button>
                   )}
                   {isOpen ? (
                     <button onClick={function(){closeAlert(a.id);}} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">✓ סגור</button>
