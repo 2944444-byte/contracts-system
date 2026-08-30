@@ -113,6 +113,12 @@ export default function Sidebar() {
     "/alerts":   openAlerts,
     "/errors":   openErrors,
   };
+  // מה כל מונה סופר — מוצג בריחוף, כדי שהמספר לא יישאר סתום.
+  const BADGE_HINTS: Record<string, string> = {
+    "/payments": "חיובים בסטטוס \"לתשלום\" שממתינים לסימון שולם",
+    "/alerts": "התראות פתוחות שטרם נקראו",
+    "/errors": "דיווחי שגיאה פתוחים",
+  };
 
   async function reportProblem() {
     var text = window.prompt("מה קרה? תארו בקצרה את הבעיה או ההצעה — הדיווח יגיע לבעלי המערכת יחד עם שם המסך הנוכחי:");
@@ -166,7 +172,8 @@ export default function Sidebar() {
               <span className="text-base shrink-0">{item.icon}</span>
               <span className="truncate flex-1">{item.label}</span>
               {badge > 0 && (
-                <span className={"text-xs rounded-full px-1.5 py-0.5 font-bold shrink-0 " +
+                <span title={BADGE_HINTS[item.href] || undefined}
+                  className={"text-xs rounded-full px-1.5 py-0.5 font-bold shrink-0 " +
                   (isActive?"bg-white/30 text-white":"bg-red-100 text-red-600")}>
                   {badge}
                 </span>
