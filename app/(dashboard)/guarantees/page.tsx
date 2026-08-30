@@ -117,15 +117,27 @@ export default function GuaranteesPage() {
   async function loadAll() {
     const [{ data: g }, { data: c }] = await Promise.all([
       supabase.from("guarantees")
-        .select("*, contracts(id, property_id, start_date, end_date, status, signing_date, planned_handover_date, actual_handover_date, planned_opening_date, actual_opening_date, works_start_date, works_end_date, grace_months, grace_days, grace_phase2_days, grace_type, grace_ends_on_opening, tenants(name), properties(name), contract_spaces(charge_method, fixed_rent, price_per_sqm, revenue_pct, min_rent, spaces(space_name, area)))")
+        .select("*, contracts(id, property_id, is_amendment, parent_contract_id, start_date, end_date, status, signing_date, planned_handover_date, actual_handover_date, planned_opening_date, actual_opening_date, works_start_date, works_end_date, grace_months, grace_days, grace_phase2_days, grace_type, grace_ends_on_opening, tenants(name), properties(name), contract_spaces(charge_method, fixed_rent, price_per_sqm, revenue_pct, min_rent, spaces(space_name, area)))")
         .order("end_date"),
       supabase.from("contracts")
-        .select("id, property_id, start_date, end_date, status, is_amendment, parent_contract_id, no_guarantee_required, guarantee_type, guarantee_amount, guarantee_months, tenants(name), properties(name), contract_spaces(charge_method, fixed_rent, price_per_sqm, revenue_pct, min_rent, spaces(space_name, area)), guarantees(id, status, end_date, guarantee_type)")
+        .select("id, property_id, start_date, end_date, status, is_amendment, parent_contract_id, amendment_date, amendment_number, no_guarantee_required, guarantee_type, guarantee_amount, guarantee_months, tenants(name), properties(name), contract_spaces(charge_method, fixed_rent, price_per_sqm, revenue_pct, min_rent, spaces(space_name, area)), guarantees(id, status, end_date, guarantee_type)")
         .in("status", ["active", "expiring", "extended", "upcoming"])
         .order("start_date", { ascending: false }),
     ]);
     var scope = await getScopeIds();
-    setGuarantees(scopeRows(g ?? [], scope, function(x: any){ return x.contracts?.property_id; }));
+    var scoped = scopeRows(g ?? [], scope, function(x: any){ return x.contracts?.property_id; });
+    // אותה ערבות שהוקלדה גם על חוזה הבסיס וגם על תוספת שלו מוצגת פעם אחת —
+    // מועדף הרישום שעל הבסיס. זיהוי: אותה משפחה, אותו סוג, סכום ותוקף.
+    var seenDup: Record<string, number> = {};
+    var deduped: any[] = [];
+    (scoped as any[]).forEach(function(gg: any) {
+      var fid = gg.contracts?.parent_contract_id || gg.contracts?.id || gg.contract_id;
+      var key = fid + "|" + (gg.guarantee_type || "") + "|" + (Number(gg.amount_required) || 0) + "|" + (gg.end_date || "");
+      if (seenDup[key] === undefined) { seenDup[key] = deduped.length; deduped.push(gg); return; }
+      var prev = deduped[seenDup[key]];
+      if (prev.contracts?.is_amendment && !gg.contracts?.is_amendment) deduped[seenDup[key]] = gg;
+    });
+    setGuarantees(deduped);
     setContracts(scopeRows(c ?? [], scope, function(x: any){ return x.property_id; }));
     setLoading(false);
   }
@@ -201,8 +213,44 @@ export default function GuaranteesPage() {
     return urlData.publicUrl;
   }
 
+  // המצב האפקטיבי של כל משפחת חוזים: תוספת שמחליפה/מצרפת יחידות יוצרת
+  // צילום-מצב חדש, והאחרון קובע. ערבות מוצגת לפי היחידות שבפועל היום —
+  // לא לפי היחידות שהיו בחוזה ברגע שהערבות נקלטה (החלפת גולף חנות 6→4).
+  var famEff: Record<string, { spaces: any[] | null; endDate: string | null; startDate: string | null }> = {};
+  (function() {
+    var groups: Record<string, any[]> = {};
+    contracts.forEach(function(c: any) { var fid = c.parent_contract_id || c.id; (groups[fid] = groups[fid] || []).push(c); });
+    Object.keys(groups).forEach(function(fid) {
+      var snaps = groups[fid].slice().sort(function(a: any, b: any) {
+        var ra = (a.is_amendment ? new Date(a.amendment_date || a.start_date).getTime() || 0 : 0) * 1000 + (Number(a.amendment_number) || 0);
+        var rb = (b.is_amendment ? new Date(b.amendment_date || b.start_date).getTime() || 0 : 0) * 1000 + (Number(b.amendment_number) || 0);
+        return ra - rb;
+      });
+      var spaces: any[] | null = null; var endDate: string | null = null; var startDate: string | null = null;
+      snaps.forEach(function(s: any) {
+        if ((s.contract_spaces || []).length > 0) spaces = s.contract_spaces;
+        if (s.end_date && (!endDate || s.end_date > endDate)) endDate = s.end_date;
+        if (!s.is_amendment) startDate = s.start_date;
+      });
+      famEff[fid] = { spaces: spaces, endDate: endDate, startDate: startDate };
+    });
+  })();
+  function effContractView(contract: any): any {
+    if (!contract) return contract;
+    var fid = contract.parent_contract_id || contract.id;
+    var fe = famEff[fid];
+    if (!fe) return contract;
+    return {
+      ...contract,
+      contract_spaces: fe.spaces || contract.contract_spaces,
+      end_date: fe.endDate || contract.end_date,
+      start_date: fe.startDate || contract.start_date,
+    };
+  }
+
   // Build a unit-list string from contract_spaces relations.
-  function spacesLabel(contract: any): string {
+  function spacesLabel(contract0: any): string {
+    var contract = effContractView(contract0);
     var arr = contract?.contract_spaces || [];
     var names = arr.map(function(cs: any) { return cs?.spaces?.space_name; }).filter(Boolean);
     if (names.length === 0) return "—";
@@ -210,7 +258,8 @@ export default function GuaranteesPage() {
     return names.slice(0, 3).join(" · ") + " +" + (names.length - 3);
   }
   // Short date range like "1/2024–12/2026" for contract identification.
-  function contractRange(c: any): string {
+  function contractRange(c0: any): string {
+    var c = effContractView(c0);
     var s = c?.start_date ? new Date(c.start_date) : null;
     var e = c?.end_date ? new Date(c.end_date) : null;
     var fmt = function(d: Date) { return (d.getMonth() + 1) + "/" + d.getFullYear(); };

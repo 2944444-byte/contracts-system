@@ -110,10 +110,10 @@ export default function InsurancesPage() {
   async function loadAll() {
     const [{ data: b }, { data: t }, { data: p }, { data: c }, { data: ch }] = await Promise.all([
       supabase.from("insurances_building").select("*, properties(name)").order("end_date"),
-      supabase.from("insurances_tenant").select("*, contracts(id, property_id, no_tenant_insurance_required, insurance_requirements, tenants(name), properties(name), contract_spaces(spaces(space_name)))").order("end_date"),
+      supabase.from("insurances_tenant").select("*, contracts(id, property_id, is_amendment, parent_contract_id, no_tenant_insurance_required, insurance_requirements, tenants(name), properties(name), contract_spaces(spaces(space_name)))").order("end_date"),
       supabase.from("properties").select("id,name").order("name"),
       supabase.from("contracts")
-        .select("id, tenant_id, property_id, start_date, end_date, status, is_amendment, parent_contract_id, no_tenant_insurance_required, insurance_requirements, tenants(name), properties(name), contract_spaces(spaces(space_name))")
+        .select("id, tenant_id, property_id, start_date, end_date, status, is_amendment, parent_contract_id, amendment_date, amendment_number, no_tenant_insurance_required, insurance_requirements, tenants(name), properties(name), contract_spaces(spaces(space_name))")
         .in("status",["active","expiring","extended","upcoming"])
         .order("start_date", { ascending: false }),
       // Existing insurance charges — to flag policies whose charge was already created.
@@ -143,8 +143,27 @@ export default function InsurancesPage() {
     return ys.length ? ys : [new Date().getFullYear()];
   }
 
+  // המצב האפקטיבי של משפחת החוזה (הצילום האחרון עם יחידות) — תעודת ביטוח
+  // מציגה את היחידות שבפועל היום, גם אחרי החלפת יחידות בתוספת.
+  var famEff: Record<string, any[] | null> = {};
+  (function() {
+    var groups: Record<string, any[]> = {};
+    contracts.forEach(function(c: any) { var fid = c.parent_contract_id || c.id; (groups[fid] = groups[fid] || []).push(c); });
+    Object.keys(groups).forEach(function(fid) {
+      var snaps = groups[fid].slice().sort(function(a: any, b: any) {
+        var ra = (a.is_amendment ? new Date(a.amendment_date || a.start_date).getTime() || 0 : 0) * 1000 + (Number(a.amendment_number) || 0);
+        var rb = (b.is_amendment ? new Date(b.amendment_date || b.start_date).getTime() || 0 : 0) * 1000 + (Number(b.amendment_number) || 0);
+        return ra - rb;
+      });
+      var spaces: any[] | null = null;
+      snaps.forEach(function(s: any) { if ((s.contract_spaces || []).length > 0) spaces = s.contract_spaces; });
+      famEff[fid] = spaces;
+    });
+  })();
   function spacesLabel(contract: any): string {
-    var arr = contract?.contract_spaces || [];
+    var fid = contract?.parent_contract_id || contract?.id;
+    var eff = fid ? famEff[fid] : null;
+    var arr = eff || contract?.contract_spaces || [];
     var names = arr.map(function(cs: any){ return cs?.spaces?.space_name; }).filter(Boolean);
     if (names.length === 0) return "—";
     if (names.length <= 3) return names.join(" · ");
