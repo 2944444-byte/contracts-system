@@ -145,7 +145,10 @@ export default function GuaranteesPage() {
   // Estimated monthly rent for a contract — sum of contract_spaces rent.
   // Returns null when nothing can be inferred (e.g. fully revenue-based with
   // no min_rent).
-  function monthlyRentOf(contract: any): number | null {
+  function monthlyRentOf(contract0: any): number | null {
+    // אומדן לפי היחידות שבפועל (אחרי החלפות/צירופים בתוספות) — ערבות לפי
+    // חודשי שכ"ד חייבת לעקוב אחרי השכ"ד של היחידה הנוכחית.
+    var contract = effContractView(contract0);
     if (!contract?.contract_spaces?.length) return null;
     var total = 0; var counted = 0;
     contract.contract_spaces.forEach(function(cs: any) {
@@ -903,7 +906,7 @@ export default function GuaranteesPage() {
                 <label className="mb-1 block text-xs font-semibold text-slate-700">חוזה *</label>
                 <select value={fContractId} onChange={function (e) { setFContractId(e.target.value); }} className={ic}>
                   <option value="">-- בחר --</option>
-                  {contracts.map(function (c) {
+                  {contracts.filter(function (c) { return !c.is_amendment; }).map(function (c) {
                     var tenantName = (c.tenants as any)?.name || "—";
                     var propName   = (c.properties as any)?.name || "—";
                     var units      = spacesLabel(c);

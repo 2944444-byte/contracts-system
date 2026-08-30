@@ -995,7 +995,7 @@ export default function InsurancesPage() {
                   <option value="">-- בחר --</option>
                   {activeTab==="building"
                     ? properties.map(function(p){return <option key={p.id} value={p.id}>{p.name}</option>;})
-                    : contracts.map(function(c){return <option key={c.id} value={c.id}>{(c.tenants as any)?.name} — {(c.properties as any)?.name} | יח&apos;: {spacesLabel(c)}{contractRange(c)?" | "+contractRange(c):""}</option>;})
+                    : contracts.filter(function(c){ return !c.is_amendment; }).map(function(c){return <option key={c.id} value={c.id}>{(c.tenants as any)?.name} — {(c.properties as any)?.name} | יח&apos;: {spacesLabel(c)}{contractRange(c)?" | "+contractRange(c):""}</option>;})
                   }
                 </select>
               </div>
