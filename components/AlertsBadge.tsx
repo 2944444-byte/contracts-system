@@ -8,6 +8,7 @@ export default function AlertsBadge() {
   const router = useRouter();
   const [count, setCount] = useState(0);
   const [urgent, setUrgent] = useState(0);
+  const [openTotal, setOpenTotal] = useState(0);
 
   useEffect(function() {
     loadCount();
@@ -22,22 +23,24 @@ export default function AlertsBadge() {
     // SCOPED: only alerts of the user's allowed properties are counted.
     const scope = await getScopeIds();
     const { data } = await supabase.from("alerts")
-      .select("id,severity,property_id,contracts(property_id)").eq("is_resolved",false).is("read_at", null);
+      .select("id,severity,read_at,property_id,contracts(property_id)").eq("is_resolved",false);
     const all = scopeRows(data ?? [], scope, function(a: any){ return a.property_id || a.contracts?.property_id; });
-    setCount(all.length);
-    setUrgent(all.filter(function(a){return a.severity==="urgent";}).length);
+    const unread = all.filter(function(a: any){ return !a.read_at; });
+    setOpenTotal(all.length);
+    setCount(unread.length);
+    setUrgent(unread.filter(function(a){return a.severity==="urgent";}).length);
   }
 
   if (count === 0) return null;
 
   return (
     <button onClick={function(){router.push("/alerts");}}
-      title={count + " התראות פתוחות שטרם נקראו" + (urgent > 0 ? " (מתוכן " + urgent + " דחופות — העיגול האדום)" : "") + " — לחיצה פותחת את מסך ההתראות"}
+      title={count + " התראות חדשות (שטרם נקראו) מתוך " + openTotal + " פתוחות בסך הכול" + (urgent > 0 ? " · " + urgent + " מהחדשות דחופות (העיגול האדום)" : "") + " — לחיצה פותחת את מסך ההתראות"}
       className="relative flex items-center gap-1.5 rounded-xl bg-red-50 border border-red-200 px-3 py-1.5 hover:bg-red-100 transition-colors">
       <span className="text-base">🔔</span>
       <span className="text-xs font-bold text-red-700">{count}</span>
       {urgent > 0 && (
-        <span title={urgent + " התראות דחופות"}
+        <span title={urgent + " התראות דחופות שטרם נקראו"}
           className="absolute -top-1 -right-1 w-4 h-4 bg-red-600 text-white text-[10px] font-black rounded-full flex items-center justify-center">
           {urgent}
         </span>
