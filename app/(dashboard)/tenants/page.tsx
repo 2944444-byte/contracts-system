@@ -191,8 +191,28 @@ export default function TenantsPage() {
     setSelected(null); await loadAll();
   }
 
+  // סינון לפי חברה בקישור עמוק ממסך החברות: /tenants?companyId=<id> —
+  // שוכרי החברה = מי שמחזיק חוזה על אחד מנכסיה.
+  const [companyFilter, setCompanyFilter] = useState<{ id: string; name: string; propIds: string[] } | null>(null);
+  useEffect(function() {
+    var cid = "";
+    try { cid = new URLSearchParams(window.location.search).get("companyId") || ""; } catch (e) { /* noop */ }
+    if (!cid) return;
+    (async function() {
+      var { data: prs } = await supabase.from("properties").select("id, companies(company_name)").eq("company_id", cid);
+      setCompanyFilter({ id: cid, name: ((prs || [])[0] as any)?.companies?.company_name || "", propIds: (prs || []).map(function(x: any){ return x.id; }) });
+    })();
+  }, []);
+  const companyTenantIds = (function() {
+    if (!companyFilter) return null;
+    var s: Record<string, boolean> = {};
+    contracts.forEach(function(c: any) { if (companyFilter.propIds.indexOf(c.property_id) !== -1 && c.tenant_id) s[c.tenant_id] = true; });
+    return s;
+  })();
+
   const filtered = tenants.filter(t =>
-    !search || t.name?.includes(search) || t.company_name?.includes(search) || t.id_number?.includes(search)
+    (!companyTenantIds || companyTenantIds[t.id]) &&
+    (!search || t.name?.includes(search) || t.company_name?.includes(search) || t.id_number?.includes(search))
   );
   const selTenant = tenants.find(t => t.id === selected);
   const selContracts = contracts.filter(c => c.tenant_id === selected);
@@ -218,6 +238,12 @@ export default function TenantsPage() {
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-5">
         {/* רשימה */}
         <div className={(selected ? "hidden lg:block " : "") + "space-y-2"}>
+          {companyFilter && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 border border-blue-200 text-blue-700 text-xs font-semibold px-3 py-1.5">
+              🏛️ {companyFilter.name || "חברה"}
+              <button onClick={() => setCompanyFilter(null)} className="text-blue-400 hover:text-blue-700 font-bold" title="הצג את כל השוכרים">✕</button>
+            </span>
+          )}
           <input type="text" value={search} onChange={e => setSearch(e.target.value)}
             placeholder="חיפוש שם / חברה / ח.פ..."
             className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm mb-2" />

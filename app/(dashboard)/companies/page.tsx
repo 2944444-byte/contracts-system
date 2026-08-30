@@ -1,5 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit-log';
 import { PageHero } from '@/components/ui';
@@ -8,6 +9,7 @@ import OrgContactsEditor from '@/components/OrgContactsEditor';
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 
 export default function CompaniesPage() {
+  const router = useRouter();
   const [companies,  setCompanies]  = useState<any[]>([]);
   const [properties, setProperties] = useState<any[]>([]);
   const [loading,    setLoading]    = useState(true);
@@ -125,14 +127,31 @@ export default function CompaniesPage() {
             <div className="space-y-4">
               <div className="rounded-xl border border-slate-200 bg-white shadow-sm p-5">
                 <div className="flex items-start justify-between mb-4">
-                  <div><h2 className="text-xl font-bold text-slate-800">{selCo.company_name}</h2>{selCo.company_id&&<div className="text-sm text-slate-500 font-mono">ח.פ: {selCo.company_id}</div>}</div>
+                  <div className="flex items-center gap-3">
+                    {selCo.logo_url && <img src={selCo.logo_url} alt="" className="h-12 max-w-[110px] object-contain rounded" />}
+                    <div><h2 className="text-xl font-bold text-slate-800">{selCo.company_name}</h2>{selCo.company_id&&<div className="text-sm text-slate-500 font-mono">ח.פ: {selCo.company_id}</div>}</div>
+                  </div>
                   <div className="flex gap-2">
                     <button onClick={function(){openEdit(selCo);}} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">✏️ עריכה</button>
                     <button onClick={function(){handleDelete(selCo.id);}} className="rounded-lg border border-red-100 px-3 py-1.5 text-xs font-semibold text-red-500 hover:bg-red-50">🗑</button>
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-3 text-sm">
-                  {[{l:"כתובת",v:(selCo.address?selCo.address+", ":"")+selCo.city,icon:"📍"},{l:"טלפון",v:selCo.phone,icon:"📞"},{l:"אימייל",v:selCo.email,icon:"✉️"},{l:"איש קשר",v:selCo.contact_name,icon:"👤"}].filter(function(f){return f.v;}).map(function(f){return <div key={f.l} className="flex items-center gap-2 text-slate-600"><span>{f.icon}</span><div><div className="text-xs text-slate-400">{f.l}</div><div className="font-medium text-slate-800">{f.v}</div></div></div>;})}
+                  {[
+                    {l:"כתובת",v:[selCo.address, selCo.city].filter(Boolean).join(", "),icon:"📍"},
+                    {l:"טלפון",v:selCo.phone,icon:"📞"},
+                    {l:"אימייל",v:selCo.email,icon:"✉️"},
+                    {l:"איש קשר",v:selCo.contact_name,icon:"👤"},
+                    {l:"מספר רישום",v:selCo.company_registration_number,icon:"🗂️"},
+                    {l:"חשבון בנק",v:(selCo.bank_name||selCo.bank_account)?[selCo.bank_name, selCo.bank_branch?"סניף "+selCo.bank_branch:"", selCo.bank_account?"חשבון "+selCo.bank_account:""].filter(Boolean).join(" · "):"",icon:"🏦"},
+                    {l:"ימי חסד לתשלום",v:selCo.payment_grace_days?selCo.payment_grace_days+" ימים":"",icon:"⏳"},
+                  ].filter(function(f){return f.v;}).map(function(f){return <div key={f.l} className="flex items-center gap-2 text-slate-600"><span>{f.icon}</span><div><div className="text-xs text-slate-400">{f.l}</div><div className="font-medium text-slate-800">{f.v}</div></div></div>;})}
+                </div>
+                {/* קישורים מהירים — המסכים נפתחים מסוננים לחברה זו */}
+                <div className="mt-4 flex gap-2 flex-wrap">
+                  <button onClick={function(){router.push("/properties?companyId="+selCo.id);}} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100">🏢 הנכסים של החברה</button>
+                  <button onClick={function(){router.push("/contracts?companyId="+selCo.id);}} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100">📄 החוזים של החברה</button>
+                  <button onClick={function(){router.push("/tenants?companyId="+selCo.id);}} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100">👤 השוכרים של החברה</button>
                 </div>
                 {selCo.notes&&<div className="mt-3 text-xs text-slate-500 bg-slate-50 rounded-lg p-2">{selCo.notes}</div>}
               </div>
@@ -140,10 +159,17 @@ export default function CompaniesPage() {
                 <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
                   <div className="px-5 py-3 border-b border-slate-100 font-semibold text-slate-700 text-sm">נכסים ({selProps.length})</div>
                   <div className="divide-y divide-slate-100">
-                    {selProps.map(function(p){return <div key={p.id} className="px-5 py-3 flex items-center gap-2 hover:bg-slate-50"><span>🏢</span><span className="text-sm font-medium text-slate-800">{p.name}</span>{p.city&&<span className="text-xs text-slate-400">— {p.city}</span>}</div>;})}
+                    {selProps.map(function(p){return <div key={p.id} onClick={function(){router.push("/units?propertyId="+p.id);}} className="px-5 py-3 flex items-center gap-2 hover:bg-slate-50 cursor-pointer" title="פתח את יחידות הנכס"><span>🏢</span><span className="text-sm font-medium text-slate-800">{p.name}</span>{p.city&&<span className="text-xs text-slate-400">— {p.city}</span>}<span className="mr-auto text-slate-300">‹</span></div>;})}
                   </div>
                 </div>
               )}
+              {/* מכותבים פנימיים למכתבים — אנשי הקשר של הארגון ברמת החברה:
+                  מקבלים עותק אוטומטי במכתבים לשוכרי כל נכסי החברה, לפי נושא. */}
+              <div className="rounded-xl border border-slate-200 bg-white shadow-sm p-5">
+                <div className="font-semibold text-slate-700 text-sm mb-1">📧 אנשי קשר למכתבים (מכותבים פנימיים)</div>
+                <div className="text-[11px] text-slate-400 mb-3">מקבלים עותק אוטומטי במכתבים לשוכרים בכל נכסי החברה, לפי הנושאים שסומנו</div>
+                <OrgContactsEditor companyId={selCo.id} />
+              </div>
             </div>
           )}
         </div>

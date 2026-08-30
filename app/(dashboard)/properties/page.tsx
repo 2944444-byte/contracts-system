@@ -296,7 +296,15 @@ export default function PropertiesPage() {
     setSelected(null); await loadAll();
   }
 
+  // סינון לפי חברה בקישור עמוק ממסך החברות: /properties?companyId=<id>
+  const [companyFilter, setCompanyFilter] = useState("");
+  useEffect(function() {
+    try { var cid = new URLSearchParams(window.location.search).get("companyId"); if (cid) setCompanyFilter(cid); } catch (e) { /* noop */ }
+  }, []);
+  const companyFilterName = companyFilter ? (properties.find(function(p){ return p.company_id === companyFilter; })?.companies?.company_name || "") : "";
+
   const filtered = properties.filter(function(p) {
+    if (companyFilter && p.company_id !== companyFilter) return false;
     return !search || p.name?.includes(search) || p.city?.includes(search);
   });
 
@@ -537,6 +545,12 @@ export default function PropertiesPage() {
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-5">
         {/* רשימה */}
         <div className={(selected ? "hidden lg:block " : "") + "space-y-2"}>
+          {companyFilter && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 border border-blue-200 text-blue-700 text-xs font-semibold px-3 py-1.5">
+              🏛️ {companyFilterName || "חברה"}
+              <button onClick={function(){ setCompanyFilter(""); }} className="text-blue-400 hover:text-blue-700 font-bold" title="הצג את כל הנכסים">✕</button>
+            </span>
+          )}
           <input type="text" value={search} onChange={function(e){setSearch(e.target.value);}}
             placeholder="חיפוש..."
             className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm mb-2" />

@@ -215,6 +215,18 @@ export default function ContractsPage() {
 
   useEffect(function() { loadContracts(); }, []);
 
+  // סינון לפי חברה בקישור עמוק ממסך החברות: /contracts?companyId=<id>
+  const [companyFilter, setCompanyFilter] = useState<{ id: string; name: string; propIds: string[] } | null>(null);
+  useEffect(function() {
+    var cid = "";
+    try { cid = new URLSearchParams(window.location.search).get("companyId") || ""; } catch (e) { /* noop */ }
+    if (!cid) return;
+    (async function() {
+      var { data: prs } = await supabase.from("properties").select("id, companies(company_name)").eq("company_id", cid);
+      setCompanyFilter({ id: cid, name: ((prs || [])[0] as any)?.companies?.company_name || "", propIds: (prs || []).map(function(x: any){ return x.id; }) });
+    })();
+  }, []);
+
   // Deep link from alerts (and anywhere else): /contracts?select=<contractId>
   // auto-opens that contract's detail panel.
   useEffect(function() {
@@ -1002,6 +1014,7 @@ export default function ContractsPage() {
 
   const filtered = contracts.filter(function(c) {
     if (c.is_amendment) return false; // Hide amendments from sidebar
+    if (companyFilter && companyFilter.propIds.indexOf(c.property_id) === -1) return false;
     var ms = false;
     if (filterSt === "all") ms = true;
     else if (filterSt === "active") ms = c.status === "active" || c.status === "extended" || c.status === "expiring";
@@ -1284,6 +1297,12 @@ export default function ContractsPage() {
             return <option key={p[0]} value={p[0]}>{p[1]}</option>;
           })}
         </select>
+        {companyFilter && (
+          <span className="mb-2 inline-flex items-center gap-1 rounded-full bg-blue-50 border border-blue-200 text-blue-700 text-xs font-semibold px-3 py-1.5">
+            🏛️ {companyFilter.name || "חברה"}
+            <button onClick={function(){ setCompanyFilter(null); }} className="text-blue-400 hover:text-blue-700 font-bold" title="הצג את כל החוזים">✕</button>
+          </span>
+        )}
         <input type="text" value={search} onChange={function(e){setSearch(e.target.value);}}
           placeholder="חיפוש שוכר / נכס..."
           className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs"/>
