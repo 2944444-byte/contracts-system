@@ -378,6 +378,10 @@ export async function runAlertSync(supabase: SupabaseClient): Promise<{ created:
       // the countdown + severity); insert only the first time. When the STAGE
       // escalates (warning→urgent at 30 days, or →overdue), read_at resets to
       // NULL so the alert pops as UNREAD again — instead of a duplicate alert.
+      // ניקוי עצמי: התראות מהמחולל הישן (option_notice_deadline) על אותה
+      // אופציה נסגרות — נשארת התראה אחת בלבד, זו שמסלימה במקום.
+      await supabase.from("alerts").update({ is_resolved: true, handled_at: new Date().toISOString() })
+        .eq("entity_id", opt.id).eq("alert_type", "option_notice_deadline").eq("is_resolved", false);
       const newStage = dd < 0 ? "overdue" : dd <= 30 ? "urgent" : "warning";
       const { data: existing } = await supabase.from("alerts").select("id,severity,title").eq("entity_id", opt.id).eq("entity_type", "option").eq("is_resolved", false).limit(1);
       if (existing && existing.length) {

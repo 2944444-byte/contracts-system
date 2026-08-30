@@ -108,31 +108,10 @@ export async function syncContractStatuses(client?: any): Promise<number> {
         notes: `אופציה ${opt.option_number} מומשה אוטומטית — חוזה הוארך עד ${newEndStr}`,
       });
       updated++;
-    } else {
-      // Notice deadline approaching (within 30 days) → create reminder alert
-      const daysToDeadline = Math.ceil((noticeDeadlineMs - todayMs) / 86400000);
-      if (daysToDeadline <= 30 && daysToDeadline > 0) {
-        // Check if alert already exists
-        const { data: existing } = await supabase.from("alerts")
-          .select("id")
-          .eq("contract_id", opt.contract_id)
-          .eq("alert_type", "option_notice_deadline")
-          .eq("entity_id", opt.id)
-          .limit(1);
-        if (!existing || existing.length === 0) {
-          await supabase.from("alerts").insert({
-            title: `תאריך הודעה אחרון לאופציה ${opt.option_number}`,
-            message: `יש ${daysToDeadline} ימים עד תאריך אחרון לקבלת הודעת אי-מימוש (${new Date(noticeDeadlineMs).toLocaleDateString("he-IL")}). אם לא תתקבל הודעה — האופציה תמומש אוטומטית.`,
-            alert_type: "option_notice_deadline",
-            severity: daysToDeadline <= 7 ? "high" : "medium",
-            entity_type: "contract_option",
-            entity_id: opt.id,
-            contract_id: opt.contract_id,
-            due_date: new Date(noticeDeadlineMs).toISOString().split("T")[0],
-          });
-        }
-      }
     }
+    // תזכורות מועד-הודעה נוצרות ומוסלמות אך ורק ב-lib/alerts-sync
+    // (התראה אחת לאופציה שמתעדכנת במקום: אזהרה → דחוף → עבר המועד).
+    // המחולל הישן כאן יצר התראה מקבילה שלא התעדכנה ולא נסגרה — הוסר.
   }
 
   // ── Visitor parking billing alerts ──
