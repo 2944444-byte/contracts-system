@@ -1418,6 +1418,7 @@ export default function ContractsPage() {
                   <div className="flex gap-2 flex-wrap">
                     <button onClick={function(){router.push("/contracts/"+selContract.id+"/edit");}} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">✏️ עריכה</button>
                     <button onClick={function(){router.push("/contracts/"+selContract.id+"/print");}} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">🖨 הדפס</button>
+                    <button onClick={function(){router.push("/letters?contract="+selContract.id);}} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50" title="כל המכתבים שנשלחו על הסכם זה">📨 מכתבים</button>
                     <button onClick={function(){router.push("/documents?contract="+selContract.id);}} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50" title="כל המסמכים של החוזה — סריקה, ערבויות, ביטוחים, העלאות">📁 מסמכים</button>
                     {/* A contract handed over in stages can't start calculating
                         until the real handover date is known. Surfaced here so it

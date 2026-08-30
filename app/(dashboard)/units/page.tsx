@@ -95,7 +95,7 @@ export default function UnitsPage() {
   // snapshot of each contract family (base + amendments). So after Golf's
   // 13.3.2026 amendment swapped them to חנות 4 (and חנות 6 to Yehonatan), each
   // unit shows its up-to-date occupant — not the stale original base rows.
-  const spaceHolderMap: Record<string, { name: string; started: boolean }> = (function() {
+  const spaceHolderMap: Record<string, { name: string; started: boolean; contractId?: string }> = (function() {
     const byContract: Record<string, { contract: any; spaceIds: string[] }> = {};
     contracts.forEach(function(c: any) {
       if (!byContract[c.id]) byContract[c.id] = { contract: c, spaceIds: [] };
@@ -115,7 +115,7 @@ export default function UnitsPage() {
       const dt = c.amendment_date || c.start_date;
       return (dt ? new Date(dt).getTime() : 0) * 1000 + (c.amendment_number || 0);
     };
-    const map: Record<string, { name: string; started: boolean }> = {};
+    const map: Record<string, { name: string; started: boolean; contractId?: string }> = {};
     Object.keys(families).forEach(function(fid) {
       const snaps = families[fid];
       // משפחה שהבסיס שלה כבר לא חי (סיום מוקדם מסמן "ended" ישירות) אינה
@@ -127,15 +127,16 @@ export default function UnitsPage() {
       if (!name) return;
       const st = String(baseEntry.contract.status);
       const started = st !== "upcoming" && st !== "future";
+      const cid = baseEntry.contract.id;
       latest.spaceIds.forEach(function(sid) {
         // A started lease outranks a future one on the same unit.
-        if (!map[sid] || (started && !map[sid].started)) map[sid] = { name: name, started: started };
+        if (!map[sid] || (started && !map[sid].started)) map[sid] = { name: name, started: started, contractId: cid };
       });
     });
     return map;
-  })() as Record<string, { name: string; started: boolean }>;
+  })() as Record<string, { name: string; started: boolean; contractId?: string }>;
 
-  function tenantForSpace(spaceId: string): { name: string; started: boolean } | null {
+  function tenantForSpace(spaceId: string): { name: string; started: boolean; contractId?: string } | null {
     return spaceHolderMap[spaceId] ?? null;
   }
 
@@ -249,7 +250,7 @@ export default function UnitsPage() {
                         </div>
                         <div className="text-[10px] text-slate-400 mb-1">{ti.l}</div>
                         {s.area&&<div className="text-xs text-slate-500">{s.area} מ"ר{s.floor?" | קומה "+s.floor:""}</div>}
-                        {tenant&&<div className={"text-xs font-semibold mt-1 cursor-pointer hover:underline "+(isFuture?"text-amber-800":"text-green-700")} onClick={function(e){e.stopPropagation();router.push("/contracts");}}>👤 {tenant.name}{isFuture?" 🔜":""} <span className="text-[10px] text-green-500">📄</span></div>}
+                        {tenant&&<div className={"text-xs font-semibold mt-1 cursor-pointer hover:underline "+(isFuture?"text-amber-800":"text-green-700")} onClick={function(e){e.stopPropagation();router.push(tenant?.contractId ? "/contracts?select=" + tenant.contractId : "/contracts");}}>👤 {tenant.name}{isFuture?" 🔜":""} <span className="text-[10px] text-green-500">📄</span></div>}
                         <div className="mt-2 flex gap-1">
                           <button onClick={function(){openEdit(s);}} className="flex-1 text-[10px] border border-slate-200 rounded py-1 text-slate-600 hover:bg-slate-50">עריכה</button>
                           <button onClick={function(){handleDelete(s.id);}} className="text-[10px] border border-red-200 rounded py-1 px-2 text-red-500 hover:bg-red-50">🗑</button>

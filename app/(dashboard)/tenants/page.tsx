@@ -45,7 +45,7 @@ export default function TenantsPage() {
     const [{ data: t }, { data: c }] = await Promise.all([
       supabase.from("tenants").select("*").order("name"),
       supabase.from("contracts")
-        .select("id, property_id, status, start_date, end_date, rent_per_sqm, charged_area, investment_addition, tenant_id, index_base_date, indexation_method, index_mechanism, properties(name)")
+        .select("id, property_id, status, start_date, end_date, rent_per_sqm, charged_area, investment_addition, tenant_id, index_base_date, indexation_method, index_mechanism, properties(name), contract_spaces(spaces(space_name))")
         .in("status", ["active","expiring","extended","upcoming"]).order("end_date"),
     ]);
     // Data-level scoping: a scoped user sees only tenants that hold at least
@@ -191,6 +191,24 @@ export default function TenantsPage() {
     await supabase.from("tenants").delete().eq("id", id);
     setSelected(null); await loadAll();
   }
+
+  // מכתבים אחרונים והתראות פתוחות של השוכר הנבחר. נטען לפי מזהי החוזים
+  // שכבר עברו את סינון ההרשאות — משתמש שמורשה לנכס אחד יראה רק את
+  // המכתבים וההתראות של אותו נכס (וה-RLS אוכף שכבה שנייה ב-DB).
+  const [selLetters, setSelLetters] = useState<any[]>([]);
+  const [selAlerts, setSelAlerts] = useState<any[]>([]);
+  useEffect(function() {
+    if (!selected) { setSelLetters([]); setSelAlerts([]); return; }
+    var cids = contracts.filter(function(c: any){ return c.tenant_id === selected; }).map(function(c: any){ return c.id; });
+    if (cids.length === 0) { setSelLetters([]); setSelAlerts([]); return; }
+    (async function() {
+      var [{ data: ls }, { data: as_ }] = await Promise.all([
+        supabase.from("letters").select("id, title, status, letter_type, sent_at, created_at").in("contract_id", cids).order("created_at", { ascending: false }).limit(5),
+        supabase.from("alerts").select("id, title, severity, due_date, created_at").in("contract_id", cids).eq("is_resolved", false).order("created_at", { ascending: false }).limit(6),
+      ]);
+      setSelLetters(ls ?? []); setSelAlerts(as_ ?? []);
+    })();
+  }, [selected, contracts]);
 
   // מיקוד לשוכר בקישור עמוק (ממסך החוזים): /tenants?tenant=<id> —
   // מציב את שם השוכר בחיפוש כך שהרשימה מתמקדת בו מיד.
@@ -364,9 +382,22 @@ export default function TenantsPage() {
                       const si = STATUS_MAP[c.status] ?? { label: c.status, color: "bg-slate-100 text-slate-600" };
                       return (
                         <div key={c.id} className="px-5 py-3 flex items-center justify-between hover:bg-slate-50 cursor-pointer"
-                          onClick={() => router.push("/contracts")}>
+                          title="פתח את ההסכם במסך החוזים"
+                          onClick={() => router.push("/contracts?select=" + c.id)}>
                           <div>
                             <div className="font-medium text-slate-800 text-sm">{c.properties?.name}</div>
+                            {(c.contract_spaces || []).length > 0 && (
+                              <div className="flex gap-1 flex-wrap mt-0.5">
+                                {(c.contract_spaces || []).map(function(cs: any, ui: number){
+                                  return (
+                                    <span key={ui} onClick={function(e: any){ e.stopPropagation(); router.push("/units?propertyId=" + c.property_id); }}
+                                      title="פתח במסך היחידות" className="text-[10px] rounded-full bg-indigo-50 border border-indigo-100 text-indigo-700 px-1.5 py-0.5 hover:bg-indigo-100">
+                                      🚪 {cs?.spaces?.space_name}
+                                    </span>
+                                  );
+                                })}
+                              </div>
+                            )}
                             <div className="flex items-center gap-2 mt-0.5">
                               <span className={"text-xs px-1.5 py-0.5 rounded-full " + si.color}>{si.label}</span>
                               <span className="text-xs text-slate-400">{fmtDate(c.start_date)} — {fmtDate(c.end_date)}</span>
@@ -382,6 +413,51 @@ export default function TenantsPage() {
                   </div>
                 </div>
               )}
+
+              {/* התראות פתוחות של השוכר (בהיקף ההרשאות של המשתמש) */}
+              {selAlerts.length > 0 && (
+                <div className="rounded-xl border border-amber-200 bg-white shadow-sm overflow-hidden">
+                  <div className="px-5 py-3 border-b border-amber-100 bg-amber-50/50 flex items-center justify-between">
+                    <span className="font-semibold text-amber-800 text-sm">🔔 התראות פתוחות ({selAlerts.length})</span>
+                    <button onClick={() => router.push("/alerts")} className="text-xs text-amber-700 hover:underline font-semibold">למסך ההתראות ↗</button>
+                  </div>
+                  <div className="divide-y divide-slate-100">
+                    {selAlerts.map(a => (
+                      <div key={a.id} onClick={() => router.push("/alerts")} title="פתח במסך ההתראות"
+                        className="px-5 py-2.5 flex items-center gap-2 hover:bg-slate-50 cursor-pointer">
+                        <span className={"w-2 h-2 rounded-full shrink-0 " + (a.severity === "urgent" ? "bg-red-500" : a.severity === "warning" ? "bg-amber-400" : "bg-blue-300")} />
+                        <span className="text-xs text-slate-700 truncate">{a.title}</span>
+                        {a.due_date && <span className="text-[10px] text-slate-400 shrink-0 mr-auto">{fmtDate(a.due_date)}</span>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* מכתבים אחרונים + קישור למסך המכתבים בחתך השוכר */}
+              <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+                <div className="px-5 py-3 border-b border-slate-100 flex items-center justify-between">
+                  <span className="font-semibold text-slate-700 text-sm">📨 מכתבים אחרונים</span>
+                  <button onClick={() => router.push("/letters?tenant=" + selTenant.id)}
+                    className="text-xs text-blue-600 hover:underline font-semibold">כל מכתבי השוכר ↗</button>
+                </div>
+                {selLetters.length === 0 ? (
+                  <div className="px-5 py-3 text-xs text-slate-400">לא נשלחו מכתבים לשוכר זה</div>
+                ) : (
+                  <div className="divide-y divide-slate-100">
+                    {selLetters.map(l => (
+                      <div key={l.id} onClick={() => router.push("/letters?tenant=" + selTenant.id)} title="פתח במסך המכתבים בחתך השוכר"
+                        className="px-5 py-2.5 flex items-center gap-2 hover:bg-slate-50 cursor-pointer">
+                        <span className={"text-[10px] px-1.5 py-0.5 rounded-full font-semibold shrink-0 " + (l.status === "sent" ? "bg-emerald-50 text-emerald-700" : l.status === "ready" ? "bg-blue-50 text-blue-700" : "bg-slate-100 text-slate-500")}>
+                          {l.status === "sent" ? "נשלח" : l.status === "ready" ? "מוכן" : "טיוטה"}
+                        </span>
+                        <span className="text-xs text-slate-700 truncate">{l.title}</span>
+                        <span className="text-[10px] text-slate-400 shrink-0 mr-auto">{fmtDate(l.sent_at || l.created_at)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>

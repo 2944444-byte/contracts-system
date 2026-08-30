@@ -193,6 +193,27 @@ export default function LettersPage() {
   const [filterYear,   setFilterYear]   = useState<string>("");
   const [filterType,   setFilterType]   = useState<string>("");
   const [filterProp,   setFilterProp]   = useState<string>("");
+  // מיקוד בקישור עמוק: /letters?tenant=<id> או /letters?contract=<id> —
+  // מציג רק את מכתבי השוכר/ההסכם, עם צ'יפ ניקוי.
+  const [lettersFocus, setLettersFocus] = useState<{ kind: "tenant" | "contract"; id: string; label: string } | null>(null);
+  useEffect(function() {
+    var tid = ""; var cid = "";
+    try {
+      var sp = new URLSearchParams(window.location.search);
+      tid = sp.get("tenant") || ""; cid = sp.get("contract") || "";
+    } catch (e) { /* noop */ }
+    if (tid) {
+      (async function(){
+        var { data } = await supabase.from("tenants").select("name").eq("id", tid).single();
+        setLettersFocus({ kind: "tenant", id: tid, label: (data as any)?.name || "" });
+      })();
+    } else if (cid) {
+      (async function(){
+        var { data } = await supabase.from("contracts").select("tenants(name)").eq("id", cid).single();
+        setLettersFocus({ kind: "contract", id: cid, label: ((data as any)?.tenants as any)?.name || "" });
+      })();
+    }
+  }, []);
   const [filterStatus, setFilterStatus] = useState<string>("");
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
 
@@ -256,7 +277,7 @@ export default function LettersPage() {
 
   async function loadAll() {
     const [{ data: l }, { data: c }, { data: t }] = await Promise.all([
-      supabase.from("letters").select("*, contracts(tenant_id, property_id, tenants(id,name,primary_email,contact_email,email,contact_name,contacts),properties(id,name),contract_spaces(spaces(space_name)))").order("created_at",{ascending:false}),
+      supabase.from("letters").select("*, contracts(tenant_id, property_id, parent_contract_id, tenants(id,name,primary_email,contact_email,email,contact_name,contacts),properties(id,name),contract_spaces(spaces(space_name)))").order("created_at",{ascending:false}),
       supabase.from("contracts").select("id,property_id,tenants(name,contact_name),properties(name,address)").in("status",["active","expiring","extended"]),
       supabase.from("document_templates").select("*").eq("is_active",true).order("name"),
     ]);
@@ -1160,6 +1181,10 @@ export default function LettersPage() {
         allYears.sort(function(a, b) { return b - a; });
 
         var filtered = letters.filter(function(l: any) {
+          if (lettersFocus) {
+            if (lettersFocus.kind === "tenant" && l.contracts?.tenant_id !== lettersFocus.id) return false;
+            if (lettersFocus.kind === "contract" && l.contract_id !== lettersFocus.id && l.contracts?.parent_contract_id !== lettersFocus.id) return false;
+          }
           if (filterType && letterCategory(l) !== filterType) return false;
           var ly = l.billing_year || (l.created_at ? new Date(l.created_at).getFullYear() : 0);
           if (filterYear && String(ly) !== filterYear) return false;
@@ -1220,6 +1245,12 @@ export default function LettersPage() {
                 <option value="">📋 סוג: הכל</option>
                 {LETTER_CATEGORIES.map(function(c){ return <option key={c.key} value={c.key}>{c.icon} {c.label}</option>; })}
               </select>
+              {lettersFocus && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 border border-blue-200 text-blue-700 text-xs font-semibold px-3 py-1.5 self-center">
+                  📨 מכתבי {lettersFocus.label || (lettersFocus.kind === "tenant" ? "השוכר" : "ההסכם")}
+                  <button onClick={function(){ setLettersFocus(null); }} className="text-blue-400 hover:text-blue-700 font-bold" title="הצג את כל המכתבים">✕</button>
+                </span>
+              )}
               <select value={filterProp} onChange={function(e){setFilterProp(e.target.value);}} className={ic + " w-full sm:w-44"}>
                 <option value="">🏢 נכס: הכל</option>
                 {Object.keys(allProps).map(function(k){ return <option key={k} value={k}>{allProps[k]}</option>; })}
