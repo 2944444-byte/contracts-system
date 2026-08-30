@@ -415,11 +415,15 @@ export async function runAlertSync(supabase: SupabaseClient): Promise<{ created:
       const { data: mExist } = await supabase.from("alerts")
         .select("id,severity").eq("entity_id", g.id).eq("entity_type", "guarantee")
         .eq("alert_type", "guarantee_missing").eq("is_resolved", false).limit(1);
-      if (gaps.length > 0) {
-        const sev = blocking.length > 0 ? "urgent" : "warning";
-        const title = blocking.length > 0
-          ? `ביטחון לא בתוקף: ${gLabel}`
-          : `חסרים פרטים בביטחון: ${gLabel}`;
+      // התראה רק על פער חוסם — בדיוק כמו שמסך הערבויות מציג "תקין":
+      // שדה חסר שאינו חוסם (בנק מוציא) אינו מצדיק התראה מתמשכת.
+      if (blocking.length > 0) {
+        const sev = "urgent";
+        // פער סכום בלבד ≠ "לא בתוקף" — הערבות בידינו, רק נמוכה מהנדרש.
+        const shortfallOnly = blocking.every(function (x: any) { return x.code === "shortfall"; });
+        const title = shortfallOnly
+          ? `פער בסכום הביטחון: ${gLabel}`
+          : `ביטחון לא בתוקף: ${gLabel}`;
         const message = describeGaps(gaps) +
           (Number(g.amount_required) > 0 ? ` · נדרש ₪${Number(g.amount_required).toLocaleString("he-IL")}` : "") +
           " · " + describeDelivery(delivery, g);
@@ -435,6 +439,9 @@ export async function runAlertSync(supabase: SupabaseClient): Promise<{ created:
             property_id: g.contracts?.property_id ?? null, due_date: g.end_date ?? null,
           });
         }
+      } else if (mExist && mExist.length) {
+        // הפער החוסם תוקן (או שנותר רק פרט לא-חוסם) — ההתראה נסגרת מעצמה.
+        await supabase.from("alerts").update({ is_resolved: true, handled_at: new Date().toISOString() }).eq("id", (mExist[0] as any).id);
       }
     }
 
