@@ -32,11 +32,13 @@ export default function AlertsBadge() {
 
   return (
     <button onClick={function(){router.push("/alerts");}}
+      title={count + " התראות פתוחות שטרם נקראו" + (urgent > 0 ? " (מתוכן " + urgent + " דחופות — העיגול האדום)" : "") + " — לחיצה פותחת את מסך ההתראות"}
       className="relative flex items-center gap-1.5 rounded-xl bg-red-50 border border-red-200 px-3 py-1.5 hover:bg-red-100 transition-colors">
       <span className="text-base">🔔</span>
       <span className="text-xs font-bold text-red-700">{count}</span>
       {urgent > 0 && (
-        <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-600 text-white text-[10px] font-black rounded-full flex items-center justify-center">
+        <span title={urgent + " התראות דחופות"}
+          className="absolute -top-1 -right-1 w-4 h-4 bg-red-600 text-white text-[10px] font-black rounded-full flex items-center justify-center">
           {urgent}
         </span>
       )}

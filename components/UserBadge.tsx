@@ -21,8 +21,11 @@ export default function UserBadge() {
   const initials = email.substring(0, 2).toUpperCase();
 
   return (
-    <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-full px-3 py-1.5">
-      <div className="w-6 h-6 rounded-full bg-blue-600 flex items-center justify-center text-white text-xs font-bold shrink-0">
+    <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-full px-3 py-1.5"
+      title={"המשתמש המחובר: " + email}>
+      {/* העיגול מציג את שני התווים הראשונים של האימייל (ראשי תיבות) — לא מונה */}
+      <div className="w-6 h-6 rounded-full bg-blue-600 flex items-center justify-center text-white text-xs font-bold shrink-0"
+        title={"ראשי התיבות של המשתמש המחובר (" + email + ") — לא מונה"}>
         {initials}
       </div>
       <span className="text-xs text-slate-600 font-medium hidden sm:block max-w-[140px] truncate">
