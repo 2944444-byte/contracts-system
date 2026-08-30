@@ -308,6 +308,8 @@ export default function SafetyPage() {
         "• " + checkLabel + (ins.standard ? " (" + ins.standard + ")" : "") + "\n" +
         (ins.next_inspection_date ? "מועד נדרש: " + fmtDate(ins.next_inspection_date) + "\n" : "") +
         "\nנבקשכם להמציא לנו אישור בתוקף בהקדם, ולהפקיד עותק במשרדנו לתיק הנכס.\n\n" +
+        // שמירת זכויות — רק מהדרישה השלישית ואילך (כמו בדרישות הביטוח).
+        (prior.count >= 2 ? "מובהר כי אין באמור במכתב זה כדי לגרוע מכל זכות העומדת למשכירה על פי ההסכם ועל פי כל דין.\n\n" : "") +
         "בברכה,\n" + (ci.companyName || "הנהלת הנכס");
       const { data, error } = await supabase.from("letters").insert({
         contract_id: contract.id,
@@ -337,6 +339,8 @@ export default function SafetyPage() {
         "בהתאם להוראות הסכם השכירות ונוהלי הבטיחות, על השוכר להמציא/לחדש את האישור הבא עבור המושכר:\n" +
         "• " + checkLabel + (cat && cat.standard ? " (" + cat.standard + ")" : "") + "\n" +
         "\nנבקשכם להמציא לנו אישור בתוקף בהקדם, ולהפקיד עותק במשרדנו לתיק הנכס.\n\n" +
+        // שמירת זכויות — רק מהדרישה השלישית ואילך (כמו בדרישות הביטוח).
+        (prior.count >= 2 ? "מובהר כי אין באמור במכתב זה כדי לגרוע מכל זכות העומדת למשכירה על פי ההסכם ועל פי כל דין.\n\n" : "") +
         "בברכה,\n" + (ci.companyName || "הנהלת הנכס");
       const { data, error } = await supabase.from("letters").insert({
         contract_id: c.id,
