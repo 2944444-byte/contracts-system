@@ -3,6 +3,7 @@ import { useState, useEffect } from "react";
 import { supabase } from '@/lib/supabase';
 import { authHeaders } from '@/lib/api-auth-client';
 import { logAudit } from '@/lib/audit-log';
+import { loadCompanyInfo, letterContent } from '@/lib/letter-format';
 import { PageHero } from '@/components/ui';
 import { getScopeIds, scopeRows } from '@/lib/permissions';
 import { topicForLetter, orgCcFor } from '@/lib/letter-cc';
@@ -363,7 +364,10 @@ export default function LettersPage() {
     if (!fContractId||!fSubject.trim()) { alert("חובה: חוזה + נושא"); return; }
     setSaving(true);
     try {
-      const { data } = await supabase.from("letters").insert({contract_id:fContractId,letter_type:fType,title:fSubject.trim(),content_json:JSON.stringify({body:fBody}),template_id:fTemplateId||null,status:"draft"}).select().single();
+      // גם מכתב ידני מקבל את כותרת החברה המשכירה (לוגו, שם, כתובת).
+      var { data: cRow0 } = await supabase.from("contracts").select("property_id").eq("id", fContractId).single();
+      var ci0 = await loadCompanyInfo((cRow0 as any)?.property_id);
+      const { data } = await supabase.from("letters").insert({contract_id:fContractId,letter_type:fType,title:fSubject.trim(),content_json:letterContent(fBody, ci0, {}),template_id:fTemplateId||null,status:"draft"}).select().single();
       await logAudit({entity_type:"letter",entity_id:data.id,action:"create"});
       setEditingId(""); await loadAll();
     } catch(e:any) { alert("שגיאה: "+e?.message); }

@@ -5,6 +5,7 @@ import { chargeBalance, waivedTotalFor, describeConcession, concessionValue, can
 import { getVatRates, vatPctAt, getVatPctForDate, type VatRate } from "@/lib/vat";
 import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit-log';
+import { loadCompanyInfo, letterContent } from '@/lib/letter-format';
 import { PageHero } from '@/components/ui';
 import { getScopeIds, scopeRows, getCurrentAccess } from '@/lib/permissions';
 import { reconcileAlerts } from '@/lib/alerts-reconcile';
@@ -860,11 +861,15 @@ export default function PaymentsPage() {
         title = (isNotice ? "הודעת חיוב — " : "דרישת תשלום — ") + row.description.slice(0, 60);
         letterType = isNotice ? "notice" : "demand";
       }
+      // כותרת החברה המשכירה + חתימה בשמה — כמו בכל מכתבי המערכת.
+      var { data: cRow } = await supabase.from("contracts").select("property_id").eq("id", row.contractId).single();
+      var ci = await loadCompanyInfo((cRow as any)?.property_id);
+      if (ci.companyName) body = body.replace(/הנהלת הנכס\s*$/, ci.companyName);
       var { data, error } = await supabase.from("letters").insert({
         contract_id: row.contractId,
         letter_type: letterType,
         title: title,
-        content_json: { body: body, year: filterYear, tenant: row.tenantName },
+        content_json: letterContent(body, ci, { year: filterYear, tenant: row.tenantName }),
         status: "draft",
       }).select().single();
       if (error) throw error;

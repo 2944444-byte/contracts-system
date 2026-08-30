@@ -7,6 +7,7 @@ import { logAudit } from '@/lib/audit-log';
 import PropertyHierarchyFilter from '@/components/PropertyHierarchyFilter';
 import { PageHero } from '@/components/ui';
 import { getScopeIds, scopeRows } from '@/lib/permissions';
+import { loadCompanyInfo, letterContent, priorSentOfKind, reminderIntro, reminderTitle } from '@/lib/letter-format';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 
@@ -517,22 +518,29 @@ export default function InsurancesPage() {
   async function sendInsuranceDemand(contract: any, issues: string[]) {
     try {
       var tName = (contract?.tenants as any)?.name || "";
-      var body = "שוכר/ת נכבד/ה " + tName + ",\n\n" +
-        "בהתאם להוראות נספח האחריות והביטוח שבהסכם השכירות, עליך להמציא לנו אישור קיום ביטוחים תקף עבור המושכר.\n\n" +
+      var propName = (contract?.properties as any)?.name || "";
+      var ci = await loadCompanyInfo(contract.property_id);
+      var prior = await priorSentOfKind(contract.id, "insurance_demand");
+      var body = "לכבוד\n" + tName + ",\n\n" +
+        "הנדון: דרישה להמצאת אישור קיום ביטוחים" + (propName ? " — " + propName : "") + "\n\n" +
+        reminderIntro(prior) +
+        "בהתאם להוראות נספח האחריות והביטוח שבהסכם השכירות שביניכם לבין " + (ci.companyName || "המשכירה") + " (\"המשכירה\"), על השוכר להמציא למשכירה אישור קיום ביטוחים תקף בגין המושכר, בנוסח ובהיקף הקבועים בהסכם.\n\n" +
         (issues && issues.length
-          ? "נמצאו הליקויים הבאים באישור הקיים / בכיסוי:\n" + issues.map(function(s){return "• " + s;}).join("\n") + "\n\n"
-          : "טרם הומצא לנו אישור ביטוח בתוקף.\n\n") +
-        "נודה להמצאת אישור ביטוח מתוקן/מעודכן בהקדם, הכולל את כל הכיסויים וגבולות האחריות הנדרשים בהסכם.\n\nבברכה,\nהנהלת הנכס";
+          ? "באישור הביטוח שבידינו נמצאו הליקויים הבאים:\n" + issues.map(function(s){return "• " + s;}).join("\n") + "\n\n"
+          : "נכון למועד מכתב זה, טרם הומצא לנו אישור קיום ביטוחים בתוקף.\n\n") +
+        "נבקשכם להסדיר את הנדרש ולהמציא לנו אישור קיום ביטוחים תקין ובתוקף, הכולל את כל הכיסויים וגבולות האחריות הנדרשים בהסכם, בתוך 14 ימים ממועד מכתב זה.\n\n" +
+        "מובהר כי אין באמור במכתב זה כדי לגרוע מכל זכות העומדת למשכירה על פי ההסכם ועל פי כל דין.\n\n" +
+        "בברכה,\n" + (ci.companyName || "הנהלת הנכס");
       var { data, error } = await supabase.from("letters").insert({
         contract_id: contract.id,
         letter_type: "demand",
-        title: "דרישת אישור ביטוח — " + tName,
-        content_json: { body: body, kind: "insurance_demand", issues: issues || [] },
+        title: reminderTitle(prior, "דרישת אישור ביטוח — " + tName),
+        content_json: letterContent(body, ci, { kind: "insurance_demand", issues: issues || [] }),
         status: "draft",
       }).select().single();
       if (error) throw error;
       await logAudit({ entity_type:"letter", entity_id:data.id, action:"insurance_demand" });
-      alert("✅ נוצרה טיוטת מכתב דרישת אישור ביטוח — היכנס למסך מכתבים לעריכה והדפסה");
+      if (confirm("✅ נוצרה טיוטת מכתב דרישת אישור ביטוח" + (prior.count ? " (תזכורת)" : "") + ".\nלעבור למסך המכתבים לשליחה?")) router.push("/letters");
     } catch (e:any) { alert("שגיאה: " + (e?.message || e)); }
   }
 
@@ -542,22 +550,29 @@ export default function InsurancesPage() {
     try {
       var c = ins.contracts || {};
       var tName = (c?.tenants as any)?.name || "";
+      var propName = (c?.properties as any)?.name || "";
       var endTxt = ins.end_date ? new Date(ins.end_date).toLocaleDateString("he-IL") : "";
-      var body = "שוכר/ת נכבד/ה " + tName + ",\n\n" +
-        "הרינו להביא לתשומת לבך כי אישור קיום הביטוחים שבידינו עבור המושכר" +
+      var ci = await loadCompanyInfo((c as any)?.property_id);
+      var prior = await priorSentOfKind(ins.contract_id, "insurance_renewal_demand");
+      var body = "לכבוד\n" + tName + ",\n\n" +
+        "הנדון: פוליסת הביטוח עומדת לפוג ביום " + endTxt + " — דרישה לחידוש אישור ביטוח" + (propName ? " — " + propName : "") + "\n\n" +
+        reminderIntro(prior) +
+        "הרינו להביא לידיעתכם כי אישור קיום הביטוחים שבידינו בגין המושכר" +
         (ins.insurer ? " (מבטח: " + ins.insurer + (ins.policy_number ? ", פוליסה מס' " + ins.policy_number : "") + ")" : "") +
-        " עומד לפוג בתאריך " + endTxt + ".\n\n" +
-        "בהתאם להוראות נספח האחריות והביטוח שבהסכם השכירות, נבקשכם להמציא לנו אישור קיום ביטוחים מחודש ובתוקף לפני מועד הפקיעה, הכולל את כל הכיסויים וגבולות האחריות הנדרשים בהסכם.\n\nבברכה,\nהנהלת הנכס";
+        " עומד לפוג ביום " + endTxt + ".\n\n" +
+        "בהתאם להוראות נספח האחריות והביטוח שבהסכם השכירות שביניכם לבין " + (ci.companyName || "המשכירה") + " (\"המשכירה\"), נבקשכם להמציא לנו אישור קיום ביטוחים מחודש ובתוקף בטרם מועד הפקיעה, באופן שתישמר רציפות הכיסוי הביטוחי, והכולל את כל הכיסויים וגבולות האחריות הנדרשים בהסכם.\n\n" +
+        "מובהר כי אין באמור במכתב זה כדי לגרוע מכל זכות העומדת למשכירה על פי ההסכם ועל פי כל דין.\n\n" +
+        "בברכה,\n" + (ci.companyName || "הנהלת הנכס");
       var { data, error } = await supabase.from("letters").insert({
         contract_id: ins.contract_id,
         letter_type: "demand",
-        title: "דרישת חידוש אישור ביטוח — " + tName,
-        content_json: { body: body, kind: "insurance_renewal_demand", end_date: ins.end_date || null },
+        title: reminderTitle(prior, "דרישת חידוש אישור ביטוח — " + tName),
+        content_json: letterContent(body, ci, { kind: "insurance_renewal_demand", end_date: ins.end_date || null }),
         status: "draft",
       }).select().single();
       if (error) throw error;
       await logAudit({ entity_type: "letter", entity_id: data.id, action: "insurance_renewal_demand" });
-      if (confirm("✅ נוצרה טיוטת מכתב דרישת חידוש ביטוח.\nלעבור למסך המכתבים לשליחה?")) router.push("/letters");
+      if (confirm("✅ נוצרה טיוטת מכתב דרישת חידוש ביטוח" + (prior.count ? " (תזכורת)" : "") + ".\nלעבור למסך המכתבים לשליחה?")) router.push("/letters");
     } catch (e: any) { alert("שגיאה: " + (e?.message || e)); }
   }
 

@@ -5,6 +5,7 @@ import { logAudit } from '@/lib/audit-log';
 import PropertyHierarchyFilter from '@/components/PropertyHierarchyFilter';
 import { PageHero } from '@/components/ui';
 import { getScopeIds, scopeRows } from '@/lib/permissions';
+import { loadCompanyInfo, letterContent, priorSentOfKind, reminderIntro, reminderTitle } from '@/lib/letter-format';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 
@@ -289,7 +290,7 @@ export default function SafetyPage() {
     if (spaceIds.length === 0) { alert("לבדיקה לא משויכות יחידות — לא ניתן לזהות שוכר. ערוך את הבדיקה ושייך יחידה."); return; }
     try {
       const { data: cs } = await supabase.from("contract_spaces")
-        .select("contracts(id, status, tenants(name), properties(name))")
+        .select("contracts(id, status, property_id, tenants(name), properties(name))")
         .in("space_id", spaceIds);
       var active = (cs || [])
         .map(function(x:any){ return x.contracts; })
@@ -298,16 +299,21 @@ export default function SafetyPage() {
       var contract = active[0];
       var cat = ins.check_key ? catalogInfo(ins.check_key) : null;
       var checkLabel = cat ? cat.l : typeInfo(ins.inspection_type).l;
-      var body = "שוכר/ת נכבד/ה " + (contract.tenants?.name || "") + ",\n\n" +
-        "בהתאם להוראות הסכם השכירות ונוהל הבטיחות, עליך להמציא/לחדש את האישור הבא עבור המושכר:\n" +
+      var ci = await loadCompanyInfo(contract.property_id);
+      var prior = await priorSentOfKind(contract.id, "safety_demand");
+      var body = "לכבוד\n" + (contract.tenants?.name || "") + ",\n\n" +
+        "הנדון: דרישה להמצאת " + checkLabel + "\n\n" +
+        reminderIntro(prior) +
+        "בהתאם להוראות הסכם השכירות ונוהלי הבטיחות, על השוכר להמציא/לחדש את האישור הבא עבור המושכר:\n" +
         "• " + checkLabel + (ins.standard ? " (" + ins.standard + ")" : "") + "\n" +
         (ins.next_inspection_date ? "מועד נדרש: " + fmtDate(ins.next_inspection_date) + "\n" : "") +
-        "\nנא להמציא אישור בתוקף בהקדם, ולהפקיד עותק במשרדנו לתיק הנכס.\n\nבברכה,\nהנהלת הנכס";
+        "\nנבקשכם להמציא לנו אישור בתוקף בהקדם, ולהפקיד עותק במשרדנו לתיק הנכס.\n\n" +
+        "בברכה,\n" + (ci.companyName || "הנהלת הנכס");
       const { data, error } = await supabase.from("letters").insert({
         contract_id: contract.id,
         letter_type: "demand",
-        title: "דרישת אישור בטיחות — " + checkLabel,
-        content_json: { body: body, kind: "safety_demand" },
+        title: reminderTitle(prior, "דרישת אישור בטיחות — " + checkLabel),
+        content_json: letterContent(body, ci, { kind: "safety_demand" }),
         status: "draft",
       }).select().single();
       if (error) throw error;
@@ -323,16 +329,20 @@ export default function SafetyPage() {
     try {
       var cat = catalogInfo("tenant_fire_license");
       var checkLabel = cat ? cat.l : "אישור בטיחות";
-      var body = "שוכר/ת נכבד/ה " + (c.tenants?.name || "") + ",\n\n" +
-        "בהתאם להוראות הסכם השכירות ונוהל הבטיחות, עליך להמציא/לחדש את האישור הבא עבור המושכר" +
-        (c.properties?.name ? " (" + c.properties.name + ")" : "") + ":\n" +
+      var ci = await loadCompanyInfo(c.property_id);
+      var prior = await priorSentOfKind(c.id, "safety_demand");
+      var body = "לכבוד\n" + (c.tenants?.name || "") + ",\n\n" +
+        "הנדון: דרישה להמצאת " + checkLabel + (c.properties?.name ? " — " + c.properties.name : "") + "\n\n" +
+        reminderIntro(prior) +
+        "בהתאם להוראות הסכם השכירות ונוהלי הבטיחות, על השוכר להמציא/לחדש את האישור הבא עבור המושכר:\n" +
         "• " + checkLabel + (cat && cat.standard ? " (" + cat.standard + ")" : "") + "\n" +
-        "\nנא להמציא אישור בתוקף בהקדם, ולהפקיד עותק במשרדנו לתיק הנכס.\n\nבברכה,\nהנהלת הנכס";
+        "\nנבקשכם להמציא לנו אישור בתוקף בהקדם, ולהפקיד עותק במשרדנו לתיק הנכס.\n\n" +
+        "בברכה,\n" + (ci.companyName || "הנהלת הנכס");
       const { data, error } = await supabase.from("letters").insert({
         contract_id: c.id,
         letter_type: "demand",
-        title: "דרישת אישור בטיחות — " + checkLabel,
-        content_json: { body: body, kind: "safety_demand" },
+        title: reminderTitle(prior, "דרישת אישור בטיחות — " + checkLabel),
+        content_json: letterContent(body, ci, { kind: "safety_demand" }),
         status: "draft",
       }).select().single();
       if (error) throw error;

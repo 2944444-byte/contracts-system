@@ -5,7 +5,7 @@ import { supabase } from '@/lib/supabase';
 import { authHeaders } from '@/lib/api-auth-client';
 import { PageHero } from '@/components/ui';
 import { getScopeIds, scopeRows } from '@/lib/permissions';
-import { loadCompanyInfo, letterContent } from '@/lib/letter-format';
+import { loadCompanyInfo, letterContent, priorSentOfKind, reminderIntro, reminderTitle } from '@/lib/letter-format';
 import { logAudit } from '@/lib/audit-log';
 import { previewOptionDecline, applyOptionDecline } from '@/lib/option-decline';
 import { reconcileAlerts } from '@/lib/alerts-reconcile';
@@ -138,20 +138,30 @@ export default function AlertsPage() {
     try {
       var tName = a.contracts?.tenants?.name || "";
       var cleanTitle = String(a.title || "").replace(/^[^\u0590-\u05FFA-Za-z0-9"']+/, "").trim();
-      var body = "שוכר/ת נכבד/ה " + tName + ",\n\n" +
-        "בהמשך למעקב השוטף אחר הסכם השכירות שבנדון, נבקש את טיפולך בנושא הבא:\n\n" +
-        cleanTitle + (a.message ? "\n" + a.message : "") + "\n\n" +
-        "נודה לטיפולך ולהמצאת המסמכים או ההסדרה הנדרשת בהקדם.\n\nבברכה,\nהנהלת הנכס";
+      var pid = a.property_id || null;
+      if (!pid) {
+        var { data: cRow } = await supabase.from("contracts").select("property_id").eq("id", a.contract_id).single();
+        pid = (cRow as any)?.property_id || null;
+      }
+      var ci = await loadCompanyInfo(pid);
+      var prior = await priorSentOfKind(a.contract_id, "alert_letter", "alert_id", a.id);
+      var body = "לכבוד\n" + tName + ",\n\n" +
+        "הנדון: " + cleanTitle + "\n\n" +
+        reminderIntro(prior) +
+        "בהמשך למעקב השוטף אחר הסכם השכירות שבנדון, נבקש את טיפולכם בנושא הבא:\n\n" +
+        (a.message ? a.message + "\n\n" : "") +
+        "נודה לטיפולכם ולהמצאת המסמכים או ההסדרה הנדרשת בהקדם.\n\n" +
+        "בברכה,\n" + (ci.companyName || "הנהלת הנכס");
       var { data, error } = await supabase.from("letters").insert({
         contract_id: a.contract_id,
         letter_type: "demand",
-        title: "פנייה בנושא: " + cleanTitle,
-        content_json: { body: body, kind: "alert_letter", alert_id: a.id, alert_type: a.alert_type || null },
+        title: reminderTitle(prior, "פנייה בנושא: " + cleanTitle),
+        content_json: letterContent(body, ci, { kind: "alert_letter", alert_id: a.id, alert_type: a.alert_type || null }),
         status: "draft",
       }).select().single();
       if (error) throw error;
       await logAudit({ entity_type: "letter", entity_id: data.id, action: "alert_letter", notes: cleanTitle });
-      if (confirm("✅ נוצרה טיוטת מכתב לשוכר בנושא ההתראה.\nלעבור למסך המכתבים לשליחה?")) router.push("/letters");
+      if (confirm("✅ נוצרה טיוטת מכתב לשוכר בנושא ההתראה" + (prior.count ? " (תזכורת)" : "") + ".\nלעבור למסך המכתבים לשליחה?")) router.push("/letters");
     } catch (e: any) { alert("שגיאה: " + (e?.message || e)); }
   }
 
