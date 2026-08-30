@@ -191,6 +191,12 @@ export default function ContractsPage() {
   const [allPropertySpaces, setAllPropertySpaces] = useState<any[]>([]);
   // For extend period
   const [amendNewEndDate, setAmendNewEndDate] = useState("");
+  // תוספת החלפת ביטחונות: פיקדון במקום ערבות בנקאית (או להפך)
+  const [amendGuarNewType, setAmendGuarNewType] = useState("cash");
+  const [amendGuarAmount, setAmendGuarAmount] = useState("");
+  const [amendGuarEndDate, setAmendGuarEndDate] = useState("");
+  const [amendGuarBank, setAmendGuarBank] = useState("");
+  const [amendGuarReplaceIds, setAmendGuarReplaceIds] = useState<Record<string, boolean>>({});
   // שינוי שיטת תשלום בתוספת: השיטה/התדירות/היום החדשים, מתוקף מועד התוספת.
   const [amendPayMethod, setAmendPayMethod] = useState("");
   const [amendPayFreq, setAmendPayFreq] = useState("");
@@ -3162,6 +3168,7 @@ export default function ContractsPage() {
                     { v: "parking_visitor", l: "חניות אורחים מזדמנים", desc: "מנוי דרך מקומות / קודים בהנחה", icon: "🎫" },
                     { v: "payment_change", l: "שינוי שיטת תשלום", desc: "שיטה / תדירות / יום תשלום — מתוקף מועד התוספת", icon: "💳" },
                     { v: "terminate_early", l: "קיצור תקופה / סיום מוקדם", desc: "סיום ההסכם בהסכמה לפני תום התקופה", icon: "✂️" },
+                    { v: "guarantee_change", l: "החלפת ביטחונות", desc: "פיקדון במקום ערבות בנקאית (או להפך) — הביטחון הישן מסומן כהוחזר", icon: "🏦" },
                     { v: "other", l: "שינוי אחר", desc: "פתיחת כל האפשרויות (אשף מלא)", icon: "📋" },
                   ].map(function(opt) {
                     return (
@@ -3169,6 +3176,17 @@ export default function ContractsPage() {
                           setAmendPayMethod(selContract.payment_method || "checks_advance");
                           setAmendPayFreq(selContract.payment_frequency || "monthly");
                           setAmendPayDay(String(selContract.payment_day || 1));
+                        }
+                        if (opt.v === "guarantee_change") {
+                          // ברירת מחדל: כל הביטחונות הפעילים מסומנים להחזרה,
+                          // והסכום החדש = סכום הביטחון הפעיל הגדול ביותר.
+                          var actGs = (selContract.guarantees || []).filter(function(g: any){ return g.status === "active"; });
+                          var ids0: Record<string, boolean> = {};
+                          actGs.forEach(function(g: any){ ids0[g.id] = true; });
+                          setAmendGuarReplaceIds(ids0);
+                          var maxAmt = actGs.reduce(function(m: number, g: any){ return Math.max(m, Number(g.amount_actual) || Number(g.amount_required) || 0); }, 0);
+                          setAmendGuarAmount(maxAmt > 0 ? String(maxAmt) : "");
+                          setAmendGuarNewType("cash"); setAmendGuarEndDate(""); setAmendGuarBank("");
                         }
                         setAmendType(opt.v); }}
                         className="w-full rounded-xl border border-slate-200 p-3 flex items-center gap-3 hover:bg-slate-50 hover:border-blue-300 transition-all text-right">
@@ -3336,6 +3354,69 @@ export default function ContractsPage() {
                         {((selContract.contract_ti ?? []).length > 0 || Number(selContract.investment_addition) > 0) && (
                           <div className="font-bold">· בהסכם רשומות השקעות בינוי — בדוק אם מגיע החזר השקעות ביציאה מוקדמת (מסך החוזה ← השקעות ← חיוב investment_clawback).</div>
                         )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ── GUARANTEE CHANGE ── */}
+                  {amendType === "guarantee_change" && (
+                    <div className="space-y-3">
+                      <div>
+                        <div className="text-xs font-bold text-slate-700 mb-1.5">הביטחונות הקיימים — סמן אילו מוחזרים לשוכר</div>
+                        {((selContract.guarantees || []).filter(function(g: any){ return g.status === "active"; })).length === 0 ? (
+                          <div className="text-xs text-slate-400">אין ביטחונות פעילים רשומים על ההסכם — יירשם רק הביטחון החדש.</div>
+                        ) : (
+                          <div className="space-y-1.5">
+                            {(selContract.guarantees || []).filter(function(g: any){ return g.status === "active"; }).map(function(g: any) {
+                              return (
+                                <label key={g.id} className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs cursor-pointer">
+                                  <input type="checkbox" checked={!!amendGuarReplaceIds[g.id]}
+                                    onChange={function(e){ var v = e.target.checked; setAmendGuarReplaceIds(function(prev){ return { ...prev, [g.id]: v }; }); }} className="w-4 h-4" />
+                                  <span className="font-semibold text-slate-700">{guaranteeTypeLabel(g.guarantee_type)}</span>
+                                  {(Number(g.amount_actual) || Number(g.amount_required)) > 0 && <span className="text-slate-500">₪{(Number(g.amount_actual) || Number(g.amount_required)).toLocaleString("he-IL")}</span>}
+                                  {g.end_date && <span className="text-slate-400">עד {fmtDate(g.end_date)}</span>}
+                                </label>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-1">הביטחון החדש</label>
+                          <select value={amendGuarNewType} onChange={function(e){setAmendGuarNewType(e.target.value);}}
+                            className="w-full rounded-lg border border-slate-300 px-2 py-2 text-sm">
+                            <option value="cash">פיקדון מזומן</option>
+                            <option value="bank">ערבות בנקאית</option>
+                            <option value="promissory_note">שטר חוב</option>
+                            <option value="personal">ערבות אישית</option>
+                            <option value="check">שיקים</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-1">סכום (₪)</label>
+                          <input type="number" value={amendGuarAmount} onChange={function(e){setAmendGuarAmount(e.target.value);}}
+                            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" placeholder="למשל 438728" />
+                        </div>
+                        {amendGuarNewType === "bank" && (
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 mb-1">בנק</label>
+                            <input type="text" value={amendGuarBank} onChange={function(e){setAmendGuarBank(e.target.value);}}
+                              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                          </div>
+                        )}
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-1">תוקף (רשות)</label>
+                          <input type="date" value={amendGuarEndDate} onChange={function(e){setAmendGuarEndDate(e.target.value);}}
+                            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                          <div className="text-[10px] text-slate-400 mt-0.5">לפיקדון מזומן בדרך כלל אין תוקף</div>
+                        </div>
+                      </div>
+                      <div className="rounded-lg bg-blue-50 border border-blue-200 p-2.5 text-[11px] text-blue-900 leading-relaxed space-y-1">
+                        <div className="font-bold">מה יקרה עם השמירה:</div>
+                        <div>· הביטחונות שסומנו יסומנו "הוחזרו" עם הפניה לתוספת.</div>
+                        <div>· הביטחון החדש יירשם על ההסכם כפעיל, עם קובץ הנספח אם צורף.</div>
+                        <div>· שאר תנאי ההסכם ללא שינוי.</div>
                       </div>
                     </div>
                   )}
@@ -3581,6 +3662,16 @@ export default function ContractsPage() {
                       if (!confirm("לאשר סיום מוקדם ב-" + new Date(amendNewEndDate).toLocaleDateString("he-IL") +
                         "?\nההסכם יתנהג מהמועד הזה כאילו הגיע לסופו, ואופציות שטרם מומשו יסומנו כנדחו.")) return;
                     }
+                    if (amendType === "guarantee_change") {
+                      var replN = Object.keys(amendGuarReplaceIds).filter(function(k){ return amendGuarReplaceIds[k]; }).length;
+                      if (!(Number(amendGuarAmount) > 0) && ["cash", "bank"].indexOf(amendGuarNewType) !== -1) {
+                        alert("נא להזין את סכום הביטחון החדש"); return;
+                      }
+                      if (!confirm("לאשר החלפת ביטחונות?\n" +
+                        (replN ? replN + " ביטחונות קיימים יסומנו \"הוחזרו\"\n" : "") +
+                        "יירשם ביטחון חדש: " + guaranteeTypeLabel(amendGuarNewType) +
+                        (Number(amendGuarAmount) > 0 ? " בסך ₪" + Number(amendGuarAmount).toLocaleString("he-IL") : ""))) return;
+                    }
                     // ── Overlap validation + cross-tenant swap ──
                     var crossSwapContracts: any[] = []; // contracts that need a mirror amendment
                     if (amendAddSpaces.length > 0) {
@@ -3694,12 +3785,18 @@ export default function ContractsPage() {
                           payment_day: selContract.payment_day,
                         } : amendType === "terminate_early" ? {
                           end_date: effectiveEndDate,
+                        } : amendType === "guarantee_change" ? {
+                          guarantee_change: {
+                            new_type: amendGuarNewType,
+                            amount: Number(amendGuarAmount) || null,
+                            replaced: (selContract.guarantees || []).filter(function(g: any){ return amendGuarReplaceIds[g.id]; }).map(function(g: any){ return guaranteeTypeLabel(g.guarantee_type) + ((Number(g.amount_actual) || Number(g.amount_required)) > 0 ? " ₪" + (Number(g.amount_actual) || Number(g.amount_required)).toLocaleString("he-IL") : ""); }),
+                          },
                         } : null,
                         amendment_notes: (amendType === "payment_change" ? ((amendNotes ? amendNotes + " · " : "") + (function(){
                           var lbl2 = function(m2: string){ return m2 === "checks_advance" ? "שיקים מראש" : m2 === "bank_transfer" ? "העברה בנקאית" : m2 === "standing_order" ? "הוראת קבע" : m2; };
                           var frq2 = function(f2: string){ return f2 === "monthly" ? "חודשי" : f2 === "quarterly" ? "רבעוני" : f2 === "annual" ? "שנתי" : f2; };
                           return "שינוי שיטת תשלום: " + lbl2(selContract.payment_method) + " → " + lbl2(amendPayMethod) + " · " + frq2(selContract.payment_frequency) + " → " + frq2(amendPayFreq);
-                        })()) : amendNotes) || (amendType === "swap_units" ? "החלפת יחידות" : amendType === "add_units" ? "הוספת יחידות" : amendType === "remove_units" ? "הורדת יחידות" : amendType === "extend" ? "הארכת תקופה" : amendType === "price_change" ? "שינוי מחירים" : amendType === "parking_subscription" ? "תוספת חניות מינוי" : amendType === "parking_visitor" ? "חניות אורחים מזדמנים" : amendType === "terminate_early" ? ("סיום מוקדם בהסכמה: " + new Date(effectiveEndDate).toLocaleDateString("he-IL") + " → " + (amendNewEndDate ? new Date(amendNewEndDate).toLocaleDateString("he-IL") : "")) : amendType === "payment_change"
+                        })()) : amendNotes) || (amendType === "swap_units" ? "החלפת יחידות" : amendType === "add_units" ? "הוספת יחידות" : amendType === "remove_units" ? "הורדת יחידות" : amendType === "extend" ? "הארכת תקופה" : amendType === "price_change" ? "שינוי מחירים" : amendType === "parking_subscription" ? "תוספת חניות מינוי" : amendType === "parking_visitor" ? "חניות אורחים מזדמנים" : amendType === "terminate_early" ? ("סיום מוקדם בהסכמה: " + new Date(effectiveEndDate).toLocaleDateString("he-IL") + " → " + (amendNewEndDate ? new Date(amendNewEndDate).toLocaleDateString("he-IL") : "")) : amendType === "guarantee_change" ? ("החלפת ביטחונות: " + guaranteeTypeLabel(amendGuarNewType) + (Number(amendGuarAmount) > 0 ? " בסך ₪" + Number(amendGuarAmount).toLocaleString("he-IL") : "") + " חלף הביטחונות הקיימים") : amendType === "payment_change"
                           ? (function(){
                               var lbl = function(m: string){ return m === "checks_advance" ? "שיקים מראש" : m === "bank_transfer" ? "העברה בנקאית" : m === "standing_order" ? "הוראת קבע" : m; };
                               var frq = function(f: string){ return f === "monthly" ? "חודשי" : f === "quarterly" ? "רבעוני" : f === "annual" ? "שנתי" : f; };
@@ -3853,6 +3950,35 @@ export default function ContractsPage() {
                       // Update parent end date if extended
                       if (amendType === "extend" && amendNewEndDate > selContract.end_date) {
                         await supabase.from("contracts").update({ end_date: amendNewEndDate }).eq("id", selContract.id);
+                      }
+
+                      // החלפת ביטחונות: הישנים מסומנים "הוחזרו", החדש נרשם על
+                      // חוזה הבסיס (המוסכמה — ביטחונות חיים על הבסיס).
+                      if (amendType === "guarantee_change") {
+                        var replaceIds = Object.keys(amendGuarReplaceIds).filter(function(k){ return amendGuarReplaceIds[k]; });
+                        if (replaceIds.length > 0) {
+                          await supabase.from("guarantees").update({
+                            status: "returned",
+                            return_date: amendDate,
+                            notes: "הוחלף לפי תוספת החלפת ביטחונות מיום " + new Date(amendDate).toLocaleDateString("he-IL"),
+                          }).in("id", replaceIds);
+                        }
+                        var { error: gcErr } = await supabase.from("guarantees").insert({
+                          contract_id: selContract.id,
+                          guarantee_type: amendGuarNewType,
+                          amount_required: Number(amendGuarAmount) || null,
+                          amount_actual: Number(amendGuarAmount) || null,
+                          start_date: amendDate,
+                          end_date: amendGuarEndDate || null,
+                          bank: amendGuarNewType === "bank" ? (amendGuarBank || null) : null,
+                          status: "active",
+                          delivered_at: amendDate,
+                          document_url: amendDocUrl || null,
+                          notes: "נתקבל לפי תוספת החלפת ביטחונות מיום " + new Date(amendDate).toLocaleDateString("he-IL"),
+                        });
+                        if (gcErr) throw gcErr;
+                        await logAudit({ entity_type: "contract", entity_id: selContract.id, action: "guarantee_change",
+                          notes: guaranteeTypeLabel(amendGuarNewType) + (Number(amendGuarAmount) > 0 ? " ₪" + Number(amendGuarAmount).toLocaleString("he-IL") : "") + " · " + replaceIds.length + " הוחזרו" });
                       }
 
                       // Early termination: from here the contract behaves as if

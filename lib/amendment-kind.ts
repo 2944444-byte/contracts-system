@@ -13,7 +13,7 @@
 
 import { contractArea } from "@/lib/contract-area";
 
-export type AmendmentChange = "units" | "area" | "parking" | "rent" | "term" | "payment" | "other";
+export type AmendmentChange = "units" | "area" | "parking" | "rent" | "term" | "payment" | "guarantees" | "other";
 
 export const CHANGE_LABELS: Record<AmendmentChange, string> = {
   units: "שינוי יחידות",
@@ -22,11 +22,12 @@ export const CHANGE_LABELS: Record<AmendmentChange, string> = {
   rent: 'שינוי שכ"ד',
   term: "שינוי תקופה",
   payment: "שינוי שיטת תשלום",
+  guarantees: "החלפת ביטחונות",
   other: "שינוי תנאים",
 };
 
 export const CHANGE_ICONS: Record<AmendmentChange, string> = {
-  units: "🏢", area: "📐", parking: "🅿️", rent: "💰", term: "📅", payment: "💳", other: "📝",
+  units: "🏢", area: "📐", parking: "🅿️", rent: "💰", term: "📅", payment: "💳", guarantees: "🏦", other: "📝",
 };
 
 function spaceIds(row: any): string[] {
@@ -109,6 +110,9 @@ export function classifyAmendment(params: {
   );
   if (paymentChanged) changes.push("payment");
 
+  // החלפת ביטחונות מתועדת בצילום שלפני-השינוי של התוספת עצמה.
+  if (ap && ap.guarantee_change) changes.push("guarantees");
+
   if (changes.length === 0) changes.push("other");
 
   // Headline: square metres first (it drives every allocation), then parking,
@@ -119,7 +123,8 @@ export function classifyAmendment(params: {
     : changes.indexOf("parking") !== -1 ? "parking"
     : changes.indexOf("rent") !== -1 ? "rent"
     : changes.indexOf("term") !== -1 ? "term"
-    : changes.indexOf("payment") !== -1 ? "payment" : "other";
+    : changes.indexOf("payment") !== -1 ? "payment"
+    : changes.indexOf("guarantees") !== -1 ? "guarantees" : "other";
 
   return {
     changes,
