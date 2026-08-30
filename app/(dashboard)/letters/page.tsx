@@ -4,6 +4,7 @@ import { supabase } from '@/lib/supabase';
 import { authHeaders } from '@/lib/api-auth-client';
 import { logAudit } from '@/lib/audit-log';
 import { loadCompanyInfo, letterContent } from '@/lib/letter-format';
+import { contactMatchesDomain } from '@/lib/tenant-contacts';
 import { PageHero } from '@/components/ui';
 import { getScopeIds, scopeRows } from '@/lib/permissions';
 import { topicForLetter, orgCcFor } from '@/lib/letter-cc';
@@ -690,9 +691,9 @@ export default function LettersPage() {
     var t = l.contracts?.tenants || {};
     var contacts = Array.isArray(t.contacts) ? t.contacts : [];
     var dom = routeDomain(l);
-    var byDomain = contacts.find(function(c: any){ return c && c.email && Array.isArray(c.domains) && c.domains.indexOf(dom) !== -1; });
+    var byDomain = contacts.find(function(c: any){ return c && c.email && contactMatchesDomain(c, dom); });
     if (byDomain) return { email: byDomain.email, name: byDomain.name || "", source: dom };
-    var general = contacts.find(function(c: any){ return c && c.email && Array.isArray(c.domains) && c.domains.indexOf("general") !== -1; });
+    var general = contacts.find(function(c: any){ return c && c.email && (contactMatchesDomain(c, "general") || (Array.isArray(c.domains) && c.domains.indexOf("general") !== -1)); });
     if (general) return { email: general.email, name: general.name || "", source: "general" };
     var any = contacts.find(function(c: any){ return c && c.email; });
     if (any) return { email: any.email, name: any.name || "", source: "contact" };
@@ -709,7 +710,7 @@ export default function LettersPage() {
     var contacts = Array.isArray(t.contacts) ? t.contacts : [];
     var dom = routeDomain(l);
     function emailsFor(d: string): string[] {
-      return contacts.filter(function(c: any){ return c && c.email && Array.isArray(c.domains) && c.domains.indexOf(d) !== -1; }).map(function(c: any){ return c.email; });
+      return contacts.filter(function(c: any){ return c && c.email && contactMatchesDomain(c, d); }).map(function(c: any){ return c.email; });
     }
     var list = emailsFor(dom);
     if (!list.length) list = emailsFor("general");

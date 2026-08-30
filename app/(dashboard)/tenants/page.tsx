@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import TenantContactsEditor from '@/components/TenantContactsEditor';
 import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit-log';
 import { fetchCpiAdjusted, fetchHighestChainedCpi } from '@/lib/cpi-server';
@@ -34,7 +35,7 @@ export default function TenantsPage() {
   const [fContactName, setFContactName] = useState("");
   const [fContactPhone, setFContactPhone] = useState("");
   const [fNotes, setFNotes] = useState("");
-  const [fContacts, setFContacts] = useState<{name:string;role:string;email:string;phone:string}[]>([]);
+  const [fContacts, setFContacts] = useState<{name:string;role:string;email:string;phone:string;topics?:string[]}[]>([]);
   const [cpiRatios, setCpiRatios] = useState<Record<string, number>>({});
   const [cpiProgress, setCpiProgress] = useState<CalcProgressState | null>(null);
 
@@ -340,6 +341,12 @@ export default function TenantsPage() {
                   ))}
                 </div>
                 {selTenant.notes && <div className="mt-3 text-xs text-slate-500 bg-slate-50 rounded-lg p-2">{selTenant.notes}</div>}
+                {/* אנשי קשר עם מינויי נושאים — צפייה, הוספה ועריכה ישירות כאן */}
+                <div className="mt-4 pt-3 border-t border-slate-100">
+                  <div className="text-xs font-bold text-slate-700 mb-0.5">👥 אנשי קשר למכתבים</div>
+                  <div className="text-[10px] text-slate-400 mb-2">כל מכתב נשלח לאנשי הקשר שהנושא שלו סומן אצלם (או "כל ההתכתבויות")</div>
+                  <TenantContactsEditor tenantId={selTenant.id} onChanged={loadAll} />
+                </div>
               </div>
 
               {/* חוזים */}
@@ -437,7 +444,7 @@ export default function TenantsPage() {
               <div className="rounded-lg border border-slate-200 p-3 mt-1">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-xs font-bold text-slate-700">אנשי קשר נוספים</span>
-                  <button type="button" onClick={() => setFContacts(prev => [...prev, {name:"",role:"",email:"",phone:""}])}
+                  <button type="button" onClick={() => setFContacts(prev => [...prev, {name:"",role:"",email:"",phone:"", topics: ["all"]}])}
                     className="text-xs bg-blue-600 text-white px-2 py-1 rounded-lg font-semibold hover:bg-blue-700">+ הוסף</button>
                 </div>
                 {fContacts.length === 0 ? (
