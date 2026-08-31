@@ -142,7 +142,11 @@ export async function generateTransferCharges(params: {
       "tenants(name), contract_spaces(space_id, charge_method, fixed_rent, price_per_sqm, spaces(space_name, area, space_type)), " +
       "contract_options(id, is_exercised, status, start_date, end_date, rent_mechanism, rent_increase_pct, new_rent_value, price_tiers, option_group)")
     .in("payment_method", TRANSFER_METHODS)
-    .in("status", ["active", "extended", "expiring"])
+    // "upcoming"/"future" נכללים בכוונה: חוזה שמתחיל ב-1 בחודש הבא עדיין
+    // בסטטוס עתידי בזמן ריצת ה-16–20, והחיוב הראשון שלו חייב להיווצר עכשיו —
+    // אחרת השוכר לא יקבל הודעת תשלום לפני ה-1 (סטופמרקט 1.9.2026 פוספס כך).
+    // חוזה שטרם הגיע לתקופת חיוב פשוט לא מניב תקופות (cStart >= period.end).
+    .in("status", ["active", "extended", "expiring", "upcoming", "future"])
     .eq("is_amendment", false);
   const { data: contracts, error } = await q;
   if (error) { res.errors.push(error.message); return res; }
