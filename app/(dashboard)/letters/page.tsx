@@ -162,9 +162,23 @@ function parseCj(l: any): any {
 // insurance / fire-safety certificate renewal requests. Guarantee = guarantee
 // renewal requests.
 function letterCategory(l: any): string {
-  var kind = parseCj(l).kind || "";
-  if (kind === "insurance_demand" || kind === "safety_demand" || kind === "certificate_demand") return "certificate";
-  if (kind === "guarantee_renewal" || l.billing_type === "guarantee" || l.letter_type === "guarantee") return "guarantee";
+  var cj = parseCj(l);
+  var kind = cj.kind || "";
+  // תחום שנכתב מפורשות על המכתב גובר על כל היסק
+  if (cj.domain === "money" || cj.domain === "certificate" || cj.domain === "guarantee") return cj.domain;
+  // סיווג לפי משפחת ה-kind (תחילית) — כך שכל מכתב ביטוח/בטיחות עתידי
+  // (insurance_demand / insurance_renewal_demand / safety_*) מסווג נכון
+  // ואינו נופל ל"כספים" דרך letter_type "demand".
+  if (kind.indexOf("insurance") === 0 || kind.indexOf("safety") === 0 || kind === "certificate_demand") return "certificate";
+  if (kind.indexOf("guarantee") === 0 || l.billing_type === "guarantee" || l.letter_type === "guarantee") return "guarantee";
+  if (kind === "alert_letter") {
+    // מכתב מהתראה — התחום נגזר מסוג ההתראה
+    var at = cj.alert_type || "";
+    if (at.indexOf("insurance") === 0 || at.indexOf("safety") === 0) return "certificate";
+    if (at.indexOf("guarantee") === 0) return "guarantee";
+    if (at.indexOf("payment") === 0 || at.indexOf("debt") === 0 || at.indexOf("late") === 0) return "money";
+    return "other";
+  }
   if (l.billing_type) return "money";            // every auto-generated billing letter
   if (l.letter_type === "demand" || l.letter_type === "indexation") return "money";
   if (l.letter_type === "renewal") return "renewal";
@@ -701,21 +715,39 @@ export default function LettersPage() {
 
   // Which recipient-domain a letter routes to. Money/cert/guarantee each get
   // their own contact; everything else falls back to "general".
+  // בתוך משפחת האישורים הניתוב עדין: מכתב ביטוח → מנויי "ביטוחים",
+  // מכתב אש/בטיחות → מנויי "אישור אש" (ולא כל המשפחה יחד).
   function routeDomain(l: any): string {
     var cat = letterCategory(l);
-    return (cat === "money" || cat === "certificate" || cat === "guarantee") ? cat : "general";
+    if (cat === "certificate") {
+      var cj = parseCj(l);
+      var k = (cj.kind || "") + " " + (cj.alert_type || "");
+      if (k.indexOf("insurance") !== -1) return "insurance";
+      if (k.indexOf("safety") !== -1) return "safety";
+      return "certificate";
+    }
+    return (cat === "money" || cat === "guarantee") ? cat : "general";
   }
   // Resolve the best recipient for a letter, honoring per-domain contacts stored
   // on tenants.contacts (each contact may carry a `domains` array). Falls back:
   // domain contact → general contact → any contact with email → tenant emails.
+  // שרשרת התחומים לניסיון, מהמדויק לרחב: התחום עצמו → משפחת האישורים
+  // (כשמדובר בביטוח/אש) → כללי.
+  function domainChain(dom: string): string[] {
+    var chain = [dom];
+    if (dom === "insurance" || dom === "safety") chain.push("certificate");
+    chain.push("general");
+    return chain;
+  }
   function resolveRecipient(l: any): { email: string; name: string; source: string } {
     var t = l.contracts?.tenants || {};
     var contacts = Array.isArray(t.contacts) ? t.contacts : [];
-    var dom = routeDomain(l);
-    var byDomain = contacts.find(function(c: any){ return c && c.email && contactMatchesDomain(c, dom); });
-    if (byDomain) return { email: byDomain.email, name: byDomain.name || "", source: dom };
-    var general = contacts.find(function(c: any){ return c && c.email && (contactMatchesDomain(c, "general") || (Array.isArray(c.domains) && c.domains.indexOf("general") !== -1)); });
-    if (general) return { email: general.email, name: general.name || "", source: "general" };
+    var chain = domainChain(routeDomain(l));
+    for (var i = 0; i < chain.length; i++) {
+      var d = chain[i];
+      var hit = contacts.find(function(c: any){ return c && c.email && (contactMatchesDomain(c, d) || (d === "general" && Array.isArray(c.domains) && c.domains.indexOf("general") !== -1)); });
+      if (hit) return { email: hit.email, name: hit.name || "", source: d };
+    }
     var any = contacts.find(function(c: any){ return c && c.email; });
     if (any) return { email: any.email, name: any.name || "", source: "contact" };
     return { email: t.primary_email || t.contact_email || t.email || "", name: t.name || "", source: "tenant" };
@@ -729,12 +761,12 @@ export default function LettersPage() {
   function resolveRecipientEmails(l: any): string[] {
     var t = l.contracts?.tenants || {};
     var contacts = Array.isArray(t.contacts) ? t.contacts : [];
-    var dom = routeDomain(l);
+    var chain = domainChain(routeDomain(l));
     function emailsFor(d: string): string[] {
       return contacts.filter(function(c: any){ return c && c.email && contactMatchesDomain(c, d); }).map(function(c: any){ return c.email; });
     }
-    var list = emailsFor(dom);
-    if (!list.length) list = emailsFor("general");
+    var list: string[] = [];
+    for (var i = 0; i < chain.length && !list.length; i++) list = emailsFor(chain[i]);
     if (!list.length) list = contacts.filter(function(c: any){ return c && c.email; }).map(function(c: any){ return c.email; });
     if (!list.length) { var te = t.primary_email || t.contact_email || t.email || ""; if (te) list = [te]; }
     return Array.from(new Set(list));
