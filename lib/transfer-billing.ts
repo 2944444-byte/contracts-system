@@ -79,6 +79,32 @@ export type BillingPeriod = {
   merged: boolean;      // true when stub days were folded into this charge
 };
 
+// תנאי תחילת החיוב של חוזה. חוזה רגיל — מתאריך התחילה שהוזן; חוזה שהוגדר
+// "תחילת תקופה במסירת החזקה / בפתיחת המושכר" — מהמועד בפועל בלבד:
+// מסירה מתוכננת שנדחתה אינה עילה לחיוב. כל עוד המועד בפועל לא נרשם,
+// החוזה אינו מחויב (מדווח בשורת דילוג); כשהמועד יוזן, מנגנון ההשלמה
+// הרטרואקטיבית ייצר את התקופות החסרות בריצה הבאה מאליו.
+export function billingStartFor(c: any): { iso: string | null; wait: string | null } {
+  const sd = c?.start_date ? String(c.start_date).slice(0, 10) : null;
+  if (c?.term_starts_at === "handover") {
+    if (c.actual_handover_date) return { iso: String(c.actual_handover_date).slice(0, 10), wait: null };
+    return { iso: null, wait: "תחילת התקופה במסירת החזקה — טרם נרשמה מסירה בפועל" };
+  }
+  if (c?.term_starts_at === "opening") {
+    if (c.actual_opening_date) return { iso: String(c.actual_opening_date).slice(0, 10), wait: null };
+    // פתיחה רעיונית ("X ימים מהמסירה") נגזרת רק ממסירה בפועל — לא ממתוכננת
+    const days = Number(c.opening_max_days_from_handover) || 0;
+    if (c.opening_rule === "actual_or_days_from_handover" && c.actual_handover_date && days > 0) {
+      const h = new Date(String(c.actual_handover_date).slice(0, 10) + "T00:00:00");
+      h.setDate(h.getDate() + days);
+      const iso = h.getFullYear() + "-" + String(h.getMonth() + 1).padStart(2, "0") + "-" + String(h.getDate()).padStart(2, "0");
+      return { iso: iso, wait: null };
+    }
+    return { iso: null, wait: "תחילת התקופה בפתיחת המושכר — טרם נרשמו פתיחה או מסירה בפועל" };
+  }
+  return { iso: sd, wait: null };
+}
+
 // All billable periods for a contract, oldest first:
 // from max(contract start, Jan 1 of the year the row was CREATED) up to and
 // including the forward period (the one containing the 1st of next month).
@@ -197,7 +223,11 @@ export async function generateTransferCharges(params: {
   for (const c of list) {
     const name = (c.tenants as any)?.name || c.id.slice(0, 8);
     try {
-      const cStart = c.start_date ? new Date(String(c.start_date).slice(0, 10) + "T00:00:00") : null;
+      // תנאי תחילת חיוב (מסירה/פתיחה בפועל) — לפני כל חישוב
+      const bs = billingStartFor(c);
+      if (!bs.iso) { res.lines.push("⏳ " + name + " — " + bs.wait + "; לא חויב"); continue; }
+      const cBill = bs.iso === (c.start_date ? String(c.start_date).slice(0, 10) : null) ? c : { ...c, start_date: bs.iso };
+      const cStart = cBill.start_date ? new Date(String(cBill.start_date).slice(0, 10) + "T00:00:00") : null;
       const cEnd = c.end_date ? new Date(String(c.end_date).slice(0, 10) + "T00:00:00") : null;
       if (!cStart) { res.lines.push(name + " — אין תאריך תחילה"); continue; }
 
@@ -218,7 +248,7 @@ export async function generateTransferCharges(params: {
         // ולא נופלת ל-fallback של מחיר החוזה למ"ר.
         const spaceBase = spaceMonthlyBase(cs, Number(c.rent_per_sqm) || 0);
         return buildSpaceRentSchedule({
-          contractStartDate: c.start_date, spaceArea: area, isFixed: isFixed,
+          contractStartDate: cBill.start_date, spaceArea: area, isFixed: isFixed,
           spaceBaseRent: spaceBase, spaceTiers: [], contractTiers: tiers, exercisedOptions: exercised,
         });
       });
@@ -238,7 +268,7 @@ export async function generateTransferCharges(params: {
             return s + (Number(cs?.spaces?.area) || 0);
           }, 0) || Number(c.charged_area) || 0;
           const minSqmNow = Number(c.min_rent_per_sqm) > 0
-            ? minRentPerSqmAtDate({ baseMinPerSqm: Number(c.min_rent_per_sqm), tiers: tiers, contractStart: c.start_date, date: mS })
+            ? minRentPerSqmAtDate({ baseMinPerSqm: Number(c.min_rent_per_sqm), tiers: tiers, contractStart: cBill.start_date, date: mS })
             : 0;
           var v = minSqmNow > 0 ? minSqmNow * area : (Number(c.minimum_rent) || 0);
           return { amount: v + parkFee, note: null };
@@ -255,7 +285,7 @@ export async function generateTransferCharges(params: {
         return { amount: total, note: null };
       };
 
-      const periods = billingPeriodsFor(c, today);
+      const periods = billingPeriodsFor(cBill, today);
       var zeroPeriods = 0;
 
       for (const period of periods) {
