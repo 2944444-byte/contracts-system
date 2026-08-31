@@ -97,8 +97,12 @@ export function graceWindow(params: { contract: any; today?: Date }): GraceWindo
   //
   // Only 'actual' and 'deemed' count. A merely PLANNED opening must not cut the
   // grace short — that was never the behaviour and a target is not an event.
+  // וגם פתיחה רעיונית ("X ימים מהמסירה") נספרת רק כשהיא נגזרת ממסירה
+  // בפועל: הכלל החוזי מודד מהמסירה שקרתה, ומסירה מתוכננת שנדחתה אינה
+  // עילה לקצר את הגרייס ולהקדים חיוב (אותו עיקרון כמו תנאי תחילת החיוב).
   const eo = effectiveOpeningDate(c);
-  const opening = (eo.kind === "actual" || eo.kind === "deemed") ? eo.date : d(c.actual_opening_date);
+  const deemedFromActual = eo.kind === "deemed" && !!d(c.actual_handover_date);
+  const opening = (eo.kind === "actual" || deemedFromActual) ? eo.date : d(c.actual_opening_date);
 
   // Does opening cut the grace short? Usually yes. Some leases grant the full
   // grace regardless — the store trades while the rent holiday runs to its
