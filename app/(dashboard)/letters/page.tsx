@@ -292,7 +292,7 @@ export default function LettersPage() {
   async function loadAll() {
     const [{ data: l }, { data: c }, { data: t }] = await Promise.all([
       supabase.from("letters").select("*, contracts(tenant_id, property_id, parent_contract_id, tenants(id,name,primary_email,contact_email,email,contact_name,contacts),properties(id,name),contract_spaces(spaces(space_name)))").order("created_at",{ascending:false}),
-      supabase.from("contracts").select("id,property_id,tenants(name,contact_name),properties(name,address)").in("status",["active","expiring","extended"]),
+      supabase.from("contracts").select("id,property_id,tenant_id,is_amendment,tenants(name,contact_name),properties(name,address)").in("status",["active","expiring","extended"]),
       supabase.from("document_templates").select("*").eq("is_active",true).order("name"),
     ]);
     var scope = await getScopeIds();
@@ -962,6 +962,23 @@ export default function LettersPage() {
     if (ids.length === 0) { alert("יש לבחור מכתבים"); return; }
     setMergeView(buildMergedGroups(ids));
   }
+  // נושא המייל: כותרת המכתב + שם השוכר (אם אינו כבר בכותרת); וכששוכר
+  // מחזיק יותר מהסכם חי אחד — גם שמות היחידות, כדי שיהיה ברור לאיזה
+  // הסכם המכתב מתייחס. שם הקובץ והמכתב עצמו אינם משתנים.
+  function emailSubjectFor(l: any, title: string): string {
+    var s = title || "מכתב";
+    var tenant = l?.contracts?.tenants?.name || "";
+    if (tenant && s.indexOf(tenant) === -1) s += " — " + tenant;
+    var tid = l?.contracts?.tenant_id;
+    if (tid) {
+      var n = contracts.filter(function(c: any){ return c.tenant_id === tid && !c.is_amendment; }).length;
+      if (n > 1) {
+        var u = unitsLabel(l);
+        if (u && s.indexOf(u) === -1) s += " (" + u + ")";
+      }
+    }
+    return s;
+  }
   // Send each recipient group as a single email (local mail client) and mark
   // every letter in it as sent.
   // פתיח אישי למעטפת המייל: פנייה לאנשי הקשר בשמם הפרטי (המילה הראשונה
@@ -1027,7 +1044,7 @@ export default function LettersPage() {
         : helloM + "\n\nרצ\"ב מכתב בנושא " + g.subject + ".\nנא לעיין במסמך המצורף ולפעול בהתאם.\n\nבברכה,\n" + (parseCj(g.letters[0]).companyName || "הנהלת הנכס");
       var mt = "mailto:" + encodeURIComponent(toList.join(",")) + "?" +
         (ccM.length ? "cc=" + encodeURIComponent(ccM.join(",")) + "&" : "") +
-        "subject=" + encodeURIComponent(g.subject) + "&body=" + encodeURIComponent(bodyM);
+        "subject=" + encodeURIComponent(emailSubjectFor(g.letters[0], g.subject)) + "&body=" + encodeURIComponent(bodyM);
       if (!pureTestM) {
         try {
           var fnameM = await downloadLetterPdf(g.printLetter, fileBase);
@@ -1051,7 +1068,7 @@ export default function LettersPage() {
     var res = await fetch("/api/send-letter", {
       method: "POST", headers: await authHeaders(),
       body: JSON.stringify({
-        to: toList[0], cc: ccList, subject: g.subject,
+        to: toList[0], cc: ccList, subject: emailSubjectFor(g.letters[0], g.subject),
         shortHtml: shortEmailHtml(g.tenant, g.subject, company, emailGreeting(g.letters, (g.emails && g.emails.length) ? g.emails : [g.email])),
         pdfBase64: pdf, filename: safeFilename(fileBase),
       }),
@@ -1100,7 +1117,7 @@ export default function LettersPage() {
       var pdf = await letterToPdfBase64(l);
       var res = await fetch("/api/send-letter", {
         method: "POST", headers: await authHeaders(),
-        body: JSON.stringify({ to: toList[0], cc: cc, subject: subject, shortHtml: shortEmailHtml(tenant, subject, company, emailGreeting([l], toList)), pdfBase64: pdf, filename: safeFilename(fileBase) }),
+        body: JSON.stringify({ to: toList[0], cc: cc, subject: emailSubjectFor(l, subject), shortHtml: shortEmailHtml(tenant, subject, company, emailGreeting([l], toList)), pdfBase64: pdf, filename: safeFilename(fileBase) }),
       });
       var d = await res.json();
       if (!res.ok || !d.ok) throw new Error(d.error || "שליחה נכשלה");
@@ -1181,7 +1198,7 @@ export default function LettersPage() {
     }
     var mailto = "mailto:" + encodeURIComponent(toStr) + "?" +
       (cc ? "cc=" + encodeURIComponent(cc) + "&" : "") +
-      "subject=" + encodeURIComponent(title) +
+      "subject=" + encodeURIComponent(emailSubjectFor(l, title)) +
       "&body=" + encodeURIComponent(body);
     // window.location triggers the OS mail handler reliably without leaving the app.
     window.location.href = mailto;
