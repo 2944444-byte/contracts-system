@@ -48,6 +48,20 @@ function screenName(path: string): string {
   var base = "/" + (path || "/").split("/").filter(Boolean)[0];
   return SCREEN_NAMES[base] || path;
 }
+// תרגום פעולות היומן ו-entity לעברית לרשימת "פעולות אחרונות"
+const ACTION_LABELS: Record<string, string> = {
+  create: "יצירה", update: "עדכון", delete: "מחיקה", status_change: "שינוי סטטוס",
+  update_access: "עדכון הרשאות", reset_password: "איפוס סיסמה", toggle_active: "הפעלה/השבתה",
+  contacts_add: "הוספת איש קשר", contacts_update: "עדכון איש קשר", contacts_remove: "הסרת איש קשר", contacts_topics: "עדכון נושאי איש קשר",
+};
+const ENTITY_LABELS: Record<string, string> = {
+  contract: "חוזה", tenant: "שוכר", property: "נכס", unit: "יחידה", space: "יחידה",
+  guarantee: "ערבות", insurance: "ביטוח", letter: "מכתב", user: "משתמש",
+  charge: "חיוב", alert: "התראה", document: "מסמך", company: "חברה", parking: "חניה",
+};
+function actionLabel(a: string): string { return ACTION_LABELS[a] || a; }
+function entityLabel(e: string): string { return ENTITY_LABELS[e] || e; }
+
 // פירוט "המסכים הנצפים" מתוך screens_30d — ממוין לפי כמות, פעימה ≈ 5 דקות
 function screensTip(sc: any): string {
   if (!sc || typeof sc !== "object") return "";
@@ -99,6 +113,9 @@ export default function UsersPage() {
 
   // ── פעילות משתמשים (למנהל מערכת): userId → שורת admin_user_activity ──
   const [activity, setActivity] = useState<Record<string, any>>({});
+  // דוח פעילות מפורט (מודל): המשתמש הנצפה + נתוני הפירוט מהשרת
+  const [actUser, setActUser] = useState<any | null>(null);
+  const [actDetail, setActDetail] = useState<{ days: any[]; actions: any[] } | null>(null);
 
   // ── Credentials panel (after create / password reset) ──
   const [creds, setCreds] = useState<{ name: string; email: string; password: string } | null>(null);
@@ -122,6 +139,17 @@ export default function UsersPage() {
       (j.rows || []).forEach(function(r: any){ m[r.user_id] = r; });
       setActivity(m);
     } catch (e) { /* אין פעילות להצגה — העמודה פשוט לא תופיע */ }
+  }
+
+  // פתיחת דוח הפעילות המלא של משתמש (לחיצה על תא הפעילות בטבלה)
+  async function openActivityReport(u: any) {
+    setActUser(u); setActDetail(null);
+    try {
+      const res = await fetch("/api/admin/user-activity?detail=" + u.id, { headers: await authHeaders() });
+      if (!res.ok) { setActDetail({ days: [], actions: [] }); return; }
+      const j = await res.json();
+      setActDetail({ days: j.days || [], actions: j.actions || [] });
+    } catch (e) { setActDetail({ days: [], actions: [] }); }
   }
 
   async function loadAll() {
@@ -572,11 +600,13 @@ export default function UsersPage() {
                       </button>
                     </td>
                     {Object.keys(activity).length > 0 && (
-                      <td className="px-4 py-3 text-xs">
+                      <td className="px-4 py-3 text-xs cursor-pointer hover:bg-blue-50/50 rounded-lg"
+                        title="לחץ לדוח פעילות מלא — גרף יומי, פילוח מסכים ופעולות אחרונות"
+                        onClick={function(){ openActivityReport(u); }}>
                         {(function(){
                           var a = activity[u.id];
                           if (!a) return <span className="text-slate-300">—</span>;
-                          if (!a.last_sign_in_at) return <span className="text-amber-600 font-semibold cursor-help" title="המשתמש מעולם לא נכנס למערכת — אם ההרשאה אינה נחוצה, שקול להשבית">מעולם לא התחבר</span>;
+                          if (!a.last_sign_in_at) return <span className="text-amber-600 font-semibold" title="המשתמש מעולם לא נכנס למערכת — אם ההרשאה אינה נחוצה, שקול להשבית">מעולם לא התחבר</span>;
                           // פעילות אחרונה = המאוחר מבין רענון החיבור לפעימת המסך
                           var lastAct = [a.last_activity, a.last_ping_at].filter(Boolean).sort().pop();
                           var hours = Math.round(((a.pings_30d || 0) * 5) / 60 * 10) / 10;
@@ -714,6 +744,135 @@ export default function UsersPage() {
                 }} className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm text-slate-600 hover:bg-slate-50">📋 העתק</button>
               </div>
               <button onClick={function(){ setCreds(null); }} className="w-full rounded-xl border border-slate-200 py-2 text-sm text-slate-500">סגור</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── דוח פעילות מלא למשתמש (30 הימים האחרונים) ── */}
+      {actUser && (
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4" onMouseDown={function(e){ if (e.target !== e.currentTarget) return; setActUser(null); }}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto" dir="rtl">
+            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between sticky top-0 bg-white rounded-t-2xl">
+              <div>
+                <h2 className="text-lg font-bold text-slate-800">📊 דוח פעילות — {actUser.full_name || actUser.email}</h2>
+                <div className="text-xs text-slate-400">30 הימים האחרונים · הזמנים הם אומדן לפי דיווח הדפדפן (~5 דק' לפעימה, רק כשהמסך גלוי)</div>
+              </div>
+              <button onClick={function(){ setActUser(null); }} className="text-slate-400 hover:text-slate-600 text-xl">✕</button>
+            </div>
+            <div className="p-6 space-y-5">
+              {(function(){
+                var a = activity[actUser.id] || {};
+                var hours = Math.round(((a.pings_30d || 0) * 5) / 60 * 10) / 10;
+                return (
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    {[
+                      { l: "זמן עבודה משוער", v: "כ-" + hours + " שע'", bg: "bg-blue-50", c: "text-blue-700" },
+                      { l: "ימי שימוש", v: String(a.active_days_30d || 0), bg: "bg-green-50", c: "text-green-700" },
+                      { l: "פעולות ביומן", v: String(a.actions_30d || 0), bg: "bg-purple-50", c: "text-purple-700" },
+                      { l: "התחברות אחרונה", v: a.last_sign_in_at ? ago(a.last_sign_in_at) : "מעולם לא", bg: "bg-slate-50", c: "text-slate-700" },
+                    ].map(function(k){
+                      return (
+                        <div key={k.l} className={"rounded-xl p-3 text-center " + k.bg}>
+                          <div className={"text-lg font-black " + k.c}>{k.v}</div>
+                          <div className="text-[11px] text-slate-400">{k.l}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
+
+              {!actDetail ? (
+                <div className="text-center py-8 text-slate-400 text-sm">טוען נתוני פעילות...</div>
+              ) : (function(){
+                // צבירה: דקות לפי יום (לגרף) ולפי מסך (לפילוח)
+                var byDay: Record<string, number> = {};
+                var byScreen: Record<string, number> = {};
+                (actDetail.days || []).forEach(function(r: any){
+                  var min = (Number(r.pings) || 0) * 5;
+                  byDay[r.day] = (byDay[r.day] || 0) + min;
+                  byScreen[r.screen] = (byScreen[r.screen] || 0) + min;
+                });
+                // 30 הימים האחרונים כרצף מלא (גם ימים ריקים)
+                var days: { key: string; label: string; min: number }[] = [];
+                for (var i = 29; i >= 0; i--) {
+                  var d = new Date(); d.setDate(d.getDate() - i);
+                  var key = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+                  days.push({ key: key, label: d.getDate() + "." + (d.getMonth() + 1), min: byDay[key] || 0 });
+                }
+                var maxMin = Math.max.apply(null, days.map(function(x){ return x.min; }).concat([1]));
+                var screens = Object.keys(byScreen).map(function(k){ return { k: k, min: byScreen[k] }; })
+                  .sort(function(x, y){ return y.min - x.min; });
+                var totalMin = screens.reduce(function(s, x){ return s + x.min; }, 0);
+                var hasData = totalMin > 0;
+                return (
+                  <>
+                    <div>
+                      <div className="text-sm font-bold text-slate-700 mb-2">📅 פעילות יומית</div>
+                      {!hasData ? (
+                        <div className="rounded-xl border border-dashed border-slate-200 p-6 text-center text-slate-400 text-sm">
+                          אין עדיין נתוני פעימות — הנתונים נצברים מרגע הפעלת המעקב (גרסה זו). תוך ימים ספורים הדוח יתמלא.
+                        </div>
+                      ) : (
+                        <div className="flex items-end gap-[3px] h-28 rounded-xl border border-slate-100 bg-slate-50/50 p-2" title="גובה עמודה = דקות פעילות באותו יום">
+                          {days.map(function(d){
+                            var h = d.min === 0 ? 2 : Math.max(6, Math.round((d.min / maxMin) * 96));
+                            return (
+                              <div key={d.key} className="flex-1 flex flex-col items-center justify-end cursor-help" title={d.label + " — " + (d.min === 0 ? "ללא פעילות" : "כ-" + d.min + " דק'")}>
+                                <div className={"w-full rounded-t " + (d.min === 0 ? "bg-slate-200" : "bg-blue-500")} style={{ height: h + "px" }} />
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                      {hasData && (
+                        <div className="flex justify-between text-[10px] text-slate-400 mt-1 px-1">
+                          <span>{days[0].label}</span><span>{days[14].label}</span><span>{days[29].label}</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {hasData && (
+                      <div>
+                        <div className="text-sm font-bold text-slate-700 mb-2">🖥 באילו מסכים עבד</div>
+                        <div className="space-y-1.5">
+                          {screens.map(function(s){
+                            var pct = Math.round((s.min / totalMin) * 100);
+                            return (
+                              <div key={s.k} className="flex items-center gap-2 text-xs">
+                                <span className="w-24 shrink-0 text-slate-600 truncate">{screenName(s.k)}</span>
+                                <div className="flex-1 h-4 rounded-full bg-slate-100 overflow-hidden">
+                                  <div className="h-full rounded-full bg-blue-500" style={{ width: Math.max(pct, 2) + "%" }} />
+                                </div>
+                                <span className="w-24 shrink-0 text-slate-500 text-[11px]">כ-{s.min} דק' ({pct}%)</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    <div>
+                      <div className="text-sm font-bold text-slate-700 mb-2">✏️ פעולות אחרונות ביומן</div>
+                      {(actDetail.actions || []).length === 0 ? (
+                        <div className="text-xs text-slate-400">לא נרשמו פעולות (צפייה בלבד אינה נרשמת ביומן הפעולות)</div>
+                      ) : (
+                        <div className="divide-y divide-slate-100 rounded-xl border border-slate-100">
+                          {(actDetail.actions || []).map(function(ac: any, i: number){
+                            return (
+                              <div key={i} className="flex items-center justify-between px-3 py-1.5 text-xs">
+                                <span className="text-slate-700">{actionLabel(ac.action)} · {entityLabel(ac.entity_type)}</span>
+                                <span className="text-slate-400">{fmtDT(ac.created_at)}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </>
+                );
+              })()}
             </div>
           </div>
         </div>
