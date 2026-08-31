@@ -2600,7 +2600,7 @@ export default function ContractsPage() {
                             </div>
                             {(ti.requires_report || ti.requires_invoice) && (
                               <div className="text-[10px] text-amber-700 mt-1.5">
-                                📋 התשלום כנגד {[ti.requires_report ? "דו&quot;ח עבודות מוסדר" : "", ti.requires_invoice ? "חשבונית" : ""].filter(Boolean).join(" + ")}
+                                📋 התשלום כנגד {[ti.requires_report ? "דו\"ח עבודות מוסדר" : "", ti.requires_invoice ? "חשבונית" : ""].filter(Boolean).join(" + ")}
                               </div>
                             )}
                             {(ti.payment_notes || ti.notes) && <div className="text-[11px] text-slate-500 mt-1">{ti.payment_notes || ti.notes}</div>}

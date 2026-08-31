@@ -812,6 +812,36 @@ export default function PaymentsPage() {
   // once the index is known, their figure is computed and lands here as a
   // charge, and 📧 on the row produces the notice letter with the breakdown.
   const [transferRunning, setTransferRunning] = useState(false);
+  // סטטוס חיובי החודש הבא: כמה כבר נוצרו, מתי, וע"י מי (ידנית מהיומן /
+  // אוטומטית מריצת הלילה) — כדי שמשתמש יראה מיד אם מישהו כבר לחץ.
+  const [transferStatus, setTransferStatus] = useState<{ count: number; latest: string | null; by: string | null } | null>(null);
+  useEffect(function () { loadTransferStatus(); }, []);
+  async function loadTransferStatus() {
+    try {
+      var period = nextBillingMonth(new Date());
+      var pIso = period.start.getFullYear() + "-" + String(period.start.getMonth() + 1).padStart(2, "0") + "-01";
+      var { data: rows } = await supabase.from("charges")
+        .select("id, created_at").eq("charge_type", "rent_transfer")
+        .eq("billing_period_start", pIso).order("created_at", { ascending: false }).limit(500);
+      var count = (rows || []).length;
+      var latest = rows && rows[0] ? rows[0].created_at : null;
+      var by: string | null = null;
+      if (latest) {
+        // אם רישום ידני ביומן קרוב לזמן היצירה — מציגים את שם המשתמש; אחרת אוטומטית
+        var { data: au } = await supabase.from("audit_log")
+          .select("created_at, user_id").eq("action", "generate_transfer_charges")
+          .order("created_at", { ascending: false }).limit(1);
+        var a = (au || [])[0];
+        if (a && Math.abs(new Date(a.created_at).getTime() - new Date(latest).getTime()) < 15 * 60000 && a.user_id) {
+          var { data: up } = await supabase.from("user_profiles").select("full_name, email").eq("id", a.user_id).maybeSingle();
+          by = "ידנית ע\"י " + ((up as any)?.full_name || (up as any)?.email || "משתמש");
+        } else {
+          by = "אוטומטית (ריצת הלילה)";
+        }
+      }
+      setTransferStatus({ count: count, latest: latest, by: by });
+    } catch (e) { /* אין סטטוס — השורה פשוט לא תוצג */ }
+  }
   async function runTransferBilling() {
     const period = nextBillingMonth(new Date());
     if (!confirm("לחשב וליצור חיובי שכ\"ד ודמי ניהול ל" + period.label +
@@ -819,7 +849,7 @@ export default function PaymentsPage() {
     setTransferRunning(true);
     try {
       const r = await generateTransferCharges({ supabase });
-      await logAudit({ entity_type: "billing", entity_id: "transfer_run", action: "generate_transfer_charges",
+      await logAudit({ entity_type: "billing", action: "generate_transfer_charges",
         notes: period.label + " · נוצרו " + r.created });
       alert("חיובי " + period.label + ":\n" +
         "✅ נוצרו: " + r.created + "\n" +
@@ -828,6 +858,7 @@ export default function PaymentsPage() {
         (r.errors.length ? "⚠ שגיאות:\n" + r.errors.join("\n") + "\n" : "") +
         (r.lines.length ? "\n" + r.lines.join("\n") : ""));
       await loadAll();
+      await loadTransferStatus();
     } catch (e: any) { alert("שגיאה: " + (e?.message || e)); }
     finally { setTransferRunning(false); }
   }
@@ -1067,11 +1098,26 @@ export default function PaymentsPage() {
           {includeAdvances && <span className="text-white/70 text-xs mr-2">(כולל מקדמות שכ&quot;ד שטרם שולמו)</span>}
         </>}
         actions={
-          <button onClick={runTransferBilling} disabled={transferRunning}
-            className="rounded-xl bg-white/15 hover:bg-white/25 border border-white/30 px-4 py-2 text-sm font-bold text-white disabled:opacity-50"
-            title="חישוב שכ&quot;ד ודמי ניהול לחודש הבא לשוכרים בהעברה בנקאית / הוראת קבע, לפי המדד הידוע">
-            {transferRunning ? "⏳ מחשב..." : "🏦 חיובי העברה/ה&quot;ק — " + nextBillingMonth(new Date()).label}
-          </button>
+          <div className="text-left">
+            <button onClick={runTransferBilling} disabled={transferRunning}
+              className="rounded-xl bg-white/15 hover:bg-white/25 border border-white/30 px-4 py-2 text-sm font-bold text-white disabled:opacity-50"
+              title={"חישוב שכ\"ד ודמי ניהול לחודש הבא לשוכרים בהעברה בנקאית / הוראת קבע, לפי המדד הידוע. " +
+                "רץ גם אוטומטית ב-16–20 בחודש (אחרי פרסום המדד); לחיצה ידנית בטוחה — חיוב שכבר קיים לא ייווצר שוב."}>
+              {transferRunning ? "⏳ מחשב..." : "🏦 חיובי העברה/ה\"ק — " + nextBillingMonth(new Date()).label}
+            </button>
+            {transferStatus && (
+              <div className={"mt-1 text-[11px] cursor-help " + (transferStatus.count > 0 ? "text-white/90" : "text-white/60")}
+                title={transferStatus.count > 0
+                  ? "החיובים לחודש זה כבר נוצרו — לחיצה נוספת רק תשלים חוזים חדשים שחסרים"
+                  : "החיובים ייווצרו אוטומטית ב-16–20 בחודש אחרי פרסום המדד, או בלחיצה ידנית"}>
+                {transferStatus.count > 0
+                  ? "✓ נוצרו " + transferStatus.count + " חיובים" +
+                    (transferStatus.latest ? " · " + new Date(transferStatus.latest).toLocaleDateString("he-IL") : "") +
+                    " · " + (transferStatus.by || "אוטומטית")
+                  : "טרם נוצרו — ריצה אוטומטית ב-16–20 בחודש"}
+              </div>
+            )}
+          </div>
         } />
 
       {/* KPIs — clickable to filter by status. Simplified to 3 buckets:
