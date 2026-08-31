@@ -60,6 +60,18 @@ export function addBusinessDays(from: Date | string, n: number): Date {
   return d;
 }
 
+// Subtract N business days from a date (skipping weekends + holidays). N >= 0.
+export function subtractBusinessDays(from: Date | string, n: number): Date {
+  const d = new Date(from);
+  d.setHours(12, 0, 0, 0); // avoid DST edge cases
+  let removed = 0;
+  while (removed < n) {
+    d.setDate(d.getDate() - 1);
+    if (isIsraeliBusinessDay(d)) removed++;
+  }
+  return d;
+}
+
 // Convenience: deadline = `n` business days after a guarantee's end date,
 // returned as a he-IL formatted string (e.g. "5.7.2026").
 export function businessDeadline(from: Date | string, n: number): { date: Date; label: string } {

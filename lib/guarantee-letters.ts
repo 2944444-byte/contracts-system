@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { addBusinessDays } from "./business-days";
+import { subtractBusinessDays } from "./business-days";
 
 function fmtMoney(n: number) { return "₪" + (n || 0).toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
@@ -37,7 +37,15 @@ export function computeGuaranteeRenewal(g: any, contract: any): GuaranteeRenewal
   const requiredNow = (months > 0 && monthly > 0) ? Math.round(months * monthly) : (Number(g.amount_required) || Number(contract?.guarantee_amount) || 0);
   const changePct = currentAmount > 0 ? ((requiredNow - currentAmount) / currentAmount) * 100 : 0;
   const needsUpdate = requiredNow > 0 && currentAmount > 0 && changePct > 5;
-  const deadlineLabel = g.end_date ? addBusinessDays(g.end_date, 5).toLocaleDateString("he-IL") : "";
+  // המועד להמצאת הערבות המחודשת: 5 ימי עסקים לפני הפקיעה — הערבות החדשה
+  // חייבת להיות בידינו בעוד הנוכחית בתוקף (אחרת נוצר פער כיסוי). אם המועד
+  // הזה כבר עבר (המכתב נוצר מאוחר) — אין תאריך, והנוסח דורש המצאה מיידית.
+  let deadlineLabel = "";
+  if (g.end_date) {
+    const dl = subtractBusinessDays(g.end_date, 5);
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    if (dl.getTime() >= today.getTime()) deadlineLabel = dl.toLocaleDateString("he-IL");
+  }
   return { currentAmount: currentAmount, requiredNow: requiredNow, changePct: changePct, needsUpdate: needsUpdate, monthly: monthly, months: months, deadlineLabel: deadlineLabel };
 }
 
@@ -61,7 +69,8 @@ export function buildGuaranteeRenewalBody(s: any, companyName: string): string {
   } else {
     body += "נבקשכם להמציא ערבות חדשה בתוקף, באותו סכום ובתנאים זהים.\n\n";
   }
-  if (s.deadlineLabel) body += "יש להמציא את הערבות המחודשת עד ולא יאוחר מיום " + s.deadlineLabel + " (5 ימי עסקים ממועד פקיעת הערבות הנוכחית).\n\n";
+  if (s.deadlineLabel) body += "יש להמציא את הערבות המחודשת עד ולא יאוחר מיום " + s.deadlineLabel + " (5 ימי עסקים לפני מועד פקיעת הערבות הנוכחית).\n\n";
+  else if (g.end_date) body += "נוכח סמיכות מועד הפקיעה, יש להמציא את הערבות המחודשת באופן מיידי וללא דיחוי.\n\n";
   body += "אי-המצאת ערבות בתוקף במועד עלולה להוות הפרה של הסכם השכירות.\n\n";
   body += "בכבוד רב ובברכה,\n\n" + (companyName || "הנהלת הנכס");
   return body;
