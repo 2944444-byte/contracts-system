@@ -964,10 +964,38 @@ export default function LettersPage() {
   }
   // Send each recipient group as a single email (local mail client) and mark
   // every letter in it as sent.
+  // פתיח אישי למעטפת המייל: פנייה לאנשי הקשר בשמם הפרטי (המילה הראשונה
+  // בשדה השם). המכתב המצורף ממוען ממילא לשוכר — המייל עצמו מדבר לאנשים.
+  // כמה נמענים עם שמות → "שלום X ו-Y, מה שלומכם?"; חלקם בלי שם → "שלום
+  // לכם"; נמען יחיד בלי שם → ריק (הקורא ייפול לפתיח לפי שם השוכר).
+  function emailGreeting(letters: any[], emails: string[]): string {
+    var byEmail: Record<string, string> = {};
+    letters.forEach(function(l: any){
+      var cs = l?.contracts?.tenants?.contacts;
+      (Array.isArray(cs) ? cs : []).forEach(function(c: any){
+        var e = (c?.email || "").toLowerCase();
+        var first = String(c?.name || "").trim().split(/\s+/)[0];
+        if (e && first && !byEmail[e]) byEmail[e] = first;
+      });
+    });
+    var names: string[] = [];
+    var seen: Record<string, boolean> = {};
+    (emails || []).forEach(function(e: string){
+      var n = byEmail[(e || "").toLowerCase()];
+      if (n && !seen[n]) { seen[n] = true; names.push(n); }
+    });
+    if (names.length > 0 && names.length >= (emails || []).length) {
+      var who = names.length === 1 ? names[0] : names.slice(0, -1).join(", ") + " ו" + names[names.length - 1];
+      return "שלום " + who + ", מה " + (names.length === 1 ? "שלומך" : "שלומכם") + "?";
+    }
+    if ((emails || []).length > 1) return "שלום לכם, מה שלומכם?";
+    return "";
+  }
   // Short covering email body — the letter itself rides as a PDF attachment.
-  function shortEmailHtml(tenant: string, subjectText: string, company: string): string {
+  function shortEmailHtml(tenant: string, subjectText: string, company: string, greeting?: string): string {
+    var hello = greeting || ('שלום ' + (tenant || '') + ',');
     return '<div dir="rtl" style="font-family:Arial,sans-serif;direction:rtl;font-size:14px;color:#1e293b">'
-      + 'שלום ' + (tenant || '') + ',<br><br>'
+      + hello + '<br><br>'
       + 'רצ"ב מכתב בנושא <b>' + subjectText + '</b>.<br>'
       + 'נא לעיין במסמך המצורף ולפעול בהתאם.<br><br>'
       + 'בברכה,<br>' + (company || 'הנהלת הנכס') + '</div>';
@@ -994,8 +1022,9 @@ export default function LettersPage() {
     if (testMode) {
       var pureTestM = emailReady !== false;
       var ccM = pureTestM ? [] : (g.cc || []);
+      var helloM = emailGreeting(g.letters, toList) || ("שלום " + (g.tenant || "") + ",");
       var bodyM = pureTestM ? g.body
-        : "שלום " + (g.tenant || "") + ",\n\nרצ\"ב מכתב בנושא " + g.subject + ".\nנא לעיין במסמך המצורף ולפעול בהתאם.\n\nבברכה,\n" + (parseCj(g.letters[0]).companyName || "הנהלת הנכס");
+        : helloM + "\n\nרצ\"ב מכתב בנושא " + g.subject + ".\nנא לעיין במסמך המצורף ולפעול בהתאם.\n\nבברכה,\n" + (parseCj(g.letters[0]).companyName || "הנהלת הנכס");
       var mt = "mailto:" + encodeURIComponent(toList.join(",")) + "?" +
         (ccM.length ? "cc=" + encodeURIComponent(ccM.join(",")) + "&" : "") +
         "subject=" + encodeURIComponent(g.subject) + "&body=" + encodeURIComponent(bodyM);
@@ -1023,7 +1052,7 @@ export default function LettersPage() {
       method: "POST", headers: await authHeaders(),
       body: JSON.stringify({
         to: toList[0], cc: ccList, subject: g.subject,
-        shortHtml: shortEmailHtml(g.tenant, g.subject, company),
+        shortHtml: shortEmailHtml(g.tenant, g.subject, company, emailGreeting(g.letters, (g.emails && g.emails.length) ? g.emails : [g.email])),
         pdfBase64: pdf, filename: safeFilename(fileBase),
       }),
     });
@@ -1071,7 +1100,7 @@ export default function LettersPage() {
       var pdf = await letterToPdfBase64(l);
       var res = await fetch("/api/send-letter", {
         method: "POST", headers: await authHeaders(),
-        body: JSON.stringify({ to: toList[0], cc: cc, subject: subject, shortHtml: shortEmailHtml(tenant, subject, company), pdfBase64: pdf, filename: safeFilename(fileBase) }),
+        body: JSON.stringify({ to: toList[0], cc: cc, subject: subject, shortHtml: shortEmailHtml(tenant, subject, company, emailGreeting([l], toList)), pdfBase64: pdf, filename: safeFilename(fileBase) }),
       });
       var d = await res.json();
       if (!res.ok || !d.ok) throw new Error(d.error || "שליחה נכשלה");
@@ -1128,7 +1157,8 @@ export default function LettersPage() {
     // לא כל טקסט המכתב עם הסכומים. הטקסט המלא נשאר רק במצב בדיקה טהור.
     if (!pureTest) {
       var companyL = parseCj(l).companyName || "הנהלת הנכס";
-      body = "שלום " + tenant + ",\n\nרצ\"ב מכתב בנושא " + title + ".\nנא לעיין במסמך המצורף ולפעול בהתאם.\n\nבברכה,\n" + companyL;
+      var helloL = emailGreeting([l], toList) || ("שלום " + tenant + ",");
+      body = helloL + "\n\nרצ\"ב מכתב בנושא " + title + ".\nנא לעיין במסמך המצורף ולפעול בהתאם.\n\nבברכה,\n" + companyL;
     }
     // דפדפן אינו יכול לצרף קובץ למייל שנפתח בתוכנה המקומית: ה-PDF נוצר
     // בשרת (זהה להדפסה) ויורד למחשב, ואז תוכנת המייל נפתחת עם תזכורת לצרף.
