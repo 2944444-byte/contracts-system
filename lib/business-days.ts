@@ -1,37 +1,68 @@
 // Israeli business-day math. The Israeli work week is Sunday–Thursday;
-// Friday and Saturday are the weekend. Major Jewish holidays (where offices are
-// closed) are also skipped — maintained as a Gregorian-date list below.
+// Friday and Saturday are the weekend. Major Jewish holidays (full-day office
+// closures) are also skipped.
 //
-// The holiday list is best-effort for the years we currently bill against and
-// is easy to extend. Weekend handling (Fri/Sat) is always correct regardless of
-// the holiday list, so a missing holiday only shifts a deadline by at most a day.
+// החגים מחושבים אלגוריתמית לכל שנה — אין רשימה ידנית ואין תלות ברשת.
+// הלוח העברי דטרמיניסטי: ראש השנה נקבע מחישוב המולד + כללי הדחייה
+// (האלגוריתם הקנוני מ-Calendrical Calculations), וכל שאר החגים במרחק
+// ימים קבוע ממנו: יום כיפור = ר"ה+9, סוכות = ר"ה+14, שמחת תורה = ר"ה+21,
+// פסח = ר"ה הבא −163 (חודשי ניסן–אלול קבועים באורכם), פורים = פסח−30,
+// שביעי של פסח = פסח+6, שבועות = פסח+50, יום העצמאות = ה' אייר (פסח+20)
+// עם הזזות החוק (שישי/שבת → חמישי, שני → שלישי).
+// אומת מול לוח 2026–2027 (20 תאריכים) — התאמה מלאה.
 
-// ISO yyyy-mm-dd strings for Israeli public holidays (full-day office closures).
-// Extend as needed for future years.
-const ISRAELI_HOLIDAYS: Record<string, string> = {
-  // ---- 2026 ----
-  "2026-03-03": "פורים",
-  "2026-04-02": "פסח א'",
-  "2026-04-08": "שביעי של פסח",
-  "2026-04-22": "יום העצמאות",
-  "2026-05-22": "שבועות",
-  "2026-09-12": "ראש השנה א'",
-  "2026-09-13": "ראש השנה ב'",
-  "2026-09-21": "יום כיפור",
-  "2026-09-26": "סוכות א'",
-  "2026-10-03": "שמחת תורה",
-  // ---- 2027 ----
-  "2027-03-23": "פורים",
-  "2027-04-22": "פסח א'",
-  "2027-04-28": "שביעי של פסח",
-  "2027-05-12": "יום העצמאות",
-  "2027-06-11": "שבועות",
-  "2027-10-02": "ראש השנה א'",
-  "2027-10-03": "ראש השנה ב'",
-  "2027-10-11": "יום כיפור",
-  "2027-10-16": "סוכות א'",
-  "2027-10-23": "שמחת תורה",
-};
+// ── הלוח העברי: ימים שחלפו עד ר"ה של שנה עברית y (ימי-מולד + דחיית אד"ו) ──
+function hebCalendarElapsedDays(y: number): number {
+  const monthsElapsed = Math.floor((235 * y - 234) / 19);
+  const partsElapsed = 12084 + 13753 * monthsElapsed;
+  let days = monthsElapsed * 29 + Math.floor(partsElapsed / 25920);
+  if ((3 * (days + 1)) % 7 < 3) days += 1;
+  return days;
+}
+// דחיות גטר"ד ובטו"תקפט — מתוקנות דרך אורך השנה (356 → יומיים, 382 → יום)
+function hebYearLengthCorrection(y: number): number {
+  const ny0 = hebCalendarElapsedDays(y - 1);
+  const ny1 = hebCalendarElapsedDays(y);
+  const ny2 = hebCalendarElapsedDays(y + 1);
+  if (ny2 - ny1 === 356) return 2;
+  if (ny1 - ny0 === 382) return 1;
+  return 0;
+}
+// ראש השנה של שנה עברית y כמספר-יום רץ (Rata Die; 1970-01-01 = 719163)
+function hebNewYearRd(y: number): number {
+  return -1373427 + hebCalendarElapsedDays(y) + hebYearLengthCorrection(y);
+}
+const RD_EPOCH_1970 = 719163;
+function isoFromRd(rd: number): string {
+  return new Date((rd - RD_EPOCH_1970) * 86400000).toISOString().slice(0, 10);
+}
+
+// חגי ישראל (סגירת משרדים מלאה) לשנה לועזית נתונה, מחושבים ונשמרים במטמון.
+const holidayCache: Record<number, Record<string, string>> = {};
+export function israeliHolidays(gregorianYear: number): Record<string, string> {
+  if (holidayCache[gregorianYear]) return holidayCache[gregorianYear];
+  const map: Record<string, string> = {};
+  const rh = hebNewYearRd(gregorianYear + 3761);   // ר"ה שחל בסתיו של השנה הזו
+  const pesach = rh - 163;                          // ט"ו בניסן, באביב של אותה שנה
+  map[isoFromRd(pesach - 30)] = "פורים";
+  map[isoFromRd(pesach)] = "פסח א'";
+  map[isoFromRd(pesach + 6)] = "שביעי של פסח";
+  // יום העצמאות: ה' אייר, מוזז — שישי/שבת מוקדם לחמישי, שני נדחה לשלישי
+  let atz = pesach + 20;
+  const w = ((atz % 7) + 7) % 7; // 0=ראשון ... 6=שבת
+  if (w === 5) atz -= 1;
+  else if (w === 6) atz -= 2;
+  else if (w === 1) atz += 1;
+  map[isoFromRd(atz)] = "יום העצמאות";
+  map[isoFromRd(pesach + 50)] = "שבועות";
+  map[isoFromRd(rh)] = "ראש השנה א'";
+  map[isoFromRd(rh + 1)] = "ראש השנה ב'";
+  map[isoFromRd(rh + 9)] = "יום כיפור";
+  map[isoFromRd(rh + 14)] = "סוכות א'";
+  map[isoFromRd(rh + 21)] = "שמחת תורה";
+  holidayCache[gregorianYear] = map;
+  return map;
+}
 
 function isoOf(d: Date): string {
   const y = d.getFullYear();
@@ -44,7 +75,7 @@ function isoOf(d: Date): string {
 export function isIsraeliBusinessDay(d: Date): boolean {
   const dow = d.getDay();
   if (dow === 5 || dow === 6) return false;
-  if (ISRAELI_HOLIDAYS[isoOf(d)]) return false;
+  if (israeliHolidays(d.getFullYear())[isoOf(d)]) return false;
   return true;
 }
 
