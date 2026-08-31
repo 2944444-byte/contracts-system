@@ -8,6 +8,7 @@ import AccessProvider, { RouteGate } from "../../components/AccessProvider";
 import { MobileNavProvider, MobileMenuButton } from "../../components/MobileNav";
 import { AppErrorBoundary, GlobalErrorCatcher } from "../../components/ErrorReporting";
 import EnvBadge from "../../components/EnvBadge";
+import ActivityPing from "../../components/ActivityPing";
 import Link from "next/link";
 import { APP_VERSION } from "../../lib/version";
 
@@ -26,6 +27,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
       <MobileNavProvider>
         <div className="flex min-h-screen bg-slate-50" dir="rtl">
           <Toaster />
+          <ActivityPing />
           <Sidebar />
           <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
             <header className="sticky top-0 z-20 bg-white border-b border-slate-100 px-3 sm:px-5 py-3 flex items-center justify-between gap-2 shadow-sm shrink-0">

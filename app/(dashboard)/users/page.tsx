@@ -34,6 +34,31 @@ function fmtDT(ts: string): string {
   return d.toLocaleDateString("he-IL") + " " + d.toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" });
 }
 
+// שמות מסכים בעברית לפירוט השימוש (נתיב → שם); נתיב לא מוכר מוצג כמו שהוא
+const SCREEN_NAMES: Record<string, string> = {
+  "/": "דשבורד", "/properties": "נכסים", "/units": "יחידות", "/groups": "קבוצות",
+  "/parking": "חניה", "/tenants": "שוכרים", "/contracts": "חוזים", "/billing": "חיובי נכס",
+  "/payments": "חיובים", "/cpi": "הצמדה CBS", "/rent-report": "שכ\"ד פדיון", "/guarantees": "ערבויות",
+  "/insurances": "ביטוחים", "/safety": "בטיחות", "/letters": "מכתבים", "/documents": "מסמכים",
+  "/reports": "דוחות", "/alerts": "התראות", "/calendar": "יומן", "/users": "משתמשים",
+  "/settings": "הגדרות", "/whats-new": "מה חדש",
+};
+function screenName(path: string): string {
+  if (SCREEN_NAMES[path]) return SCREEN_NAMES[path];
+  var base = "/" + (path || "/").split("/").filter(Boolean)[0];
+  return SCREEN_NAMES[base] || path;
+}
+// פירוט "המסכים הנצפים" מתוך screens_30d — ממוין לפי כמות, פעימה ≈ 5 דקות
+function screensTip(sc: any): string {
+  if (!sc || typeof sc !== "object") return "";
+  var entries = Object.keys(sc).map(function(k){ return { k: k, n: Number(sc[k]) || 0 }; })
+    .sort(function(a, b){ return b.n - a.n; });
+  if (entries.length === 0) return "";
+  return "מסכים עיקריים: " + entries.map(function(e){
+    return screenName(e.k) + " (~" + Math.max(5, Math.round(e.n * 5)) + " דק')";
+  }).join(" · ");
+}
+
 function genPassword(): string {
   // Guarantee one of each class (upper/lower/digit/symbol) so the password meets
   // Supabase's strongest "letters, digits and symbols" requirement + length ≥ 8.
@@ -490,7 +515,7 @@ export default function UsersPage() {
                 <th className="px-4 py-3 font-semibold text-slate-700">סטטוס</th>
                 {Object.keys(activity).length > 0 && (
                   <th className="px-4 py-3 font-semibold text-slate-700 cursor-help"
-                    title="🔑 התחברות אחרונה · 🖥 פעילות אחרונה (רענון חיבור — קירוב) · ✏️ פעולות שנרשמו ביומן ב-30 הימים האחרונים">
+                    title="🔑 התחברות אחרונה · 🖥 פעילות אחרונה · ⏱ אומדן זמן עבודה וימי שימוש ב-30 יום (לפי דיווח הדפדפן כל ~5 דק') · ✏️ פעולות שנרשמו ביומן ב-30 יום">
                     פעילות
                   </th>
                 )}
@@ -552,11 +577,19 @@ export default function UsersPage() {
                           var a = activity[u.id];
                           if (!a) return <span className="text-slate-300">—</span>;
                           if (!a.last_sign_in_at) return <span className="text-amber-600 font-semibold cursor-help" title="המשתמש מעולם לא נכנס למערכת — אם ההרשאה אינה נחוצה, שקול להשבית">מעולם לא התחבר</span>;
+                          // פעילות אחרונה = המאוחר מבין רענון החיבור לפעימת המסך
+                          var lastAct = [a.last_activity, a.last_ping_at].filter(Boolean).sort().pop();
+                          var hours = Math.round(((a.pings_30d || 0) * 5) / 60 * 10) / 10;
                           return (
                             <div className="space-y-0.5 text-slate-600 whitespace-nowrap">
                               <div className="cursor-help" title={"התחברות אחרונה (הזנת סיסמה): " + fmtDT(a.last_sign_in_at)}>🔑 {ago(a.last_sign_in_at)}</div>
-                              {a.last_activity && (
-                                <div className="cursor-help" title={"פעילות אחרונה — רענון החיבור (קירוב): " + fmtDT(a.last_activity) + " · " + (a.open_sessions || 0) + " חיבורים פתוחים"}>🖥 {ago(a.last_activity)}</div>
+                              {lastAct && (
+                                <div className="cursor-help" title={"פעילות אחרונה במסך: " + fmtDT(lastAct) + " · " + (a.open_sessions || 0) + " חיבורים פתוחים"}>🖥 {ago(lastAct)}</div>
+                              )}
+                              {(a.pings_30d || 0) > 0 && (
+                                <div className="cursor-help" title={"אומדן זמן עבודה ב-30 הימים האחרונים (הדפדפן מדווח כל ~5 דק' כשהמסך גלוי). " + screensTip(a.screens_30d)}>
+                                  ⏱ כ-{hours} שע' · {a.active_days_30d || 0} ימים
+                                </div>
                               )}
                               <div className="cursor-help" title={"פעולות שנרשמו ביומן הפעולות ב-30 הימים האחרונים" + (a.last_action_at ? " · אחרונה: " + fmtDT(a.last_action_at) : "")}>✏️ {a.actions_30d || 0} פעולות</div>
                             </div>

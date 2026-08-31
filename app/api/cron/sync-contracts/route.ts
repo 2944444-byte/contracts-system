@@ -42,6 +42,13 @@ export async function GET(req: NextRequest) {
     historyPurged = count ?? 0;
   } catch (e) { /* best-effort — never blocks the sync */ }
 
+  // שמירת נתונים לפעימות פעילות המשתמשים: מדדי המסך מסתכלים 30 יום
+  // אחורה; מעבר ל-180 יום אין שימוש — נמחק לילית כדי שהטבלה לא תתנפח.
+  try {
+    const pingCutoff = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString();
+    await supabase.from("user_activity_pings").delete().lt("pinged_at", pingCutoff);
+  } catch (e) { /* best-effort — never blocks the sync */ }
+
   // Status lifecycle + auto-exercised options + visitor-parking billing dates.
   // This ran ONLY from the manual "סנכרן סטטוסים" button until now — a lease
   // whose notice deadline passed was auto-exercised only when somebody
