@@ -15,14 +15,25 @@ export function topicLabel(key: string): string {
   return t ? t.icon + " " + t.label : key;
 }
 
-// האם איש קשר מנוי על תחום מכתב (money/certificate/guarantee/general —
-// התחומים שמסך המכתבים מנתב אליהם). תאימות לאחור למנגנון domains הישן.
+// האם איש קשר מנוי על תחום מכתב. התחומים שמסך המכתבים מנתב אליהם:
+// money / insurance / safety / certificate (ביטוח+אש יחד) / guarantee /
+// general. כשמוגדרים לאיש הקשר נושאים (topics) — הם מקור האמת היחיד;
+// מערך domains הישן נבחן רק אצל איש קשר legacy שאין לו נושאים כלל,
+// אחרת שיוך ישן ("certificate") היה גובר על נושאים שסומנו ידנית.
 export function contactMatchesDomain(c: any, dom: string): boolean {
   const topics: string[] = Array.isArray(c?.topics) ? c.topics : [];
-  if (topics.indexOf("all") !== -1) return true;
-  if (dom === "money" && topics.indexOf("finance") !== -1) return true;
-  if (dom === "certificate" && (topics.indexOf("insurance") !== -1 || topics.indexOf("safety") !== -1)) return true;
-  if (dom === "guarantee" && topics.indexOf("guarantees") !== -1) return true;
   const domains: string[] = Array.isArray(c?.domains) ? c.domains : [];
+  if (topics.length > 0) {
+    if (topics.indexOf("all") !== -1) return true;
+    if (dom === "money") return topics.indexOf("finance") !== -1;
+    // ניתוב עדין: מכתב ביטוח → מנויי "ביטוחים"; מכתב אש/בטיחות → "אישור אש"
+    if (dom === "insurance") return topics.indexOf("insurance") !== -1;
+    if (dom === "safety") return topics.indexOf("safety") !== -1;
+    if (dom === "certificate") return topics.indexOf("insurance") !== -1 || topics.indexOf("safety") !== -1;
+    if (dom === "guarantee") return topics.indexOf("guarantees") !== -1;
+    return false; // כולל general — נושא ספציפי אינו "כל ההתכתבויות"
+  }
+  // legacy: איש קשר ישן עם domains בלבד
+  if (dom === "insurance" || dom === "safety") return domains.indexOf("certificate") !== -1;
   return domains.indexOf(dom) !== -1;
 }
