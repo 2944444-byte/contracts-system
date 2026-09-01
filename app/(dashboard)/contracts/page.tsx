@@ -2459,6 +2459,27 @@ export default function ContractsPage() {
                                   // Spaces removed in this amendment (in previous but not here) → mark occupied
                                   var removedInAmend = prevSpaceIds.filter(function(sid: string) { return !amSpaceIds.includes(sid); });
 
+                                  // שיקי הפרש שנוצרו בגין התוספת (מזוהים לפי היחידות שהיא
+                                  // הוסיפה): שטרם התקבלו — נמחקים אוטומטית ונרשמים ביומן;
+                                  // שכבר התקבלו — נשארים, והמשתמש מתבקש לסמן את החזרתם
+                                  // במסך השיקים השמורים (שיק פיזי שנמסר לא נעלם ממחיקה).
+                                  var receivedDiff: any[] = [];
+                                  var deletedDiffCount = 0;
+                                  if (addedInAmend.length > 0) {
+                                    var { data: diffRows } = await supabase.from("advance_payments")
+                                      .select("id, status, period, year")
+                                      .eq("contract_id", selContract.id).eq("addition_diff", true)
+                                      .in("space_id", addedInAmend);
+                                    receivedDiff = (diffRows || []).filter(function(r: any){ return r.status === "received" || r.status === "paid"; });
+                                    var pendingDiff = (diffRows || []).filter(function(r: any){ return r.status !== "received" && r.status !== "paid"; });
+                                    if (pendingDiff.length > 0) {
+                                      await supabase.from("advance_payments").delete().in("id", pendingDiff.map(function(r: any){ return r.id; }));
+                                      deletedDiffCount = pendingDiff.length;
+                                      await logAudit({ entity_type: "contract", entity_id: selContract.id, action: "diff_cheques_deleted",
+                                        notes: "נמחקו " + pendingDiff.length + " שיקי הפרש שטרם התקבלו — עם מחיקת תוספת " + (am.amendment_number || "") });
+                                    }
+                                  }
+
                                   // Delete ALL related data + contract record
                                   await deleteContractData(am.id);
                                   await supabase.from("contracts").delete().eq("id", am.id);
@@ -2481,7 +2502,14 @@ export default function ContractsPage() {
                                     }
                                   }
                                   await logAudit({ entity_type: "contract", entity_id: am.id, action: "delete", notes: "מחיקת תוספת " + (am.amendment_number || "") });
+                                  // עדכון מיידי של המסך — בלי לחכות לרענון (המשתמש ראה את
+                                  // התוספת "עדיין שם" ולחץ מחיקה שוב ושוב)
+                                  setAmendments(function(prev: any[]){ return prev.filter(function(a: any){ return a.id !== am.id; }); });
                                   loadContracts();
+                                  var doneMsg = "✅ התוספת נמחקה.";
+                                  if (deletedDiffCount > 0) doneMsg += "\n🧩 " + deletedDiffCount + " שיקי הפרש שטרם התקבלו נמחקו מהמערכת (נרשם ביומן הפעולות).";
+                                  if (receivedDiff.length > 0) doneMsg += "\n⚠️ " + receivedDiff.length + " שיקי הפרש כבר התקבלו — הם לא נמחקו. יש להחזירם לשוכר ולסמן את החזרתם במסך השיקים השמורים.";
+                                  alert(doneMsg);
                                 } catch (err: any) { alert("שגיאה במחיקת תוספת: " + (err?.message || err)); }
                               }}
                                 className="rounded border border-red-200 px-2 py-1 text-xs text-red-500 hover:bg-red-50">🗑</button>
