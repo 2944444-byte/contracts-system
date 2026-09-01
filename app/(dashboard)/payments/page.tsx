@@ -935,17 +935,24 @@ export default function PaymentsPage() {
   // חלון הסבלנות שאחריו. חיובים אוטומטיים אחרים (ביטוח, הפרשי מדד וכו')
   // כבר מגלמים את ימי החסד בתאריך היעד עצמו — אצלם אין לכפול את החסד.
   const CONTRACTUAL_CHARGE_TYPES = ["rent_transfer", "rent", "parking", "advance"];
-  function isOverdueRow(r: Row): boolean {
-    if (r.status === "paid") return false;
-    if (!r.dueDate) return false;
-    var today = new Date();
-    today.setHours(0, 0, 0, 0);
+  // סוף חלון התשלום של שורה: חיוב חוזי — היעד + ימי החסד; אוטומטי — היעד
+  // עצמו (החסד כבר גולם בו ביצירה). משמש גם לדגל וגם ל-tooltip ההסבר.
+  function graceEndOf(r: Row): Date | null {
+    if (!r.dueDate) return null;
     var due = new Date(r.dueDate);
     due.setHours(0, 0, 0, 0);
     if (CONTRACTUAL_CHARGE_TYPES.indexOf(r.chargeType) !== -1 || r.source === "rent_check") {
       due.setDate(due.getDate() + (graceByProperty[r.propertyName] ?? 30));
     }
-    return due < today;
+    return due;
+  }
+  function isOverdueRow(r: Row): boolean {
+    if (r.status === "paid") return false;
+    var end = graceEndOf(r);
+    if (!end) return false;
+    var today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return end < today;
   }
 
   const filtered = rows.filter(function(r) {
@@ -1443,7 +1450,18 @@ export default function PaymentsPage() {
                               </td>
                               <td className="px-4 py-2.5 text-xs text-slate-500 whitespace-nowrap">
                                 {fmtDate(r.dueDate || "")}
-                                {overdue && <div className="text-red-600 font-semibold">⚠ באיחור</div>}
+                                {overdue && (function(){
+                                  var end = graceEndOf(r);
+                                  var contractual = CONTRACTUAL_CHARGE_TYPES.indexOf(r.chargeType) !== -1 || r.source === "rent_check";
+                                  return (
+                                    <div className="text-red-600 font-semibold cursor-help"
+                                      title={contractual
+                                        ? "מועד תשלום חוזי " + fmtDate(r.dueDate || "") + " + " + (graceByProperty[r.propertyName] ?? 30) + " ימי חסד — חלון התשלום הסתיים ב-" + (end ? end.toLocaleDateString("he-IL") : "")
+                                        : "חיוב אוטומטי — ימי החסד גולמו בתאריך היעד; חלון התשלום הסתיים ב-" + fmtDate(r.dueDate || "")}>
+                                      ⚠ באיחור
+                                    </div>
+                                  );
+                                })()}
                               </td>
                               <td className="px-4 py-2.5">
                                 <span className={"text-xs px-2 py-0.5 rounded-full font-semibold " + (
