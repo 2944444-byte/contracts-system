@@ -103,6 +103,8 @@ export default function GuaranteesPage() {
   const [fEndDate,     setFEndDate]     = useState("");
   const [fStatus,      setFStatus]      = useState("active");
   const [fNotes,       setFNotes]       = useState("");
+  // ערבים אישיים (בעיקר לשטר חוב) — נשמרים בהקמה ולא היו ניתנים לעריכה בשום מקום
+  const [fGuarantors, setFGuarantors] = useState<Array<{ name: string; id_number: string }>>([]);
   const [fPrevGuaranteeId, setFPrevGuaranteeId] = useState<string | null>(null);
 
   // Extend dialog state
@@ -314,6 +316,7 @@ export default function GuaranteesPage() {
       setFContractLabel(prefillContractId ? contractLabelOf(contracts.find(function(c: any){ return c.id === prefillContractId; })) : ""); setFType("bank"); setFRequired(""); setFActual("");
       setFBank(""); setFRef(""); setFStartDate(""); setFEndDate("");
       setFStatus("active"); setFNotes(""); setFPrevGuaranteeId(null);
+      setFGuarantors([]);
     }
   }
 
@@ -325,6 +328,7 @@ export default function GuaranteesPage() {
     setFBank(g.bank ?? ""); setFRef(g.reference_number ?? "");
     setFStartDate(g.start_date?.split("T")[0] ?? ""); setFEndDate(g.end_date?.split("T")[0] ?? "");
     setFStatus(g.status ?? "active"); setFNotes(g.notes ?? "");
+    setFGuarantors(Array.isArray(g.guarantors) ? g.guarantors.map(function(x: any){ return { name: x?.name || "", id_number: x?.id_number || "" }; }) : []);
     setFPrevGuaranteeId(g.previous_guarantee_id ?? null);
     setFDocUrl(g.document_url ?? "");
     if (newFileRef.current) newFileRef.current.value = "";
@@ -362,6 +366,7 @@ export default function GuaranteesPage() {
         contract_id: fContractId,
         guarantee_type: fType,
         amount_required: fRequired ? Number(fRequired) : null,
+        guarantors: (function(){ var v = fGuarantors.filter(function(g){ return g.name || g.id_number; }); return v.length ? v : null; })(),
         amount_actual:   fActual   ? Number(fActual)   : null,
         bank:             fBank || null,
         reference_number: fRef || null,
@@ -1011,6 +1016,30 @@ export default function GuaranteesPage() {
                   </div>
                 )}
               </div>
+              {(fType === "promissory_note" || fGuarantors.length > 0) && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50/40 p-3 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-amber-800">🖋 ערבים אישיים</span>
+                    <button type="button" onClick={function(){ setFGuarantors(fGuarantors.concat([{ name: "", id_number: "" }])); }}
+                      className="text-[11px] rounded border border-amber-300 px-2 py-0.5 text-amber-700 hover:bg-amber-100">+ ערב</button>
+                  </div>
+                  {fGuarantors.length === 0 && <div className="text-[11px] text-slate-400">אין ערבים רשומים</div>}
+                  {fGuarantors.map(function(g, i){
+                    return (
+                      <div key={i} className="flex gap-2 items-center">
+                        <input type="text" value={g.name} placeholder="שם הערב"
+                          onChange={function(e){ setFGuarantors(fGuarantors.map(function(x, j){ return j === i ? { ...x, name: e.target.value } : x; })); }}
+                          className={ic} />
+                        <input type="text" value={g.id_number} placeholder="ת.ז."
+                          onChange={function(e){ setFGuarantors(fGuarantors.map(function(x, j){ return j === i ? { ...x, id_number: e.target.value } : x; })); }}
+                          className={ic} dir="ltr" />
+                        <button type="button" onClick={function(){ setFGuarantors(fGuarantors.filter(function(_, j){ return j !== i; })); }}
+                          className="text-red-400 hover:text-red-600 text-sm shrink-0">🗑</button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
               <div><label className="mb-1 block text-xs font-semibold text-slate-700">הערות</label><textarea value={fNotes} onChange={function (e) { setFNotes(e.target.value); }} rows={2} className={ic}/></div>
               <div className="flex gap-3 pt-2">
                 <button onClick={function () { setEditingId(""); }} className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm text-slate-600">ביטול</button>

@@ -14,7 +14,24 @@ interface TIRecord {
   recovery_start: string;
   recovery_end:   string;
   notes:         string;
+  // תנאי התשלום לשוכר + החזר ביציאה מוקדמת (clawback) — כמו באשף ההקמה
+  payment_trigger: string;
+  payment_days_after: string;
+  payment_installments: string;
+  requires_report: boolean;
+  requires_invoice: boolean;
+  payment_notes: string;
+  clawback_months: string;
+  clawback_indexed: boolean;
+  clawback_vat: boolean;
+  clawback_notes: string;
 }
+
+const EMPTY_EXTRAS = {
+  payment_trigger: "on_completion", payment_days_after: "", payment_installments: "",
+  requires_report: false, requires_invoice: false, payment_notes: "",
+  clawback_months: "", clawback_indexed: true, clawback_vat: true, clawback_notes: "",
+};
 
 const RECOVERY_LABELS: Record<string,string> = {
   monthly_addition: "תוספת לשכ\"ד חודשי",
@@ -33,6 +50,7 @@ export function TIManager({ contractId, contractEndDate }: Props) {
     ti_type: "one_time", description: "", ti_amount: "",
     recovery_method: "monthly_addition", recovery_amount_monthly: "",
     recovery_start: "", recovery_end: contractEndDate ?? "", notes: "",
+    ...EMPTY_EXTRAS,
   });
 
   useEffect(function() { load(); }, [contractId]);
@@ -49,6 +67,7 @@ export function TIManager({ contractId, contractEndDate }: Props) {
       ti_type: "one_time", description: "", ti_amount: "",
       recovery_method: "monthly_addition", recovery_amount_monthly: "",
       recovery_start: "", recovery_end: contractEndDate ?? "", notes: "",
+      ...EMPTY_EXTRAS,
     });
     setEditing(true);
   }
@@ -66,6 +85,16 @@ export function TIManager({ contractId, contractEndDate }: Props) {
       recovery_start: (r.recovery_start_date || "").slice(0, 10),
       recovery_end: (r.recovery_end_date || "").slice(0, 10),
       notes: r.notes || "",
+      payment_trigger: r.payment_trigger || "on_completion",
+      payment_days_after: r.payment_days_after != null ? String(r.payment_days_after) : "",
+      payment_installments: r.payment_installments != null ? String(r.payment_installments) : "",
+      requires_report: !!r.requires_report,
+      requires_invoice: !!r.requires_invoice,
+      payment_notes: r.payment_notes || "",
+      clawback_months: r.clawback_months != null ? String(r.clawback_months) : "",
+      clawback_indexed: r.clawback_indexed !== false,
+      clawback_vat: r.clawback_vat !== false,
+      clawback_notes: r.clawback_notes || "",
     });
     setEditing(true);
   }
@@ -84,6 +113,16 @@ export function TIManager({ contractId, contractEndDate }: Props) {
         recovery_start_date: form.recovery_start || null,
         recovery_end_date:   form.recovery_end || null,
         notes:          form.notes || null,
+        payment_trigger: form.payment_trigger || null,
+        payment_days_after: form.payment_days_after ? Number(form.payment_days_after) : null,
+        payment_installments: form.payment_trigger === "installments" && form.payment_installments ? Number(form.payment_installments) : null,
+        requires_report: form.requires_report,
+        requires_invoice: form.requires_invoice,
+        payment_notes: form.payment_notes || null,
+        clawback_months: form.clawback_months ? Number(form.clawback_months) : null,
+        clawback_indexed: form.clawback_indexed,
+        clawback_vat: form.clawback_vat,
+        clawback_notes: form.clawback_notes || null,
       };
       if (editId) {
         await supabase.from("contract_ti").update(payload).eq("id", editId);
@@ -248,6 +287,73 @@ export function TIManager({ contractId, contractEndDate }: Props) {
                     className={ic} />
                 </div>
               </div>
+              <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-3 space-y-2">
+                <div className="text-xs font-bold text-slate-700">💳 תנאי תשלום ההשקעה לשוכר</div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="mb-1 block text-[11px] font-semibold text-slate-600">מועד התשלום</label>
+                    <select value={form.payment_trigger}
+                      onChange={function(e) { setForm(function(p) { return {...p, payment_trigger: e.target.value}; }); }} className={ic}>
+                      <option value="on_completion">עם השלמת העבודות</option>
+                      <option value="on_opening">עם פתיחת העסק</option>
+                      <option value="on_handover">במסירת המושכר</option>
+                      <option value="fixed_date">בתאריך קבוע</option>
+                      <option value="installments">בתשלומים</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[11px] font-semibold text-slate-600">
+                      {form.payment_trigger === "installments" ? "מספר תשלומים" : "ימים לאחר המועד"}
+                    </label>
+                    {form.payment_trigger === "installments" ? (
+                      <input type="number" value={form.payment_installments}
+                        onChange={function(e) { setForm(function(p) { return {...p, payment_installments: e.target.value}; }); }} className={ic} />
+                    ) : (
+                      <input type="number" value={form.payment_days_after} placeholder="למשל 30"
+                        onChange={function(e) { setForm(function(p) { return {...p, payment_days_after: e.target.value}; }); }} className={ic} />
+                    )}
+                  </div>
+                </div>
+                <div className="flex gap-4">
+                  <label className="flex items-center gap-1.5 text-[11px] text-slate-700">
+                    <input type="checkbox" checked={form.requires_report}
+                      onChange={function(e) { setForm(function(p) { return {...p, requires_report: e.target.checked}; }); }} className="w-3.5 h-3.5" />
+                    כנגד דו&quot;ח עבודות מוסדר
+                  </label>
+                  <label className="flex items-center gap-1.5 text-[11px] text-slate-700">
+                    <input type="checkbox" checked={form.requires_invoice}
+                      onChange={function(e) { setForm(function(p) { return {...p, requires_invoice: e.target.checked}; }); }} className="w-3.5 h-3.5" />
+                    כנגד חשבוניות
+                  </label>
+                </div>
+                <input type="text" value={form.payment_notes} placeholder="הערות לתשלום (לא חובה)"
+                  onChange={function(e) { setForm(function(p) { return {...p, payment_notes: e.target.value}; }); }} className={ic} />
+              </div>
+
+              <div className="rounded-lg border border-rose-200 bg-rose-50/40 p-3 space-y-2">
+                <div className="text-xs font-bold text-rose-800">↩️ החזר השקעה ביציאה מוקדמת (clawback)</div>
+                <div className="grid grid-cols-3 gap-2 items-end">
+                  <div>
+                    <label className="mb-1 block text-[11px] font-semibold text-slate-600">חודשי החזר-בסיס</label>
+                    <input type="number" value={form.clawback_months} placeholder="למשל 120"
+                      onChange={function(e) { setForm(function(p) { return {...p, clawback_months: e.target.value}; }); }} className={ic} />
+                  </div>
+                  <label className="flex items-center gap-1.5 text-[11px] text-slate-700 pb-2">
+                    <input type="checkbox" checked={form.clawback_indexed}
+                      onChange={function(e) { setForm(function(p) { return {...p, clawback_indexed: e.target.checked}; }); }} className="w-3.5 h-3.5" />
+                    צמוד למדד
+                  </label>
+                  <label className="flex items-center gap-1.5 text-[11px] text-slate-700 pb-2">
+                    <input type="checkbox" checked={form.clawback_vat}
+                      onChange={function(e) { setForm(function(p) { return {...p, clawback_vat: e.target.checked}; }); }} className="w-3.5 h-3.5" />
+                    בתוספת מע&quot;מ
+                  </label>
+                </div>
+                <input type="text" value={form.clawback_notes} placeholder="לשון הסעיף / הערות (לא חובה)"
+                  onChange={function(e) { setForm(function(p) { return {...p, clawback_notes: e.target.value}; }); }} className={ic} />
+                <div className="text-[10px] text-slate-400">ריק = אין סעיף החזר ביציאה מוקדמת.</div>
+              </div>
+
               <div>
                 <label className="mb-1 block text-xs font-semibold text-slate-700">הערות</label>
                 <input type="text" value={form.notes}

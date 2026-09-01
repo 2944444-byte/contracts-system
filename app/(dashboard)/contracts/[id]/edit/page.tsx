@@ -5,6 +5,8 @@ import { leaseTerm, effectiveOpeningDate, describeLeaseTerm, describeOpening } f
 import { guaranteedMonthlyRent } from "@/lib/guarantee-base";
 import RevenuePctTiersEditor from "@/components/RevenuePctTiersEditor";
 import { TIManager } from "@/components/TIManager";
+import RevenueCategoriesEditor from "@/components/RevenueCategoriesEditor";
+import { revenueCategoriesFromRow, type RevenueCategory } from "@/lib/revenue-categories";
 import { RevenuePctTier, pctTiersFromRow } from "@/lib/revenue-pct-steps";
 import { useRouter, useParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
@@ -152,6 +154,14 @@ export default function ContractEditPage() {
   const [endDate, setEndDate] = useState("");
   const [rentType, setRentType] = useState<"fixed" | "revenue_pct">("fixed");
   const [revenuePct, setRevenuePct] = useState("");
+  // הגדרות התחשבנות פדיון — היו ניתנות לקביעה רק בהקמה
+  const [revMinAdvance, setRevMinAdvance] = useState(false);
+  const [revReportFreq, setRevReportFreq] = useState("monthly");
+  const [revSettleFreq, setRevSettleFreq] = useState("monthly");
+  const [revSettleDay, setRevSettleDay] = useState("15");
+  const [revSettleTiming, setRevSettleTiming] = useState("next_month");
+  const [revLateHigherIndex, setRevLateHigherIndex] = useState(false);
+  const [revCategories, setRevCategories] = useState<RevenueCategory[]>([]);
   const [minimumRent, setMinimumRent] = useState("");
   const [termStartsAt, setTermStartsAt] = useState<"start_date"|"handover"|"opening">("start_date");
   const [openingRuleOn, setOpeningRuleOn] = useState(false);
@@ -174,6 +184,11 @@ export default function ContractEditPage() {
   const [vatType, setVatType] = useState("taxable");
   const [paymentFreq, setPaymentFreq] = useState("monthly");
   const [paymentMethod, setPaymentMethod] = useState("checks_advance");
+  // תשלום החודש הראשון במעמד החתימה — כמו באשף: קבוע, ללא הצמדה, לא מחויב שוב
+  const [prepaidOn, setPrepaidOn] = useState(false);
+  const [prepaidRent, setPrepaidRent] = useState("");
+  const [prepaidMgmt, setPrepaidMgmt] = useState("");
+  const [prepaidPaidAt, setPrepaidPaidAt] = useState("");
   const [firstChargeMode, setFirstChargeMode] = useState("stub_plus_period");
   const [paymentDay, setPaymentDay] = useState("1");
   const [indexMethod, setIndexMethod] = useState("standard");
@@ -488,6 +503,13 @@ export default function ContractEditPage() {
     }
     setRevenuePctTiers(pctTiersFromRow(c));
     setRevenueReportDay(c.revenue_report_day?.toString() ?? "5");
+    setRevMinAdvance(!!c.revenue_minimum_advance);
+    setRevReportFreq(c.revenue_report_freq ?? "monthly");
+    setRevSettleFreq(c.revenue_settlement_freq ?? "monthly");
+    setRevSettleDay(c.revenue_settlement_day?.toString() ?? "15");
+    setRevSettleTiming(c.revenue_settlement_timing ?? "next_month");
+    setRevLateHigherIndex(!!c.revenue_late_report_higher_index);
+    setRevCategories(revenueCategoriesFromRow(c));
     setMgmtIncludedInRevenue(c.mgmt_included_in_revenue ?? false);
     setRentPerSqm((effectiveRent || c.rent_per_sqm)?.toString() ?? "");
     setChargedArea((effectiveArea || c.charged_area)?.toString() ?? "");
@@ -496,6 +518,10 @@ export default function ContractEditPage() {
     setVatType(c.vat_type ?? "taxable");
     setPaymentFreq(c.payment_frequency ?? "monthly");
     setPaymentMethod(c.payment_method ?? "checks_advance");
+    setPrepaidOn(!!c.prepaid_first_month);
+    setPrepaidRent(c.prepaid_first_rent != null ? String(c.prepaid_first_rent) : "");
+    setPrepaidMgmt(c.prepaid_first_mgmt != null ? String(c.prepaid_first_mgmt) : "");
+    setPrepaidPaidAt(c.prepaid_first_paid_at ? String(c.prepaid_first_paid_at).slice(0, 10) : "");
     setFirstChargeMode(c.first_charge_mode ?? "stub_plus_period");
     setPaymentDay(c.payment_day?.toString() ?? "1");
     setIndexMethod(c.indexation_method ?? "standard");
@@ -850,9 +876,20 @@ export default function ContractEditPage() {
         min_rent_condition_notes: rentType === "revenue_pct" && Number(revProtection.untilOccupancyPct) > 0 ? (minCondNotes || null) : null,
         revenue_pct_tiers: rentType === "revenue_pct" && revenuePctTiers.length > 0 ? revenuePctTiers : null,
         revenue_report_day: rentType === "revenue_pct" ? Number(revenueReportDay) || 5 : null,
+        revenue_minimum_advance: rentType === "revenue_pct" ? revMinAdvance : false,
+        revenue_report_freq: rentType === "revenue_pct" ? revReportFreq : "monthly",
+        revenue_settlement_freq: rentType === "revenue_pct" ? revSettleFreq : "monthly",
+        revenue_settlement_day: rentType === "revenue_pct" ? (Number(revSettleDay) || null) : null,
+        revenue_settlement_timing: rentType === "revenue_pct" ? revSettleTiming : null,
+        revenue_late_report_higher_index: rentType === "revenue_pct" ? revLateHigherIndex : false,
+        revenue_categories: rentType === "revenue_pct" && revCategories.length > 0 ? revCategories : null,
         mgmt_included_in_revenue: mgmtIncludedInRevenue,
         charged_area: Number(chargedArea) || null,
         investment_addition: investAddMonthly || null,
+        prepaid_first_month: prepaidOn || null,
+        prepaid_first_rent: prepaidOn ? (Number(prepaidRent) || null) : null,
+        prepaid_first_mgmt: prepaidOn ? (Number(prepaidMgmt) || 0) : null,
+        prepaid_first_paid_at: prepaidOn ? (prepaidPaidAt || null) : null,
         investment_addition_per_sqm: investAddMode === "per_sqm" ? (Number(investAddPerSqm) || null) : null,
         vat_type: vatType,
         payment_frequency: paymentFreq,
@@ -1463,6 +1500,53 @@ export default function ContractEditPage() {
                     <label htmlFor="mgmtInRev" className="text-xs text-slate-700">דמי ניהול כלולים באחוז מהמחזור</label>
                   </div>
                 </div>
+
+                {/* הגדרות התחשבנות פדיון — שיקוף האשף (עד היום ניתנות לקביעה רק בהקמה) */}
+                <div className="rounded-lg border border-purple-200 bg-white/60 p-3 space-y-3">
+                  <div className="text-xs font-bold text-purple-800">⚖️ התחשבנות פדיון</div>
+                  <label className="flex items-start gap-2 text-xs text-slate-700">
+                    <input type="checkbox" checked={revMinAdvance} onChange={(e) => setRevMinAdvance(e.target.checked)} className="rounded mt-0.5" />
+                    <span><b>השוכר משלם מקדמת מינימום מדי חודש</b> — ובהתחשבנות נגבית רק ההשלמה לאחוז מהפדיון.</span>
+                  </label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="mb-1 block text-[11px] font-semibold text-purple-700">תדירות דו&quot;ח פדיון</label>
+                      <select value={revReportFreq} onChange={(e) => setRevReportFreq(e.target.value)} className={ic}>
+                        <option value="monthly">חודשי</option>
+                        <option value="quarterly">רבעוני</option>
+                        <option value="semiannual">חצי שנתי</option>
+                        <option value="annual">שנתי</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-[11px] font-semibold text-purple-700">תדירות התחשבנות מול המינימום</label>
+                      <select value={revSettleFreq} onChange={(e) => setRevSettleFreq(e.target.value)} className={ic}>
+                        <option value="monthly">חודשית</option>
+                        <option value="quarterly">רבעונית</option>
+                        <option value="semiannual">חצי שנתית</option>
+                        <option value="annual">שנתית</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-[11px] font-semibold text-purple-700">מתי משולמת ההתחשבנות</label>
+                      <select value={revSettleTiming} onChange={(e) => setRevSettleTiming(e.target.value)} className={ic}>
+                        <option value="next_month">בחודש שאחרי תום התקופה</option>
+                        <option value="same_month" disabled={revSettleFreq !== "monthly"}>בחודש הדיווח עצמו{revSettleFreq !== "monthly" ? " — רק בהתחשבנות חודשית" : ""}</option>
+                        <option value="with_report" disabled={revSettleFreq !== "monthly"}>יחד עם הגשת דוח הפדיון{revSettleFreq !== "monthly" ? " — רק בהתחשבנות חודשית" : ""}</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-[11px] font-semibold text-purple-700">יום ההתחשבנות בחודש</label>
+                      <input type="number" min="1" max="28" value={revSettleDay} onChange={(e) => setRevSettleDay(e.target.value)} className={ic} />
+                    </div>
+                  </div>
+                  <label className="flex items-start gap-2 text-[11px] text-slate-700">
+                    <input type="checkbox" checked={revLateHigherIndex} onChange={(e) => setRevLateHigherIndex(e.target.checked)} className="rounded mt-0.5" />
+                    <span>דיווח מאוחר מחויב לפי המדד הגבוה (סנקציית איחור בדיווח)</span>
+                  </label>
+                  <RevenueCategoriesEditor value={revCategories} onChange={setRevCategories} basePct={revenuePct} />
+                </div>
+
                 <RevenuePctTiersEditor basePct={Number(revenuePct) || 0} tiers={revenuePctTiers} onChange={setRevenuePctTiers} />
               </div>
             )}
@@ -1521,6 +1605,39 @@ export default function ContractEditPage() {
               <div>
                 <label className="mb-1 block text-xs font-semibold text-slate-700">יום תשלום בחודש</label>
                 <input type="number" min="1" max="28" value={paymentDay} onChange={(e) => setPaymentDay(e.target.value)} className={ic} />
+              </div>
+              {/* תשלום חודש ראשון במעמד החתימה — כמו באשף */}
+              <div className="rounded-lg border border-teal-200 bg-teal-50/50 p-3 space-y-2 sm:col-span-2">
+                <label className="flex items-start gap-2 text-xs text-slate-700">
+                  <input type="checkbox" checked={prepaidOn}
+                    onChange={(e) => {
+                      setPrepaidOn(e.target.checked);
+                      if (e.target.checked) {
+                        if (!prepaidRent && baseRent > 0) setPrepaidRent(String(Math.round(baseRent * 100) / 100));
+                        if (!prepaidMgmt && mgmtFeeMonthly > 0) setPrepaidMgmt(String(Math.round(mgmtFeeMonthly * 100) / 100));
+                        if (!prepaidPaidAt) setPrepaidPaidAt(new Date().toISOString().slice(0, 10));
+                      }
+                    }} className="rounded mt-0.5" />
+                  <span><b>💰 שולם במעמד החתימה שכ"ד + מקדמת ד"נ של החודש הראשון</b>
+                    <span className="block text-slate-500">הסכום קבוע — ללא הצמדה, והחודש הראשון לא יחויב שוב (לא בשיקים ולא בהעברה).</span>
+                  </span>
+                </label>
+                {prepaidOn && (
+                  <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <label className="mb-1 block text-[11px] font-semibold text-slate-700">שכ"ד (לפני מע"מ)</label>
+                      <input type="number" min="0" value={prepaidRent} onChange={(e) => setPrepaidRent(e.target.value)} className={ic} />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-[11px] font-semibold text-slate-700">מקדמת ד"נ (לפני מע"מ)</label>
+                      <input type="number" min="0" value={prepaidMgmt} onChange={(e) => setPrepaidMgmt(e.target.value)} className={ic} />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-[11px] font-semibold text-slate-700">שולם בתאריך</label>
+                      <input type="date" value={prepaidPaidAt} onChange={(e) => setPrepaidPaidAt(e.target.value)} className={ic} />
+                    </div>
+                  </div>
+                )}
               </div>
               {(paymentMethod === "bank_transfer" || paymentMethod === "standing_order") && (
                 <div>
