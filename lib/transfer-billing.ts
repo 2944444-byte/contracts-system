@@ -159,6 +159,7 @@ export async function generateTransferCharges(params: {
     .select("id, property_id, rent_type, revenue_pct, rent_per_sqm, charged_area, investment_addition, " +
       "min_rent_per_sqm, minimum_rent, min_rent_condition_type, min_rent_condition_pct, min_rent_condition_met_at, " +
       "payment_method, payment_frequency, payment_day, first_charge_mode, vat_type, indexation_method, index_base_date, index_base_value, index_mechanism, " +
+      "prepaid_first_month, prepaid_first_rent, prepaid_first_mgmt, " +
       "start_date, end_date, signing_date, created_at, mgmt_fee_per_sqm, mgmt_included_in_revenue, " +
       "contract_type, mgmt_parking_fee_per_spot, properties(parking_mgmt_fee_per_spot, space_type_billing), " +
       "grace_months, grace_days, grace_phase2_days, grace_type, grace_discount_pct, grace_mgmt_discount_pct, grace_ends_on_opening, " +
@@ -293,6 +294,14 @@ export async function generateTransferCharges(params: {
         if (cStart >= period.end) continue;
         if (cEnd && cEnd < period.start) continue;
         if (billed[c.id + "|" + ymd(period.start)]) { res.skippedExisting++; continue; }
+        // החודש הראשון שולם במעמד החתימה (ביטחון לקיום ההסכם) — הסכום קבוע
+        // וללא הצמדה, ואין לחייב אותו שוב. התקופה הראשונה = זו שמכילה את
+        // תחילת החיוב בפועל.
+        if (c.prepaid_first_month && cStart >= period.start && cStart < period.end) {
+          res.lines.push("💰 " + name + " — " + period.start.toLocaleDateString("he-IL") + ": החודש הראשון שולם מראש במעמד החתימה (₪" +
+            ((Number(c.prepaid_first_rent) || 0) + (Number(c.prepaid_first_mgmt) || 0)).toLocaleString("he-IL") + " לפני מע\"מ, ללא הצמדה); לא חויב");
+          continue;
+        }
 
         const noteLines: string[] = [];
         // ── Month walk: base rent + grace + proration, month by month ──

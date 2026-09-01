@@ -11,6 +11,9 @@ import { supabase } from "@/lib/supabase";
 import { authHeaders } from '@/lib/api-auth-client';
 import { getScopeIds, getCompanyScopeIds, getTenantScopeIds, scopeRows, scopeGroups } from '@/lib/permissions';
 import { logAudit } from "@/lib/audit-log";
+import { buildOnboardingBody, chequeSchedule, type OnboardingParams } from "@/lib/onboarding-letter";
+import { loadCompanyInfo, letterContent } from "@/lib/letter-format";
+import { getVatRates, vatPctAt } from "@/lib/vat";
 import {
   calculateEndDate,
   calculateOptionDates,
@@ -244,6 +247,15 @@ export default function ContractsNewPage() {
   const [revReportFreq, setRevReportFreq] = useState("monthly");
   const [revLateHigherIndex, setRevLateHigherIndex] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState("checks_advance");
+  // תשלום החודש הראשון במעמד החתימה — ביטחון לקיום ההסכם בחוזה עתידי.
+  // הסכום קבוע (ללא הצמדה), ומנועי החיוב/המקדמות מדלגים על החודש ששולם.
+  const [prepaidOn, setPrepaidOn] = useState(false);
+  const [prepaidRent, setPrepaidRent] = useState("");
+  const [prepaidMgmt, setPrepaidMgmt] = useState("");
+  const [prepaidPaidAt, setPrepaidPaidAt] = useState("");
+  // מודל "מכתב דרישות" בסיום ההקמה — נפתח אחרי שמירה מוצלחת
+  const [onboard, setOnboard] = useState<{ contractId: string; params: OnboardingParams } | null>(null);
+  const [onboardSaving, setOnboardSaving] = useState(false);
   // חיוב ראשון בהעברה/ה"ק: שארית+תקופה יחד (ברירת מחדל) או שארית בנפרד.
   const [firstChargeMode, setFirstChargeMode] = useState("stub_plus_period");
   const [paymentDay, setPaymentDay] = useState("1");
@@ -454,6 +466,54 @@ export default function ContractsNewPage() {
     var iso = shifted.getFullYear() + "-" + String(shifted.getMonth() + 1).padStart(2, "0") + "-" + String(shifted.getDate()).padStart(2, "0");
     if (iso !== plannedOpening) setPlannedOpening(iso);
   }, [hasGrace, graceMonths, graceUnit, actualHandover, plannedHandover, startDate, plannedOpeningTouched]);
+
+  // אישור מכתב הדרישות: יוצר את המכתב (עם כותרת החברה, נכנס למסך המכתבים
+  // על כל ערוצי השליחה הקיימים) ומבצע את הפעולות בפועל — למשלמי שיקים:
+  // רישום שיקי המקדמות עד סוף השנה מאותו חישוב של המכתב; חודש ששולם
+  // במעמד החתימה נשמר בסטטוס "שולם" ולא יידרש שוב.
+  async function confirmOnboarding() {
+    if (!onboard) return;
+    setOnboardSaving(true);
+    try {
+      var ci = await loadCompanyInfo(propertyId);
+      var full = { ...onboard.params, companyName: ci.companyName || "", bankLine: ci.bankLine || "" };
+      var built = buildOnboardingBody(full);
+      var { error: le } = await supabase.from("letters").insert({
+        contract_id: onboard.contractId,
+        letter_type: "notice",
+        title: "השלמת מסמכים ותשלומים — " + (full.tenantName || ""),
+        content_json: letterContent(built.body, ci, { kind: "onboarding_requirements", domain: "money" }),
+        status: "ready",
+      });
+      if (le) throw new Error(le.message);
+      if (full.paymentMethod === "checks_advance") {
+        var sched = chequeSchedule(full);
+        var firstSpace = spaces.find(function (s: any) { return selSpaces.indexOf(s.id) !== -1; });
+        if (sched.length > 0 && firstSpace) {
+          var rows = sched.map(function (r) {
+            var rentPart = r.prepaid ? full.prepaidRent : full.baseRent;
+            return {
+              contract_id: onboard!.contractId, space_id: firstSpace.id, property_id: propertyId,
+              tenant_name: full.tenantName || "—", space_name: full.unitsLabel || firstSpace.space_name || "—",
+              year: r.year, period: "חודש " + r.month,
+              base_rent: rentPart, indexed_rent: rentPart,
+              management_advance: Math.max(0, r.amount - rentPart),
+              total_before_vat: r.amount, vat_amount: r.vat, total_with_vat: r.total,
+              check_date: r.year + "-" + String(r.month).padStart(2, "0") + "-01",
+              status: r.prepaid ? "paid" : "pending",
+            };
+          });
+          var { error: ae } = await supabase.from("advance_payments").insert(rows);
+          if (ae) throw new Error("המכתב נוצר, אך רישום המקדמות נכשל: " + ae.message);
+        }
+      }
+      await logAudit({ entity_type: "contract", entity_id: onboard.contractId, action: "onboarding_letter", notes: full.tenantName });
+      router.push("/letters?contract=" + onboard.contractId);
+    } catch (e: any) {
+      alert("שגיאה: " + (e?.message || e));
+      setOnboardSaving(false);
+    }
+  }
 
   // === Auto-calculate deposit ===
   const baseRent =
@@ -1089,6 +1149,10 @@ export default function ContractsNewPage() {
         payment_frequency: paymentFreq,
         payment_method: paymentMethod,
         first_charge_mode: (paymentMethod === "bank_transfer" || paymentMethod === "standing_order") ? firstChargeMode : null,
+        prepaid_first_month: prepaidOn || null,
+        prepaid_first_rent: prepaidOn ? (Number(prepaidRent) || baseRent || null) : null,
+        prepaid_first_mgmt: prepaidOn ? (Number(prepaidMgmt) || mgmtFeeMonthly || 0) : null,
+        prepaid_first_paid_at: prepaidOn ? (prepaidPaidAt || new Date().toISOString().slice(0, 10)) : null,
         payment_day: Number(paymentDay) || 1,
         early_termination_allowed: earlyTermination,
         termination_notice_days: earlyTermination ? Number(terminationNoticeDays) || 30 : null,
@@ -1431,7 +1495,29 @@ export default function ContractsNewPage() {
         action: "create",
         notes: tenants.find((t) => t.id === tenantId)?.name,
       });
-      router.push("/contracts");
+      // בסיום ההקמה: הצעת "מכתב דרישות" לשוכר (שיקים / ערבות / חודש ראשון
+      // ששולם / פרטי העברה) + ביצוע הפעולות בפועל — במקום ניווט מיידי.
+      var obTenant = tenants.find((t) => t.id === tenantId);
+      var obUnits = spaces.filter(function (s: any) { return selSpaces.indexOf(s.id) !== -1; })
+        .map(function (s: any) { return s.space_name; }).filter(Boolean).join(", ");
+      setOnboard({
+        contractId: contract.id,
+        params: {
+          tenantName: obTenant?.name || "",
+          unitsLabel: obUnits,
+          startDate: startDate,
+          paymentMethod: paymentMethod,
+          baseRent: baseRent,
+          mgmtMonthly: mgmtFeeMonthly,
+          vatPct: vatType === "taxable" ? currentVatPct : 0,
+          prepaidFirstMonth: prepaidOn,
+          prepaidRent: Number(prepaidRent) || baseRent,
+          prepaidMgmt: Number(prepaidMgmt) || mgmtFeeMonthly || 0,
+          guaranteeType: addGuarantee ? guaranteeType : null,
+          guaranteeAmount: Number(guaranteeAmt) || 0,
+          companyName: "",
+        },
+      });
     } catch (e: any) {
       alert("שגיאה: " + e?.message);
     } finally {
@@ -2196,6 +2282,39 @@ export default function ContractsNewPage() {
                     </option>
                   ))}
                 </select>
+              </div>
+              {/* תשלום חודש ראשון במעמד החתימה — ביטחון לקיום ההסכם */}
+              <div className="rounded-lg border border-teal-200 bg-teal-50/50 p-3 space-y-2">
+                <label className="flex items-start gap-2 text-xs text-slate-700">
+                  <input type="checkbox" checked={prepaidOn}
+                    onChange={(e) => {
+                      setPrepaidOn(e.target.checked);
+                      if (e.target.checked) {
+                        if (!prepaidRent && baseRent > 0) setPrepaidRent(String(Math.round(baseRent * 100) / 100));
+                        if (!prepaidMgmt && mgmtFeeMonthly > 0) setPrepaidMgmt(String(Math.round(mgmtFeeMonthly * 100) / 100));
+                        if (!prepaidPaidAt) setPrepaidPaidAt(new Date().toISOString().slice(0, 10));
+                      }
+                    }} className="rounded mt-0.5" />
+                  <span><b>💰 שולם במעמד החתימה שכ"ד + מקדמת ד"נ של החודש הראשון</b>
+                    <span className="block text-slate-500">ביטחון לקיום ההסכם. הסכום קבוע — לא תחול עליו הצמדה, והחודש הראשון לא יחויב שוב (לא בשיקים ולא בהעברה).</span>
+                  </span>
+                </label>
+                {prepaidOn && (
+                  <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <label className="mb-1 block text-[11px] font-semibold text-slate-700">שכ"ד (לפני מע"מ)</label>
+                      <input type="number" min="0" value={prepaidRent} onChange={(e) => setPrepaidRent(e.target.value)} className={ic} />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-[11px] font-semibold text-slate-700">מקדמת ד"נ (לפני מע"מ)</label>
+                      <input type="number" min="0" value={prepaidMgmt} onChange={(e) => setPrepaidMgmt(e.target.value)} className={ic} />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-[11px] font-semibold text-slate-700">שולם בתאריך</label>
+                      <input type="date" value={prepaidPaidAt} onChange={(e) => setPrepaidPaidAt(e.target.value)} className={ic} />
+                    </div>
+                  </div>
+                )}
               </div>
               {(paymentMethod === "bank_transfer" || paymentMethod === "standing_order") && (
                 <div>
@@ -4592,6 +4711,34 @@ export default function ContractsNewPage() {
             <div className="bg-white rounded-2xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
               <h3 className="text-lg font-bold text-slate-800 mb-4">נכס חדש</h3>
               <PropertyForm onSubmit={handleNewProperty} onCancel={() => setShowNewProperty(false)} />
+            </div>
+          </div>
+        )}
+
+        {/* מכתב דרישות בסיום ההקמה — המכתב וגם הפעולות (מקדמות שיקים וכו') */}
+        {onboard && (
+          <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-2xl p-6 w-full max-w-xl max-h-[90vh] overflow-y-auto" dir="rtl">
+              <h3 className="text-lg font-bold text-slate-800 mb-1">📋 החוזה נשמר — להפיק מכתב דרישות לשוכר?</h3>
+              <div className="text-xs text-slate-500 mb-3">
+                המכתב מפרט מה על השוכר להמציא, והמערכת גם תבצע את הפעולות בפועל
+                {onboard.params.paymentMethod === "checks_advance" ? " (רישום שיקי המקדמות עד סוף השנה במסך המקדמות)" : ""}.
+              </div>
+              <div className="space-y-1.5 mb-4">
+                {buildOnboardingBody(onboard.params).items.map(function (it, i) {
+                  return <div key={i} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700 leading-relaxed">{it}</div>;
+                })}
+              </div>
+              <div className="flex gap-2">
+                <button onClick={confirmOnboarding} disabled={onboardSaving}
+                  className="flex-1 rounded-xl bg-blue-700 py-2.5 text-sm font-bold text-white hover:bg-blue-800 disabled:opacity-50">
+                  {onboardSaving ? "יוצר..." : "📨 צור מכתב ובצע פעולות"}
+                </button>
+                <button onClick={function () { setOnboard(null); router.push("/contracts"); }} disabled={onboardSaving}
+                  className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm text-slate-600 hover:bg-slate-50">
+                  דלג
+                </button>
+              </div>
             </div>
           </div>
         )}
