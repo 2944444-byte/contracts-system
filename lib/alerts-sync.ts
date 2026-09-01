@@ -547,11 +547,31 @@ export async function runAlertSync(supabase: SupabaseClient): Promise<{ created:
   // 5. Charges in arrears — any unpaid charge past its due date (rent, CPI diff,
   //    mgmt, insurance, waste…). ONE alert per contract (count + total), so the
   //    screen shows "שכ\"ד בפיגור" per tenant without flooding a row per charge.
-  const { data: overdue } = await supabase.from("charges")
+  const { data: overdueRaw } = await supabase.from("charges")
     .select("id,contract_id,total_amount,due_date,charge_type,contracts!charges_contract_id_fkey(property_id,tenants(name))")
     .neq("status", "paid")
     .not("due_date", "is", null)
     .lt("due_date", todayStr);
+  // "בפיגור" לחיוב חוזי (שכ"ד/העברה/חניה) = תאריך היעד + ימי החסד של
+  // החברה (ברירת מחדל 30) — תאריך היעד שלו הוא מועד התשלום החוזי, וימי
+  // החסד הם חלון הסבלנות. חיובים אוטומטיים אחרים כבר מגלמים את החסד
+  // בתאריך היעד, ואצלם הפיגור נספר מתאריך היעד כרגיל (אותו כלל כמו
+  // במסך החיובים — isOverdueRow).
+  const CONTRACTUAL_TYPES = ["rent_transfer", "rent", "parking", "advance"];
+  const { data: gdProps } = await supabase.from("properties").select("id, companies(payment_grace_days)");
+  const graceByPropId: Record<string, number> = {};
+  ((gdProps ?? []) as any[]).forEach(function (p: any) {
+    const co = Array.isArray(p.companies) ? p.companies[0] : p.companies;
+    graceByPropId[p.id] = Number(co?.payment_grace_days) || 30;
+  });
+  const todayMs = new Date(todayStr + "T00:00:00").getTime();
+  const overdue = ((overdueRaw ?? []) as any[]).filter(function (ch: any) {
+    if (CONTRACTUAL_TYPES.indexOf(ch.charge_type) === -1) return true;
+    const grace = graceByPropId[ch.contracts?.property_id] ?? 30;
+    const due = new Date(String(ch.due_date).slice(0, 10) + "T00:00:00");
+    due.setDate(due.getDate() + grace);
+    return due.getTime() < todayMs;
+  });
   // A waived amount is not a debt. Without this the tenant kept being chased for
   // money the landlord decided to give up, and a fully-waived charge produced an
   // arrears alert that could never be satisfied.

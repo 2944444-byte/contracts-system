@@ -811,6 +811,25 @@ export default function PaymentsPage() {
   // Tenants who pay by transfer / standing order get no cheques — each month,
   // once the index is known, their figure is computed and lands here as a
   // charge, and 📧 on the row produces the notice letter with the breakdown.
+  // ימי החסד לתשלום לפי נכס (מחברת הבעלים) — לחישוב "באיחור" של חיובים חוזיים
+  const [graceByProperty, setGraceByProperty] = useState<Record<string, number>>({});
+  useEffect(function () {
+    (async function () {
+      try {
+        var [{ data: props }, { data: cos }] = await Promise.all([
+          supabase.from("properties").select("name, company_id"),
+          supabase.from("companies").select("id, payment_grace_days"),
+        ]);
+        var gd: Record<string, number> = {};
+        (props || []).forEach(function (p: any) {
+          var co = (cos || []).find(function (c: any) { return c.id === p.company_id; });
+          gd[p.name] = Number(co?.payment_grace_days) || 30;
+        });
+        setGraceByProperty(gd);
+      } catch (e) { /* בלי המפה — ברירת מחדל 30 בכל שורה */ }
+    })();
+  }, []);
+
   const [transferRunning, setTransferRunning] = useState(false);
   // סטטוס חיובי החודש הבא: כמה כבר נוצרו, מתי, וע"י מי (ידנית מהיומן /
   // אוטומטית מריצת הלילה) — כדי שמשתמש יראה מיד אם מישהו כבר לחץ.
@@ -910,12 +929,23 @@ export default function PaymentsPage() {
   }
 
   // Apply filters
+  // "באיחור (מעל ימי החסד)": חיוב חוזי (שכ"ד, העברה/ה"ק, חניה, שיקים)
+  // נחשב באיחור רק אחרי תאריך היעד + ימי החסד שהוגדרו לחברה (ברירת מחדל
+  // 30) — תאריך היעד שלו הוא מועד התשלום החוזי (ה-1 בחודש), והחסד הוא
+  // חלון הסבלנות שאחריו. חיובים אוטומטיים אחרים (ביטוח, הפרשי מדד וכו')
+  // כבר מגלמים את ימי החסד בתאריך היעד עצמו — אצלם אין לכפול את החסד.
+  const CONTRACTUAL_CHARGE_TYPES = ["rent_transfer", "rent", "parking", "advance"];
   function isOverdueRow(r: Row): boolean {
     if (r.status === "paid") return false;
     if (!r.dueDate) return false;
     var today = new Date();
     today.setHours(0, 0, 0, 0);
-    return new Date(r.dueDate) < today;
+    var due = new Date(r.dueDate);
+    due.setHours(0, 0, 0, 0);
+    if (CONTRACTUAL_CHARGE_TYPES.indexOf(r.chargeType) !== -1 || r.source === "rent_check") {
+      due.setDate(due.getDate() + (graceByProperty[r.propertyName] ?? 30));
+    }
+    return due < today;
   }
 
   const filtered = rows.filter(function(r) {

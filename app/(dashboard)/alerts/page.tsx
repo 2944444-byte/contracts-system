@@ -116,8 +116,23 @@ export default function AlertsPage() {
     // Total money in arrears — computed live from charges (the source), not
     // from alert titles.
     var todayStr = new Date().toISOString().split("T")[0];
-    const { data: od } = await supabase.from("charges").select("id, total_amount, status, contracts!charges_contract_id_fkey(property_id)").neq("status","paid").not("due_date","is",null).lt("due_date", todayStr);
+    const { data: od } = await supabase.from("charges").select("id, total_amount, status, due_date, charge_type, contracts!charges_contract_id_fkey(property_id)").neq("status","paid").not("due_date","is",null).lt("due_date", todayStr);
     var rows = scopeRows(od ?? [], scope, function(x: any){ return x.contracts?.property_id; });
+    // חיוב חוזי (שכ"ד/העברה/חניה) בפיגור רק אחרי תאריך היעד + ימי החסד של
+    // החברה — אותו כלל כמו במסך החיובים; חיובים אחרים מגלמים חסד ביעד.
+    try {
+      var CONTRACTUAL = ["rent_transfer", "rent", "parking", "advance"];
+      const { data: gdProps } = await supabase.from("properties").select("id, companies(payment_grace_days)");
+      var gMap: Record<string, number> = {};
+      (gdProps ?? []).forEach(function(p: any){ var co = Array.isArray(p.companies) ? p.companies[0] : p.companies; gMap[p.id] = Number(co?.payment_grace_days) || 30; });
+      var tMs = new Date(todayStr + "T00:00:00").getTime();
+      rows = rows.filter(function(x: any){
+        if (CONTRACTUAL.indexOf(x.charge_type) === -1) return true;
+        var d = new Date(String(x.due_date).slice(0, 10) + "T00:00:00");
+        d.setDate(d.getDate() + (gMap[x.contracts?.property_id] ?? 30));
+        return d.getTime() < tMs;
+      });
+    } catch (e) { /* בלי המפה — הכלל הישן */ }
     // Net of concessions — a waived charge is not arrears.
     var odIds = rows.map(function(x: any){ return x.id; });
     var concBy: Record<string, any[]> = {};
