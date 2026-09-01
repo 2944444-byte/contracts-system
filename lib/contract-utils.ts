@@ -673,6 +673,31 @@ export function buildPriceTimeline(params: {
         type: tier.increase_type,
       });
     });
+
+    // הזנב שאחרי המדרגה האחרונה: המחיר האחרון ממשיך עד תום התקופה
+    // הראשית. expandRecurringTiers פולט מדרגות עם to_year > from_year,
+    // כך שהמדרגה האחרונה נחתכה בגבול השנה שלה — וחוזה 5 שנים עם עלייה
+    // "עד שנה 4" הציג רק 4 שורות (שנה 5 נעלמה). החיוב תמיד המשיך נכון
+    // (לוח המדרגות שומר את המחיר האחרון) — הפער היה בתצוגה בלבד.
+    const lastMain = timeline[timeline.length - 1];
+    if (lastMain && lastMain.source === "main") {
+      const lastEnd = new Date(lastMain.endDate);
+      if (lastEnd < mainEndObj) {
+        const csMs = new Date(contractStart).getTime();
+        const yrsDone = Math.round((lastEnd.getTime() - csMs) / (365.25 * 86400000));
+        const totalYrs = Math.round((mainEndObj.getTime() - csMs) / (365.25 * 86400000));
+        const firstYear = yrsDone + 1;
+        timeline.push({
+          label: totalYrs <= firstYear ? `שנה ${firstYear}` : `שנים ${firstYear}-${totalYrs}`,
+          startDate: format(lastEnd, "yyyy-MM-dd"),
+          endDate: format(mainEndObj, "yyyy-MM-dd"),
+          rentPerSqm: lastMain.rentPerSqm,
+          fixedAmount: lastMain.fixedAmount,
+          source: "main",
+          type: "continuation",
+        });
+      }
+    }
   }
 
   // Options
