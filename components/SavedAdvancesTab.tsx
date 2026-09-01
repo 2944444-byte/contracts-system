@@ -196,17 +196,18 @@ export default function SavedAdvancesTab({ properties }: Props) {
   });
 
   // Group by contract → consolidate by check_date (one check per contract per date)
-  type CheckGroup = { date: string; period: string; ids: string[]; totalRent: number; totalMgmt: number; totalParking: number; totalBeforeVat: number; totalVat: number; total: number; status: string; clearingStatus: string; clearingDate: string; waived: boolean; chargeInterest: boolean; chargeCpiDiff: boolean; checkNumber: string; spaceNames: string[]; actualDate: string; actualAmount: number; interestPct: number };
+  type CheckGroup = { date: string; period: string; isDiff: boolean; ids: string[]; totalRent: number; totalMgmt: number; totalParking: number; totalBeforeVat: number; totalVat: number; total: number; status: string; clearingStatus: string; clearingDate: string; waived: boolean; chargeInterest: boolean; chargeCpiDiff: boolean; checkNumber: string; spaceNames: string[]; actualDate: string; actualAmount: number; interestPct: number };
   type ContractGroup = { contractId: string; tenantName: string; spaces: string[]; checks: CheckGroup[] };
   var byContract: Record<string, ContractGroup> = {};
   filtered.forEach(function (a) {
     var cid = a.contract_id;
     if (!byContract[cid]) byContract[cid] = { contractId: cid, tenantName: a.tenant_name || "—", spaces: [], checks: [] };
     if (a.space_name && byContract[cid].spaces.indexOf(a.space_name) === -1) byContract[cid].spaces.push(a.space_name);
-    var existing = byContract[cid].checks.find(function (c) { return c.date === a.check_date; });
+    // שיק הפרש בגין תוספת = שיק פיזי נפרד — לא מתאחד עם השיק המקורי של אותו תאריך
+    var existing = byContract[cid].checks.find(function (c) { return c.date === a.check_date && c.isDiff === !!a.addition_diff; });
     if (!existing) {
       existing = {
-        date: a.check_date, period: a.period, ids: [],
+        date: a.check_date, period: a.period, isDiff: !!a.addition_diff, ids: [],
         totalRent: 0, totalMgmt: 0, totalParking: 0,
         totalBeforeVat: 0, totalVat: 0, total: 0,
         status: a.status, checkNumber: a.check_number || "",
@@ -414,6 +415,7 @@ export default function SavedAdvancesTab({ properties }: Props) {
                         <tr key={editKey} className={rowClass}>
                           <td className="px-2 py-2 font-medium text-slate-700">
                             {c.period}
+                            {c.isDiff && <span className="block text-[10px] bg-amber-50 text-amber-700 border border-amber-200 rounded px-1 mt-0.5 w-fit" title="שיק נפרד שהשוכר מביא בגין תוספת להסכם — בנוסף לשיק המקורי של אותו חודש">🧩 שיק הפרש תוספת</span>}
                             {c.waived && <span className="block text-[10px] text-slate-500 mt-0.5">🤝 ויתור</span>}
                           </td>
                           <td className="px-2 py-2 text-slate-600">{fmtDate(c.date)}</td>

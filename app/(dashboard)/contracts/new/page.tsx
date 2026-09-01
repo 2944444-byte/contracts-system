@@ -519,6 +519,7 @@ export default function ContractsNewPage() {
               // תאריך הפירעון לפי יום התשלום שבהסכם — זהה למכתב
               check_date: r.iso,
               status: r.prepaid ? "paid" : "pending",
+              addition_diff: onboard!.amend ? true : null,
             };
           });
           var { error: ae } = await supabase.from("advance_payments").insert(rows);
@@ -4826,6 +4827,14 @@ export default function ContractsNewPage() {
                   : "המכתב מפרט מה על השוכר להמציא, והמערכת גם תבצע את הפעולות בפועל" +
                     (onboard.params.paymentMethod === "checks_advance" ? " (רישום שיקי המקדמות במסך המקדמות)" : "") + "."}
               </div>
+              {onboard.amend && (
+                <label className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50/50 px-3 py-2 mb-3 text-xs text-slate-700 cursor-pointer">
+                  <input type="checkbox" checked={!!onboard.params.guaranteeUpdateNote}
+                    onChange={function(e){ setOnboard({ ...onboard!, params: { ...onboard!.params, guaranteeUpdateNote: e.target.checked } }); }}
+                    className="rounded mt-0.5" />
+                  <span><b>🏛 לכלול בקשת עדכון ביטחונות בגין התוספת</b></span>
+                </label>
+              )}
               <div className="space-y-1.5 mb-4">
                 {(onboard.amend ? buildAmendmentDiffBody(onboard.params) : buildOnboardingBody(onboard.params)).items.map(function (it, i) {
                   return <div key={i} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700 leading-relaxed">{it}</div>;

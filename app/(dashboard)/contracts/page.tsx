@@ -193,6 +193,51 @@ export default function ContractsPage() {
   const [amendAddRents, setAmendAddRents] = useState<Record<string, string>>({});
   // מחיר יחידה שנוספה: "מחיר ההסכם" (ברירת המחדל — הרוב המכריע) או מחיר אחר
   const [amendPriceModeAdd, setAmendPriceModeAdd] = useState<Record<string, "contract" | "custom">>({});
+  // הצעת מכתב עדכון תשלומים אחרי שמירת תוספת — מודל מעוצב (כמו באשף)
+  const [amendLetterOffer, setAmendLetterOffer] = useState<any | null>(null);
+  const [amendLetterSaving, setAmendLetterSaving] = useState(false);
+
+  // אישור מכתב עדכון התשלומים לתוספת: יוצר את המכתב ורושם את שיקי
+  // ההפרשים (מסומנים addition_diff — שיק נפרד, לא מתאחד עם המקורי).
+  async function confirmAmendLetter() {
+    if (!amendLetterOffer) return;
+    setAmendLetterSaving(true);
+    try {
+      var off = amendLetterOffer;
+      var built = buildAmendmentDiffBody(off.params);
+      var { error: le } = await supabase.from("letters").insert({
+        contract_id: off.contractId, letter_type: "notice",
+        title: "עדכון תשלומים — תוספת להסכם — " + (off.params.tenantName || ""),
+        content_json: letterContent(built.body, off.ci, { kind: "amendment_diff_requirements", domain: "money" }),
+        status: "ready",
+      });
+      if (le) throw new Error(le.message);
+      if (off.params.paymentMethod === "checks_advance") {
+        var sched = chequeSchedule(off.params);
+        if (sched.length > 0) {
+          var rows = sched.map(function(r: any){ return {
+            contract_id: off.contractId, space_id: off.addSpaceId, property_id: off.propertyId,
+            tenant_name: off.params.tenantName || "—",
+            space_name: "הפרש תוספת — " + (off.params.unitsLabel || ""),
+            year: r.year, period: "חודש " + r.month,
+            base_rent: off.params.baseRent, indexed_rent: off.params.baseRent,
+            management_advance: off.params.mgmtMonthly,
+            total_before_vat: r.amount, vat_amount: r.vat, total_with_vat: r.total,
+            check_date: r.iso, status: "pending",
+            addition_diff: true,
+          };});
+          var { error: ae } = await supabase.from("advance_payments").insert(rows);
+          if (ae) throw new Error("המכתב נוצר, אך רישום השיקים נכשל: " + ae.message);
+        }
+      }
+      await logAudit({ entity_type: "contract", entity_id: off.contractId, action: "amendment_diff_letter", notes: off.params.tenantName });
+      setAmendLetterOffer(null);
+      router.push("/letters?contract=" + off.contractId);
+    } catch (e: any) {
+      alert("שגיאה: " + (e?.message || e));
+      setAmendLetterSaving(false);
+    }
+  }
   const [allPropertySpaces, setAllPropertySpaces] = useState<any[]>([]);
   // For extend period
   const [amendNewEndDate, setAmendNewEndDate] = useState("");
@@ -4162,11 +4207,7 @@ export default function ContractsPage() {
                           });
                           var obAddedMgmt = (Number(selContract.mgmt_fee_per_sqm) || 0) * obAddedArea;
                           var obMethod = selContract.payment_method || "checks_advance";
-                          if (obAddedRent + obAddedMgmt > 0.5 && confirm(
-                            "להפיק לשוכר מכתב עדכון תשלומים על התוספת (" + obNames.join(", ") + ")?\n" +
-                            (obMethod === "checks_advance"
-                              ? "המכתב יבקש רק את הפרשי השיקים על התוספת, והמערכת תרשום אותם במסך המקדמות."
-                              : "המכתב יודיע שהחיוב החודשי בהעברה/ה\"ק מתעדכן אוטומטית."))) {
+                          if (obAddedRent + obAddedMgmt > 0.5) {
                             var obVatPct = 0;
                             if (selContract.vat_type === "taxable") {
                               try { obVatPct = Math.round(vatPctAt(await getVatRates(), amendDate) * 100); } catch (e) { obVatPct = 18; }
@@ -4177,47 +4218,28 @@ export default function ContractsPage() {
                             var obHorizon = (obAdvMax && obAdvMax[0] && String(obAdvMax[0].check_date) > amendDate)
                               ? String(obAdvMax[0].check_date).slice(0, 10) : null;
                             var obCi = await loadCompanyInfo(selContract.property_id);
-                            var obParams: any = {
-                              tenantName: selContract.tenants?.name || "",
-                              unitsLabel: obNames.join(", "),
-                              startDate: amendDate,
-                              paymentMethod: obMethod,
-                              baseRent: obAddedRent, mgmtMonthly: obAddedMgmt, vatPct: obVatPct,
-                              prepaidFirstMonth: false, prepaidRent: 0, prepaidMgmt: 0,
-                              guaranteeUpdateNote: ((selContract.guarantees || []) as any[]).some(function(g: any){ return (Number(g?.amount_actual) || Number(g?.amount_required) || 0) > 0; }),
-                              horizonEnd: obHorizon, noYearExtension: true,
-                              paymentDay: Number(selContract.payment_day) || 1,
-                              companyName: obCi.companyName || "",
-                            };
-                            var obBuilt = buildAmendmentDiffBody(obParams);
-                            await supabase.from("letters").insert({
-                              contract_id: selContract.id, letter_type: "notice",
-                              title: "עדכון תשלומים — תוספת להסכם — " + (selContract.tenants?.name || ""),
-                              content_json: letterContent(obBuilt.body, obCi, { kind: "amendment_diff_requirements", domain: "money" }),
-                              status: "ready",
+                            setAmendLetterOffer({
+                              ci: obCi,
+                              contractId: selContract.id,
+                              propertyId: selContract.property_id,
+                              addSpaceId: amendAddSpaces[0],
+                              params: {
+                                tenantName: selContract.tenants?.name || "",
+                                unitsLabel: obNames.join(", "),
+                                startDate: amendDate,
+                                paymentMethod: obMethod,
+                                baseRent: obAddedRent, mgmtMonthly: obAddedMgmt, vatPct: obVatPct,
+                                prepaidFirstMonth: false, prepaidRent: 0, prepaidMgmt: 0,
+                                guaranteeUpdateNote: ((selContract.guarantees || []) as any[]).some(function(g: any){ return (Number(g?.amount_actual) || Number(g?.amount_required) || 0) > 0; }),
+                                horizonEnd: obHorizon, noYearExtension: true,
+                                paymentDay: Number(selContract.payment_day) || 1,
+                                companyName: obCi.companyName || "",
+                              },
                             });
-                            if (obMethod === "checks_advance") {
-                              var obSched = chequeSchedule(obParams);
-                              if (obSched.length > 0) {
-                                var obRows = obSched.map(function(r: any){ return {
-                                  contract_id: selContract.id, space_id: amendAddSpaces[0], property_id: selContract.property_id,
-                                  tenant_name: selContract.tenants?.name || "—",
-                                  space_name: "הפרש תוספת — " + obNames.join(", "),
-                                  year: r.year, period: "חודש " + r.month,
-                                  base_rent: obAddedRent, indexed_rent: obAddedRent,
-                                  management_advance: obAddedMgmt,
-                                  total_before_vat: r.amount, vat_amount: r.vat, total_with_vat: r.total,
-                                  check_date: r.iso, status: "pending",
-                                };});
-                                await supabase.from("advance_payments").insert(obRows);
-                              }
-                            }
-                            alert("📨 מכתב עדכון התשלומים נוצר במסך המכתבים" +
-                              (obMethod === "checks_advance" ? ", ושיקי ההפרשים נרשמו במסך המקדמות." : "."));
                           }
                         }
                       } catch (obErr: any) {
-                        alert("התוספת נשמרה, אך יצירת מכתב ההפרשים נכשלה: " + (obErr?.message || obErr));
+                        alert("התוספת נשמרה, אך הכנת מכתב ההפרשים נכשלה: " + (obErr?.message || obErr));
                       }
 
                       setShowAmendModal(false);
@@ -4233,6 +4255,44 @@ export default function ContractsPage() {
                   </button>
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* מכתב עדכון תשלומים אחרי תוספת — אותה גרפיקה כמו מודל הדרישות באשף */}
+      {amendLetterOffer && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+          onMouseDown={function(e){ if (e.target !== e.currentTarget) return; setAmendLetterOffer(null); }}>
+          <div className="bg-white rounded-2xl p-6 w-full max-w-xl max-h-[90vh] overflow-y-auto" dir="rtl">
+            <h3 className="text-lg font-bold text-slate-800 mb-1">📋 התוספת נשמרה — להפיק מכתב עדכון תשלומים לשוכר?</h3>
+            <div className="text-xs text-slate-500 mb-3">
+              {amendLetterOffer.params.paymentMethod === "checks_advance"
+                ? "המכתב מבקש רק את הפרשי השיקים על התוספת, והמערכת רושמת אותם במסך המקדמות כשיקים נפרדים."
+                : "המכתב מודיע שהחיוב החודשי בהעברה/ה\"ק מתעדכן אוטומטית."}
+            </div>
+            <label className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50/50 px-3 py-2 mb-3 text-xs text-slate-700 cursor-pointer">
+              <input type="checkbox" checked={!!amendLetterOffer.params.guaranteeUpdateNote}
+                onChange={function(e){ setAmendLetterOffer({ ...amendLetterOffer, params: { ...amendLetterOffer.params, guaranteeUpdateNote: e.target.checked } }); }}
+                className="rounded mt-0.5" />
+              <span><b>🏛 לכלול בקשת עדכון ביטחונות בגין התוספת</b>
+                <span className="block text-slate-500">יתווסף סעיף המבקש לעדכן את סכום הבטוחה בהתאם לשכר הדירה המעודכן.</span>
+              </span>
+            </label>
+            <div className="space-y-1.5 mb-4">
+              {buildAmendmentDiffBody(amendLetterOffer.params).items.map(function (it: string, i: number) {
+                return <div key={i} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700 leading-relaxed">{it}</div>;
+              })}
+            </div>
+            <div className="flex gap-2">
+              <button onClick={confirmAmendLetter} disabled={amendLetterSaving}
+                className="flex-1 rounded-xl bg-blue-700 py-2.5 text-sm font-bold text-white hover:bg-blue-800 disabled:opacity-50">
+                {amendLetterSaving ? "יוצר..." : "📨 צור מכתב ובצע פעולות"}
+              </button>
+              <button onClick={function(){ setAmendLetterOffer(null); }} disabled={amendLetterSaving}
+                className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm text-slate-600 hover:bg-slate-50">
+                דלג
+              </button>
             </div>
           </div>
         </div>
