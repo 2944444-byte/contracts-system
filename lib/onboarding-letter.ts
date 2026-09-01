@@ -30,9 +30,16 @@ export interface OnboardingParams {
   // שמתחיל אחרי ספטמבר) אינה חלה על תוספות.
   horizonEnd?: string | null;
   noYearExtension?: boolean;
+  // יום התשלום שנקבע בהסכם (payment_day) — תאריך הפירעון של כל שיק
+  paymentDay?: number;
+  // פירוט חישוב הסכום (כמו במכתבי המקדמות): שכ"ד למ"ר × שטח, ד"נ למ"ר
+  rentPerSqm?: number;
+  areaSqm?: number;
+  investAdd?: number;
+  mgmtPerSqm?: number;
 }
 
-export interface ChequeRow { year: number; month: number; label: string; amount: number; vat: number; total: number; prepaid: boolean; }
+export interface ChequeRow { year: number; month: number; label: string; iso: string; dateLabel: string; amount: number; vat: number; total: number; prepaid: boolean; }
 
 const HE_MONTHS = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
 function fmt(n: number): string { return "₪" + (Math.round(n * 100) / 100).toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -67,13 +74,43 @@ export function chequeSchedule(p: OnboardingParams): ChequeRow[] {
     const mgmt = first && p.prepaidFirstMonth ? (p.prepaidMgmt || p.mgmtMonthly) : p.mgmtMonthly;
     const beforeVat = rent + mgmt;
     const vat = beforeVat * (p.vatPct / 100);
+    // תאריך הפירעון: יום התשלום שבהסכם, מוצמד לאורך החודש (31 → 28/30)
+    const lastDay = new Date(mm.y, mm.m + 1, 0).getDate();
+    const day = Math.min(Math.max(1, Number(p.paymentDay) || 1), lastDay);
+    const iso = mm.y + "-" + String(mm.m + 1).padStart(2, "0") + "-" + String(day).padStart(2, "0");
     return {
       year: mm.y, month: mm.m + 1,
       label: HE_MONTHS[mm.m] + " " + mm.y,
+      iso: iso,
+      dateLabel: day + "." + (mm.m + 1) + "." + mm.y,
       amount: beforeVat, vat: vat, total: beforeVat + vat,
       prepaid: first && p.prepaidFirstMonth,
     };
   });
+}
+
+// פירוט חישוב הסכום החודשי — כמו במכתבי המקדמות: כל רכיב בשורה משלו.
+function breakdownLines(p: OnboardingParams): string[] {
+  const lines: string[] = [];
+  const perSqm = Number(p.rentPerSqm) || 0;
+  const area = Number(p.areaSqm) || 0;
+  if (perSqm > 0 && area > 0) {
+    lines.push("שכ\"ד: " + fmt(perSqm) + " למ\"ר × " + area.toLocaleString("he-IL") + " מ\"ר = " + fmt(perSqm * area));
+    if ((Number(p.investAdd) || 0) > 0) lines.push("תוספת השקעות בינוי: " + fmt(Number(p.investAdd) || 0));
+  } else if (p.baseRent > 0) {
+    lines.push("שכ\"ד חודשי: " + fmt(p.baseRent));
+  }
+  if (p.mgmtMonthly > 0) {
+    const mps = Number(p.mgmtPerSqm) || 0;
+    lines.push("מקדמת דמי ניהול: " + (mps > 0 && area > 0 ? fmt(mps) + " למ\"ר × " + area.toLocaleString("he-IL") + " מ\"ר = " : "") + fmt(p.mgmtMonthly));
+  }
+  const beforeVat = p.baseRent + p.mgmtMonthly;
+  if (p.vatPct > 0) {
+    lines.push("סה\"כ לפני מע\"מ: " + fmt(beforeVat));
+    lines.push("מע\"מ " + p.vatPct + "%: " + fmt(beforeVat * (p.vatPct / 100)));
+  }
+  lines.push("סה\"כ לחודש: " + fmt(beforeVat * (1 + p.vatPct / 100)));
+  return lines;
 }
 
 // גוף מכתב הדרישות — פורמלי אך לא משפטני, נבנה סעיף-סעיף לפי מה שקיים.
@@ -110,9 +147,11 @@ export function buildOnboardingBody(p: OnboardingParams): { body: string; items:
     if (future.length > 0) {
       const line = future.length + " שיקים מראש לחודשים " + future[0].label + " – " + future[future.length - 1].label +
         ", כל אחד על סך " + fmt(future[0].total) + (p.vatPct > 0 ? " (כולל מע\"מ)" : "") +
-        ", לפקודת " + (p.companyName || "המשכירה") + ", זמן פירעון 1 לכל חודש.";
+        ", לפקודת " + (p.companyName || "המשכירה") + ".";
       body += n++ + ". " + line + "\n";
-      body += future.map(function (r) { return "   • " + r.label + " — " + fmt(r.total); }).join("\n") + "\n";
+      body += future.map(function (r) { return "   • שיק לתאריך " + r.dateLabel + " (" + r.label + ") — " + fmt(r.total); }).join("\n") + "\n";
+      body += "   פירוט חישוב הסכום החודשי:\n";
+      body += breakdownLines(p).map(function (l) { return "   " + l; }).join("\n") + "\n";
       body += "   הסכומים לפי שכר הדירה הבסיסי; הפרשי הצמדה יחויבו בנפרד על פי ההסכם.\n\n";
       items.push("📝 " + line);
     }
@@ -131,7 +170,8 @@ export function buildOnboardingBody(p: OnboardingParams): { body: string; items:
       : p.guaranteeType === "cash" ? "פיקדון כספי"
       : p.guaranteeType === "promissory_note" ? "שטר חוב"
       : "בטוחה";
-    const line = "המצאת " + gt + " על סך " + fmt(p.guaranteeAmount || 0) + " בהתאם להוראות ההסכם.";
+    const line = "המצאת " + gt + " על סך " + fmt(p.guaranteeAmount || 0) +
+      (p.guaranteeType === "bank" ? ", בנוסח נספח הערבות המצורף להסכם," : "") + " בהתאם להוראות ההסכם.";
     body += n++ + ". " + line + "\n\n";
     items.push("🏛 " + line);
   }
@@ -140,7 +180,7 @@ export function buildOnboardingBody(p: OnboardingParams): { body: string; items:
   body += n++ + ". " + insLine + "\n\n";
   items.push("🛡 " + insLine);
 
-  body += "נודה להמצאת המפורט לעיל בתוך 7 ימים ממועד החתימה.\n\n";
+  body += "נבקשכם להמציא את המפורט לעיל במעמד חתימת ההסכם.\n\n";
   body += "בכבוד רב ובברכה,\n\n" + (p.companyName || "הנהלת הנכס");
   return { body: body, items: items };
 }
@@ -170,7 +210,9 @@ export function buildAmendmentDiffBody(p: OnboardingParams): { body: string; ite
       ", כל אחד על סך " + fmt(sched[0].total) + (p.vatPct > 0 ? " (כולל מע\"מ)" : "") +
       ", לפקודת " + (p.companyName || "המשכירה") + ".";
     body += n++ + ". " + line + "\n";
-    body += sched.map(function (r) { return "   • " + r.label + " — " + fmt(r.total); }).join("\n") + "\n\n";
+    body += sched.map(function (r) { return "   • שיק לתאריך " + r.dateLabel + " (" + r.label + ") — " + fmt(r.total); }).join("\n") + "\n";
+    body += "   פירוט חישוב סכום ההפרש החודשי:\n";
+    body += breakdownLines(p).map(function (l) { return "   " + l; }).join("\n") + "\n\n";
     items.push("📝 " + line);
   }
 
@@ -187,7 +229,7 @@ export function buildAmendmentDiffBody(p: OnboardingParams): { body: string; ite
     items.push("🏛 " + line);
   }
 
-  body += "נודה להסדרת האמור בתוך 7 ימים.\n\n";
+  body += "נבקשכם להסדיר את האמור במעמד חתימת התוספת.\n\n";
   body += "בכבוד רב ובברכה,\n\n" + (p.companyName || "הנהלת הנכס");
   return { body: body, items: items };
 }

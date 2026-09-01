@@ -512,7 +512,8 @@ export default function ContractsNewPage() {
               base_rent: rentPart, indexed_rent: rentPart,
               management_advance: Math.max(0, r.amount - rentPart),
               total_before_vat: r.amount, vat_amount: r.vat, total_with_vat: r.total,
-              check_date: r.year + "-" + String(r.month).padStart(2, "0") + "-01",
+              // תאריך הפירעון לפי יום התשלום שבהסכם — זהה למכתב
+              check_date: r.iso,
               status: r.prepaid ? "paid" : "pending",
             };
           });
@@ -1545,6 +1546,8 @@ export default function ContractsNewPage() {
               baseRent: diffRent,
               mgmtMonthly: diffMgmt,
               vatPct: vatType === "taxable" ? currentVatPct : 0,
+              // בתוספת אין פירוט למ"ר — הסכומים הם הפרשים; תאריך השיק לפי ההסכם
+              paymentDay: Number(amendmentParent.payment_day) || Number(paymentDay) || 1,
               prepaidFirstMonth: false, prepaidRent: 0, prepaidMgmt: 0,
               guaranteeUpdateNote: ((amendmentParent.guarantees || []) as any[]).some(function (g: any) {
                 return (Number(g?.amount_actual) || Number(g?.amount_required) || 0) > 0;
@@ -1567,6 +1570,11 @@ export default function ContractsNewPage() {
           baseRent: baseRent,
           mgmtMonthly: mgmtFeeMonthly,
           vatPct: vatType === "taxable" ? currentVatPct : 0,
+          paymentDay: Number(paymentDay) || 1,
+          rentPerSqm: Number(rentPerSqm) || 0,
+          areaSqm: Number(chargedArea) || 0,
+          investAdd: Number(investAdd) || 0,
+          mgmtPerSqm: Number(mgmtFeePct) || 0,
           prepaidFirstMonth: prepaidOn,
           prepaidRent: Number(prepaidRent) || baseRent,
           prepaidMgmt: Number(prepaidMgmt) || mgmtFeeMonthly || 0,
