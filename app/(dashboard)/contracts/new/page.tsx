@@ -11,7 +11,8 @@ import { supabase } from "@/lib/supabase";
 import { authHeaders } from '@/lib/api-auth-client';
 import { getScopeIds, getCompanyScopeIds, getTenantScopeIds, scopeRows, scopeGroups } from '@/lib/permissions';
 import { logAudit } from "@/lib/audit-log";
-import { buildOnboardingBody, chequeSchedule, type OnboardingParams } from "@/lib/onboarding-letter";
+import { buildOnboardingBody, buildAmendmentDiffBody, chequeSchedule, type OnboardingParams } from "@/lib/onboarding-letter";
+import { spaceMonthlyBase } from "@/lib/space-billing";
 import { loadCompanyInfo, letterContent } from "@/lib/letter-format";
 import { getVatRates, vatPctAt } from "@/lib/vat";
 import {
@@ -253,8 +254,9 @@ export default function ContractsNewPage() {
   const [prepaidRent, setPrepaidRent] = useState("");
   const [prepaidMgmt, setPrepaidMgmt] = useState("");
   const [prepaidPaidAt, setPrepaidPaidAt] = useState("");
-  // מודל "מכתב דרישות" בסיום ההקמה — נפתח אחרי שמירה מוצלחת
-  const [onboard, setOnboard] = useState<{ contractId: string; params: OnboardingParams } | null>(null);
+  // מודל "מכתב דרישות" בסיום ההקמה — נפתח אחרי שמירה מוצלחת.
+  // amend=true: מכתב הפרשים לתוספת (params מחזיק את סכומי ההפרש).
+  const [onboard, setOnboard] = useState<{ contractId: string; amend?: boolean; params: OnboardingParams } | null>(null);
   const [onboardSaving, setOnboardSaving] = useState(false);
   // חיוב ראשון בהעברה/ה"ק: שארית+תקופה יחד (ברירת מחדל) או שארית בנפרד.
   const [firstChargeMode, setFirstChargeMode] = useState("stub_plus_period");
@@ -477,12 +479,12 @@ export default function ContractsNewPage() {
     try {
       var ci = await loadCompanyInfo(propertyId);
       var full = { ...onboard.params, companyName: ci.companyName || "", bankLine: ci.bankLine || "" };
-      var built = buildOnboardingBody(full);
+      var built = onboard.amend ? buildAmendmentDiffBody(full) : buildOnboardingBody(full);
       var { error: le } = await supabase.from("letters").insert({
         contract_id: onboard.contractId,
         letter_type: "notice",
-        title: "השלמת מסמכים ותשלומים — " + (full.tenantName || ""),
-        content_json: letterContent(built.body, ci, { kind: "onboarding_requirements", domain: "money" }),
+        title: (onboard.amend ? "עדכון תשלומים — תוספת להסכם — " : "השלמת מסמכים ותשלומים — ") + (full.tenantName || ""),
+        content_json: letterContent(built.body, ci, { kind: onboard.amend ? "amendment_diff_requirements" : "onboarding_requirements", domain: "money" }),
         status: "ready",
       });
       if (le) throw new Error(le.message);
@@ -490,14 +492,22 @@ export default function ContractsNewPage() {
       // כשמועד התחילה ייקבע בפועל; התשלום ששולם בחתימה רשום על החוזה
       // והמנוע יצמיד אותו לחודש הראשון האמיתי כשיגיע.
       if (full.paymentMethod === "checks_advance" && !full.milestonePending) {
-        var sched = chequeSchedule(full);
-        var firstSpace = spaces.find(function (s: any) { return selSpaces.indexOf(s.id) !== -1; });
+        var sched = chequeSchedule(onboard.amend ? { ...full, prepaidFirstMonth: false } : full);
+        // בתוספת: השורות נרשמות על היחידה שנוספה (זיהוי ההפרש); בחוזה חדש —
+        // על היחידה הראשונה שנבחרה.
+        var parentIds: string[] = onboard.amend && amendmentParent
+          ? ((amendmentParent.contract_spaces || []) as any[]).map(function (cs: any) { return cs.space_id; })
+          : [];
+        var firstSpace = spaces.find(function (s: any) {
+          return selSpaces.indexOf(s.id) !== -1 && (!onboard!.amend || parentIds.indexOf(s.id) === -1);
+        }) || spaces.find(function (s: any) { return selSpaces.indexOf(s.id) !== -1; });
         if (sched.length > 0 && firstSpace) {
           var rows = sched.map(function (r) {
             var rentPart = r.prepaid ? full.prepaidRent : full.baseRent;
             return {
               contract_id: onboard!.contractId, space_id: firstSpace.id, property_id: propertyId,
-              tenant_name: full.tenantName || "—", space_name: full.unitsLabel || firstSpace.space_name || "—",
+              tenant_name: full.tenantName || "—",
+              space_name: (onboard!.amend ? "הפרש תוספת — " : "") + (full.unitsLabel || firstSpace.space_name || "—"),
               year: r.year, period: "חודש " + r.month,
               base_rent: rentPart, indexed_rent: rentPart,
               management_advance: Math.max(0, r.amount - rentPart),
@@ -1503,6 +1513,50 @@ export default function ContractsNewPage() {
       var obTenant = tenants.find((t) => t.id === tenantId);
       var obUnits = spaces.filter(function (s: any) { return selSpaces.indexOf(s.id) !== -1; })
         .map(function (s: any) { return s.space_name; }).filter(Boolean).join(", ");
+      if (amendmentOfId && amendmentParent) {
+        // תוספת להסכם: מחשבים את ההפרש החודשי מול הבסיס — ומציעים מכתב
+        // הפרשים (רק אם התוספת אכן מגדילה את התשלום).
+        var parentMonthly = ((amendmentParent.contract_spaces || []) as any[]).reduce(function (s: number, cs: any) {
+          return s + spaceMonthlyBase(cs, Number(amendmentParent.rent_per_sqm) || 0);
+        }, 0) + (Number(amendmentParent.investment_addition) || 0);
+        var parentMgmt = (Number(amendmentParent.mgmt_fee_per_sqm) || 0) * (Number(amendmentParent.charged_area) || 0);
+        var diffRent = Math.max(0, baseRent - parentMonthly);
+        var diffMgmt = Math.max(0, mgmtFeeMonthly - parentMgmt);
+        var parentSpaceIds = ((amendmentParent.contract_spaces || []) as any[]).map(function (cs: any) { return cs.space_id; });
+        var addedUnits = spaces.filter(function (s: any) { return selSpaces.indexOf(s.id) !== -1 && parentSpaceIds.indexOf(s.id) === -1; })
+          .map(function (s: any) { return s.space_name; }).filter(Boolean).join(", ");
+        if (diffRent + diffMgmt > 0.5) {
+          // אופק ההפרשים = השיק האחרון שכבר נרשם לחוזה הבסיס (אם קיים) —
+          // מבקשים הפרשים בדיוק לתקופה שהשוכר כבר כיסה בשיקים.
+          var { data: advMax } = await supabase.from("advance_payments")
+            .select("check_date").eq("contract_id", amendmentOfId)
+            .order("check_date", { ascending: false }).limit(1);
+          var horizonEnd = (advMax && advMax[0] && String(advMax[0].check_date) > startDate) ? String(advMax[0].check_date).slice(0, 10) : null;
+          setOnboard({
+            contractId: amendmentOfId,
+            amend: true,
+            params: {
+              horizonEnd: horizonEnd,
+              noYearExtension: true,
+              tenantName: obTenant?.name || amendmentParent.tenants?.name || "",
+              unitsLabel: addedUnits,
+              startDate: startDate,
+              paymentMethod: amendmentParent.payment_method || paymentMethod,
+              baseRent: diffRent,
+              mgmtMonthly: diffMgmt,
+              vatPct: vatType === "taxable" ? currentVatPct : 0,
+              prepaidFirstMonth: false, prepaidRent: 0, prepaidMgmt: 0,
+              guaranteeUpdateNote: ((amendmentParent.guarantees || []) as any[]).some(function (g: any) {
+                return (Number(g?.amount_actual) || Number(g?.amount_required) || 0) > 0;
+              }),
+              companyName: "",
+            },
+          });
+          return;
+        }
+        router.push("/contracts");
+        return;
+      }
       setOnboard({
         contractId: contract.id,
         params: {
@@ -4726,13 +4780,17 @@ export default function ContractsNewPage() {
         {onboard && (
           <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
             <div className="bg-white rounded-2xl p-6 w-full max-w-xl max-h-[90vh] overflow-y-auto" dir="rtl">
-              <h3 className="text-lg font-bold text-slate-800 mb-1">📋 החוזה נשמר — להפיק מכתב דרישות לשוכר?</h3>
+              <h3 className="text-lg font-bold text-slate-800 mb-1">
+                {onboard.amend ? "📋 התוספת נשמרה — להפיק מכתב עדכון תשלומים לשוכר?" : "📋 החוזה נשמר — להפיק מכתב דרישות לשוכר?"}
+              </h3>
               <div className="text-xs text-slate-500 mb-3">
-                המכתב מפרט מה על השוכר להמציא, והמערכת גם תבצע את הפעולות בפועל
-                {onboard.params.paymentMethod === "checks_advance" ? " (רישום שיקי המקדמות עד סוף השנה במסך המקדמות)" : ""}.
+                {onboard.amend
+                  ? "המכתב מבקש רק את הפרשי השיקים על התוספת (או מודיע על עדכון החיוב למשלמי העברה), והמערכת גם רושמת את שורות ההפרשים במסך המקדמות."
+                  : "המכתב מפרט מה על השוכר להמציא, והמערכת גם תבצע את הפעולות בפועל" +
+                    (onboard.params.paymentMethod === "checks_advance" ? " (רישום שיקי המקדמות במסך המקדמות)" : "") + "."}
               </div>
               <div className="space-y-1.5 mb-4">
-                {buildOnboardingBody(onboard.params).items.map(function (it, i) {
+                {(onboard.amend ? buildAmendmentDiffBody(onboard.params) : buildOnboardingBody(onboard.params)).items.map(function (it, i) {
                   return <div key={i} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700 leading-relaxed">{it}</div>;
                 })}
               </div>

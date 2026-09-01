@@ -586,6 +586,60 @@ export async function runAlertSync(supabase: SupabaseClient): Promise<{ created:
     });
   }
 
+  // 9. מעקב אחרי מכתב הדרישות מסיום ההקמה (משלמי שיקים): אם עברו 7 ימים
+  //    ולא נרשמו שיקי מקדמות — התראה; וכשתחילה תלוית-אבן-דרך נקבעה בפועל
+  //    אך שיקים עדיין לא נרשמו — התראה שמזכירה לרשום ולעדכן את השוכר.
+  //    נסגרת מעצמה כשנרשמו שורות מקדמות לחוזה.
+  {
+    const { data: obLetters } = await supabase.from("letters")
+      .select("contract_id, created_at, content_json").not("contract_id", "is", null)
+      .gte("created_at", new Date(Date.now() - 90 * 86400000).toISOString());
+    const obByContract: Record<string, string> = {};   // contract → מועד המכתב האחרון
+    for (const l of ((obLetters ?? []) as any[])) {
+      let cj: any = l.content_json;
+      if (typeof cj === "string") { try { cj = JSON.parse(cj); } catch (e) { cj = {}; } }
+      if (cj?.kind !== "onboarding_requirements" && cj?.kind !== "amendment_diff_requirements") continue;
+      if (!obByContract[l.contract_id] || l.created_at > obByContract[l.contract_id]) obByContract[l.contract_id] = l.created_at;
+    }
+    const obIds = Object.keys(obByContract);
+    if (obIds.length > 0) {
+      const { data: obContracts } = await supabase.from("contracts")
+        .select("id, payment_method, status, term_starts_at, actual_handover_date, actual_opening_date, property_id, tenant_id, tenants(name)")
+        .in("id", obIds).in("status", ["active", "expiring", "extended", "upcoming", "future"])
+        .eq("payment_method", "checks_advance");
+      for (const c of ((obContracts ?? []) as any[])) {
+        const { count: advCount } = await supabase.from("advance_payments")
+          .select("id", { count: "exact", head: true }).eq("contract_id", c.id);
+        const fulfilled = (advCount ?? 0) > 0;
+        if (fulfilled) {
+          // הדרישה הושלמה — סגירת התראה פתוחה אם קיימת
+          await supabase.from("alerts").update({ is_resolved: true, resolved_at: new Date().toISOString() })
+            .eq("entity_id", c.id).eq("entity_type", "onboarding").eq("is_resolved", false);
+          continue;
+        }
+        const milestonePending = c.term_starts_at === "handover" ? !c.actual_handover_date
+          : c.term_starts_at === "opening" ? !c.actual_opening_date : false;
+        const tName = c.tenants?.name ?? "";
+        if (milestonePending) continue;   // ממתינים לאבן הדרך — אין מה לרשום עדיין
+        const milestoneJustSet = c.term_starts_at === "handover" || c.term_starts_at === "opening";
+        const letterAgeDays = Math.floor((Date.now() - new Date(obByContract[c.id]).getTime()) / 86400000);
+        if (!milestoneJustSet && letterAgeDays < 7) continue;   // עוד בתוך חלון 7 הימים מהמכתב
+        if (await hasOpen(c.id, "onboarding")) continue;
+        await add({
+          title: milestoneJustSet
+            ? "נקבע מועד תחילת השכירות — יש לרשום שיקי מקדמות ולעדכן את השוכר: " + tName
+            : "דרישות הפתיחה טרם הושלמו — לא נרשמו שיקי מקדמות: " + tName,
+          message: milestoneJustSet
+            ? "תחילת השכירות נקבעה בפועל. יש לרשום את שיקי המקדמות במסך המקדמות ולשלוח לשוכר את פירוט הסכומים והמועדים (כפי שהובטח במכתב הדרישות)."
+            : "חלפו " + letterAgeDays + " ימים ממכתב הדרישות ולא נרשמו שיקי מקדמות לחוזה. בדוק אם השיקים התקבלו ורשום אותם, או שלח תזכורת לשוכר.",
+          severity: "warning", alert_type: "onboarding_pending",
+          entity_type: "onboarding", entity_id: c.id,
+          contract_id: c.id, property_id: c.property_id ?? null, tenant_id: c.tenant_id ?? null,
+        });
+      }
+    }
+  }
+
   return { created, resolved, newAlerts };
 }
 

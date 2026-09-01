@@ -23,6 +23,13 @@ export interface OnboardingParams {
   // לוח השיקים לא נקבע מראש — יומצא עם קביעת המועד בפועל.
   milestonePending?: boolean;
   milestoneLabel?: string;       // "מסירת החזקה" / "פתיחת המושכר"
+  // מכתב הפרשים לתוספת: כשקיימת בטוחה שנגזרת מחודשי שכירות — לבקש עדכון
+  guaranteeUpdateNote?: boolean;
+  // תוספת להסכם: הפרשי השיקים מיושרים לאופק השיקים שכבר נמסרו —
+  // horizonEnd = check_date האחרון הקיים; והרחבת השנה העוקבת (חוזה חדש
+  // שמתחיל אחרי ספטמבר) אינה חלה על תוספות.
+  horizonEnd?: string | null;
+  noYearExtension?: boolean;
 }
 
 export interface ChequeRow { year: number; month: number; label: string; amount: number; vat: number; total: number; prepaid: boolean; }
@@ -40,9 +47,19 @@ export function chequeSchedule(p: OnboardingParams): ChequeRow[] {
   if (isNaN(start.getTime())) return [];
   const startYear = start.getFullYear();
   const months: { y: number; m: number }[] = [];
-  for (let m = start.getMonth(); m <= 11; m++) months.push({ y: startYear, m: m });
-  if (start.getMonth() >= 9) {
-    for (let m = 0; m <= 11; m++) months.push({ y: startYear + 1, m: m });
+  if (p.horizonEnd) {
+    // יישור לאופק נתון (הפרשי תוספת מול שיקים שכבר נמסרו)
+    const h = new Date(String(p.horizonEnd).slice(0, 10) + "T00:00:00");
+    let y = startYear, m = start.getMonth();
+    while (y < h.getFullYear() || (y === h.getFullYear() && m <= h.getMonth())) {
+      months.push({ y: y, m: m });
+      m++; if (m > 11) { m = 0; y++; }
+    }
+  } else {
+    for (let m = start.getMonth(); m <= 11; m++) months.push({ y: startYear, m: m });
+    if (start.getMonth() >= 9 && !p.noYearExtension) {
+      for (let m = 0; m <= 11; m++) months.push({ y: startYear + 1, m: m });
+    }
   }
   return months.map(function (mm, i) {
     const first = i === 0;
@@ -124,6 +141,53 @@ export function buildOnboardingBody(p: OnboardingParams): { body: string; items:
   items.push("🛡 " + insLine);
 
   body += "נודה להמצאת המפורט לעיל בתוך 7 ימים ממועד החתימה.\n\n";
+  body += "בכבוד רב ובברכה,\n\n" + (p.companyName || "הנהלת הנכס");
+  return { body: body, items: items };
+}
+
+// מכתב הפרשים לתוספת להסכם: שכר הדירה עודכן (יחידה/שטח/חניה שנוספו) —
+// למשלמי שיקים מבקשים רק את שיקי ההפרשים על התוספת (לא שיקים חדשים
+// מלאים), למשלמי העברה מודיעים שהחיוב מתעדכן אוטומטית. baseRent/
+// mgmtMonthly בפרמטרים הם סכומי ה-ה-פ-ר-ש החודשיים; unitsLabel = מה נוסף.
+export function buildAmendmentDiffBody(p: OnboardingParams): { body: string; items: string[] } {
+  const items: string[] = [];
+  const isCheques = p.paymentMethod === "checks_advance";
+  const isTransfer = p.paymentMethod === "bank_transfer" || p.paymentMethod === "standing_order";
+  const sched = chequeSchedule({ ...p, prepaidFirstMonth: false });
+  const diffBeforeVat = p.baseRent + p.mgmtMonthly;
+
+  let body = "לכבוד\n" + (p.tenantName || "") + "\n\nשלום רב,\n\n";
+  body += "הנדון: עדכון תשלומים בעקבות תוספת להסכם השכירות" + (p.unitsLabel ? " — " + p.unitsLabel : "") + "\n\n";
+  body += "בהמשך לתוספת להסכם שנחתמה בינינו" + (p.unitsLabel ? ", לפיה נוספו למושכר: " + p.unitsLabel : "") +
+    ", עודכן התשלום החודשי בתוספת של " + fmt(p.baseRent) +
+    (p.mgmtMonthly > 0 ? " שכ\"ד + " + fmt(p.mgmtMonthly) + " דמי ניהול" : "") +
+    " לפני מע\"מ לחודש, החל מיום " + new Date(String(p.startDate).slice(0, 10) + "T00:00:00").toLocaleDateString("he-IL") + ".\n\n";
+  let n = 1;
+
+  if (isCheques && sched.length > 0) {
+    const line = "בהמשך לשיקים שנמסרו לנו, נבקשכם להמציא שיקי הפרשים בגין התוספת בלבד: " +
+      sched.length + " שיקים לחודשים " + sched[0].label + " – " + sched[sched.length - 1].label +
+      ", כל אחד על סך " + fmt(sched[0].total) + (p.vatPct > 0 ? " (כולל מע\"מ)" : "") +
+      ", לפקודת " + (p.companyName || "המשכירה") + ".";
+    body += n++ + ". " + line + "\n";
+    body += sched.map(function (r) { return "   • " + r.label + " — " + fmt(r.total); }).join("\n") + "\n\n";
+    items.push("📝 " + line);
+  }
+
+  if (isTransfer) {
+    const line = "החיוב החודשי ב" + (p.paymentMethod === "standing_order" ? "הוראת הקבע" : "העברה הבנקאית") +
+      " יעודכן אוטומטית בהתאם, החל מהחיוב הקרוב — אין צורך בפעולה מצדכם בגין השוטף.";
+    body += n++ + ". " + line + "\n\n";
+    items.push("🏦 " + line);
+  }
+
+  if (p.guaranteeUpdateNote && diffBeforeVat > 0) {
+    const line = "לאור עדכון שכר הדירה, ככל שסכום הבטוחה שבידינו נגזר ממספר חודשי שכירות — נבקשכם לעדכן את סכומה בהתאם להוראות ההסכם.";
+    body += n++ + ". " + line + "\n\n";
+    items.push("🏛 " + line);
+  }
+
+  body += "נודה להסדרת האמור בתוך 7 ימים.\n\n";
   body += "בכבוד רב ובברכה,\n\n" + (p.companyName || "הנהלת הנכס");
   return { body: body, items: items };
 }
