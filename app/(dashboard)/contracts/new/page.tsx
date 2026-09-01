@@ -486,7 +486,10 @@ export default function ContractsNewPage() {
         status: "ready",
       });
       if (le) throw new Error(le.message);
-      if (full.paymentMethod === "checks_advance") {
+      // בתחילה תלוית אבן-דרך שטרם קרתה אין חודשים לרשום — השורות ייווצרו
+      // כשמועד התחילה ייקבע בפועל; התשלום ששולם בחתימה רשום על החוזה
+      // והמנוע יצמיד אותו לחודש הראשון האמיתי כשיגיע.
+      if (full.paymentMethod === "checks_advance" && !full.milestonePending) {
         var sched = chequeSchedule(full);
         var firstSpace = spaces.find(function (s: any) { return selSpaces.indexOf(s.id) !== -1; });
         if (sched.length > 0 && firstSpace) {
@@ -1516,6 +1519,10 @@ export default function ContractsNewPage() {
           guaranteeType: addGuarantee ? guaranteeType : null,
           guaranteeAmount: Number(guaranteeAmt) || 0,
           companyName: "",
+          // תחילה תלוית אבן-דרך שטרם קרתה — לוח השיקים ייקבע במסירה/פתיחה בפועל
+          milestonePending: termStartsAt === "handover" ? !actualHandover
+            : termStartsAt === "opening" ? !actualOpening : false,
+          milestoneLabel: termStartsAt === "opening" ? "פתיחת המושכר" : "מסירת החזקה",
         },
       });
     } catch (e: any) {

@@ -19,6 +19,10 @@ export interface OnboardingParams {
   guaranteeAmount?: number;
   bankLine?: string | null;      // פרטי חשבון החברה (להעברה/ה"ק)
   companyName?: string;
+  // תחילת השכירות תלויה באבן דרך (מסירה/פתיחה) שטרם קרתה בפועל:
+  // לוח השיקים לא נקבע מראש — יומצא עם קביעת המועד בפועל.
+  milestonePending?: boolean;
+  milestoneLabel?: string;       // "מסירת החזקה" / "פתיחת המושכר"
 }
 
 export interface ChequeRow { year: number; month: number; label: string; amount: number; vat: number; total: number; prepaid: boolean; }
@@ -26,28 +30,33 @@ export interface ChequeRow { year: number; month: number; label: string; amount:
 const HE_MONTHS = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
 function fmt(n: number): string { return "₪" + (Math.round(n * 100) / 100).toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
-// לוח השיקים: מהחודש הראשון של השכירות ועד דצמבר של אותה שנה.
+// לוח השיקים: מהחודש הראשון של השכירות ועד דצמבר של אותה שנה — ובחוזה
+// חדש שמתחיל אחרי ספטמבר (אוקטובר ואילך), גם כל השנה העוקבת באותו
+// מעמד, כדי לא לחזור אל השוכר אחרי חודשיים בשביל שיקים חדשים.
 // החודש הראשון מסומן prepaid כששולם בחתימה — במכתב הוא מוצג כשולם,
 // ובשורות המקדמות הוא נשמר בסטטוס paid (לא יידרש שוב).
 export function chequeSchedule(p: OnboardingParams): ChequeRow[] {
   const start = new Date(String(p.startDate).slice(0, 10) + "T00:00:00");
   if (isNaN(start.getTime())) return [];
-  const rows: ChequeRow[] = [];
-  const year = start.getFullYear();
-  for (let m = start.getMonth(); m <= 11; m++) {
-    const first = m === start.getMonth();
+  const startYear = start.getFullYear();
+  const months: { y: number; m: number }[] = [];
+  for (let m = start.getMonth(); m <= 11; m++) months.push({ y: startYear, m: m });
+  if (start.getMonth() >= 9) {
+    for (let m = 0; m <= 11; m++) months.push({ y: startYear + 1, m: m });
+  }
+  return months.map(function (mm, i) {
+    const first = i === 0;
     const rent = first && p.prepaidFirstMonth ? (p.prepaidRent || p.baseRent) : p.baseRent;
     const mgmt = first && p.prepaidFirstMonth ? (p.prepaidMgmt || p.mgmtMonthly) : p.mgmtMonthly;
     const beforeVat = rent + mgmt;
     const vat = beforeVat * (p.vatPct / 100);
-    rows.push({
-      year: year, month: m + 1,
-      label: HE_MONTHS[m] + " " + year,
+    return {
+      year: mm.y, month: mm.m + 1,
+      label: HE_MONTHS[mm.m] + " " + mm.y,
       amount: beforeVat, vat: vat, total: beforeVat + vat,
       prepaid: first && p.prepaidFirstMonth,
-    });
-  }
-  return rows;
+    };
+  });
 }
 
 // גוף מכתב הדרישות — פורמלי אך לא משפטני, נבנה סעיף-סעיף לפי מה שקיים.
@@ -72,7 +81,14 @@ export function buildOnboardingBody(p: OnboardingParams): { body: string; items:
     items.push("💰 " + line);
   }
 
-  if (isCheques && sched.length > 0) {
+  if (isCheques && p.milestonePending) {
+    // תחילה תלוית אבן-דרך שטרם קרתה: אין לוח חודשים לקבוע — השיקים
+    // יומצאו כשהמועד ייקבע בפועל, והמערכת תרשום אותם אז.
+    const line = "שיקים מראש לתשלומי שכ\"ד ודמי הניהול, עד תום שנת השכירות הראשונה, יומצאו עם קביעת מועד תחילת השכירות בפועל (" +
+      (p.milestoneLabel || "מסירת החזקה") + ") — נודיעכם על הסכומים והמועדים המדויקים.";
+    body += n++ + ". " + line + "\n\n";
+    items.push("📝 " + line);
+  } else if (isCheques && sched.length > 0) {
     const future = sched.filter(function (r) { return !r.prepaid; });
     if (future.length > 0) {
       const line = future.length + " שיקים מראש לחודשים " + future[0].label + " – " + future[future.length - 1].label +
