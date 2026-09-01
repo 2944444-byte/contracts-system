@@ -201,6 +201,10 @@ export default function ContractsNewPage() {
   const [rentPerSqm, setRentPerSqm] = useState("");
   const [chargedArea, setChargedArea] = useState("");
   const [investAdd, setInvestAdd] = useState("");
+  // תוספת ההשקעות: סכום קבוע לחודש או למ"ר (מוכפל בשטח המחויב).
+  // investment_addition בבסיס נשאר תמיד הסכום החודשי; למ"ר נשמר בנפרד.
+  const [investAddMode, setInvestAddMode] = useState<"fixed" | "per_sqm">("fixed");
+  const [investAddPerSqm, setInvestAddPerSqm] = useState("");
   // Construction-investment (השקעות בינוי) detail + reimbursement terms: the
   // landlord funds fit-out works and pays the tenant back, typically X days
   // after works completion / handover / opening, against a report + invoice.
@@ -530,9 +534,13 @@ export default function ContractsNewPage() {
   }
 
   // === Auto-calculate deposit ===
+  // הסכום החודשי של תוספת ההשקעות — לפי המצב שנבחר (קבוע / למ"ר × שטח)
+  const investAddMonthly = investAddMode === "per_sqm"
+    ? (Number(investAddPerSqm) || 0) * (Number(chargedArea) || 0)
+    : (Number(investAdd) || 0);
   const baseRent =
     (Number(rentPerSqm) || 0) * (Number(chargedArea) || 0) +
-    (Number(investAdd) || 0);
+    investAddMonthly;
   const mgmtFeeMonthly = (Number(mgmtFeePct) || 0) * (Number(chargedArea) || 0);
   const vat = vatType === "taxable" ? baseRent * (currentVatPct / 100) : 0;
   const totalRent = baseRent + vat;
@@ -543,7 +551,7 @@ export default function ContractsNewPage() {
   // rent — reading baseRent there left the guarantee holding only the
   // management fee.
   const guaranteeMonthlyRent = guaranteedMonthlyRent({
-    rentType, rentPerSqm, area: chargedArea, investmentAddition: investAdd,
+    rentType, rentPerSqm, area: chargedArea, investmentAddition: investAddMonthly,
     minimumRent, minRentBasis,
   });
 
@@ -624,6 +632,7 @@ export default function ContractsNewPage() {
       setRentPerSqm(c.rent_per_sqm ? String(c.rent_per_sqm) : "");
       setChargedArea(c.charged_area ? String(c.charged_area) : "");
       setInvestAdd(c.investment_addition ? String(c.investment_addition) : "");
+      if (c.investment_addition_per_sqm) { setInvestAddMode("per_sqm"); setInvestAddPerSqm(String(c.investment_addition_per_sqm)); }
       setVatType(c.vat_type || "taxable");
       setPaymentFreq(c.payment_frequency || "monthly");
       // A turnover amendment inherits the parent's terms: type, percentage,
@@ -1158,7 +1167,8 @@ export default function ContractsNewPage() {
         mgmt_included_in_revenue: rentType === "revenue_pct" ? mgmtIncludedInRevenue : false,
         works_start_date: worksStartDate || null,
         charged_area: Number(chargedArea) || null,
-        investment_addition: Number(investAdd) || null,
+        investment_addition: investAddMonthly || null,
+        investment_addition_per_sqm: investAddMode === "per_sqm" ? (Number(investAddPerSqm) || null) : null,
         vat_type: vatType,
         payment_frequency: paymentFreq,
         payment_method: paymentMethod,
@@ -1393,14 +1403,14 @@ export default function ContractsNewPage() {
       // reimbursement terms alongside the contract's monthly rent addition.
       // An investment is worth recording on its own — the monthly addition may
       // legitimately be zero.
-      if (Number(tiAmount) > 0 || tiDescription || Number(investAdd) > 0) {
+      if (Number(tiAmount) > 0 || tiDescription || investAddMonthly > 0) {
         await supabase.from("contract_ti").insert({
           contract_id: contract.id,
           ti_type: "one_time",
           description: tiDescription || null,
           ti_amount: Number(tiAmount) || 0,
           recovery_method: "monthly_addition",
-          recovery_amount_monthly: Number(investAdd) || null,
+          recovery_amount_monthly: investAddMonthly || null,
           recovery_start_date: startDate || actualHandover || plannedHandover || null,
           recovery_end_date: endDate || null,
           payment_trigger: tiPaymentTrigger || null,
@@ -1573,7 +1583,7 @@ export default function ContractsNewPage() {
           paymentDay: Number(paymentDay) || 1,
           rentPerSqm: Number(rentPerSqm) || 0,
           areaSqm: Number(chargedArea) || 0,
-          investAdd: Number(investAdd) || 0,
+          investAdd: investAddMonthly,
           mgmtPerSqm: Number(mgmtFeePct) || 0,
           prepaidFirstMonth: prepaidOn,
           prepaidRent: Number(prepaidRent) || baseRent,
@@ -2291,17 +2301,36 @@ export default function ContractsNewPage() {
               )}
               {!isParkingContract && (
               <div>
-                <label className="mb-1 block text-xs font-semibold text-slate-700">
-                  תוספת שכ&quot;ד בגין השקעות בינוי (₪/חודש)
-                </label>
-                <input
-                  type="number"
-                  value={investAdd}
-                  onChange={(e) => setInvestAdd(e.target.value)}
-                  className={ic}
-                  placeholder="0"
-                />
-                <p className="mt-1 text-[11px] text-slate-400">תוספת חודשית לשכ&quot;ד תמורת השקעות בינוי שביצע המשכיר. מוצמדת למדד ככל שכ&quot;ד.</p>
+                <div className="mb-1 flex items-center justify-between">
+                  <label className="block text-xs font-semibold text-slate-700">
+                    תוספת שכ&quot;ד בגין השקעות בינוי
+                  </label>
+                  <div className="flex gap-1">
+                    {[{ v: "fixed", l: "💰 סכום קבוע (₪/חודש)" }, { v: "per_sqm", l: "📐 למ\"ר (₪/מ\"ר)" }].map((o) => (
+                      <button key={o.v} type="button" onClick={() => setInvestAddMode(o.v as any)}
+                        className={"rounded border px-2 py-0.5 text-[11px] font-semibold " +
+                          (investAddMode === o.v ? "border-purple-500 bg-purple-50 text-purple-700" : "border-slate-200 text-slate-500")}>
+                        {o.l}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {investAddMode === "per_sqm" ? (
+                  <>
+                    <input type="number" value={investAddPerSqm} onChange={(e) => setInvestAddPerSqm(e.target.value)} className={ic} placeholder="0" />
+                    <p className="mt-1 text-[11px] text-slate-400">
+                      {Number(investAddPerSqm) > 0 && Number(chargedArea) > 0
+                        ? "= " + fmtMoney((Number(investAddPerSqm) || 0) * (Number(chargedArea) || 0)) + "/חודש (" + investAddPerSqm + " ₪/מ\"ר × " + chargedArea + " מ\"ר) — מתעדכן עם שינוי השטח. "
+                        : ""}
+                      מוצמדת למדד ככל שכ&quot;ד.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <input type="number" value={investAdd} onChange={(e) => setInvestAdd(e.target.value)} className={ic} placeholder="0" />
+                    <p className="mt-1 text-[11px] text-slate-400">תוספת חודשית לשכ&quot;ד תמורת השקעות בינוי שביצע המשכיר. מוצמדת למדד ככל שכ&quot;ד.</p>
+                  </>
+                )}
               </div>
               )}
               <div>
@@ -2420,7 +2449,7 @@ export default function ContractsNewPage() {
                 addition is one possible consequence — often there is none. */}
             <div className="flex items-center gap-2 mt-3">
               <input type="checkbox" id="hasTI" className="w-4 h-4"
-                checked={hasTI || Number(investAdd) > 0 || Number(tiAmount) > 0 || !!tiDescription}
+                checked={hasTI || investAddMonthly > 0 || Number(tiAmount) > 0 || !!tiDescription}
                 onChange={(e) => setHasTI(e.target.checked)} />
               <label htmlFor="hasTI" className="text-sm font-bold text-slate-700">
                 השקעות בינוי / התאמות למושכר
@@ -2429,7 +2458,7 @@ export default function ContractsNewPage() {
                 </span>
               </label>
             </div>
-            {(hasTI || Number(investAdd) > 0 || Number(tiAmount) > 0 || !!tiDescription) && (
+            {(hasTI || investAddMonthly > 0 || Number(tiAmount) > 0 || !!tiDescription) && (
               <div className="rounded-xl border border-purple-200 bg-purple-50/40 p-4 mt-3">
                 <div className="text-sm font-bold text-purple-800 mb-1">🏗 פירוט השקעות בינוי ותנאי החזר <span className="text-[11px] font-semibold text-purple-500">(אופציונלי)</span></div>
                 <div className="text-[11px] text-purple-600 mb-3 leading-relaxed">

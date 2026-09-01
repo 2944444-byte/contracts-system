@@ -4,6 +4,7 @@ import { graceWindow, describeGrace, lateOpeningPenalty, mgmtFreeWindow, describ
 import { leaseTerm, effectiveOpeningDate, describeLeaseTerm, describeOpening } from "@/lib/lease-term";
 import { guaranteedMonthlyRent } from "@/lib/guarantee-base";
 import RevenuePctTiersEditor from "@/components/RevenuePctTiersEditor";
+import { TIManager } from "@/components/TIManager";
 import { RevenuePctTier, pctTiersFromRow } from "@/lib/revenue-pct-steps";
 import { useRouter, useParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
@@ -167,6 +168,9 @@ export default function ContractEditPage() {
   const [rentPerSqm, setRentPerSqm] = useState("");
   const [chargedArea, setChargedArea] = useState("");
   const [investAdd, setInvestAdd] = useState("");
+  // תוספת ההשקעות: סכום קבוע לחודש או למ"ר (מוכפל בשטח המחויב) — כמו באשף
+  const [investAddMode, setInvestAddMode] = useState<"fixed" | "per_sqm">("fixed");
+  const [investAddPerSqm, setInvestAddPerSqm] = useState("");
   const [vatType, setVatType] = useState("taxable");
   const [paymentFreq, setPaymentFreq] = useState("monthly");
   const [paymentMethod, setPaymentMethod] = useState("checks_advance");
@@ -265,8 +269,11 @@ export default function ContractEditPage() {
 
   // === Auto-calculate deposit ===
   // Calculate baseRent: from global rent or per-unit pricing
-  var baseRent = (Number(rentPerSqm) || 0) * (Number(chargedArea) || 0) + (Number(investAdd) || 0);
-  if (baseRent === (Number(investAdd) || 0) && Object.keys(unitRentOverrides).length > 0) {
+  const investAddMonthly = investAddMode === "per_sqm"
+    ? (Number(investAddPerSqm) || 0) * (Number(chargedArea) || 0)
+    : (Number(investAdd) || 0);
+  var baseRent = (Number(rentPerSqm) || 0) * (Number(chargedArea) || 0) + investAddMonthly;
+  if (baseRent === investAddMonthly && Object.keys(unitRentOverrides).length > 0) {
     var perUnitTotal = 0;
     selSpaces.forEach(function(sid) {
       var sp = spaces.find(function(s) { return s.id === sid; });
@@ -275,7 +282,7 @@ export default function ContractEditPage() {
       if (rType === "fixed") perUnitTotal += rVal;
       else perUnitTotal += rVal * (sp?.area || 0);
     });
-    if (perUnitTotal > 0) baseRent = perUnitTotal + (Number(investAdd) || 0);
+    if (perUnitTotal > 0) baseRent = perUnitTotal + investAddMonthly;
   }
   const mgmtFeeMonthly = (Number(mgmtFeePct) || 0) * (Number(chargedArea) || 0);
   const vat = vatType === "taxable" ? baseRent * (currentVatPct / 100) : 0;
@@ -288,7 +295,7 @@ export default function ContractEditPage() {
   // addition, so it is used as-is when it exists; the helper only fills the
   // turnover case, where baseRent is 0 because there is no per-sqm rent.
   const guaranteeMonthlyRent = baseRent > 0 ? baseRent : guaranteedMonthlyRent({
-    rentType, rentPerSqm, area: chargedArea, investmentAddition: investAdd,
+    rentType, rentPerSqm, area: chargedArea, investmentAddition: investAddMonthly,
     minimumRent, minRentBasis,
   });
 
@@ -485,6 +492,7 @@ export default function ContractEditPage() {
     setRentPerSqm((effectiveRent || c.rent_per_sqm)?.toString() ?? "");
     setChargedArea((effectiveArea || c.charged_area)?.toString() ?? "");
     setInvestAdd(c.investment_addition?.toString() ?? "");
+    if (c.investment_addition_per_sqm) { setInvestAddMode("per_sqm"); setInvestAddPerSqm(String(c.investment_addition_per_sqm)); }
     setVatType(c.vat_type ?? "taxable");
     setPaymentFreq(c.payment_frequency ?? "monthly");
     setPaymentMethod(c.payment_method ?? "checks_advance");
@@ -844,7 +852,8 @@ export default function ContractEditPage() {
         revenue_report_day: rentType === "revenue_pct" ? Number(revenueReportDay) || 5 : null,
         mgmt_included_in_revenue: mgmtIncludedInRevenue,
         charged_area: Number(chargedArea) || null,
-        investment_addition: Number(investAdd) || null,
+        investment_addition: investAddMonthly || null,
+        investment_addition_per_sqm: investAddMode === "per_sqm" ? (Number(investAddPerSqm) || null) : null,
         vat_type: vatType,
         payment_frequency: paymentFreq,
         payment_method: paymentMethod,
@@ -1468,8 +1477,28 @@ export default function ContractEditPage() {
                 <input type="number" value={chargedArea} onChange={(e) => setChargedArea(e.target.value)} className={ic} />
               </div>
               <div>
-                <label className="mb-1 block text-xs font-semibold text-slate-700">תוספת השקעות (₪)</label>
-                <input type="number" value={investAdd} onChange={(e) => setInvestAdd(e.target.value)} className={ic} />
+                <div className="mb-1 flex items-center justify-between gap-2">
+                  <label className="block text-xs font-semibold text-slate-700">תוספת השקעות</label>
+                  <div className="flex gap-1">
+                    {[{ v: "fixed", l: "₪/חודש" }, { v: "per_sqm", l: "למ\"ר" }].map((o) => (
+                      <button key={o.v} type="button" onClick={() => setInvestAddMode(o.v as any)}
+                        className={"rounded border px-1.5 py-0.5 text-[10px] font-semibold " +
+                          (investAddMode === o.v ? "border-purple-500 bg-purple-50 text-purple-700" : "border-slate-200 text-slate-500")}>
+                        {o.l}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {investAddMode === "per_sqm" ? (
+                  <>
+                    <input type="number" value={investAddPerSqm} onChange={(e) => setInvestAddPerSqm(e.target.value)} className={ic} />
+                    {Number(investAddPerSqm) > 0 && Number(chargedArea) > 0 && (
+                      <p className="mt-1 text-[10px] text-slate-400">= ₪{((Number(investAddPerSqm) || 0) * (Number(chargedArea) || 0)).toLocaleString("he-IL")}/חודש — מתעדכן עם שינוי השטח</p>
+                    )}
+                  </>
+                ) : (
+                  <input type="number" value={investAdd} onChange={(e) => setInvestAdd(e.target.value)} className={ic} />
+                )}
               </div>
               <div>
                 <label className="mb-1 block text-xs font-semibold text-slate-700">מע&quot;מ</label>
@@ -1658,6 +1687,14 @@ export default function ContractEditPage() {
               <label className="mb-1 block text-xs font-semibold text-slate-700">קישור לחוזה מקורי (URL)</label>
               <input type="url" value={documentUrl} onChange={(e) => setDocumentUrl(e.target.value)}
                 placeholder="https://drive.google.com/..." className={ic} dir="ltr" />
+            </div>
+
+            {/* פירוט השקעות בינוי ותנאי החזר — עורך רשומות contract_ti, כמו
+                שקיים באשף ההקמה: סכום ההשקעה, שיטת ההחזר ותקופת ההחזר,
+                כולל עריכת רשומה קיימת. */}
+            <div className="rounded-xl border border-purple-200 bg-purple-50/30 p-4 mt-3">
+              <div className="text-sm font-bold text-purple-800 mb-2">🏗 פירוט השקעות בינוי ותנאי החזר</div>
+              <TIManager contractId={id} contractEndDate={endDate || ""} />
             </div>
 
             {/* Early termination clause — mirrors the wizard */}

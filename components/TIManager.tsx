@@ -27,6 +27,7 @@ interface Props { contractId: string; contractEndDate: string; }
 export function TIManager({ contractId, contractEndDate }: Props) {
   const [records,  setRecords]  = useState<any[]>([]);
   const [editing,  setEditing]  = useState(false);
+  const [editId,   setEditId]   = useState<string | null>(null);
   const [saving,   setSaving]   = useState(false);
   const [form, setForm] = useState<TIRecord>({
     ti_type: "one_time", description: "", ti_amount: "",
@@ -43,10 +44,28 @@ export function TIManager({ contractId, contractEndDate }: Props) {
   }
 
   function openNew() {
+    setEditId(null);
     setForm({
       ti_type: "one_time", description: "", ti_amount: "",
       recovery_method: "monthly_addition", recovery_amount_monthly: "",
       recovery_start: "", recovery_end: contractEndDate ?? "", notes: "",
+    });
+    setEditing(true);
+  }
+
+  // עריכת רשומה קיימת — עד היום ניתן היה רק להוסיף ולמחוק, ותיקון סכום
+  // או תקופת החזר חייב מחיקה והקלדה מחדש.
+  function openEdit(r: any) {
+    setEditId(r.id);
+    setForm({
+      ti_type: r.ti_type || "one_time",
+      description: r.description || "",
+      ti_amount: r.ti_amount != null ? String(r.ti_amount) : "",
+      recovery_method: r.recovery_method || "monthly_addition",
+      recovery_amount_monthly: r.recovery_amount_monthly != null ? String(r.recovery_amount_monthly) : "",
+      recovery_start: (r.recovery_start_date || "").slice(0, 10),
+      recovery_end: (r.recovery_end_date || "").slice(0, 10),
+      notes: r.notes || "",
     });
     setEditing(true);
   }
@@ -66,8 +85,13 @@ export function TIManager({ contractId, contractEndDate }: Props) {
         recovery_end_date:   form.recovery_end || null,
         notes:          form.notes || null,
       };
-      await supabase.from("contract_ti").insert(payload);
+      if (editId) {
+        await supabase.from("contract_ti").update(payload).eq("id", editId);
+      } else {
+        await supabase.from("contract_ti").insert(payload);
+      }
       setEditing(false);
+      setEditId(null);
       await load();
     } catch(e: any) { alert("שגיאה: " + e?.message); }
     finally { setSaving(false); }
@@ -130,10 +154,16 @@ export function TIManager({ contractId, contractEndDate }: Props) {
                       )}
                     </div>
                   </div>
-                  <button onClick={function() { handleDelete(r.id); }}
-                    className="text-xs text-red-400 hover:text-red-600 border border-red-100 rounded px-2 py-1">
-                    מחק
-                  </button>
+                  <div className="flex gap-1 shrink-0">
+                    <button onClick={function() { openEdit(r); }}
+                      className="text-xs text-blue-500 hover:text-blue-700 border border-blue-100 rounded px-2 py-1">
+                      ✏️ ערוך
+                    </button>
+                    <button onClick={function() { handleDelete(r.id); }}
+                      className="text-xs text-red-400 hover:text-red-600 border border-red-100 rounded px-2 py-1">
+                      מחק
+                    </button>
+                  </div>
                 </div>
               </div>
             );
@@ -147,7 +177,7 @@ export function TIManager({ contractId, contractEndDate }: Props) {
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto"
             onClick={function(e) { e.stopPropagation(); }} dir="rtl">
             <div className="sticky top-0 bg-white border-b border-slate-100 px-6 py-4 flex items-center justify-between">
-              <h2 className="font-bold text-slate-800">השקעת משכיר חדשה</h2>
+              <h2 className="font-bold text-slate-800">{editId ? "עריכת השקעת משכיר" : "השקעת משכיר חדשה"}</h2>
               <button onClick={function() { setEditing(false); }} className="text-2xl text-slate-400">×</button>
             </div>
             <div className="p-6 space-y-3">
