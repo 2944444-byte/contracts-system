@@ -1431,7 +1431,9 @@ export default function ContractsPage() {
                         className={"rounded-lg border px-3 py-1.5 text-xs font-semibold " + (selContract.actual_handover_date
                           ? "border-green-200 bg-green-50 text-green-700 hover:bg-green-100"
                           : "border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 animate-pulse")}
-                        title="הזנת מועד המסירה בפועל — ממנה מתחילה תקופת השכירות וכל החישובים">
+                        title={selContract.actual_handover_date
+                          ? "המסירה בפועל נקלטה — כל החישובים מתבססים עליה. לחיצה מאפשרת לתקן את התאריך אם הוזן שגוי."
+                          : "הזנת מועד המסירה בפועל — ממנה מתחילה תקופת השכירות וכל החישובים"}>
                         {selContract.actual_handover_date
                           ? "📦 נמסר " + new Date(selContract.actual_handover_date).toLocaleDateString("he-IL")
                           : "📦 הזן מסירה בפועל"}
@@ -1602,9 +1604,12 @@ export default function ContractsPage() {
                   var items: { icon: string; text: string; tone?: string }[] = [];
 
                   // The lease clock runs from a milestone, not a typed date.
-                  // Shown until the premises actually open — after that the
-                  // dates are ordinary history.
-                  if ((c.term_starts_at === "opening" || c.term_starts_at === "handover") && !c.actual_opening_date) {
+                  // מוצג עד שהאירוע שהתנאי תלוי בו קרה בפועל: חוזה "מהפתיחה" —
+                  // עד פתיחה בפועל; חוזה "מהמסירה" — עד מסירה בפועל (בעבר נבדקה
+                  // הפתיחה גם כאן, והשורה נשארה אחרי אישור המסירה). אחרי האירוע
+                  // התאריכים הם היסטוריה רגילה והשורה נעלמת.
+                  var termPending = c.term_starts_at === "opening" ? !c.actual_opening_date : !c.actual_handover_date;
+                  if ((c.term_starts_at === "opening" || c.term_starts_at === "handover") && termPending) {
                     var t = leaseTerm({ contract: c });
                     var op = effectiveOpeningDate(c);
                     var termTxt = t.start && t.end
