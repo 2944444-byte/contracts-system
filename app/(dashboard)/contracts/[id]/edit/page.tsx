@@ -1345,6 +1345,60 @@ export default function ContractEditPage() {
                 </div>
               </div>
             </div>
+
+            {/* ממה רצה תקופת השכירות — תמיד גלוי בשלב תנאי השכירות, כמו
+                באשף ההקמה (בעבר הוצג רק בתוך שלב הגרייס וכשגרייס מופעל,
+                ולכן אי-אפשר היה לתקן חוזה בלי גרייס). */}
+            <div className="rounded-lg border border-violet-200 bg-violet-50/50 p-3 space-y-2">
+              <div className="text-xs font-bold text-violet-800">🗓 תקופת השכירות מתחילה מ־</div>
+              <div className="grid grid-cols-3 gap-2">
+                {[{v:"start_date",l:"תאריך שהוזן"},{v:"handover",l:"מועד המסירה"},{v:"opening",l:"פתיחת המושכר"}].map(function(o){
+                  return (
+                    <button key={o.v} type="button" onClick={function(){ setTermStartsAt(o.v as any); if (o.v === "opening") setOpeningRuleOn(true); }}
+                      className={"rounded-lg border px-2 py-2 text-[11px] font-bold " + (termStartsAt === o.v ? "border-violet-500 bg-white text-violet-800" : "border-slate-200 text-slate-500")}>
+                      {o.l}
+                    </button>
+                  );
+                })}
+              </div>
+              {termStartsAt === "opening" && (
+                <>
+                  <label className="flex items-start gap-2 text-[11px] text-slate-700">
+                    <input type="checkbox" checked={openingRuleOn} onChange={(e) => setOpeningRuleOn(e.target.checked)} className="rounded mt-0.5" />
+                    <span>מועד הפתיחה מוגדר בהסכם — המוקדם מבין הפתיחה בפועל לבין ימים ממועד המסירה</span>
+                  </label>
+                  {openingRuleOn && (
+                    <div>
+                      <label className="mb-1 block text-[11px] font-semibold text-slate-700">ולא יאוחר מ־ (ימים ממועד המסירה)</label>
+                      <input type="number" min="0" max="730" value={openingMaxDays} placeholder="למשל 60"
+                        onChange={(e) => setOpeningMaxDays(e.target.value)} className={ic} />
+                    </div>
+                  )}
+                  <div>
+                    <label className="mb-1 block text-[11px] font-semibold text-slate-700">הגדרת מועד הפתיחה כלשונה</label>
+                    <textarea value={openingDefinition} onChange={(e) => setOpeningDefinition(e.target.value)} rows={2} className={ic} />
+                  </div>
+                </>
+              )}
+              {termStartsAt !== "start_date" && (function(){
+                var draft = {
+                  start_date: startDate || null,
+                  actual_handover_date: actualHandover || null, planned_handover_date: plannedHandover || null,
+                  actual_opening_date: actualOpening || null, planned_opening_date: plannedOpening || null,
+                  opening_rule: openingRuleOn ? "actual_or_days_from_handover" : null,
+                  opening_max_days_from_handover: Number(openingMaxDays) || null,
+                  term_starts_at: termStartsAt, lease_period_unit: leasePeriodUnit,
+                };
+                var t = leaseTerm({ contract: draft, months: leasePeriodUnit === "years" ? leasePeriodValue * 12 : leasePeriodValue });
+                return (
+                  <div className="rounded-lg bg-white border border-violet-200 p-2 text-[11px] text-violet-900">
+                    {termStartsAt === "opening" && <div>מועד הפתיחה: <b>{describeOpening(effectiveOpeningDate(draft))}</b></div>}
+                    <div>{describeLeaseTerm(t)}</div>
+                  </div>
+                );
+              })()}
+            </div>
+
             {endDate && (
               <div className="rounded-lg bg-green-50 border border-green-200 px-4 py-3 flex items-center justify-between">
                 <span className="text-sm text-green-700 font-semibold">תאריך סיום מחושב</span>
@@ -1750,55 +1804,8 @@ export default function ContractEditPage() {
                     </label>
                   </div>
 
-                  <div className="rounded-lg border border-violet-200 bg-violet-50/50 p-3 space-y-2">
-                    <div className="text-xs font-bold text-violet-800">🗓 תקופת השכירות מתחילה מ־</div>
-                    <div className="grid grid-cols-3 gap-2">
-                      {[{v:"start_date",l:"תאריך שהוזן"},{v:"handover",l:"מועד המסירה"},{v:"opening",l:"פתיחת המושכר"}].map(function(o){
-                        return (
-                          <button key={o.v} type="button" onClick={function(){ setTermStartsAt(o.v as any); }}
-                            className={"rounded-lg border px-2 py-2 text-[11px] font-bold " + (termStartsAt === o.v ? "border-violet-500 bg-white text-violet-800" : "border-slate-200 text-slate-500")}>
-                            {o.l}
-                          </button>
-                        );
-                      })}
-                    </div>
-                    {termStartsAt === "opening" && (
-                      <>
-                        <label className="flex items-start gap-2 text-[11px] text-slate-700">
-                          <input type="checkbox" checked={openingRuleOn} onChange={(e) => setOpeningRuleOn(e.target.checked)} className="rounded mt-0.5" />
-                          <span>מועד הפתיחה מוגדר בהסכם — המוקדם מבין הפתיחה בפועל לבין ימים ממועד המסירה</span>
-                        </label>
-                        {openingRuleOn && (
-                          <div>
-                            <label className="mb-1 block text-[11px] font-semibold text-slate-700">ולא יאוחר מ־ (ימים ממועד המסירה)</label>
-                            <input type="number" min="0" max="730" value={openingMaxDays} placeholder="למשל 60"
-                              onChange={(e) => setOpeningMaxDays(e.target.value)} className={ic} />
-                          </div>
-                        )}
-                        <div>
-                          <label className="mb-1 block text-[11px] font-semibold text-slate-700">הגדרת מועד הפתיחה כלשונה</label>
-                          <textarea value={openingDefinition} onChange={(e) => setOpeningDefinition(e.target.value)} rows={2} className={ic} />
-                        </div>
-                      </>
-                    )}
-                    {termStartsAt !== "start_date" && (function(){
-                      var draft = {
-                        start_date: startDate || null,
-                        actual_handover_date: actualHandover || null, planned_handover_date: plannedHandover || null,
-                        actual_opening_date: actualOpening || null, planned_opening_date: plannedOpening || null,
-                        opening_rule: openingRuleOn ? "actual_or_days_from_handover" : null,
-                        opening_max_days_from_handover: Number(openingMaxDays) || null,
-                        term_starts_at: termStartsAt, lease_period_unit: leasePeriodUnit,
-                      };
-                      var t = leaseTerm({ contract: draft, months: leasePeriodUnit === "years" ? leasePeriodValue * 12 : leasePeriodValue });
-                      return (
-                        <div className="rounded-lg bg-white border border-violet-200 p-2 text-[11px] text-violet-900">
-                          {termStartsAt === "opening" && <div>מועד הפתיחה: <b>{describeOpening(effectiveOpeningDate(draft))}</b></div>}
-                          <div>{describeLeaseTerm(t)}</div>
-                        </div>
-                      );
-                    })()}
-                  </div>
+                  {/* הבורר "תקופת השכירות מתחילה מ־" עבר לשלב תנאי השכירות —
+                      שם הוא גלוי תמיד, גם בחוזה בלי גרייס */}
 
                   {rentType === "revenue_pct" && (
                     <div className="rounded-lg border border-purple-300 bg-purple-50/60 p-3 space-y-2">
