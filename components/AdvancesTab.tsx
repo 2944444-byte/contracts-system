@@ -98,7 +98,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
 
   // Saved advances state
   const [savedMode, setSavedMode] = useState(false); // true = showing saved data
-  const [savedInfo, setSavedInfo] = useState<{ count: number; savedAt: string; cpiCalcDate: string; otherDates: string[] } | null>(null);
+  const [savedInfo, setSavedInfo] = useState<{ count: number; savedAt: string; cpiCalcDate: string; otherDates: string[]; contractIds: string[] } | null>(null);
   const [checkingSaved, setCheckingSaved] = useState(false);
   // Which rows have their "show your work" breakdown expanded (by index)
   const [expandedBreakdowns, setExpandedBreakdowns] = useState<Record<number, boolean>>({});
@@ -180,6 +180,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
           savedAt: latestCreated,
           cpiCalcDate: calcDate,
           otherDates: (otherSaved || []).length > 0 ? ["קיימות מקדמות נוספות מתאריך אחר"] : [],
+          contractIds: Array.from(new Set(saved.map(function(s: any){ return s.contract_id; }))),
         });
       } else {
         setSavedInfo(null);
@@ -840,9 +841,10 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
     setProgress({ current: 0, total: totalChecks, label: "שומר מקדמות...", startedAt: saveStart });
     try {
       var count = 0;
+      var failures: string[] = [];
       for (var r of results) {
         for (var p of r.checks) {
-          await supabase.from("advance_payments").upsert({
+          var { error: upErr } = await supabase.from("advance_payments").upsert({
             contract_id: r.contractId,
             space_id: r.spaceId,
             property_id: propId,
@@ -867,6 +869,9 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
             cpi_calc_date: cpiCalcDate,
             status: "pending",
           }, { onConflict: "contract_id,space_id,year,period" });
+          // שגיאת שמירה בשורה אחת אינה נבלעת עוד — נאספת ומדווחת בסוף
+          // (כך נעלמו בשקט מקדמות של שוכר שלם בעוד ההודעה אמרה "נוצרו").
+          if (upErr) { failures.push(r.tenantName + " · " + r.spaceName + " · " + p.label + ": " + upErr.message); continue; }
           count++;
           setProgress({
             current: count,
@@ -876,8 +881,12 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
           });
         }
       }
-      await logAudit({ entity_type: "billing", entity_id: propId, action: "create_advances", notes: count + " מקדמות" });
-      alert("✅ נוצרו " + count + " מקדמות");
+      await logAudit({ entity_type: "billing", entity_id: propId, action: "create_advances", notes: count + " מקדמות" + (failures.length ? " · " + failures.length + " כשלונות" : "") });
+      if (failures.length > 0) {
+        alert("⚠️ נשמרו " + count + " מקדמות, אך " + failures.length + " שורות נכשלו:\n" + failures.slice(0, 8).join("\n") + (failures.length > 8 ? "\n..." : ""));
+      } else {
+        alert("✅ נוצרו " + count + " מקדמות");
+      }
     } catch (e: any) { alert("שגיאה: " + (e?.message || e)); }
     finally { setCreatingCharges(false); setProgress(null); }
   }
@@ -1073,6 +1082,18 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
               <span className="text-green-600 text-xl">✅</span>
               <div>
                 <div className="font-bold text-green-800 text-sm">נמצאו מקדמות שמורות לשנת {year}</div>
+                {(function(){
+                  // מלכודת המצב-השמור: הנכס נראה "שמור" גם כשלחלק מחוזי
+                  // השיקים אין מקדמות בכלל (כך נעלמו של מנשה בלי שהבחינו).
+                  var missing = availableContracts.filter(function(c: any){ return (savedInfo?.contractIds || []).indexOf(c.id) === -1; });
+                  if (missing.length === 0) return null;
+                  return (
+                    <div className="mt-1 rounded-lg bg-amber-50 border border-amber-300 px-2.5 py-1.5 text-xs text-amber-800 font-semibold">
+                      ⚠️ לחוזים הבאים אין מקדמות שמורות לשנה זו: {missing.map(function(c: any){ return (c.tenants as any)?.name || "—"; }).join(", ")} —
+                      בחר את החוזה במסנן החוזים, לחץ "חשב מחדש" ושמור.
+                    </div>
+                  );
+                })()}
                 <div className="text-xs text-green-600">{savedInfo.count} שייקים | נשמר ב-{fmtDate(savedInfo.savedAt)} | תאריך ערך מדד: {savedInfo.cpiCalcDate ? fmtDate(savedInfo.cpiCalcDate) : "—"}</div>
                 {savedInfo.otherDates.length > 0 && (
                   <div className="text-xs text-amber-600 mt-0.5">⚠️ {savedInfo.otherDates[0]}</div>
