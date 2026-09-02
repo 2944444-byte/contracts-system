@@ -882,7 +882,9 @@ export default function ContractEditPage() {
         revenue_settlement_day: rentType === "revenue_pct" ? (Number(revSettleDay) || null) : null,
         revenue_settlement_timing: rentType === "revenue_pct" ? revSettleTiming : null,
         revenue_late_report_higher_index: rentType === "revenue_pct" ? revLateHigherIndex : false,
-        revenue_categories: rentType === "revenue_pct" && revCategories.length > 0 ? revCategories : null,
+        // העמודה NOT NULL — כמו באשף: מערך ריק, לעולם לא null (null הפיל
+        // שמירת כל חוזה שאינו פדיון עם "violates not-null constraint")
+        revenue_categories: rentType === "revenue_pct" ? revCategories.filter(function (c) { return c.name.trim(); }) : [],
         mgmt_included_in_revenue: mgmtIncludedInRevenue,
         charged_area: Number(chargedArea) || null,
         investment_addition: investAddMonthly || null,
