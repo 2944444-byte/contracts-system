@@ -80,6 +80,7 @@ interface AdvanceRow {
   cpiError?: string;            // CBS API failed after retries
   cpiInconsistent?: string;     // ratio differs from sibling spaces in same group
   cpiSuspicious?: string;       // ratio = 1 on an indexed contract (almost certainly a bug)
+  cpiNote?: string;             // הערת מידע (לא בעיה): למשל חוזה שנחתם אחרי תאריך החישוב
   checks: CheckRow[];
 }
 
@@ -487,10 +488,12 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
           var baseAfterCalc = (function () {
             try { return new Date(cpiBaseDate) > new Date(cpiCalcDate); } catch (e) { return false; }
           })();
+          var cpiNoteMsg: string | undefined = undefined;
           if (c.indexation_method !== "none" && baseAfterCalc) {
             cpiRatio = 1;
             cpiCurrentValue = cpiBaseValue;
             cpiCurrentDate = String(cpiBaseDate).slice(0, 10);
+            cpiNoteMsg = "ההסכם נחתם אחרי תאריך החישוב — החישוב לפי מדד הבסיס של ההסכם (" + cpiBaseValue + "), ללא הצמדה שנצברה.";
           } else if (c.indexation_method !== "none" && fromCbs && toCbs) {
             // Use retry wrapper — transient CBS failures (timeout / 5xx / brief
             // outage) auto-retried 3× with backoff before giving up. If we
@@ -769,6 +772,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
               rentSchedule: schedule.map(function(e) { return { date: e.date.toISOString().split("T")[0], rentMonthly: e.rentMonthly, source: e.source }; }),
               cpiPeakMonth: cpiPeakMonth,
               cpiError: cpiErrorMsg,
+              cpiNote: cpiNoteMsg,
               vatPct: displayVatPct,
               isQuarterly: isQuarterly,
               investmentMonthly: thisInvestMonthly,
@@ -832,7 +836,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
       rows.forEach(function(r: AdvanceRow) {
         if (r.indexationMethod && r.indexationMethod !== "none"
           && r.cpiRatio && Math.abs(r.cpiRatio - 1) < 0.0001
-          && !r.cpiError) {
+          && !r.cpiError && !r.cpiNote) {
           r.cpiSuspicious = "יחס מדד = 1.0 על חוזה מוצמד — כמעט תמיד באג. לחץ 'חשב מחדש'.";
         }
       });
@@ -1189,6 +1193,11 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
                     <div className="flex-1">
                       <div className="font-bold text-slate-800 text-sm">{r.tenantName}</div>
                       <div className="text-xs text-slate-500">📐 {r.spaceName} | {r.spaceArea} מ&quot;ר | תחילה: {fmtDate(r.startDate)}</div>
+                      {r.cpiNote && (
+                        <div className="mt-1 text-[11px] rounded bg-blue-50 border border-blue-200 text-blue-700 px-2 py-1 w-fit">
+                          ℹ️ {r.cpiNote}
+                        </div>
+                      )}
                     </div>
                     <button
                       type="button"
