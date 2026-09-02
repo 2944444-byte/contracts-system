@@ -103,6 +103,11 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
   const [checkingSaved, setCheckingSaved] = useState(false);
   // Which rows have their "show your work" breakdown expanded (by index)
   const [expandedBreakdowns, setExpandedBreakdowns] = useState<Record<number, boolean>>({});
+  // חוזים/תוספות שנוצרו אחרי תאריך החישוב (תאריך הערך): ברירת המחדל —
+  // לכלול אותם לפי מדד הבסיס שלהם (תמונה מלאה); כיבוי = שחזור טהור של
+  // תאריך הערך, בלי מה שנוסף אחריו. בשני המצבים מוצגת הודעה מה נוסף.
+  const [includeNewer, setIncludeNewer] = useState(true);
+  const [valueDateNotes, setValueDateNotes] = useState<string[]>([]);
 
   // Load available contracts when property changes
   function loadAvailableContracts(pid: string) {
@@ -301,6 +306,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
       var toCbs = formatDateForCbs(cpiCalcDate);
 
       var rows: AdvanceRow[] = [];
+      var vdNotes: string[] = [];
       var totalContracts = contracts.length;
       var contractIdx = 0;
 
@@ -314,6 +320,21 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
         });
         var isVat = c.vat_type === "taxable";
         var isQuarterly = c.payment_frequency === "quarterly";
+
+        // חוזה שמדד הבסיס (או תחילתו) מאוחר מתאריך החישוב — "לא קיים"
+        // בתמונת תאריך הערך. נכלל לפי מדד הבסיס שלו (ברירת מחדל) או מדולג
+        // בשחזור טהור — ותמיד מדווח למשתמש.
+        var cNewerThanValueDate = (function(){
+          try {
+            var bd = c.index_base_date || c.start_date;
+            return bd ? new Date(bd) > new Date(cpiCalcDate) : false;
+          } catch (e) { return false; }
+        })();
+        if (cNewerThanValueDate) {
+          var cLabel = ((c.tenants as any)?.name || "—") + " (מדד בסיס " + fmtDate(c.index_base_date || c.start_date) + ")";
+          if (!includeNewer) { vdNotes.push("⏭ החוזה של " + cLabel + " לא נכלל — נוצר אחרי תאריך החישוב"); continue; }
+          vdNotes.push("➕ החוזה של " + cLabel + " נכלל לפי מדד הבסיס של ההסכם, ללא הצמדה שנצברה");
+        }
 
         // Build per-space timeline: entry_date = earliest date the space appeared,
         // exit_date = earliest amendment date that removed it (null if still active).
@@ -358,10 +379,26 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
         // so only units that actually entered before that date are included.
         var cutoffDate = new Date(cpiCalcDate);
         var yearEndForSnap = new Date(year, 11, 31);
-        var snapCutoff = cutoffDate < yearEndForSnap ? cutoffDate : yearEndForSnap;
+        // ברירת מחדל: תמונה מלאה עד סוף השנה (תוספות אחרי תאריך הערך
+        // נכללות, לפי מדד הבסיס שנקבע להן בתוספת); שחזור טהור — עד תאריך הערך.
+        var snapCutoff = includeNewer
+          ? yearEndForSnap
+          : (cutoffDate < yearEndForSnap ? cutoffDate : yearEndForSnap);
         var activeSnapshot = snapshots[0];
         for (var s of snapshots) {
           if (s.date <= snapCutoff) activeSnapshot = s;
+        }
+        // דיווח על תוספות שנכנסו בין תאריך הערך לסוף השנה
+        for (var sN of snapshots) {
+          if (sN.date > cutoffDate && sN.date <= yearEndForSnap) {
+            var prevSetN = snapshots[snapshots.indexOf(sN) - 1]?.spaceIds || new Set();
+            var addedNamesN: string[] = [];
+            sN.spaces.forEach(function(x: any){ if (!prevSetN.has(x.space_id) && x.spaces?.space_name) addedNamesN.push(x.spaces.space_name); });
+            if (addedNamesN.length > 0) {
+              vdNotes.push((includeNewer ? "➕ " : "⏭ ") + ((c.tenants as any)?.name || "—") + " — תוספת מ-" + fmtDate(String(sN.date.toISOString()).slice(0,10)) +
+                " (" + addedNamesN.join(", ") + ") " + (includeNewer ? "נכללה — הצמדה לפי בסיס המדד שנקבע בתוספת" : "לא נכללה — נוצרה אחרי תאריך החישוב"));
+            }
+          }
         }
         var spacesToProcess = activeSnapshot.spaces || [];
         var parkingMonthly = contractParkingMonthly[c.id] || 0;
@@ -841,6 +878,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
         }
       });
 
+      setValueDateNotes(vdNotes);
       setResults(rows);
     } catch (e: any) { alert("שגיאה: " + (e?.message || e)); }
     finally { setComputing(false); setProgress(null); }
@@ -1088,6 +1126,13 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
             <label className="mb-1 block text-xs font-semibold text-slate-700">תאריך חישוב מדד</label>
             <input type="date" value={cpiCalcDate} onChange={function(e) { setCpiCalcDate(e.target.value); if (!savedMode) setResults([]); }} className={ic} />
             <div className="text-xs text-slate-400 mt-0.5">המערכת תיקח את המדד הידוע בתאריך זה (t-2)</div>
+            <label className="flex items-start gap-2 text-xs text-slate-700 mt-2 cursor-pointer">
+              <input type="checkbox" checked={includeNewer}
+                onChange={function(e) { setIncludeNewer(e.target.checked); if (!savedMode) setResults([]); }} className="rounded mt-0.5" />
+              <span><b>כלול חוזים ותוספות שנוצרו אחרי תאריך החישוב</b>
+                <span className="block text-slate-400">מסומן: תמונה מלאה — הם נכללים לפי מדד הבסיס שלהם (ללא הצמדה שנצברה). לא מסומן: שחזור טהור של תאריך הערך — כפי שהעולם נראה אז.</span>
+              </span>
+            </label>
           </div>
         </div>
 
@@ -1183,6 +1228,17 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
                 <div className="text-lg font-black text-purple-800">{fmtMoney(totalAllChecks)}</div>
               </div>
             </div>
+
+            {/* מה נוסף בין תאריך הערך להיום — ומה נעשה איתו */}
+            {valueDateNotes.length > 0 && (
+              <div className="rounded-xl border border-blue-200 bg-blue-50 p-3 space-y-1">
+                <div className="text-xs font-bold text-blue-800">ℹ️ חוזים ותוספות שנוצרו אחרי תאריך החישוב ({fmtDate(cpiCalcDate)})</div>
+                {valueDateNotes.map(function (n, i) {
+                  return <div key={i} className="text-xs text-blue-700 leading-relaxed">{n}</div>;
+                })}
+                <div className="text-[10px] text-blue-500">להחלפה בין תמונה מלאה לשחזור תאריך הערך — סימון "כלול חוזים ותוספות" ליד תאריך החישוב, ואז "חשב מחדש".</div>
+              </div>
+            )}
 
             {/* Per-unit detail */}
             {results.map(function(r, ri) {
