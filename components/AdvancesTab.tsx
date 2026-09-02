@@ -626,7 +626,8 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
           // we must treat the unit as still belonging to the contract for
           // the full year, exactly mirroring the unit-entry cutoff above.
           var unitExit = spaceExit[cs.space_id];
-          if (unitExit && unitExit < effectiveEnd && unitExit.getTime() <= cutoffDate.getTime()) {
+          // בתמונה המלאה (includeNewer) גם יציאה שנקבעה בתוספת מאוחרת נספרת
+          if (unitExit && unitExit < effectiveEnd && (includeNewer || unitExit.getTime() <= cutoffDate.getTime())) {
             effectiveEnd = unitExit;
           }
 
@@ -636,8 +637,10 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
           // can't be part of this year's check book. Base units are known from
           // signing: a signed lease starting NEXT month still gets its cheques
           // now — that is exactly when the checkbook is collected.
+          // במצב "כלול חוזים ותוספות שנוצרו אחרי תאריך החישוב" (ברירת המחדל)
+          // היחידה כן נכללת — השיקים שלה מתחילים ממועד הכניסה שלה בתוספת.
           var addedAt = spaceAddedByAmendAt[cs.space_id];
-          if (addedAt && addedAt > cutoffDate) continue;
+          if (addedAt && addedAt > cutoffDate && !includeNewer) continue;
 
           // Grace helper: given a period [pStart, pEnd], compute how much of
           // the rent and management should actually be charged.
