@@ -479,7 +479,19 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
           var cpiPeakMonth: string | undefined = undefined;
           var cpiErrorMsg: string | undefined = undefined;
 
-          if (c.indexation_method !== "none" && fromCbs && toCbs) {
+          // מדד הבסיס מאוחר מתאריך החישוב (חוזה חדש שמדד הבסיס שלו טרם
+          // "נעקף" בתאריך שנבחר, או תאריך חישוב ישן ששוחזר משמירה קודמת):
+          // מצב לגיטימי — אין הצמדה שנצברה, יחס = 1, שיקים לפי שכ"ד בסיס.
+          // בלי הבדיקה הזו הלמ"ס התבקשה לחשב "אחורה בזמן" והחזירה
+          // Error: Calculator Data שנראה כתקלה וחסם שמירה.
+          var baseAfterCalc = (function () {
+            try { return new Date(cpiBaseDate) > new Date(cpiCalcDate); } catch (e) { return false; }
+          })();
+          if (c.indexation_method !== "none" && baseAfterCalc) {
+            cpiRatio = 1;
+            cpiCurrentValue = cpiBaseValue;
+            cpiCurrentDate = String(cpiBaseDate).slice(0, 10);
+          } else if (c.indexation_method !== "none" && fromCbs && toCbs) {
             // Use retry wrapper — transient CBS failures (timeout / 5xx / brief
             // outage) auto-retried 3× with backoff before giving up. If we
             // still fail, the row gets a `cpiError` flag and the save-button
