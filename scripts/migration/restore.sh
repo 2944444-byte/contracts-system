@@ -3,7 +3,15 @@
 # Usage: restore.sh <dump-dir>
 # Requires: psql (libpq), ~/.propmanager-migration.env with NEW_DB_URL.
 set -euo pipefail
+export PATH="/usr/local/opt/libpq/bin:$PATH"
 source "$HOME/.propmanager-migration.env"
+NEW_DB_URL="$(python3 - "$NEW_DB_URL" <<'PY'
+import sys, re, urllib.parse
+u = sys.argv[1]
+m = re.match(r'^(postgres(?:ql)?://[^:]+:)(.*)(@[^@]+)$', u)
+print(m.group(1) + urllib.parse.quote(m.group(2), safe='') + m.group(3) if m else u)
+PY
+)"
 DUMP="$1"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 OLD_REF="ndvcqgrpsqykhodiyrhx"
