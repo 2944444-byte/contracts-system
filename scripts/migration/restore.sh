@@ -9,7 +9,9 @@ NEW_DB_URL="$(python3 - "$NEW_DB_URL" <<'PY'
 import sys, re, urllib.parse
 u = sys.argv[1]
 m = re.match(r'^(postgres(?:ql)?://[^:]+:)(.*)(@[^@]+)$', u)
-print(m.group(1) + urllib.parse.quote(m.group(2), safe='') + m.group(3) if m else u)
+pw = m.group(2) if m else ''
+if pw.startswith('[') and pw.endswith(']'): pw = pw[1:-1]
+print(m.group(1) + urllib.parse.quote(pw, safe='') + m.group(3) if m else u)
 PY
 )"
 DUMP="$1"
