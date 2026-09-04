@@ -146,7 +146,7 @@ export default function SettingsPage() {
             <div className="pt-2">
               <div className="rounded-xl bg-slate-50 border p-3 text-xs text-slate-500 space-y-1">
                 <div>גרסה: PropManager v{APP_VERSION}{BUILD_DATE ? " · build " + BUILD_DATE : ""} · <a href="/whats-new" className="text-blue-600 hover:underline">מה חדש</a></div>
-                <div>Supabase: ndvcqgrpsqykhodiyrhx</div>
+                <div>Supabase: {(process.env.NEXT_PUBLIC_SUPABASE_URL || "").replace(/^https?:\/\//, "").split(".")[0] || "—"}</div>
                 <div>Deploy: Vercel — main (משתמשים) / dev (בדיקות)</div>
               </div>
             </div>
