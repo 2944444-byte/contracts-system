@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { graceWindow, describeGrace, lateOpeningPenalty, mgmtFreeWindow, describeMgmtFree } from "@/lib/store-opening";
 import { leaseTerm, effectiveOpeningDate, describeLeaseTerm, describeOpening } from "@/lib/lease-term";
 import { guaranteedMonthlyRent } from "@/lib/guarantee-base";
@@ -28,6 +28,7 @@ import { penaltyTermsFromRow, penaltyTermsToRow } from "@/lib/option-penalty";
 import OptionPenaltyFields from '@/components/OptionPenaltyFields';
 import { baseIndexRuleToRow, baseIndexRuleFromRow, type BaseIndexRule } from "@/lib/base-index-rule";
 import BaseIndexRuleFields from '@/components/BaseIndexRuleFields';
+import { classifyAmendment, CHANGE_LABELS, CHANGE_ICONS, type AmendmentChange } from "@/lib/amendment-kind";
 import MgmtProtectionFields from '@/components/MgmtProtectionFields';
 import { mgmtProtectionFromRow, mgmtProtectionToRow, emptyMgmtProtection, type MgmtProtection } from '@/lib/mgmt-protection';
 import { revenueProtectionFromRow, revenueProtectionToRow, emptyRevenueProtection, type RevenueProtection } from '@/lib/revenue-protection';
@@ -116,6 +117,33 @@ function fmtMoney(n: number) {
   return "₪" + (n ?? 0).toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+
+// ─── תוספות להסכם: מה כל תוספת שינתה, ומה הטופס הזה עומד לדרוס ────────────
+// חוזה בסיס עם תוספות: העריכה כאן משנה את הבסיס בלבד, אבל אם המשתמש נוגע
+// בתחום שכבר הוסדר בתוספת (תקופה, שכ"ד, תשלום, ביטחונות, יחידות) — הוא צריך
+// לדעת שהוא עלול לסתור אותה, ולאשר במפורש. החתימות משוות את הטופס ברגע
+// הטעינה למצבו ברגע השמירה, כך ששינוי "טכני" (שמירה בלי לגעת) לא מציק.
+type AmendSummary = { id: string; number: number | null; date: string | null; notes: string | null; changes: AmendmentChange[]; label: string };
+type AmendSig = { term: string; rent: string; payment: string; guarantees: string; units: string };
+const AMEND_GROUP: Record<AmendmentChange, keyof AmendSig | null> = {
+  term: "term", rent: "rent", payment: "payment", guarantees: "guarantees", units: "units", area: "units", parking: null, other: null,
+};
+function amendSigOf(p: {
+  endDate: string; rentPerSqm: any; revenuePct: any;
+  paymentMethod: string; paymentFreq: string; paymentDay: any;
+  addGuarantee: boolean; guaranteeType: string; guaranteeAmt: any; guaranteeEnd: string; extras: ExtraGuarantee[];
+  spaceIds: string[];
+}): AmendSig {
+  return {
+    term: String(p.endDate || "").slice(0, 10),
+    rent: JSON.stringify([Number(p.rentPerSqm) || 0, Number(p.revenuePct) || 0]),
+    payment: JSON.stringify([p.paymentMethod || "", p.paymentFreq || "", Number(p.paymentDay) || 1]),
+    guarantees: JSON.stringify(p.addGuarantee ? [[p.guaranteeType || "", Number(p.guaranteeAmt) || 0, String(p.guaranteeEnd || "").slice(0, 10)]].concat(
+      (p.extras || []).map(function(e){ return [e.type || "", Number(e.amount_required) || 0, String(e.end_date || "").slice(0, 10)]; })) : []),
+    units: (p.spaceIds || []).slice().sort().join(","),
+  };
+}
+
 export default function ContractEditPage() {
   const router = useRouter();
   const params = useParams();
@@ -139,6 +167,8 @@ export default function ContractEditPage() {
   const [selSpaces, setSelSpaces] = useState<string[]>([]);
   const [originalBaseSpaceIds, setOriginalBaseSpaceIds] = useState<string[]>([]);
   const [contractHasAmendments, setContractHasAmendments] = useState(false);
+  const [amendSummaries, setAmendSummaries] = useState<AmendSummary[]>([]);
+  const amendBaselineRef = useRef<AmendSig | null>(null);
   const [contractType, setContractType] = useState("regular");
   const [showNewTenant, setShowNewTenant] = useState(false);
   const [showNewProperty, setShowNewProperty] = useState(false);
@@ -397,6 +427,15 @@ export default function ContractEditPage() {
       if (amends && amends.length > 0) {
         hasAmendments = true;
         setContractHasAmendments(true);
+        // מה כל תוספת שינתה — נגזר מהשוואה לצילום שלפניה (כמו במסך החוזים).
+        var prevSnap: any = { ...c, contract_spaces: cs ?? [] };
+        var sums: AmendSummary[] = [];
+        amends.forEach(function(a: any) {
+          var k = classifyAmendment({ amendment: a, prev: prevSnap });
+          sums.push({ id: a.id, number: a.amendment_number ?? null, date: a.amendment_date ?? a.start_date ?? null, notes: a.notes ?? null, changes: k.changes, label: k.label });
+          prevSnap = (a.contract_spaces && a.contract_spaces.length > 0) ? a : { ...a, contract_spaces: prevSnap.contract_spaces };
+        });
+        setAmendSummaries(sums);
         var latest = amends[amends.length - 1];
         // Override spaces with latest amendment's spaces
         if (latest.contract_spaces?.length > 0) {
@@ -717,6 +756,20 @@ export default function ContractEditPage() {
       // own amount/issuer/expiry — editable here rather than being wiped on save.
       setAdditionalGuarantees(guarSorted.slice(1).map(extraGuaranteeFromRow));
     }
+    // חתימת הטופס ברגע הטעינה — הבסיס להשוואה בשמירה מול תוספות קיימות.
+    var g0: any = guarSorted.length > 0 ? guarSorted[0] : null;
+    amendBaselineRef.current = amendSigOf({
+      endDate: effEnd,
+      rentPerSqm: (effectiveRent || c.rent_per_sqm)?.toString() ?? "",
+      revenuePct: c.revenue_pct?.toString() ?? "",
+      paymentMethod: c.payment_method ?? "checks_advance", paymentFreq: c.payment_frequency ?? "monthly", paymentDay: c.payment_day?.toString() ?? "1",
+      addGuarantee: !!g0,
+      guaranteeType: g0 ? (g0.guarantee_type ?? "bank") : "bank",
+      guaranteeAmt: g0 ? (g0.amount_required?.toString() ?? "") : "",
+      guaranteeEnd: g0 ? (g0.end_date?.split("T")[0] ?? "") : "",
+      extras: guarSorted.slice(1).map(extraGuaranteeFromRow),
+      spaceIds: spaceIds,
+    });
     if (c.deposit_calculation_method) setDepositCalcMethod(c.deposit_calculation_method as any);
     if (c.deposit_includes_mgmt) setDepositIncludesMgmt(true);
     if (c.deposit_months != null) setDepositMonths(Number(c.deposit_months) || 1);
@@ -825,6 +878,33 @@ export default function ContractEditPage() {
     if (!tenantId || !propertyId || !startDate || !endDate || !hasAnyRent) {
       alert("נא מלא כל שדות חובה");
       return;
+    }
+    // תוספות קיימות: שינוי בתחום שכבר הוסדר בתוספת דורש אישור מפורש.
+    if (amendSummaries.length > 0 && amendBaselineRef.current) {
+      var curSig = amendSigOf({
+        endDate: endDate, rentPerSqm: rentPerSqm, revenuePct: revenuePct,
+        paymentMethod: paymentMethod, paymentFreq: paymentFreq, paymentDay: paymentDay,
+        addGuarantee: addGuarantee, guaranteeType: guaranteeType, guaranteeAmt: guaranteeAmt, guaranteeEnd: guaranteeEnd, extras: additionalGuarantees,
+        spaceIds: selSpaces,
+      });
+      var baseSig = amendBaselineRef.current;
+      var hits: string[] = [];
+      amendSummaries.forEach(function(a) {
+        a.changes.forEach(function(ch) {
+          var grp = AMEND_GROUP[ch];
+          if (!grp || curSig[grp] === baseSig[grp]) return;
+          var line = "• תוספת" + (a.number != null ? " מס' " + a.number : "") + (a.date ? " מיום " + new Date(a.date).toLocaleDateString("he-IL") : "") + " — " + CHANGE_ICONS[ch] + " " + CHANGE_LABELS[ch];
+          if (hits.indexOf(line) === -1) hits.push(line);
+        });
+      });
+      if (hits.length > 0) {
+        var ok = window.confirm(
+          "שים לב: אתה משנה תנאים שכבר הוסדרו בתוספת להסכם:\n\n" + hits.join("\n") +
+          "\n\nהעריכה משנה את חוזה הבסיס בלבד ואינה מבטלת את התוספת — אבל אם השינוי כאן סותר אותה, המערכת תציג נתונים סותרים. " +
+          "אם הכוונה היא לשנות את מה שנקבע בתוספת, עדיף לערוך או למחוק את התוספת עצמה במסך החוזים.\n\nלהמשיך בשמירה בכל זאת?"
+        );
+        if (!ok) return;
+      }
     }
     setSaving(true);
     try {
@@ -1240,6 +1320,24 @@ export default function ContractEditPage() {
           ← חזרה לחוזים
         </button>
       </div>
+
+      {amendSummaries.length > 0 && (
+        <div className="mb-6 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm">
+          <div className="font-bold text-amber-800">📎 לחוזה זה {amendSummaries.length === 1 ? "תוספת אחת להסכם" : amendSummaries.length + " תוספות להסכם"} — הן נשארות בתוקף</div>
+          <ul className="mt-1.5 space-y-0.5 text-amber-900">
+            {amendSummaries.map(function(a) {
+              return (
+                <li key={a.id} className="flex flex-wrap items-baseline gap-x-2">
+                  <span className="font-semibold">תוספת{a.number != null ? " מס' " + a.number : ""}{a.date ? " · " + new Date(a.date).toLocaleDateString("he-IL") : ""}</span>
+                  <span>{a.changes.map(function(ch){ return CHANGE_ICONS[ch] + " " + CHANGE_LABELS[ch]; }).join(" · ")}</span>
+                  {a.notes && <span className="text-xs text-amber-700">— {a.notes}</span>}
+                </li>
+              );
+            })}
+          </ul>
+          <div className="text-xs text-amber-700 mt-1.5">העריכה כאן משנה את חוזה הבסיס בלבד. שינוי בתחום שכבר הוסדר בתוספת (תקופה, שכ"ד, תשלום, ביטחונות, יחידות) יבקש אישור לפני השמירה; כדי לשנות את מה שנקבע בתוספת — ערוך או מחק את התוספת במסך החוזים.</div>
+        </div>
+      )}
 
       {/* Steps */}
       <div className="flex gap-0 mb-8">
