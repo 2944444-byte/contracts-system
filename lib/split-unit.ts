@@ -11,8 +11,11 @@
 // לשוכר המקבל תוספת "הוספת יחידות" — אותן קונבנציות בדיוק כמו במסך החוזים,
 // כך שמנועי החיוב, המקדמות וההצמדה קוראים את זה בלי לדעת שהיה פיצול.
 //
-// מגבלה ידועה: השטח ההיסטורי של היחידה המקורית אינו נשמר ברשומת היחידה
-// (כמו בעריכת שטח ידנית). הוא נרשם ב-amendment_prev.split וביומן הביקורת.
+// היסטוריה: לפני שהיחידה משתנה, כל שורת contract_spaces שמצביעה עליה (הבסיס
+// של השוכר המחזיק, תוספות קודמות שלו, וחוזים שהסתיימו) מקבלת
+// area_override = השטח המקורי. csArea() מעדיף אותו על השטח החי, ולכן הפרשי
+// הצמדה, שכ"ד, דמי ניהול וכל חישוב לפי מ"ר לתקופות שלפני הפיצול ממשיכים
+// להשתמש בשטח שהיה נכון אז. הצילומים החדשים (אחרי הפיצול) בלי override.
 
 import { supabase } from "@/lib/supabase";
 import { logAudit } from "@/lib/audit-log";
@@ -51,7 +54,7 @@ export type SplitResult = {
   amendments: Array<{ contractId: string; amendmentId: string; kind: "holder" | "transfer" }>;
 };
 
-const CS_SELECT = "space_id,charge_method,fixed_rent,price_per_sqm,index_base_value,index_base_date,use_original_index";
+const CS_SELECT = "space_id,charge_method,fixed_rent,price_per_sqm,index_base_value,index_base_date,use_original_index,area_override";
 
 export function partsTotal(parts: SplitPart[]): number {
   return Math.round(parts.reduce(function (s, p) { return s + (Number(p.area) || 0); }, 0) * 100) / 100;
@@ -89,7 +92,7 @@ async function loadEffectiveSpaces(contractId: string): Promise<{ base: any; eff
   if (error || !base) throw new Error("החוזה לא נטען: " + (error?.message || contractId));
   const { data: baseCs } = await supabase.from("contract_spaces").select(CS_SELECT).eq("contract_id", contractId);
   const { data: amends, count } = await supabase.from("contracts")
-    .select("id, contract_spaces(" + CS_SELECT + ")", { count: "exact" })
+    .select("id, contract_spaces(area_override," + CS_SELECT + ")", { count: "exact" })
     .eq("parent_contract_id", contractId).eq("is_amendment", true)
     .order("amendment_number", { ascending: false });
   const latestWithSpaces: any = ((amends || []) as any[]).find(function (a: any) { return (a.contract_spaces || []).length > 0; });
@@ -146,6 +149,14 @@ export async function performUnitSplit(input: SplitInput): Promise<SplitResult> 
   const origName: string = space.space_name;
   const origArea: number = Number(space.area) || 0;
   const docUrl = input.documentUrl?.trim() || null;
+
+  // 0. Freeze the pre-split area on every snapshot row that points at this unit
+  //    (holder base + earlier amendments + ended contracts). Idempotent and
+  //    harmless if a later step fails: the frozen value equals today's area.
+  if (origArea > 0) {
+    const { error: fErr } = await supabase.from("contract_spaces").update({ area_override: origArea }).eq("space_id", space.id).is("area_override", null);
+    if (fErr) throw new Error("הקפאת השטח ההיסטורי נכשלה: " + fErr.message);
+  }
 
   // The retained part reuses the original row: the first "keep" part when a
   // tenant holds the unit, otherwise simply the first part.
@@ -210,12 +221,14 @@ export async function performUnitSplit(input: SplitInput): Promise<SplitResult> 
           use_original_index: origCs?.use_original_index ?? true,
           index_base_value: origCs?.index_base_value ?? null,
           index_base_date: origCs?.index_base_date ?? null,
+          area_override: null as number | null,
         };
       });
     const rows = others.map(function (cs: any) {
       return {
         space_id: cs.space_id, charge_method: cs.charge_method || "per_sqm", price_per_sqm: cs.price_per_sqm ?? null, fixed_rent: cs.fixed_rent ?? null,
         use_original_index: cs.use_original_index ?? true, index_base_value: cs.index_base_value ?? null, index_base_date: cs.index_base_date ?? null,
+        area_override: cs.area_override ?? null,
       };
     }).concat(keepRows);
     await areasFor(rows.map(function (r) { return r.space_id; }), areaKnown);
@@ -244,13 +257,14 @@ export async function performUnitSplit(input: SplitInput): Promise<SplitResult> 
       return {
         space_id: cs.space_id, charge_method: cs.charge_method || "per_sqm", price_per_sqm: cs.price_per_sqm ?? null, fixed_rent: cs.fixed_rent ?? null,
         use_original_index: cs.use_original_index ?? true, index_base_value: cs.index_base_value ?? null, index_base_date: cs.index_base_date ?? null,
+        area_override: cs.area_override ?? null,
       };
     });
     const added: string[] = [];
     byTarget[targetId].forEach(function (i) {
       const p = input.parts[i];
       const price = p.pricePerSqm !== undefined && p.pricePerSqm !== "" ? Number(p.pricePerSqm) : (Number(t.base.rent_per_sqm) || 0);
-      rows.push({ space_id: idOf(i), charge_method: "per_sqm", price_per_sqm: price, fixed_rent: null, use_original_index: true, index_base_value: null, index_base_date: null });
+      rows.push({ space_id: idOf(i), charge_method: "per_sqm", price_per_sqm: price, fixed_rent: null, use_original_index: true, index_base_value: null, index_base_date: null, area_override: null });
       added.push(p.name.trim() + " (" + fmtArea(Number(p.area)) + ' מ"ר, ₪' + price.toLocaleString("he-IL") + '/מ"ר)');
     });
     await areasFor(rows.map(function (r) { return r.space_id; }), areaKnown);

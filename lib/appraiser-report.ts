@@ -16,6 +16,7 @@ import { graceFactorsFor } from "@/lib/store-opening";
 import { minRentPerSqmAtDate } from "@/lib/min-rent";
 import { isParkingOnly, billableParkingRows, parkingMonthlyTotal, parkingSpotCount, parkingRentAtDate } from "@/lib/parking-rent";
 import { getVatPct } from "@/lib/vat";
+import { csArea } from "@/lib/contract-area";
 
 const LIVE = ["active", "extended", "expiring", "upcoming", "future"];
 const TYPE_LABELS: Record<string, string> = { office: "משרדים", retail: "מסחר", store: "חנות", warehouse: "מחסן", industrial: "תעשיה", shed: "סככה", yard: "חצר צמודה", other: "אחר" };
@@ -32,7 +33,7 @@ export async function buildAppraiserWorkbook(params: { propertyIds: string[]; ti
   const [{ data: props }, { data: contracts }, { data: allSpaces }, cpiRes, vatPct] = await Promise.all([
     supabase.from("properties").select("id,name,city,total_area").in("id", pids),
     supabase.from("contracts")
-      .select("id, property_id, tenant_id, contract_type, status, start_date, end_date, rent_per_sqm, charged_area, investment_addition, rent_type, revenue_pct, min_rent_per_sqm, minimum_rent, payment_method, payment_frequency, payment_day, indexation_method, index_mechanism, index_base_value, index_base_date, early_termination_allowed, termination_notice_days, termination_by, grace_months, grace_days, grace_phase2_days, grace_type, grace_discount_pct, grace_mgmt_discount_pct, grace_ends_on_opening, mgmt_charge_starts, mgmt_free_max_days, works_start_date, planned_handover_date, actual_handover_date, planned_opening_date, actual_opening_date, opening_rule, opening_max_days_from_handover, lease_period_value, lease_period_unit, tenants(name), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area,space_type))")
+      .select("id, property_id, tenant_id, contract_type, status, start_date, end_date, rent_per_sqm, charged_area, investment_addition, rent_type, revenue_pct, min_rent_per_sqm, minimum_rent, payment_method, payment_frequency, payment_day, indexation_method, index_mechanism, index_base_value, index_base_date, early_termination_allowed, termination_notice_days, termination_by, grace_months, grace_days, grace_phase2_days, grace_type, grace_discount_pct, grace_mgmt_discount_pct, grace_ends_on_opening, mgmt_charge_starts, mgmt_free_max_days, works_start_date, planned_handover_date, actual_handover_date, planned_opening_date, actual_opening_date, opening_rule, opening_max_days_from_handover, lease_period_value, lease_period_unit, tenants(name), contract_spaces(area_override,space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area,space_type))")
       .in("property_id", pids).in("status", LIVE).eq("is_amendment", false).order("start_date"),
     supabase.from("spaces").select("id,property_id,space_name,space_type,area,floor,status").in("property_id", pids).order("space_name"),
     supabase.from("cpi_records").select("year,month,value").eq("base_year", 2022).order("year", { ascending: false }).order("month", { ascending: false }).limit(1),
@@ -43,7 +44,7 @@ export async function buildAppraiserWorkbook(params: { propertyIds: string[]; ti
   const knownIdx = (cpiRes.data && cpiRes.data[0]) ? { y: Number(cpiRes.data[0].year), m: Number(cpiRes.data[0].month), v: Number(cpiRes.data[0].value) } : null;
 
   const [{ data: amends }, { data: tiers }, { data: options }, { data: parking }] = await Promise.all([
-    cids.length ? supabase.from("contracts").select("id,parent_contract_id,end_date,amendment_date,amendment_number,start_date,rent_per_sqm,contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area,space_type))").eq("is_amendment", true).in("parent_contract_id", cids) : Promise.resolve({ data: [] } as any),
+    cids.length ? supabase.from("contracts").select("id,parent_contract_id,end_date,amendment_date,amendment_number,start_date,rent_per_sqm,contract_spaces(area_override,space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area,space_type))").eq("is_amendment", true).in("parent_contract_id", cids) : Promise.resolve({ data: [] } as any),
     cids.length ? supabase.from("contract_price_tiers").select("*").in("contract_id", cids).is("option_id", null) : Promise.resolve({ data: [] } as any),
     cids.length ? supabase.from("contract_options").select("id,contract_id,option_number,is_exercised,status,start_date,end_date,duration_months,duration_years").in("contract_id", cids) : Promise.resolve({ data: [] } as any),
     cids.length ? supabase.from("parking_subscriptions").select("contract_id,monthly_fee,quantity,is_included_in_rent,subscription_type,status").eq("status", "active") : Promise.resolve({ data: [] } as any),
@@ -123,7 +124,7 @@ export async function buildAppraiserWorkbook(params: { propertyIds: string[]; ti
     const schedByCs: Record<string, any> = {};
     const baseStart = d(c.start_date);
     effSpaces.forEach(function (cs: any, i: number) {
-      const area = Number(cs.spaces?.area) || 0;
+      const area = csArea(cs);
       const name = cs.spaces?.space_name || "יחידה";
       const ent = unitEntry[cs.space_id];
       const addedNote = ent && baseStart && ent.getTime() > baseStart.getTime() ? "נוסף בתוספת מ-" + fmtD(ent) : "";
@@ -147,7 +148,7 @@ export async function buildAppraiserWorkbook(params: { propertyIds: string[]; ti
     // מינימום פדיון (חוזה אחוז ממחזור ללא שכ"ד יחידות)
     const unitsMonthly = units.reduce(function (a, u) { return a + u.monthly; }, 0);
     if (unitsMonthly === 0 && (c.rent_type === "revenue_pct" || Number(c.revenue_pct) > 0)) {
-      const mArea = effSpaces.reduce(function (a: number, x: any) { return a + (Number(x?.spaces?.area) || 0); }, 0) || Number(c.charged_area) || 0;
+      const mArea = effSpaces.reduce(function (a: number, x: any) { return a + csArea(x); }, 0) || Number(c.charged_area) || 0;
       const minPsm = Number(c.min_rent_per_sqm) > 0 ? minRentPerSqmAtDate({ baseMinPerSqm: Number(c.min_rent_per_sqm), tiers: cTiers, contractStart: c.start_date, date: today }) : 0;
       const minMonthly = minPsm > 0 ? minPsm * mArea : (Number(c.minimum_rent) || 0);
       if (minMonthly > 0) units.push({ unit: "מינימום פדיון (" + (Number(c.revenue_pct) || 0) + "% ממחזור)", area: mArea || null, basePsm: minPsm > 0 ? r2(minPsm) : null, idxPsm: minPsm > 0 ? r2(minPsm * ratio) : null, monthly: r2(minMonthly * ratio), note: "שכ\"ד פדיון — מוצג המינימום החוזי" });
@@ -182,7 +183,7 @@ export async function buildAppraiserWorkbook(params: { propertyIds: string[]; ti
         if (sched) baseM += rentAtDate(sched, mS);
       });
       if (baseM === 0 && (c.rent_type === "revenue_pct" || Number(c.revenue_pct) > 0)) {
-        const mArea2 = effSpaces.reduce(function (a: number, x: any) { return a + (Number(x?.spaces?.area) || 0); }, 0) || Number(c.charged_area) || 0;
+        const mArea2 = effSpaces.reduce(function (a: number, x: any) { return a + csArea(x); }, 0) || Number(c.charged_area) || 0;
         const minPsm2 = Number(c.min_rent_per_sqm) > 0 ? minRentPerSqmAtDate({ baseMinPerSqm: Number(c.min_rent_per_sqm), tiers: cTiers, contractStart: c.start_date, date: mS }) : 0;
         baseM = minPsm2 > 0 ? minPsm2 * mArea2 : (Number(c.minimum_rent) || 0);
       }

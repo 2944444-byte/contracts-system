@@ -2,6 +2,7 @@
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
 import { getVatPct, getVatRates, vatPctAt } from "@/lib/vat";
+import { csArea } from "@/lib/contract-area";
 
 function fmtMoney(n: number) { return "₪" + (n ?? 0).toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
@@ -134,7 +135,7 @@ export default function SavedAdvancesTab({ properties }: Props) {
   // Load contracts for manual add
   async function openAddModal() {
     var { data } = await supabase.from("contracts")
-      .select("id, rent_per_sqm, vat_type, tenants(name), contract_spaces(space_id, spaces(space_name, area))")
+      .select("id, rent_per_sqm, vat_type, tenants(name), contract_spaces(area_override,space_id, spaces(space_name, area))")
       .eq("property_id", propId)
       .in("status", ["active", "extended"])
       .eq("is_amendment", false);
@@ -621,7 +622,7 @@ export default function SavedAdvancesTab({ properties }: Props) {
                 <select value={addSpaceId} onChange={function (e) { setAddSpaceId(e.target.value); }} className={ic}>
                   <option value="">בחר יחידה...</option>
                   {(addContracts.find(function (c: any) { return c.id === addContractId; })?.contract_spaces || []).map(function (cs: any) {
-                    return <option key={cs.space_id} value={cs.space_id}>{cs.spaces?.space_name || cs.space_id} ({cs.spaces?.area || 0} מ&quot;ר)</option>;
+                    return <option key={cs.space_id} value={cs.space_id}>{cs.spaces?.space_name || cs.space_id} ({csArea(cs)} מ&quot;ר)</option>;
                   })}
                 </select>
               </div>

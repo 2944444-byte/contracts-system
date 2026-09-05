@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { subtractBusinessDays } from "./business-days";
+import { csArea } from "@/lib/contract-area";
 
 function fmtMoney(n: number) { return "₪" + (n || 0).toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function fmtDate(d: string) { return d ? new Date(d).toLocaleDateString("he-IL") : "—"; }
@@ -9,7 +10,7 @@ export function monthlyRentFromSpaces(spaces: any[]): number {
   if (!spaces || !spaces.length) return 0;
   let total = 0, counted = 0;
   spaces.forEach(function (cs: any) {
-    const area = cs?.spaces?.area ?? 0;
+    const area = csArea(cs);
     if (cs.charge_method === "included") { }
     else if (cs.charge_method === "fixed" || (cs.fixed_rent && cs.fixed_rent > 0)) { total += Number(cs.fixed_rent || 0); counted++; }
     else if (cs.charge_method === "per_sqm" || (cs.price_per_sqm && cs.price_per_sqm > 0)) { total += Number(cs.price_per_sqm || 0) * Number(area); counted++; }
@@ -104,7 +105,7 @@ export async function autoCreateGuaranteeRenewalLetters(
 ): Promise<Array<{ tenantName: string; ref: string; deadline: string; needsUpdate: boolean }>> {
   const out: Array<{ tenantName: string; ref: string; deadline: string; needsUpdate: boolean }> = [];
   const { data: guarantees } = await supabase.from("guarantees")
-    .select("*, contracts(id, property_id, guarantee_months, guarantee_amount, tenants(name), contract_spaces(charge_method, fixed_rent, price_per_sqm, revenue_pct, min_rent, spaces(area)))")
+    .select("*, contracts(id, property_id, guarantee_months, guarantee_amount, tenants(name), contract_spaces(area_override,charge_method, fixed_rent, price_per_sqm, revenue_pct, min_rent, spaces(area)))")
     .eq("status", "active");
 
   const compCache: Record<string, any> = {};

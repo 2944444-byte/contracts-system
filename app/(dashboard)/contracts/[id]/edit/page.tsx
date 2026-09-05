@@ -419,7 +419,7 @@ export default function ContractEditPage() {
 
     if (!c.is_amendment) {
       var { data: amendsData } = await supabase.from("contracts")
-        .select("*, contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,index_base_value,index_base_date,use_original_index)")
+        .select("*, contract_spaces(area_override,space_id,charge_method,fixed_rent,price_per_sqm,index_base_value,index_base_date,use_original_index)")
         .eq("parent_contract_id", id)
         .eq("is_amendment", true)
         .order("amendment_number");

@@ -1,3 +1,4 @@
+import { csArea } from "@/lib/contract-area";
 // שטחי עזר (סככה, חצר צמודה) — שני מנגנונים גנריים:
 //
 // 1. שכ"ד "כלול במחיר" (charge_method='included'): יחידת עזר שההסכם קובע
@@ -47,6 +48,6 @@ export function spaceMonthlyBase(cs: any, contractRentPerSqm: number): number {
   if (!cs) return 0;
   if (cs.charge_method === "included") return 0;
   if (cs.charge_method === "fixed" && Number(cs.fixed_rent) > 0) return Number(cs.fixed_rent);
-  const area = Number(cs?.spaces?.area) || Number(cs?.area) || 0;
+  const area = csArea(cs);
   return (Number(cs.price_per_sqm) || Number(contractRentPerSqm) || 0) * area;
 }

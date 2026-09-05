@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
-import { contractArea } from "@/lib/contract-area";
+import { contractArea, csArea } from "@/lib/contract-area";
 import { useRouter } from "next/navigation";
 import { supabase } from '@/lib/supabase';
 import { PageHero } from '@/components/ui';
@@ -18,7 +18,7 @@ function calcContractRent(c: any): number {
   if (c.contract_spaces?.length > 0) {
     c.contract_spaces.forEach(function(cs: any) {
       if (cs.charge_method === "included") { } else if (cs.charge_method === "fixed" && cs.fixed_rent) total += Number(cs.fixed_rent);
-      else total += (Number(cs.price_per_sqm) || Number(c.rent_per_sqm) || 0) * (cs.spaces?.area || 0);
+      else total += (Number(cs.price_per_sqm) || Number(c.rent_per_sqm) || 0) * csArea(cs);
     });
   }
   if (total === 0) total = (Number(c.rent_per_sqm) || 0) * contractArea(c);
@@ -57,7 +57,7 @@ export default function GroupsPage() {
       supabase.from("properties").select("id,name,group_id,total_area,city,property_type").order("name"),
       // upcoming/future included: a signed lease holds its units in the group's
       // occupancy even before its term begins. Income filters them out below.
-      supabase.from("contracts").select("id, status, start_date, rent_type, revenue_pct, min_rent_per_sqm, minimum_rent, rent_per_sqm, charged_area, investment_addition, property_id, end_date, tenants(name), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area))").in("status",["active","expiring","extended","upcoming","future"]),
+      supabase.from("contracts").select("id, status, start_date, rent_type, revenue_pct, min_rent_per_sqm, minimum_rent, rent_per_sqm, charged_area, investment_addition, property_id, end_date, tenants(name), contract_spaces(area_override,space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area))").in("status",["active","expiring","extended","upcoming","future"]),
       supabase.from("spaces").select("id, property_id, status, space_name, area").order("space_name"),
       supabase.from("guarantees").select("id,contract_id,guarantee_type,amount_required,end_date,status").eq("status","active"),
     ]);

@@ -121,10 +121,10 @@ export default function InsurancesPage() {
   async function loadAll() {
     const [{ data: b }, { data: t }, { data: p }, { data: c }, { data: ch }] = await Promise.all([
       supabase.from("insurances_building").select("*, properties(name)").order("end_date"),
-      supabase.from("insurances_tenant").select("*, contracts(id, property_id, is_amendment, parent_contract_id, no_tenant_insurance_required, insurance_requirements, tenants(name), properties(name), contract_spaces(spaces(space_name)))").order("end_date"),
+      supabase.from("insurances_tenant").select("*, contracts(id, property_id, is_amendment, parent_contract_id, no_tenant_insurance_required, insurance_requirements, tenants(name), properties(name), contract_spaces(area_override,spaces(space_name)))").order("end_date"),
       supabase.from("properties").select("id,name").order("name"),
       supabase.from("contracts")
-        .select("id, tenant_id, property_id, start_date, end_date, status, is_amendment, parent_contract_id, amendment_date, amendment_number, no_tenant_insurance_required, insurance_requirements, tenants(name), properties(name), contract_spaces(spaces(space_name))")
+        .select("id, tenant_id, property_id, start_date, end_date, status, is_amendment, parent_contract_id, amendment_date, amendment_number, no_tenant_insurance_required, insurance_requirements, tenants(name), properties(name), contract_spaces(area_override,spaces(space_name))")
         .in("status",["active","expiring","extended","upcoming"])
         .order("start_date", { ascending: false }),
       // Existing insurance charges — to flag policies whose charge was already created.

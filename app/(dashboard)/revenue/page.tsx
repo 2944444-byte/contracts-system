@@ -87,7 +87,7 @@ export default function RevenuePage() {
     try {
       const sp = await supabase.from("spaces").select("id,area").eq("property_id", c.property_id);
       const cn = await supabase.from("contracts")
-        .select("id,status,start_date,end_date,actual_opening_date,planned_opening_date,actual_handover_date,planned_handover_date,opening_rule,opening_max_days_from_handover,contract_spaces(space_id)")
+        .select("id,status,start_date,end_date,actual_opening_date,planned_opening_date,actual_handover_date,planned_handover_date,opening_rule,opening_max_days_from_handover,contract_spaces(area_override,space_id)")
         .eq("property_id", c.property_id).eq("is_amendment", false);
       const spaces = sp.data || [], cons = cn.data || [];
       const openings: Record<string, Date | null> = {};
@@ -364,10 +364,10 @@ export default function RevenuePage() {
     }
     const [baseRes, amendsRes] = await Promise.all([
       supabase.from("contracts")
-        .select("id, property_id, start_date, charged_area, contract_spaces(space_id, spaces(space_name,area))")
+        .select("id, property_id, start_date, charged_area, contract_spaces(area_override,space_id, spaces(space_name,area))")
         .eq("id", contractId).single(),
       supabase.from("contracts")
-        .select("id, amendment_date, start_date, charged_area, contract_spaces(space_id, spaces(space_name,area))")
+        .select("id, amendment_date, start_date, charged_area, contract_spaces(area_override,space_id, spaces(space_name,area))")
         .eq("parent_contract_id", contractId)
         .eq("is_amendment", true)
         .order("amendment_date", { ascending: true }),

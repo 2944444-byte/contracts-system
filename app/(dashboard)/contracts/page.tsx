@@ -12,7 +12,7 @@ import { getScopeIds, scopeRows, getCurrentAccess } from '@/lib/permissions';
 import CalcProgress, { CalcProgressState } from '@/components/CalcProgress';
 import { buildPriceTimeline, calculateTierPreviews, buildSpaceRentSchedule, rentAtDate, type PriceTier } from '@/lib/contract-utils';
 import { penaltyTermsFromRow, hasPenalty, describePenaltyTerms, penaltyMonths } from '@/lib/option-penalty';
-import { contractArea } from '@/lib/contract-area';
+import { contractArea, csArea } from '@/lib/contract-area';
 import { classifyAmendment, describeAmendment } from '@/lib/amendment-kind';
 import { freeContractSpaces } from '@/lib/contractSync';
 import { previewOptionDecline, applyOptionDecline } from '@/lib/option-decline';
@@ -351,7 +351,7 @@ export default function ContractsPage() {
 
   async function loadContracts() {
     const { data } = await supabase.from("contracts")
-      .select("*, tenants(name,phone,primary_email,company_name), properties(name,city), contract_options(id,option_number,duration_months,duration_years,start_date,end_date,notice_days_before_end,notice_type,status,is_exercised,rent_mechanism,rent_increase_pct,new_rent_value,option_group,exit_points,price_schedule_type,price_tiers,non_exercise_penalty_type,non_exercise_penalty_value,non_exercise_penalty_basis,non_exercise_penalty_months,non_exercise_penalty_indexed,non_exercise_penalty_vat,non_exercise_penalty_days,non_exercise_penalty_notes,declined_at,non_exercise_charge_id,cancels_revenue_protection), guarantees(id,guarantee_type,status,amount_required,amount_actual,end_date,bank,document_url,documents,delivery_trigger,delivery_offset_days,delivery_due_date,delivery_condition,delivered_at), contract_ti(id,description,ti_type,ti_amount,recovery_method,recovery_amount_monthly,recovery_start_date,recovery_end_date,payment_trigger,payment_days_after,payment_due_date,payment_installments,requires_invoice,requires_report,paid_at,paid_amount,payment_notes,notes), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,index_base_value,index_base_date,use_original_index,spaces(space_name,area))")
+      .select("*, tenants(name,phone,primary_email,company_name), properties(name,city), contract_options(id,option_number,duration_months,duration_years,start_date,end_date,notice_days_before_end,notice_type,status,is_exercised,rent_mechanism,rent_increase_pct,new_rent_value,option_group,exit_points,price_schedule_type,price_tiers,non_exercise_penalty_type,non_exercise_penalty_value,non_exercise_penalty_basis,non_exercise_penalty_months,non_exercise_penalty_indexed,non_exercise_penalty_vat,non_exercise_penalty_days,non_exercise_penalty_notes,declined_at,non_exercise_charge_id,cancels_revenue_protection), guarantees(id,guarantee_type,status,amount_required,amount_actual,end_date,bank,document_url,documents,delivery_trigger,delivery_offset_days,delivery_due_date,delivery_condition,delivered_at), contract_ti(id,description,ti_type,ti_amount,recovery_method,recovery_amount_monthly,recovery_start_date,recovery_end_date,payment_trigger,payment_days_after,payment_due_date,payment_installments,requires_invoice,requires_report,paid_at,paid_amount,payment_notes,notes), contract_spaces(area_override,space_id,charge_method,fixed_rent,price_per_sqm,index_base_value,index_base_date,use_original_index,spaces(space_name,area))")
       .order("end_date");
     // Data-level scoping: managers/viewers see only contracts of their
     // allowed properties (admin scope is null = everything).
@@ -393,7 +393,7 @@ export default function ContractsPage() {
     if (!selContract) { setAmendments([]); setParkingSubs([]); setSpaceOverlaps([]); return; }
     // Load amendments first, then check overlaps using ALL spaces (base + amendments)
     supabase.from("contracts")
-      .select("id,amendment_number,amendment_date,amendment_notes,document_url,start_date,end_date,rent_per_sqm,charged_area,payment_method,payment_frequency,payment_day,amendment_prev,contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,index_base_value,index_base_date,use_original_index,spaces(space_name,area))")
+      .select("id,amendment_number,amendment_date,amendment_notes,document_url,start_date,end_date,rent_per_sqm,charged_area,payment_method,payment_frequency,payment_day,amendment_prev,contract_spaces(area_override,space_id,charge_method,fixed_rent,price_per_sqm,index_base_value,index_base_date,use_original_index,spaces(space_name,area))")
       .eq("parent_contract_id", selContract.id)
       .eq("is_amendment", true)
       .order("amendment_number")
@@ -448,7 +448,7 @@ export default function ContractsPage() {
                 var baseIdArr = Array.from(otherBaseIds);
                 // Load latest amendment spaces for each base contract
                 var { data: otherAmends } = await supabase.from("contracts")
-                  .select("parent_contract_id, amendment_number, contract_spaces(space_id)")
+                  .select("parent_contract_id, amendment_number, contract_spaces(area_override,space_id)")
                   .in("parent_contract_id", baseIdArr)
                   .eq("is_amendment", true)
                   .order("amendment_number", { ascending: false });
@@ -568,7 +568,7 @@ export default function ContractsPage() {
         var rows = (data ?? []).filter(function(r: any){ return r.final_rent != null; });
         if (rows.length === 0) { setRevStats(null); return; }
         var area = Number(selContract.charged_area)
-          || (selContract.contract_spaces || []).reduce(function(s: number, cs: any){ return s + (Number(cs.spaces?.area) || 0); }, 0)
+          || (selContract.contract_spaces || []).reduce(function(s: number, cs: any){ return s + csArea(cs); }, 0)
           || 0;
         var sumFinal = rows.reduce(function(s: number, r: any){ return s + (Number(r.final_rent) || 0); }, 0);
         var avgFinal = sumFinal / rows.length;
@@ -635,7 +635,7 @@ export default function ContractsPage() {
         var actual: any = null;
         if (rec && Number(rec.actual_share) > 0) {
           var area = Number(rec.charged_area) || Number(selContract.charged_area)
-            || (selContract.contract_spaces || []).reduce(function(s: number, cs: any){ return s + (Number(cs.spaces?.area) || 0); }, 0) || 0;
+            || (selContract.contract_spaces || []).reduce(function(s: number, cs: any){ return s + csArea(cs); }, 0) || 0;
           actual = {
             year: rec.year,
             total: Number(rec.actual_share),
@@ -1137,12 +1137,12 @@ export default function ContractsPage() {
     if (hasPerUnitPricing && !effectiveRentPerSqm) {
       effectiveSpaces.forEach(function(cs: any) {
         if (cs.charge_method === "included") { } else if (cs.charge_method === "fixed" && cs.fixed_rent) baseRent += Number(cs.fixed_rent);
-        else baseRent += (Number(cs.price_per_sqm) || 0) * (cs.spaces?.area || 0);
+        else baseRent += (Number(cs.price_per_sqm) || 0) * csArea(cs);
       });
     } else if (effectiveSpaces.length > 0 && effectiveSpaces.some(function(cs: any){ return cs.price_per_sqm; })) {
       effectiveSpaces.forEach(function(cs: any) {
         if (cs.charge_method === "included") { } else if (cs.charge_method === "fixed" && cs.fixed_rent) baseRent += Number(cs.fixed_rent);
-        else baseRent += (Number(cs.price_per_sqm) || trueRentPerSqm) * (cs.spaces?.area || 0);
+        else baseRent += (Number(cs.price_per_sqm) || trueRentPerSqm) * csArea(cs);
       });
     } else {
       baseRent = trueRentPerSqm * (effectiveArea || 0);
@@ -1153,7 +1153,7 @@ export default function ContractsPage() {
   if (selContract && latestAmendment) {
     (selContract.contract_spaces || []).forEach(function(cs: any) {
       if (cs.charge_method === "included") { } else if (cs.charge_method === "fixed" && cs.fixed_rent) originalBaseRent += Number(cs.fixed_rent);
-      else originalBaseRent += (Number(cs.price_per_sqm) || Number(selContract.rent_per_sqm) || 0) * (cs.spaces?.area || 0);
+      else originalBaseRent += (Number(cs.price_per_sqm) || Number(selContract.rent_per_sqm) || 0) * csArea(cs);
     });
     if (originalBaseRent === 0) originalBaseRent = (Number(selContract.rent_per_sqm) || 0) * contractArea(selContract);
   }
@@ -1178,7 +1178,7 @@ export default function ContractsPage() {
   // billing can never silently disagree again.
   function unitSteppedMonthly(cs: any): number {
     var isFx = cs.charge_method === "fixed";
-    var area = cs.spaces?.area || 0;
+    var area = csArea(cs);
     var raw = cs.charge_method === "included" ? 0 : isFx
       ? (Number(cs.fixed_rent) || 0)
       : (Number(cs.price_per_sqm) || Number(effectiveRentPerSqm) || 0) * area;
@@ -1384,7 +1384,7 @@ export default function ContractsPage() {
             if (cEffSpaces?.length > 0) {
               cEffSpaces.forEach(function(cs: any) {
                 if (cs.charge_method === "included") { } else if (cs.charge_method === "fixed" && cs.fixed_rent) mon += Number(cs.fixed_rent);
-                else mon += (Number(cs.price_per_sqm) || Number(c.rent_per_sqm) || 0) * (cs.spaces?.area || 0);
+                else mon += (Number(cs.price_per_sqm) || Number(c.rent_per_sqm) || 0) * csArea(cs);
               });
             }
             // A turnover lease has no per-sqm rent — showing ₪0.00/חודש made it
@@ -2022,7 +2022,7 @@ export default function ContractsPage() {
                       <div className="space-y-3">
                         {effectiveSpaces.map(function(cs: any) {
                           var spaceName = cs.spaces?.space_name || "—";
-                          var area = cs.spaces?.area || 0;
+                          var area = csArea(cs);
                           var baseRent = cs.charge_method === "included" ? 0 : cs.charge_method === "fixed" ? Number(cs.fixed_rent) || 0 : (Number(cs.price_per_sqm) || 0);
                           var isFixed = cs.charge_method === "fixed";
                           var spaceTiersList = rawTiersWithSpace.filter(function(t: any) { return t.space_id === cs.space_id; });
@@ -2263,7 +2263,7 @@ export default function ContractsPage() {
                     <div className="space-y-1.5">
                       {effectiveSpaces.map(function(cs: any) {
                         var spName = cs.spaces?.space_name || "—";
-                        var spArea = cs.spaces?.area || 0;
+                        var spArea = csArea(cs);
                         var isFixed = cs.charge_method === "fixed";
                         // Raw base price
                         var rawMonthly = cs.charge_method === "included" ? 0 : isFixed
@@ -2379,7 +2379,7 @@ export default function ContractsPage() {
                       var amRent = 0;
                       amSpaces.forEach(function(cs: any) {
                         if (cs.charge_method === "included") { } else if (cs.charge_method === "fixed" && cs.fixed_rent) amRent += Number(cs.fixed_rent);
-                        else amRent += (Number(cs.price_per_sqm) || Number(am.rent_per_sqm) || 0) * (cs.spaces?.area || 0);
+                        else amRent += (Number(cs.price_per_sqm) || Number(am.rent_per_sqm) || 0) * csArea(cs);
                       });
                       if (amRent === 0) amRent = (Number(am.rent_per_sqm) || 0) * contractArea(am);
 
@@ -2396,7 +2396,7 @@ export default function ContractsPage() {
                       var prevRent = 0;
                       prevSpaces.forEach(function(cs: any) {
                         if (cs.charge_method === "included") { } else if (cs.charge_method === "fixed" && cs.fixed_rent) prevRent += Number(cs.fixed_rent);
-                        else prevRent += (Number(cs.price_per_sqm) || Number(selContract.rent_per_sqm) || 0) * (cs.spaces?.area || 0);
+                        else prevRent += (Number(cs.price_per_sqm) || Number(selContract.rent_per_sqm) || 0) * csArea(cs);
                       });
                       if (prevRent === 0) prevRent = (Number(selContract.rent_per_sqm) || 0) * contractArea(selContract);
 
@@ -2580,10 +2580,10 @@ export default function ContractsPage() {
                               <div className="rounded-lg bg-green-50 border border-green-200 px-3 py-2">
                                 <div className="text-sm font-bold text-green-700 mb-1">➕ יחידות שנוספו</div>
                                 {addedSpaces.map(function(cs: any) {
-                                  var rent = cs.charge_method === "fixed" ? Number(cs.fixed_rent) : (Number(cs.price_per_sqm)||0) * (cs.spaces?.area||0);
+                                  var rent = cs.charge_method === "fixed" ? Number(cs.fixed_rent) : (Number(cs.price_per_sqm)||0) * csArea(cs);
                                   return (
                                     <div key={cs.space_id} className="flex justify-between text-sm">
-                                      <span className="text-slate-700">{cs.spaces?.space_name} ({cs.spaces?.area} מ&quot;ר)</span>
+                                      <span className="text-slate-700">{cs.spaces?.space_name} ({csArea(cs)} מ&quot;ר)</span>
                                       <span className="font-bold text-green-700">{fmtMoney(rent)}/חודש</span>
                                     </div>
                                   );
@@ -2598,7 +2598,7 @@ export default function ContractsPage() {
                                 {removedSpaces.map(function(cs: any) {
                                   return (
                                     <div key={cs.space_id} className="text-sm text-red-600 line-through">
-                                      {cs.spaces?.space_name} ({cs.spaces?.area} מ&quot;ר)
+                                      {cs.spaces?.space_name} ({csArea(cs)} מ&quot;ר)
                                     </div>
                                   );
                                 })}
@@ -3851,7 +3851,7 @@ export default function ContractsPage() {
 
                       // Calculate totals for the amendment record
                       var totalArea = 0;
-                      newSpaces.forEach(function(cs: any) { totalArea += cs.spaces?.area || 0; });
+                      newSpaces.forEach(function(cs: any) { totalArea += csArea(cs); });
                       amendAddSpaces.forEach(function(sid) {
                         var sp = allPropertySpaces.find(function(s){return s.id===sid;});
                         if (sp) totalArea += sp.area || 0;
@@ -3976,12 +3976,12 @@ export default function ContractsPage() {
                       for (var swapInfo of crossSwapContracts) {
                         // Load the other contract's effective spaces
                         var { data: otherContract } = await supabase.from("contracts")
-                          .select("*, tenants(name), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,index_base_value,index_base_date,use_original_index,spaces(space_name,area))")
+                          .select("*, tenants(name), contract_spaces(area_override,space_id,charge_method,fixed_rent,price_per_sqm,index_base_value,index_base_date,use_original_index,spaces(space_name,area))")
                           .eq("id", swapInfo.contractId).single();
                         if (!otherContract) continue;
                         // Get latest amendment's spaces for the other contract
                         var { data: otherAmends } = await supabase.from("contracts")
-                          .select("id, contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,index_base_value,index_base_date,use_original_index,spaces(space_name,area))")
+                          .select("id, contract_spaces(area_override,space_id,charge_method,fixed_rent,price_per_sqm,index_base_value,index_base_date,use_original_index,spaces(space_name,area))")
                           .eq("parent_contract_id", swapInfo.contractId).eq("is_amendment", true)
                           .order("amendment_number", { ascending: false }).limit(1);
                         var otherEffSpaces = (otherAmends && otherAmends.length > 0 && otherAmends[0].contract_spaces?.length > 0)
@@ -3996,7 +3996,7 @@ export default function ContractsPage() {
                           .eq("parent_contract_id", swapInfo.contractId).eq("is_amendment", true);
                         // Calculate new total area for the mirror amendment
                         var otherNewArea = 0;
-                        otherNewSpaces.forEach(function(cs: any) { otherNewArea += Number(cs.spaces?.area) || 0; });
+                        otherNewSpaces.forEach(function(cs: any) { otherNewArea += csArea(cs); });
                         swapInfo.spacesToAdd.forEach(function(sid: string) {
                           var sp = allPropertySpaces.find(function(s: any) { return s.id === sid; });
                           otherNewArea += Number(sp?.area) || 0;

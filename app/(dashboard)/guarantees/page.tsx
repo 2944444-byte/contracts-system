@@ -10,6 +10,7 @@ import { PageHero } from '@/components/ui';
 import { getScopeIds, scopeRows } from '@/lib/permissions';
 import { hasDocument } from '@/lib/guarantee-status';
 import { deliveryStatus } from '@/lib/guarantee-delivery';
+import { csArea } from "@/lib/contract-area";
 
 // Minimum months of rent that a guarantee should cover. Below this, the
 // row is flagged "underinsured". Industry norm in Israel is ~3 months.
@@ -130,10 +131,10 @@ export default function GuaranteesPage() {
   async function loadAll() {
     const [{ data: g }, { data: c }] = await Promise.all([
       supabase.from("guarantees")
-        .select("*, contracts(id, property_id, is_amendment, parent_contract_id, start_date, end_date, status, signing_date, planned_handover_date, actual_handover_date, planned_opening_date, actual_opening_date, works_start_date, works_end_date, grace_months, grace_days, grace_phase2_days, grace_type, grace_ends_on_opening, tenants(name), properties(name), contract_spaces(charge_method, fixed_rent, price_per_sqm, revenue_pct, min_rent, spaces(space_name, area)))")
+        .select("*, contracts(id, property_id, is_amendment, parent_contract_id, start_date, end_date, status, signing_date, planned_handover_date, actual_handover_date, planned_opening_date, actual_opening_date, works_start_date, works_end_date, grace_months, grace_days, grace_phase2_days, grace_type, grace_ends_on_opening, tenants(name), properties(name), contract_spaces(area_override,charge_method, fixed_rent, price_per_sqm, revenue_pct, min_rent, spaces(space_name, area)))")
         .order("end_date"),
       supabase.from("contracts")
-        .select("id, property_id, start_date, end_date, status, is_amendment, parent_contract_id, amendment_date, amendment_number, no_guarantee_required, guarantee_type, guarantee_amount, guarantee_months, tenants(name), properties(name), contract_spaces(charge_method, fixed_rent, price_per_sqm, revenue_pct, min_rent, spaces(space_name, area)), guarantees(id, status, end_date, guarantee_type)")
+        .select("id, property_id, start_date, end_date, status, is_amendment, parent_contract_id, amendment_date, amendment_number, no_guarantee_required, guarantee_type, guarantee_amount, guarantee_months, tenants(name), properties(name), contract_spaces(area_override,charge_method, fixed_rent, price_per_sqm, revenue_pct, min_rent, spaces(space_name, area)), guarantees(id, status, end_date, guarantee_type)")
         .in("status", ["active", "expiring", "extended", "upcoming"])
         .order("start_date", { ascending: false }),
     ]);
@@ -165,7 +166,7 @@ export default function GuaranteesPage() {
     if (!contract?.contract_spaces?.length) return null;
     var total = 0; var counted = 0;
     contract.contract_spaces.forEach(function(cs: any) {
-      var area = cs?.spaces?.area ?? 0;
+      var area = csArea(cs);
       if (cs.charge_method === "fixed" || (cs.fixed_rent && cs.fixed_rent > 0)) {
         total += Number(cs.fixed_rent || 0); counted++;
       } else if (cs.charge_method === "per_sqm" || (cs.price_per_sqm && cs.price_per_sqm > 0)) {

@@ -31,6 +31,7 @@ import { fetchCpiAdjustedWithRetry, fetchHighestChainedCpiWithRetry } from "@/li
 import { getVatRates, vatPctAt } from "@/lib/vat";
 import { isParkingOnly, parkingMonthlyTotal, parkingSpotCount, parkingRentSchedule } from "@/lib/parking-rent";
 import { spaceMonthlyBase, billableAreaFor } from "@/lib/space-billing";
+import { csArea } from "@/lib/contract-area";
 
 // CBS wants MM-DD-YYYY. The 15th is the publication day itself and is
 // ambiguous — bumped to the 16th, matching the cheque path, so both paths
@@ -166,7 +167,7 @@ export async function generateTransferCharges(params: {
       "mgmt_charge_starts, mgmt_free_max_days, works_start_date, works_end_date, " +
       "planned_handover_date, actual_handover_date, planned_opening_date, actual_opening_date, " +
       "opening_rule, opening_max_days_from_handover, term_starts_at, " +
-      "tenants(name), contract_spaces(space_id, charge_method, fixed_rent, price_per_sqm, spaces(space_name, area, space_type)), " +
+      "tenants(name), contract_spaces(area_override,space_id, charge_method, fixed_rent, price_per_sqm, spaces(space_name, area, space_type)), " +
       "contract_options(id, is_exercised, status, start_date, end_date, rent_mechanism, rent_increase_pct, new_rent_value, price_tiers, option_group)")
     .in("payment_method", TRANSFER_METHODS)
     // "upcoming"/"future" נכללים בכוונה: חוזה שמתחיל ב-1 בחודש הבא עדיין
@@ -243,7 +244,7 @@ export async function generateTransferCharges(params: {
 
       // Per-space schedules built ONCE per contract (steps + exercised options).
       const spaceScheds = (parkingOnly ? [] : ((c.contract_spaces || []) as any[])).map(function (cs: any) {
-        const area = Number(cs?.spaces?.area) || 0;
+        const area = csArea(cs);
         const isFixed = cs.charge_method === "fixed" && Number(cs.fixed_rent) > 0;
         // spaceMonthlyBase: יחידת "כלול במחיר" (סככה/חצר) תורמת ₪0 —
         // ולא נופלת ל-fallback של מחיר החוזה למ"ר.
@@ -266,7 +267,7 @@ export async function generateTransferCharges(params: {
           const cond = minimumApplies({ contract: c, date: mS });
           if (!cond.applies) return { amount: 0, note: cond.reason || "אין מקדמת מינימום בחודש זה" };
           const area = (c.contract_spaces || []).reduce(function (s: number, cs: any) {
-            return s + (Number(cs?.spaces?.area) || 0);
+            return s + csArea(cs);
           }, 0) || Number(c.charged_area) || 0;
           const minSqmNow = Number(c.min_rent_per_sqm) > 0
             ? minRentPerSqmAtDate({ baseMinPerSqm: Number(c.min_rent_per_sqm), tiers: tiers, contractStart: cBill.start_date, date: mS })

@@ -9,6 +9,7 @@ import { graceFactorsFor, describeGrace, graceWindow } from '@/lib/store-opening
 import CalcProgress, { CalcProgressState } from '@/components/CalcProgress';
 import { useAccess } from '@/components/AccessProvider';
 import { guaranteeInPlace } from '@/lib/guarantee-status';
+import { csArea } from "@/lib/contract-area";
 
 function fmtMoney(n: number) { return "₪" + (n ?? 0).toLocaleString("he-IL",{minimumFractionDigits:2,maximumFractionDigits:2}); }
 // Headline KPI numbers: drop the agorot once the figure is big, so long sums
@@ -46,13 +47,13 @@ function calcContractRent(c: any): number {
   if (c.contract_spaces?.length > 0) {
     c.contract_spaces.forEach(function(cs: any) {
       if (cs.charge_method === "included") { } else if (cs.charge_method === "fixed" && cs.fixed_rent) total += Number(cs.fixed_rent);
-      else total += (Number(cs.price_per_sqm) || Number(c.rent_per_sqm) || 0) * (cs.spaces?.area || 0);
+      else total += (Number(cs.price_per_sqm) || Number(c.rent_per_sqm) || 0) * csArea(cs);
     });
   }
   if (total === 0) total = (Number(c.rent_per_sqm) || 0) * (Number(c.charged_area) || 0);
   // A turnover lease earns its MINIMUM on paper.
   if (total === 0 && (c.rent_type === "revenue_pct" || Number(c.revenue_pct) > 0)) {
-    var mArea = (c.contract_spaces || []).reduce(function (a: number, x: any) { return a + (Number(x?.spaces?.area) || 0); }, 0) || Number(c.charged_area) || 0;
+    var mArea = (c.contract_spaces || []).reduce(function (a: number, x: any) { return a + csArea(x); }, 0) || Number(c.charged_area) || 0;
     total = Number(c.min_rent_per_sqm) > 0 ? Number(c.min_rent_per_sqm) * mArea : (Number(c.minimum_rent) || 0);
   }
   return total + (Number(c.investment_addition) || 0);
@@ -100,7 +101,7 @@ export default function DashboardPage() {
     const [{ data: pg }, { data: p }, { data: c }, { data: sp }, { data: gu }, { data: al }, { data: ch }, { data: ap }] = await Promise.all([
       supabase.from("property_groups").select("id,group_name").order("group_name"),
       supabase.from("properties").select("id,name,group_id,city,total_area,property_type"),
-      supabase.from("contracts").select("id,status,rent_per_sqm,charged_area,investment_addition,property_id,end_date,start_date,index_base_date,indexation_method,index_mechanism,is_amendment,grace_months,grace_days,grace_phase2_days,grace_type,grace_discount_pct,grace_mgmt_discount_pct,grace_ends_on_opening,rent_type,revenue_pct,min_rent_per_sqm,minimum_rent,planned_handover_date,actual_handover_date,planned_opening_date,actual_opening_date,tenants(name),properties(name),contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area))").in("status",["active","extended","expiring","upcoming","future"]),
+      supabase.from("contracts").select("id,status,rent_per_sqm,charged_area,investment_addition,property_id,end_date,start_date,index_base_date,indexation_method,index_mechanism,is_amendment,grace_months,grace_days,grace_phase2_days,grace_type,grace_discount_pct,grace_mgmt_discount_pct,grace_ends_on_opening,rent_type,revenue_pct,min_rent_per_sqm,minimum_rent,planned_handover_date,actual_handover_date,planned_opening_date,actual_opening_date,tenants(name),properties(name),contract_spaces(area_override,space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area))").in("status",["active","extended","expiring","upcoming","future"]),
       supabase.from("spaces").select("id,property_id,status,space_name,area"),
       supabase.from("guarantees").select("id,contract_id,amount_required,amount_actual,end_date,guarantee_type,status,delivered_at,document_url,documents").eq("status","active"),
       supabase.from("alerts").select("id,title,severity,due_date,entity_type,contract_id,property_id").eq("is_resolved",false).order("due_date", { ascending: true }).limit(60),

@@ -48,7 +48,7 @@ export default function TenantsPage() {
     const [{ data: t }, { data: c }] = await Promise.all([
       supabase.from("tenants").select("*").order("name"),
       supabase.from("contracts")
-        .select("id, property_id, status, start_date, end_date, rent_per_sqm, charged_area, investment_addition, tenant_id, is_amendment, parent_contract_id, amendment_date, amendment_number, index_base_date, indexation_method, index_mechanism, properties(name), contract_spaces(spaces(space_name))")
+        .select("id, property_id, status, start_date, end_date, rent_per_sqm, charged_area, investment_addition, tenant_id, is_amendment, parent_contract_id, amendment_date, amendment_number, index_base_date, indexation_method, index_mechanism, properties(name), contract_spaces(area_override,spaces(space_name))")
         // "ended" נטען גם הוא: מסווג שוכרי עבר, מציג את ההיסטוריה שלהם,
         // ומאפשר למשתמש מוגבל לראות שוכרי עבר של הנכסים שבהיקפו.
         .in("status", ["active","expiring","extended","upcoming","future","ended"]).order("end_date"),

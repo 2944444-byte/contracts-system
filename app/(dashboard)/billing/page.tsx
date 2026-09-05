@@ -18,6 +18,7 @@ import AdvancesTab from '@/components/AdvancesTab';
 import CpiDiffTab from '@/components/CpiDiffTab';
 import SavedAdvancesTab from '@/components/SavedAdvancesTab';
 import CalcProgress, { CalcProgressState } from '@/components/CalcProgress';
+import { csArea } from "@/lib/contract-area";
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 
@@ -424,7 +425,7 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
       // (their mgmt is paid as part of the % rent — no separate charge).
       const { data: contracts } = await supabase
         .from("contracts")
-        .select("id, charged_area, rent_per_sqm, rent_type, revenue_pct, mgmt_included_in_revenue, is_amendment, start_date, end_date, indexation_method, index_base_date, mgmt_protection_type, mgmt_protection_value, mgmt_protection_months, mgmt_protection_indexed, mgmt_protection_notes, mgmt_cost_plus_pct, mgmt_fee_per_sqm, mgmt_included_in_revenue, grace_months, grace_days, grace_phase2_days, grace_type, grace_ends_on_opening, grace_mgmt_discount_pct, mgmt_charge_starts, mgmt_free_max_days, works_start_date, planned_handover_date, actual_handover_date, planned_opening_date, actual_opening_date, tenants(name), contract_spaces(space_id, spaces(id, space_name, area))")
+        .select("id, charged_area, rent_per_sqm, rent_type, revenue_pct, mgmt_included_in_revenue, is_amendment, start_date, end_date, indexation_method, index_base_date, mgmt_protection_type, mgmt_protection_value, mgmt_protection_months, mgmt_protection_indexed, mgmt_protection_notes, mgmt_cost_plus_pct, mgmt_fee_per_sqm, mgmt_included_in_revenue, grace_months, grace_days, grace_phase2_days, grace_type, grace_ends_on_opening, grace_mgmt_discount_pct, mgmt_charge_starts, mgmt_free_max_days, works_start_date, planned_handover_date, actual_handover_date, planned_opening_date, actual_opening_date, tenants(name), contract_spaces(area_override,space_id, spaces(id, space_name, area))")
         .eq("property_id", propId)
         .eq("is_amendment", false)
         .in("status", ["active", "expiring", "extended"]);
@@ -435,7 +436,7 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
       if (mgmtBaseIds.length > 0) {
         const { data: amends } = await supabase
           .from("contracts")
-          .select("id, parent_contract_id, amendment_date, start_date, charged_area, contract_spaces(space_id, spaces(id, space_name, area))")
+          .select("id, parent_contract_id, amendment_date, start_date, charged_area, contract_spaces(area_override,space_id, spaces(id, space_name, area))")
           .in("parent_contract_id", mgmtBaseIds)
           .eq("is_amendment", true)
           .order("amendment_date", { ascending: true });
@@ -484,7 +485,7 @@ function ManagementTab({ properties, allProperties }: { properties: any[]; allPr
           if ((!segSpaces || segSpaces.length === 0) && i > 0) segSpaces = points[i - 1].spaces;
           (segSpaces || []).forEach(function (cs: any) {
             if (!cs.space_id) return;
-            if (!held[cs.space_id]) held[cs.space_id] = { days: 0, area: spaceAreaMap.has(cs.space_id) ? (spaceAreaMap.get(cs.space_id) || 0) : (Number(cs.spaces?.area) || 0), name: cs.spaces?.space_name || "" };
+            if (!held[cs.space_id]) held[cs.space_id] = { days: 0, area: spaceAreaMap.has(cs.space_id) ? (spaceAreaMap.get(cs.space_id) || 0) : csArea(cs), name: cs.spaces?.space_name || "" };
             held[cs.space_id].days += d;
           });
         }
@@ -1559,7 +1560,7 @@ function InsuranceTab({ properties, initialPropId, initialYear }: { properties: 
       // 1) Base contracts (no amendments — those are merged into the timeline below)
       const { data: baseContracts } = await supabase
         .from("contracts")
-        .select("id, charged_area, start_date, end_date, status, planned_handover_date, actual_handover_date, tenants(name), contract_spaces(space_id, spaces(space_name, area))")
+        .select("id, charged_area, start_date, end_date, status, planned_handover_date, actual_handover_date, tenants(name), contract_spaces(area_override,space_id, spaces(space_name, area))")
         .eq("property_id", propId)
         .eq("is_amendment", false)
         .in("status", ["active", "expiring", "extended"]);
@@ -1572,7 +1573,7 @@ function InsuranceTab({ properties, initialPropId, initialYear }: { properties: 
       if (baseIds.length > 0) {
         const { data: amends } = await supabase
           .from("contracts")
-          .select("id, parent_contract_id, amendment_date, start_date, charged_area, contract_spaces(space_id, spaces(space_name, area))")
+          .select("id, parent_contract_id, amendment_date, start_date, charged_area, contract_spaces(area_override,space_id, spaces(space_name, area))")
           .in("parent_contract_id", baseIds)
           .eq("is_amendment", true)
           .order("amendment_date", { ascending: true });
@@ -1608,7 +1609,7 @@ function InsuranceTab({ properties, initialPropId, initialYear }: { properties: 
       var areaOf = function(row: any): number {
         var sum = (row?.contract_spaces || []).reduce(function(a: number, x: any) {
           if (x?.space_id && insExcluded.has(x.space_id)) return a;
-          return a + (Number(x?.spaces?.area) || 0);
+          return a + csArea(x);
         }, 0);
         return sum > 0 ? sum : (Number(row?.charged_area) || 0);
       };
@@ -2610,7 +2611,7 @@ function WasteTab({ properties }: { properties: any[] }) {
       // same tenant (e.g. Yehonatan's offices contract appearing 3× → 163%).
       const { data: baseContracts } = await supabase
         .from("contracts")
-        .select("id, charged_area, start_date, end_date, planned_handover_date, actual_handover_date, tenants(name), contract_spaces(space_id, spaces(id, space_name, area, uses_waste_service))")
+        .select("id, charged_area, start_date, end_date, planned_handover_date, actual_handover_date, tenants(name), contract_spaces(area_override,space_id, spaces(id, space_name, area, uses_waste_service))")
         .eq("property_id", propId)
         .eq("is_amendment", false)
         .in("status", ["active", "expiring", "extended"]);
@@ -2623,7 +2624,7 @@ function WasteTab({ properties }: { properties: any[] }) {
       if (baseIds.length > 0) {
         const { data: amends } = await supabase
           .from("contracts")
-          .select("id, parent_contract_id, amendment_number, amendment_date, start_date, contract_spaces(space_id, spaces(id, space_name, area, uses_waste_service))")
+          .select("id, parent_contract_id, amendment_number, amendment_date, start_date, contract_spaces(area_override,space_id, spaces(id, space_name, area, uses_waste_service))")
           .in("parent_contract_id", baseIds)
           .eq("is_amendment", true);
         (amends ?? []).forEach(function(a:any){
@@ -2684,7 +2685,7 @@ function WasteTab({ properties }: { properties: any[] }) {
             // שטח שאינו משתתף באשפה (דגל היחידה או מטריצת סוג השטח) — 0.
             var sRow = spaces.find(function(s0: any){ return s0.id === sid; });
             var wasteOk = (!sRow || sRow.uses_waste_service !== false) && (!sRow || spaceCountsFor("waste", sRow.space_type, wasteTypeMatrix));
-            if (!held[sid]) held[sid] = { area: wasteOk ? (Number(x.spaces?.area) || 0) : 0, days: 0, name: x.spaces?.space_name || "" };
+            if (!held[sid]) held[sid] = { area: wasteOk ? csArea(x) : 0, days: 0, name: x.spaces?.space_name || "" };
             held[sid].days += d;
           });
         }

@@ -40,7 +40,7 @@ export default function SplitUnitModal(props: {
       }));
       if (holder) {
         // How the holder is charged for this unit — the retained part inherits it.
-        const { data: amends } = await supabase.from("contracts").select("id, contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm)")
+        const { data: amends } = await supabase.from("contracts").select("id, contract_spaces(area_override,space_id,charge_method,fixed_rent,price_per_sqm)")
           .eq("parent_contract_id", holder.contractId).eq("is_amendment", true).order("amendment_number", { ascending: false });
         const latest = (amends || []).find(function (a: any) { return (a.contract_spaces || []).length > 0; });
         let cs: any = latest ? (latest.contract_spaces || []).find(function (x: any) { return x.space_id === space.id; }) : null;
@@ -113,7 +113,7 @@ export default function SplitUnitModal(props: {
           {holder && (
             <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-xs text-amber-900">
               <div className="font-bold">היחידה מוחזקת על ידי {holder.tenantName}</div>
-              <div className="mt-0.5">החלק שנשאר אצלו שומר על מזהה היחידה המקורי — המקדמות והחיובים הקיימים ממשיכים להצביע עליו. השאר ייווצרו כיחידות חדשות. לשוכר תיווצר תוספת להסכם מתאריך התחולה; חלק שעובר לשוכר אחר יוצר לו תוספת "הוספת יחידות".</div>
+              <div className="mt-0.5">החלק שנשאר אצלו שומר על מזהה היחידה המקורי — המקדמות והחיובים הקיימים ממשיכים להצביע עליו. השאר ייווצרו כיחידות חדשות. השטח שלפני הפיצול מוקפא בצילומים הקודמים, כך שהצמדה, שכ"ד ודמי ניהול לתקופות שלפני תאריך התחולה מחושבים לפי השטח המקורי. לשוכר תיווצר תוספת להסכם מתאריך התחולה; חלק שעובר לשוכר אחר יוצר לו תוספת "הוספת יחידות".</div>
               {holderCharge && <div className="mt-1 text-amber-800">חיוב היחידה היום: {isFixed ? "סכום קבוע ₪" + (holderCharge.fixed || 0).toLocaleString("he-IL") + " לחודש — יש להזין את הסכום לחלק שנשאר" : 'לפי מ"ר' + (holderCharge.price != null ? " (₪" + holderCharge.price.toLocaleString("he-IL") + ')' : " (מחיר ההסכם)") + " — החלק שנשאר ממשיך באותו מחיר למ\"ר"}</div>}
             </div>
           )}

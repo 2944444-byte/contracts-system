@@ -31,7 +31,7 @@ export async function previewOptionDecline(optionId: string, noticeDate?: Date):
   if (!option) return null;
 
   const { data: contract } = await supabase.from("contracts")
-    .select("id, tenant_id, property_id, vat_type, start_date, end_date, index_base_date, lease_period_value, lease_period_unit, tenants(name), contract_spaces(space_id, spaces(area))")
+    .select("id, tenant_id, property_id, vat_type, start_date, end_date, index_base_date, lease_period_value, lease_period_unit, tenants(name), contract_spaces(area_override,space_id, spaces(area))")
     .eq("id", option.contract_id).single();
 
   const terms = penaltyTermsFromRow(option);

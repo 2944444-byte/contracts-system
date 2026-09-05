@@ -291,7 +291,7 @@ export default function LettersPage() {
 
   async function loadAll() {
     const [{ data: l }, { data: c }, { data: t }] = await Promise.all([
-      supabase.from("letters").select("*, contracts(tenant_id, property_id, parent_contract_id, tenants(id,name,primary_email,contact_email,email,contact_name,contacts),properties(id,name),contract_spaces(spaces(space_name)))").order("created_at",{ascending:false}),
+      supabase.from("letters").select("*, contracts(tenant_id, property_id, parent_contract_id, tenants(id,name,primary_email,contact_email,email,contact_name,contacts),properties(id,name),contract_spaces(area_override,spaces(space_name)))").order("created_at",{ascending:false}),
       supabase.from("contracts").select("id,property_id,tenant_id,is_amendment,tenants(name,contact_name),properties(name,address)").in("status",["active","expiring","extended"]),
       supabase.from("document_templates").select("*").eq("is_active",true).order("name"),
     ]);

@@ -48,7 +48,7 @@ export default function UnitsPage() {
       // upcoming/future included: a SIGNED lease holds its units — the shop is
       // let even though the term hasn't begun, and showing it vacant invited
       // someone to rent it twice.
-      supabase.from("contracts").select("id,property_id,tenant_id,status,is_amendment,parent_contract_id,amendment_number,amendment_date,start_date,tenants(name),contract_spaces(space_id)").in("status",["active","expiring","extended","upcoming","future"]),
+      supabase.from("contracts").select("id,property_id,tenant_id,status,is_amendment,parent_contract_id,amendment_number,amendment_date,start_date,tenants(name),contract_spaces(area_override,space_id)").in("status",["active","expiring","extended","upcoming","future"]),
     ]);
     var scope = await getScopeIds();
     setSpaces(scopeRows(sp??[], scope, function(x: any){ return x.property_id; }));

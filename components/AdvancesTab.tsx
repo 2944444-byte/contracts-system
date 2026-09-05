@@ -12,6 +12,7 @@ import CalcBreakdown from "./CalcBreakdown";
 import { tierAppliesAtYear, buildSpaceRentSchedule, rentAtDate, rentForPeriod } from "@/lib/contract-utils";
 import { getVatRates, vatPctAt } from "@/lib/vat";
 import { fetchHighestChainedCpi } from "@/lib/cpi-server";
+import { csArea } from "@/lib/contract-area";
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 function fmtMoney(n: number) { return "₪" + (n ?? 0).toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -113,7 +114,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
   function loadAvailableContracts(pid: string) {
     if (!pid) { setAvailableContracts([]); return; }
     supabase.from("contracts")
-      .select("id, tenants(name), payment_method, contract_spaces(spaces(space_name))")
+      .select("id, tenants(name), payment_method, contract_spaces(area_override,spaces(space_name))")
       // upcoming/future כלולים: פנקס שיקים מראש מוכן בחתימה — לפני תחילת התקופה.
       .eq("property_id", pid).in("status", ["active", "extended", "upcoming", "future"]).eq("is_amendment", false)
       .then(function({ data }) {
@@ -211,7 +212,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
     try {
       // Load contracts
       var query = supabase.from("contracts")
-        .select("id, rent_per_sqm, charged_area, investment_addition, payment_method, payment_frequency, vat_type, indexation_method, index_mechanism, index_base_date, index_base_value, start_date, end_date, is_amendment, mgmt_fee_per_sqm, grace_months, grace_days, grace_phase2_days, grace_type, grace_discount_pct, grace_mgmt_discount_pct, grace_ends_on_opening, mgmt_charge_starts, mgmt_free_max_days, works_start_date, works_end_date, planned_handover_date, actual_handover_date, planned_opening_date, actual_opening_date, rent_type, minimum_rent, mgmt_included_in_revenue, tenants(name), contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,index_base_date,index_base_value,use_original_index,spaces(space_name,area))")
+        .select("id, rent_per_sqm, charged_area, investment_addition, payment_method, payment_frequency, vat_type, indexation_method, index_mechanism, index_base_date, index_base_value, start_date, end_date, is_amendment, mgmt_fee_per_sqm, grace_months, grace_days, grace_phase2_days, grace_type, grace_discount_pct, grace_mgmt_discount_pct, grace_ends_on_opening, mgmt_charge_starts, mgmt_free_max_days, works_start_date, works_end_date, planned_handover_date, actual_handover_date, planned_opening_date, actual_opening_date, rent_type, minimum_rent, mgmt_included_in_revenue, tenants(name), contract_spaces(area_override,space_id,charge_method,fixed_rent,price_per_sqm,index_base_date,index_base_value,use_original_index,spaces(space_name,area))")
         .eq("property_id", propId)
         // חוזה חתום שטרם התחיל (upcoming/future) מקבל פנקס שיקים כרגיל —
         // החודשים שלפני תחילת התקופה ממילא נופלים בפרו-רטה של כל יחידה.
@@ -242,7 +243,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
 
       // Load amendments (for per-unit entry/exit dates)
       var { data: allAmendments } = await supabase.from("contracts")
-        .select("id, parent_contract_id, amendment_date, start_date, end_date, contract_spaces(space_id,charge_method,fixed_rent,price_per_sqm,index_base_date,index_base_value,use_original_index,spaces(space_name,area))")
+        .select("id, parent_contract_id, amendment_date, start_date, end_date, contract_spaces(area_override,space_id,charge_method,fixed_rent,price_per_sqm,index_base_date,index_base_value,use_original_index,spaces(space_name,area))")
         .in("parent_contract_id", contractIds)
         .eq("is_amendment", true)
         .order("amendment_date", { ascending: true });
@@ -411,7 +412,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
 
         // Process EACH space separately (per-unit view)
         for (var cs of spacesToProcess) {
-          var area = cs.spaces?.area || 0;
+          var area = csArea(cs);
           var spaceName = cs.spaces?.space_name || "—";
           // Add parking to first space only (to avoid double-counting)
           var thisParkingMonthly = 0;

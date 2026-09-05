@@ -132,7 +132,7 @@ export default function SafetyPage() {
         .order("next_inspection_date"),
       supabase.from("properties").select("id,name").order("name"),
       supabase.from("contracts")
-        .select("id, tenant_id, property_id, status, is_amendment, parent_contract_id, tenants(name), properties(name), contract_spaces(space_id, spaces(space_name))")
+        .select("id, tenant_id, property_id, status, is_amendment, parent_contract_id, tenants(name), properties(name), contract_spaces(area_override,space_id, spaces(space_name))")
         .in("status", ["active","expiring","extended","upcoming"])
         .order("start_date", { ascending: false }),
     ]);
