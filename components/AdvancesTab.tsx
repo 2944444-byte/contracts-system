@@ -13,6 +13,7 @@ import { tierAppliesAtYear, buildSpaceRentSchedule, rentAtDate, rentForPeriod } 
 import { getVatRates, vatPctAt } from "@/lib/vat";
 import { fetchHighestChainedCpi } from "@/lib/cpi-server";
 import { csArea } from "@/lib/contract-area";
+import { protectedMgmtAdvance } from "@/lib/mgmt-protection";
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 function fmtMoney(n: number) { return "₪" + (n ?? 0).toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -52,6 +53,7 @@ interface AdvanceRow {
   indexedRentMonthly: number;
   investmentMonthly?: number;  // תוספת שכ"ד בגין השקעות included in the base
   mgmtAdvanceMonthly: number;
+  mgmtProtectionNote?: string;
   parkingMonthly: number;
   parkingSpots: number;
   totalMonthly: number;
@@ -212,7 +214,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
     try {
       // Load contracts
       var query = supabase.from("contracts")
-        .select("id, rent_per_sqm, charged_area, investment_addition, payment_method, payment_frequency, vat_type, indexation_method, index_mechanism, index_base_date, index_base_value, start_date, end_date, is_amendment, mgmt_fee_per_sqm, grace_months, grace_days, grace_phase2_days, grace_type, grace_discount_pct, grace_mgmt_discount_pct, grace_ends_on_opening, mgmt_charge_starts, mgmt_free_max_days, works_start_date, works_end_date, planned_handover_date, actual_handover_date, planned_opening_date, actual_opening_date, rent_type, minimum_rent, mgmt_included_in_revenue, tenants(name), contract_spaces(area_override,space_id,charge_method,fixed_rent,price_per_sqm,index_base_date,index_base_value,use_original_index,spaces(space_name,area))")
+        .select("id, rent_per_sqm, charged_area, investment_addition, payment_method, payment_frequency, vat_type, indexation_method, index_mechanism, index_base_date, index_base_value, start_date, end_date, is_amendment, mgmt_fee_per_sqm, mgmt_protection_type, mgmt_protection_value, mgmt_protection_months, mgmt_protection_indexed, grace_months, grace_days, grace_phase2_days, grace_type, grace_discount_pct, grace_mgmt_discount_pct, grace_ends_on_opening, mgmt_charge_starts, mgmt_free_max_days, works_start_date, works_end_date, planned_handover_date, actual_handover_date, planned_opening_date, actual_opening_date, rent_type, minimum_rent, mgmt_included_in_revenue, tenants(name), contract_spaces(area_override,space_id,charge_method,fixed_rent,price_per_sqm,index_base_date,index_base_value,use_original_index,spaces(space_name,area))")
         .eq("property_id", propId)
         // חוזה חתום שטרם התחיל (upcoming/future) מקבל פנקס שיקים כרגיל —
         // החודשים שלפני תחילת התקופה ממילא נופלים בפרו-רטה של כל יחידה.
@@ -657,6 +659,9 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
 
           // Generate checks based on payment frequency
           var checks: CheckRow[] = [];
+          // הגנה על דמי ניהול (תקרה/קבוע, צמוד למדד הבסיס) חלה כבר על המקדמה —
+          // לא רק בהתחשבנות הסופית. הערה אחת לשורה כשההגנה שינתה את המספר.
+          var mgmtProtectionNote = "";
 
           if (isQuarterly) {
             for (var q = 0; q < 4; q++) {
@@ -700,7 +705,9 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
               // Apply grace period adjustments
               var gf = graceFactors(periodStart, periodEnd);
               rentBV = rentBV * gf.rentFactor;
-              var mgmtBV = mgmtMonthly * 3 * ratio * gf.mgmtFactor;
+              var mgmtProtQ = protectedMgmtAdvance({ contract: c, area: area, periodStart: periodStart, cpiRatio: cpiRatio, propertyMonthly: mgmtMonthly });
+              if (mgmtProtQ.capped) mgmtProtectionNote = mgmtProtQ.reason;
+              var mgmtBV = mgmtProtQ.monthly * 3 * ratio * gf.mgmtFactor;
               var parkingBV = thisParkingMonthly * cpiRatio * 3 * ratio;
               var totalBV = rentBV + mgmtBV + parkingBV;
               var vat = isVat ? totalBV * vatPctAt(vatRates, periodStart) : 0;
@@ -764,7 +771,9 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
               // Apply grace period adjustments
               var gfM = graceFactors(periodStartM, periodEndM);
               rentBVM = rentBVM * gfM.rentFactor;
-              var mgmtBVM = mgmtMonthly * ratioM * gfM.mgmtFactor;
+              var mgmtProtM = protectedMgmtAdvance({ contract: c, area: area, periodStart: periodStartM, cpiRatio: cpiRatio, propertyMonthly: mgmtMonthly });
+              if (mgmtProtM.capped) mgmtProtectionNote = mgmtProtM.reason;
+              var mgmtBVM = mgmtProtM.monthly * ratioM * gfM.mgmtFactor;
               var parkingBVM = thisParkingMonthly * cpiRatio * ratioM;
               var totalBVM = rentBVM + mgmtBVM + parkingBVM;
               var vatM = isVat ? totalBVM * vatPctAt(vatRates, periodStartM) : 0;
@@ -817,7 +826,8 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
               vatPct: displayVatPct,
               isQuarterly: isQuarterly,
               investmentMonthly: thisInvestMonthly,
-              mgmtAdvanceMonthly: mgmtMonthly,
+              mgmtAdvanceMonthly: mgmtProtectionNote ? protectedMgmtAdvance({ contract: c, area: area, periodStart: new Date(year, 0, 1), cpiRatio: cpiRatio, propertyMonthly: mgmtMonthly }).monthly : mgmtMonthly,
+              mgmtProtectionNote: mgmtProtectionNote || undefined,
               // הערך הצמוד — כך שהתצוגה, המכתבים והשמירה משקפים את מה שמחויב בפועל.
               parkingMonthly: thisParkingMonthly * cpiRatio,
               parkingSpots: thisParkingSpots,
@@ -1017,6 +1027,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
           appendix += "\n";
           appendix += "מקדמת דמי ניהול: " + fmtMoney(ur2.mgmtAdvanceMonthly) + "/חודש";
           if (ur2.spaceArea > 0) appendix += " (" + (ur2.mgmtAdvanceMonthly / ur2.spaceArea).toFixed(2) + '₪/מ"ר)';
+          if (ur2.mgmtProtectionNote) appendix += " — " + ur2.mgmtProtectionNote;
           appendix += "\n";
           if (ur2.parkingMonthly > 0) {
             appendix += "🅿️ חניה: " + fmtMoney(ur2.parkingMonthly) + "/חודש";
@@ -1305,6 +1316,7 @@ export default function AdvancesTab({ properties }: { properties: any[] }) {
                     <div>
                       <div className="text-slate-500">מקדמת ד.נ.</div>
                       <div className="font-bold text-slate-800">{fmtMoney(r.mgmtAdvanceMonthly)}/חודש</div>
+                      {r.mgmtProtectionNote && <div className="text-[10px] text-amber-700 mt-0.5">🛡 {r.mgmtProtectionNote}</div>}
                     </div>
                     {r.parkingMonthly > 0 && (
                     <div>

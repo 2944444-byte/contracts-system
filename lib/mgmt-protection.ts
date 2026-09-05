@@ -149,3 +149,49 @@ export function describeMgmtProtection(p: MgmtProtection, contract?: any): strin
   }
   return parts.join(" · ");
 }
+
+// ── שלב המקדמות ─────────────────────────────────────────────────────────
+// כלל בעלי המערכת: כל עוד אין הגנה על דמי ניהול, מקדמת דמי הניהול היא לפי
+// חיוב הנכס (קבוצת חיוב / תקציב) ואם אין — לפי ההסכם. כשיש הגנה, המקדמה
+// עצמה כפופה להגנה: "קבוע" — בדיוק התעריף המוגן; "תקרה" — הנמוך מבין תעריף
+// הנכס לתקרה. ההגנה צמודה למדד הבסיס (אלא אם סומן אחרת), ולכן התקרה לתקופה
+// = ערך × יחס ההצמדה של ההסכם לתקופה. ההתחשבנות הסופית (applyMgmtProtection)
+// משווה אחר כך את העלות בפועל לאותה תקרה.
+export type ProtectedMgmtAdvance = {
+  monthly: number;          // the management advance to charge for the period (per month, before VAT)
+  capped: boolean;          // protection changed the figure
+  ratePerSqm: number | null;// the protected rate (after linkage) when it applied
+  reason: string;           // short Hebrew note for letters / appendices
+};
+
+export function protectedMgmtAdvance(params: {
+  contract: any;
+  area: number;
+  periodStart: Date;
+  cpiRatio: number;         // contract base index → the advance's value date
+  propertyMonthly: number;  // the advance the property rate would give (per month)
+}): ProtectedMgmtAdvance {
+  const { contract, area, periodStart, cpiRatio, propertyMonthly } = params;
+  const none: ProtectedMgmtAdvance = { monthly: propertyMonthly, capped: false, ratePerSqm: null, reason: "" };
+  const p = mgmtProtectionFromRow(contract);
+  if (!hasMgmtProtection(p)) return none;
+  const start = contract?.start_date ? new Date(contract.start_date) : null;
+  const end = protectionEndDate(contract, p);
+  // A protection with no months runs for the whole lease; otherwise only
+  // periods that start inside the window are protected.
+  if (start && !isNaN(start.getTime()) && periodStart < new Date(start.getFullYear(), start.getMonth(), 1)) return none;
+  if (end && periodStart > end) return none;
+  const ratio = p.indexed && cpiRatio > 0 ? cpiRatio : 1;
+  const rate = Math.round((Number(p.value) || 0) * ratio * 100) / 100;
+  const protectedMonthly = Math.round(rate * (Number(area) || 0) * 100) / 100;
+  const monthly = p.type === "fixed" ? protectedMonthly : Math.min(propertyMonthly, protectedMonthly);
+  const capped = Math.abs(monthly - propertyMonthly) > 0.005;
+  return {
+    monthly: monthly,
+    capped: capped,
+    ratePerSqm: rate,
+    reason: capped
+      ? (p.type === "fixed" ? "דמי ניהול קבועים לפי ההסכם: " : "תקרת דמי ניהול לפי ההסכם: ") + rate.toFixed(2) + ' ₪/מ"ר' + (p.indexed ? " (צמוד למדד הבסיס)" : " (נומינלי)") + (end ? " עד " + end.toLocaleDateString("he-IL") : "")
+      : "",
+  };
+}

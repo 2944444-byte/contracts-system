@@ -214,6 +214,19 @@ export async function performUnitSplit(input: SplitInput): Promise<SplitResult> 
     newIds[i] = ins.id;
   }
   const idOf = function (i: number): string { return i === retainedIdx ? space.id : newIds[i]; };
+
+  // 1b. The parts inherit the original unit's billing-group memberships
+  //     (management / waste, every year): same physical area, same billing
+  //     rule. Without this a new part would fall back to the contract's
+  //     management figure instead of the property's advance rate.
+  const { data: memberships } = await supabase.from("billing_group_spaces").select("billing_group_id").eq("space_id", space.id);
+  const newIdList = Object.keys(newIds).map(function (k) { return newIds[Number(k)]; });
+  if ((memberships || []).length > 0 && newIdList.length > 0) {
+    const rows: any[] = [];
+    (memberships || []).forEach(function (m: any) { newIdList.forEach(function (sid) { rows.push({ billing_group_id: m.billing_group_id, space_id: sid }); }); });
+    const { error: bgErr } = await supabase.from("billing_group_spaces").insert(rows);
+    if (bgErr) throw new Error("שיוך החלקים לקבוצות החיוב נכשל: " + bgErr.message);
+  }
   const areaKnown: Record<string, number> = {};
   input.parts.forEach(function (p, i) { areaKnown[idOf(i)] = Number(p.area) || 0; });
 
