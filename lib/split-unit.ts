@@ -22,13 +22,34 @@ import { logAudit } from "@/lib/audit-log";
 
 export type SplitDisposition = "keep" | "vacant" | "transfer";
 
+export type SplitPriceMode = "holder" | "receiver" | "custom";
+export type SplitCpiMode = "receiver" | "holder" | "custom";
+
 export type SplitPart = {
   name: string;
   area: string;                 // as typed
   disposition: SplitDisposition;
   targetContractId?: string;    // for "transfer"
-  pricePerSqm?: string;         // for "transfer": rent per m² on the receiving contract ("" = its contract rent)
+  // "transfer": where the price per m² comes from — the holder's price for this
+  // unit before the split, the receiving contract's rent, or a new figure.
+  priceMode?: SplitPriceMode;
+  pricePerSqm?: string;         // for priceMode "custom"
+  // "transfer": which CPI base the new part is indexed to — the receiving
+  // contract's own base (use_original_index), the holder's base for this unit,
+  // or another index (value + date).
+  cpiMode?: SplitCpiMode;
+  cpiBaseValue?: string;        // for cpiMode "custom"
+  cpiBaseDate?: string;         // for cpiMode "custom"
   fixedRent?: string;           // for "keep" when the original is charged as a fixed amount
+};
+
+// What the holder pays for this unit today — the "holder" price/CPI options.
+export type HolderTerms = {
+  pricePerSqm: number | null;   // null when charged as a fixed amount
+  fixedRent: number | null;
+  chargeMethod: string;
+  indexBaseValue: number | null;
+  indexBaseDate: string | null;
 };
 
 export type SplitCandidateContract = {
@@ -82,6 +103,12 @@ export function validateSplit(input: SplitInput): string | null {
     if (p.disposition === "transfer") {
       if (!p.targetContractId) return 'לחלק "' + p.name + '" נבחר "עובר לשוכר אחר" בלי לבחור חוזה';
       if (p.targetContractId === input.holderContractId) return 'החלק "' + p.name + '" לא יכול לעבור לשוכר שכבר מחזיק בו';
+      const pm = p.priceMode || "receiver";
+      if (pm === "holder" && !input.holderContractId) return 'לחלק "' + p.name + '" נבחר מחיר המחזיק, אבל ליחידה אין שוכר מחזיק';
+      if (pm === "custom" && !(Number(p.pricePerSqm) >= 0 && p.pricePerSqm !== undefined && p.pricePerSqm !== "")) return 'לחלק "' + p.name + '" נבחר מחיר חדש — יש להזין ₪ למ"ר';
+      const cm = p.cpiMode || "receiver";
+      if (cm === "holder" && !input.holderContractId) return 'לחלק "' + p.name + '" נבחר מדד המחזיק, אבל ליחידה אין שוכר מחזיק';
+      if (cm === "custom" && !(Number(p.cpiBaseValue) > 0 && p.cpiBaseDate)) return 'לחלק "' + p.name + '" נבחר מדד אחר — יש להזין ערך מדד ותאריך';
     }
   }
   return null;
@@ -201,9 +228,17 @@ export async function performUnitSplit(input: SplitInput): Promise<SplitResult> 
   };
 
   // 2. Holder amendment: its snapshot keeps only the parts that stay with the tenant.
+  let holderTerms: HolderTerms | null = null;
   if (input.holderContractId) {
     const h = await loadEffectiveSpaces(input.holderContractId);
     const origCs = h.effective.find(function (cs: any) { return cs.space_id === space.id; });
+    holderTerms = {
+      chargeMethod: origCs?.charge_method || "per_sqm",
+      pricePerSqm: origCs?.charge_method === "fixed" ? null : (origCs?.price_per_sqm != null ? Number(origCs.price_per_sqm) : (h.base.rent_per_sqm != null ? Number(h.base.rent_per_sqm) : null)),
+      fixedRent: origCs?.fixed_rent != null ? Number(origCs.fixed_rent) : null,
+      indexBaseValue: (origCs && origCs.use_original_index === false && origCs.index_base_value != null) ? Number(origCs.index_base_value) : (h.base.index_base_value != null ? Number(h.base.index_base_value) : null),
+      indexBaseDate: (origCs && origCs.use_original_index === false && origCs.index_base_date) ? String(origCs.index_base_date).slice(0, 10) : (h.base.index_base_date ? String(h.base.index_base_date).slice(0, 10) : null),
+    };
     const others = h.effective.filter(function (cs: any) { return cs.space_id !== space.id; });
     const isFixed = origCs?.charge_method === "fixed";
     const keepRows = input.parts.map(function (p, i) { return { p: p, i: i }; })
@@ -263,9 +298,20 @@ export async function performUnitSplit(input: SplitInput): Promise<SplitResult> 
     const added: string[] = [];
     byTarget[targetId].forEach(function (i) {
       const p = input.parts[i];
-      const price = p.pricePerSqm !== undefined && p.pricePerSqm !== "" ? Number(p.pricePerSqm) : (Number(t.base.rent_per_sqm) || 0);
-      rows.push({ space_id: idOf(i), charge_method: "per_sqm", price_per_sqm: price, fixed_rent: null, use_original_index: true, index_base_value: null, index_base_date: null, area_override: null });
-      added.push(p.name.trim() + " (" + fmtArea(Number(p.area)) + ' מ"ר, ₪' + price.toLocaleString("he-IL") + '/מ"ר)');
+      const pm: SplitPriceMode = p.priceMode || "receiver";
+      const price = pm === "custom" ? Number(p.pricePerSqm)
+        : pm === "holder" ? (holderTerms?.pricePerSqm ?? (holderTerms?.fixedRent != null && origArea > 0 ? Math.round(holderTerms.fixedRent / origArea * 100) / 100 : 0))
+        : (Number(t.base.rent_per_sqm) || 0);
+      const cm: SplitCpiMode = p.cpiMode || "receiver";
+      const idx = cm === "custom" ? { value: Number(p.cpiBaseValue), date: p.cpiBaseDate || null }
+        : cm === "holder" ? { value: holderTerms?.indexBaseValue ?? null, date: holderTerms?.indexBaseDate ?? null }
+        : null;
+      const useOriginal = !idx || idx.value == null;
+      rows.push({ space_id: idOf(i), charge_method: "per_sqm", price_per_sqm: price, fixed_rent: null,
+        use_original_index: useOriginal, index_base_value: useOriginal ? null : idx!.value, index_base_date: useOriginal ? null : idx!.date, area_override: null });
+      added.push(p.name.trim() + " (" + fmtArea(Number(p.area)) + ' מ"ר, ₪' + price.toLocaleString("he-IL") + '/מ"ר ' +
+        (pm === "holder" ? "לפי מחיר המחזיק לפני הפיצול" : pm === "custom" ? "מחיר חדש" : "לפי מחיר ההסכם המקבל") +
+        ", הצמדה " + (cm === "receiver" || useOriginal ? "למדד הבסיס של ההסכם המקבל" : cm === "holder" ? "למדד הבסיס של המחזיק (" + idx!.value + (idx!.date ? " · " + fmtDate(idx!.date) : "") + ")" : "למדד " + idx!.value + (idx!.date ? " · " + fmtDate(idx!.date) : "")) + ")");
     });
     await areasFor(rows.map(function (r) { return r.space_id; }), areaKnown);
     const chargedArea = rows.reduce(function (s, r) { return s + (areaKnown[r.space_id] || 0); }, 0);

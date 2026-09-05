@@ -3,7 +3,7 @@
 // לשוכר אחר). ההרצה עצמה ב-lib/split-unit.ts.
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
-import { performUnitSplit, validateSplit, partsTotal, type SplitPart, type SplitCandidateContract, type SplitResult } from "@/lib/split-unit";
+import { performUnitSplit, validateSplit, partsTotal, type SplitPart, type SplitCandidateContract, type SplitResult, type HolderTerms } from "@/lib/split-unit";
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 
@@ -23,39 +23,50 @@ export default function SplitUnitModal(props: {
   const [allowDiff, setAllowDiff] = useState(false);
   const [notes, setNotes] = useState("");
   const [docUrl, setDocUrl] = useState("");
-  const [candidates, setCandidates] = useState<SplitCandidateContract[]>([]);
-  const [holderCharge, setHolderCharge] = useState<{ method: string; fixed: number | null; price: number | null } | null>(null);
+  const [candidates, setCandidates] = useState<Array<SplitCandidateContract & { index_base_value: number | null; index_base_date: string | null }>>([]);
+  const [holderCharge, setHolderCharge] = useState<HolderTerms | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(function () {
     (async function () {
       const { data } = await supabase.from("contracts")
-        .select("id, status, rent_per_sqm, tenants(name)")
+        .select("id, status, rent_per_sqm, index_base_value, index_base_date, tenants(name)")
         .eq("property_id", space.property_id).eq("is_amendment", false)
         .in("status", ["active", "expiring", "extended", "upcoming", "future"])
         .order("start_date", { ascending: false });
       setCandidates((data || []).filter(function (c: any) { return c.id !== holder?.contractId; }).map(function (c: any) {
-        return { id: c.id, tenantName: c.tenants?.name || "—", status: c.status, rent_per_sqm: c.rent_per_sqm != null ? Number(c.rent_per_sqm) : null };
+        return { id: c.id, tenantName: c.tenants?.name || "—", status: c.status, rent_per_sqm: c.rent_per_sqm != null ? Number(c.rent_per_sqm) : null,
+          index_base_value: c.index_base_value != null ? Number(c.index_base_value) : null, index_base_date: c.index_base_date ? String(c.index_base_date).slice(0, 10) : null };
       }));
       if (holder) {
-        // How the holder is charged for this unit — the retained part inherits it.
-        const { data: amends } = await supabase.from("contracts").select("id, contract_spaces(area_override,space_id,charge_method,fixed_rent,price_per_sqm)")
+        // How the holder is charged for this unit — the retained part inherits it,
+        // and a transferred part may take it as its price / CPI base.
+        const { data: hBase } = await supabase.from("contracts").select("rent_per_sqm, index_base_value, index_base_date").eq("id", holder.contractId).single();
+        const { data: amends } = await supabase.from("contracts").select("id, contract_spaces(area_override,space_id,charge_method,fixed_rent,price_per_sqm,use_original_index,index_base_value,index_base_date)")
           .eq("parent_contract_id", holder.contractId).eq("is_amendment", true).order("amendment_number", { ascending: false });
         const latest = (amends || []).find(function (a: any) { return (a.contract_spaces || []).length > 0; });
         let cs: any = latest ? (latest.contract_spaces || []).find(function (x: any) { return x.space_id === space.id; }) : null;
         if (!cs) {
-          const { data: baseCs } = await supabase.from("contract_spaces").select("space_id,charge_method,fixed_rent,price_per_sqm").eq("contract_id", holder.contractId).eq("space_id", space.id).limit(1);
+          const { data: baseCs } = await supabase.from("contract_spaces").select("space_id,charge_method,fixed_rent,price_per_sqm,use_original_index,index_base_value,index_base_date").eq("contract_id", holder.contractId).eq("space_id", space.id).limit(1);
           cs = (baseCs || [])[0] || null;
         }
-        setHolderCharge({ method: cs?.charge_method || "per_sqm", fixed: cs?.fixed_rent != null ? Number(cs.fixed_rent) : null, price: cs?.price_per_sqm != null ? Number(cs.price_per_sqm) : null });
+        setHolderCharge({
+          chargeMethod: cs?.charge_method || "per_sqm",
+          pricePerSqm: cs?.charge_method === "fixed" ? null : (cs?.price_per_sqm != null ? Number(cs.price_per_sqm) : (hBase?.rent_per_sqm != null ? Number(hBase.rent_per_sqm) : null)),
+          fixedRent: cs?.fixed_rent != null ? Number(cs.fixed_rent) : null,
+          indexBaseValue: (cs && cs.use_original_index === false && cs.index_base_value != null) ? Number(cs.index_base_value) : (hBase?.index_base_value != null ? Number(hBase.index_base_value) : null),
+          indexBaseDate: (cs && cs.use_original_index === false && cs.index_base_date) ? String(cs.index_base_date).slice(0, 10) : (hBase?.index_base_date ? String(hBase.index_base_date).slice(0, 10) : null),
+        });
       }
     })();
   }, [space.id, space.property_id, holder?.contractId]);
 
   const total = partsTotal(parts);
   const diff = Math.round((total - origArea) * 100) / 100;
-  const isFixed = holderCharge?.method === "fixed";
+  const isFixed = holderCharge?.chargeMethod === "fixed";
+  const holderPriceLabel = holderCharge ? (holderCharge.pricePerSqm != null ? "₪" + holderCharge.pricePerSqm.toLocaleString("he-IL") + '/מ"ר' : (holderCharge.fixedRent != null && origArea > 0 ? "≈₪" + (Math.round(holderCharge.fixedRent / origArea * 100) / 100).toLocaleString("he-IL") + '/מ"ר (מסכום קבוע)' : "לא ידוע")) : "";
+  const holderIdxLabel = holderCharge && holderCharge.indexBaseValue != null ? holderCharge.indexBaseValue + (holderCharge.indexBaseDate ? " · " + new Date(holderCharge.indexBaseDate).toLocaleDateString("he-IL") : "") : "";
 
   function setPart(i: number, patch: Partial<SplitPart>) {
     setParts(function (prev) { return prev.map(function (p, j) { return j === i ? { ...p, ...patch } : p; }); });
@@ -75,7 +86,9 @@ export default function SplitUnitModal(props: {
   const summary = parts.map(function (p) {
     const t = p.disposition === "transfer" ? candidates.find(function (c) { return c.id === p.targetContractId; }) : null;
     return "• " + (p.name || "?") + " — " + (Number(p.area) || 0).toLocaleString("he-IL") + ' מ"ר: ' +
-      (p.disposition === "keep" ? "נשאר אצל " + (holder?.tenantName || "השוכר") : p.disposition === "vacant" ? "פנוי להשכרה" : "עובר ל" + (t?.tenantName || "…") + " (תוספת הוספת יחידות)");
+      (p.disposition === "keep" ? "נשאר אצל " + (holder?.tenantName || "השוכר") : p.disposition === "vacant" ? "פנוי להשכרה" : "עובר ל" + (t?.tenantName || "…") +
+        " (תוספת הוספת יחידות · " + ((p.priceMode || "receiver") === "holder" ? "מחיר המחזיק" : (p.priceMode || "receiver") === "custom" ? "מחיר חדש ₪" + (Number(p.pricePerSqm) || 0).toLocaleString("he-IL") : "מחיר ההסכם המקבל") +
+        " · " + ((p.cpiMode || "receiver") === "holder" ? "מדד המחזיק" : (p.cpiMode || "receiver") === "custom" ? "מדד " + (p.cpiBaseValue || "?") : "מדד ההסכם המקבל") + ")");
   });
 
   async function run() {
@@ -114,7 +127,7 @@ export default function SplitUnitModal(props: {
             <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-xs text-amber-900">
               <div className="font-bold">היחידה מוחזקת על ידי {holder.tenantName}</div>
               <div className="mt-0.5">החלק שנשאר אצלו שומר על מזהה היחידה המקורי — המקדמות והחיובים הקיימים ממשיכים להצביע עליו. השאר ייווצרו כיחידות חדשות. השטח שלפני הפיצול מוקפא בצילומים הקודמים, כך שהצמדה, שכ"ד ודמי ניהול לתקופות שלפני תאריך התחולה מחושבים לפי השטח המקורי. לשוכר תיווצר תוספת להסכם מתאריך התחולה; חלק שעובר לשוכר אחר יוצר לו תוספת "הוספת יחידות".</div>
-              {holderCharge && <div className="mt-1 text-amber-800">חיוב היחידה היום: {isFixed ? "סכום קבוע ₪" + (holderCharge.fixed || 0).toLocaleString("he-IL") + " לחודש — יש להזין את הסכום לחלק שנשאר" : 'לפי מ"ר' + (holderCharge.price != null ? " (₪" + holderCharge.price.toLocaleString("he-IL") + ')' : " (מחיר ההסכם)") + " — החלק שנשאר ממשיך באותו מחיר למ\"ר"}</div>}
+              {holderCharge && <div className="mt-1 text-amber-800">חיוב היחידה היום: {isFixed ? "סכום קבוע ₪" + (holderCharge.fixedRent || 0).toLocaleString("he-IL") + " לחודש — יש להזין את הסכום לחלק שנשאר" : 'לפי מ"ר' + (holderCharge.pricePerSqm != null ? " (₪" + holderCharge.pricePerSqm.toLocaleString("he-IL") + ')' : " (מחיר ההסכם)") + " — החלק שנשאר ממשיך באותו מחיר למ\"ר"}{holderIdxLabel ? " · מדד בסיס " + holderIdxLabel : ""}</div>}
             </div>
           )}
 
@@ -145,27 +158,55 @@ export default function SplitUnitModal(props: {
                       </div>
                       <div className="col-span-1 text-left">{parts.length > 2 && <button type="button" onClick={function () { removePart(i); }} className="text-red-500 text-lg leading-none" title="הסר חלק">×</button>}</div>
                     </div>
-                    {p.disposition === "transfer" && (
-                      <div className="grid grid-cols-12 gap-2 items-end">
-                        <div className="col-span-8">
-                          <label className="mb-1 block text-[11px] text-slate-500">לחוזה של</label>
-                          <select value={p.targetContractId || ""} onChange={function (e) { setPart(i, { targetContractId: e.target.value || undefined }); }} className={ic}>
-                            <option value="">-- בחר שוכר בנכס --</option>
-                            {candidates.map(function (c) { return <option key={c.id} value={c.id}>{c.tenantName}{c.status === "future" || c.status === "upcoming" ? " (חוזה טרם החל)" : ""}{c.rent_per_sqm != null ? ' · ₪' + c.rent_per_sqm.toLocaleString("he-IL") + '/מ"ר' : ""}</option>; })}
-                          </select>
+                    {p.disposition === "transfer" && (function () {
+                      const c = candidates.find(function (x) { return x.id === p.targetContractId; });
+                      const pm = p.priceMode || "receiver";
+                      const cm = p.cpiMode || "receiver";
+                      return (
+                        <div className="space-y-2">
+                          <div>
+                            <label className="mb-1 block text-[11px] text-slate-500">לחוזה של</label>
+                            <select value={p.targetContractId || ""} onChange={function (e) { setPart(i, { targetContractId: e.target.value || undefined }); }} className={ic}>
+                              <option value="">-- בחר שוכר בנכס --</option>
+                              {candidates.map(function (x) { return <option key={x.id} value={x.id}>{x.tenantName}{x.status === "future" || x.status === "upcoming" ? " (חוזה טרם החל)" : ""}{x.rent_per_sqm != null ? ' · ₪' + x.rent_per_sqm.toLocaleString("he-IL") + '/מ"ר' : ""}</option>; })}
+                            </select>
+                          </div>
+                          <div className="grid grid-cols-12 gap-2 items-end">
+                            <div className={pm === "custom" ? "col-span-8" : "col-span-12"}>
+                              <label className="mb-1 block text-[11px] text-slate-500">מחיר למ"ר לחלק המועבר</label>
+                              <select value={pm} onChange={function (e) { setPart(i, { priceMode: e.target.value as any }); }} className={ic}>
+                                <option value="receiver">מחיר ההסכם המקבל{c && c.rent_per_sqm != null ? " (₪" + c.rent_per_sqm.toLocaleString("he-IL") + ')' : ""}</option>
+                                {holder && <option value="holder">מחיר המחזיק ליחידה לפני הפיצול{holderPriceLabel ? " (" + holderPriceLabel + ")" : ""}</option>}
+                                <option value="custom">מחיר חדש…</option>
+                              </select>
+                            </div>
+                            {pm === "custom" && (
+                              <div className="col-span-4"><label className="mb-1 block text-[11px] text-slate-500">₪ למ"ר</label><input type="number" step="0.01" value={p.pricePerSqm || ""} onChange={function (e) { setPart(i, { pricePerSqm: e.target.value }); }} className={ic} /></div>
+                            )}
+                          </div>
+                          <div className="grid grid-cols-12 gap-2 items-end">
+                            <div className={cm === "custom" ? "col-span-6" : "col-span-12"}>
+                              <label className="mb-1 block text-[11px] text-slate-500">הצמדה למדד</label>
+                              <select value={cm} onChange={function (e) { setPart(i, { cpiMode: e.target.value as any }); }} className={ic}>
+                                <option value="receiver">מדד הבסיס של ההסכם המקבל{c && c.index_base_value != null ? " (" + c.index_base_value + (c.index_base_date ? " · " + new Date(c.index_base_date).toLocaleDateString("he-IL") : "") + ")" : ""}</option>
+                                {holder && <option value="holder" disabled={!holderIdxLabel}>מדד הבסיס של המחזיק{holderIdxLabel ? " (" + holderIdxLabel + ")" : " (לא רשום)"}</option>}
+                                <option value="custom">מדד אחר…</option>
+                              </select>
+                            </div>
+                            {cm === "custom" && (<>
+                              <div className="col-span-3"><label className="mb-1 block text-[11px] text-slate-500">ערך מדד</label><input type="number" step="0.01" value={p.cpiBaseValue || ""} onChange={function (e) { setPart(i, { cpiBaseValue: e.target.value }); }} className={ic} /></div>
+                              <div className="col-span-3"><label className="mb-1 block text-[11px] text-slate-500">תאריך מדד</label><input type="date" value={p.cpiBaseDate || ""} onChange={function (e) { setPart(i, { cpiBaseDate: e.target.value }); }} className={ic} /></div>
+                            </>)}
+                          </div>
                         </div>
-                        <div className="col-span-4">
-                          <label className="mb-1 block text-[11px] text-slate-500">₪ למ"ר (ריק = מחיר ההסכם המקבל)</label>
-                          <input type="number" step="0.01" value={p.pricePerSqm || ""} onChange={function (e) { setPart(i, { pricePerSqm: e.target.value }); }} className={ic} placeholder={(function () { const c = candidates.find(function (x) { return x.id === p.targetContractId; }); return c?.rent_per_sqm != null ? String(c.rent_per_sqm) : ""; })()} />
-                        </div>
-                      </div>
-                    )}
+                      );
+                    })()}
                     {p.disposition === "keep" && isFixed && (
                       <div className="grid grid-cols-12 gap-2 items-end">
                         <div className="col-span-6">
                           <label className="mb-1 block text-[11px] text-slate-500">שכ"ד קבוע לחלק זה (₪ לחודש)</label>
                           <input type="number" step="0.01" value={p.fixedRent || ""} onChange={function (e) { setPart(i, { fixedRent: e.target.value }); }} className={ic}
-                            placeholder={holderCharge?.fixed != null && origArea > 0 ? String(Math.round((holderCharge.fixed * (Number(p.area) || 0) / origArea) * 100) / 100) : ""} />
+                            placeholder={holderCharge?.fixedRent != null && origArea > 0 ? String(Math.round((holderCharge.fixedRent * (Number(p.area) || 0) / origArea) * 100) / 100) : ""} />
                         </div>
                         <div className="col-span-6 text-[11px] text-slate-500 pb-2">ריק = יחסי לשטח מתוך הסכום הקבוע הנוכחי</div>
                       </div>
