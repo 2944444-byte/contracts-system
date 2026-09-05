@@ -716,8 +716,10 @@ export default function ContractsPage() {
     if (!baseDate) { resetCpi(); return; }
 
     // True rent = current step-rent + investment per sqm
-    const cpiInvestPerSqm = contractArea(selContract) > 0 && selContract.investment_addition
-      ? Number(selContract.investment_addition) / contractArea(selContract)
+    const cpiAreaForInvest = (amendments.length > 0 && Number(amendments[amendments.length - 1]?.charged_area) > 0)
+      ? Number(amendments[amendments.length - 1].charged_area) : contractArea(selContract);
+    const cpiInvestPerSqm = cpiAreaForInvest > 0 && selContract.investment_addition
+      ? Number(selContract.investment_addition) / cpiAreaForInvest
       : 0;
     const totalRentPerSqm = currentRent + cpiInvestPerSqm;
 
@@ -1102,6 +1104,26 @@ export default function ContractsPage() {
   var effectiveEndDate = latestAmendment?.end_date || selContract?.end_date;
   var effectiveRentPerSqm = latestAmendment?.rent_per_sqm ?? selContract?.rent_per_sqm ?? 0;
   var effectiveArea = latestAmendment?.charged_area ?? selContract?.charged_area ?? 0;
+  // השטח הנוכחי = סכום היחידות בצילום האחרון. שונה מ-contractArea(selContract),
+  // שהוא שטח צילום הבסיס — ואחרי פיצול יחידה הוא מוקפא על השטח הישן בכוונה
+  // (הפרשי הצמדה ושכ"ד לתקופות שלפני הפיצול). הכותרת, ה-KPI וחישובי "היום"
+  // חייבים את הנוכחי; חישובי "במקור" נשארים על הבסיס.
+  var effectiveContractArea = effectiveSpaces.length > 0 ? effectiveSpaces.reduce(function(s: number, cs: any){ return s + csArea(cs); }, 0) : 0;
+  if (!(effectiveContractArea > 0)) effectiveContractArea = Number(effectiveArea) || (selContract ? contractArea(selContract) : 0);
+  var originalContractArea = selContract ? contractArea(selContract) : 0;
+  // תיקון שטח שנובע מתוספת — מוצג כתג ליד השטח כדי שיהיה ברור שהמספר עודכן.
+  var areaChange: { from: number; to: number; number: number | null; date: string | null; kind: string } | null = null;
+  if (selContract && latestAmendment && originalContractArea > 0 && Math.abs(effectiveContractArea - originalContractArea) > 0.5) {
+    var amArea: any = amendments.slice().reverse().find(function(a: any){ return a.amendment_prev?.split || a.amendment_prev?.split_in || (a.contract_spaces?.length > 0); }) || latestAmendment;
+    areaChange = {
+      from: originalContractArea, to: effectiveContractArea,
+      number: amArea?.amendment_number ?? null, date: amArea?.amendment_date ?? null,
+      kind: amArea?.amendment_prev?.split ? "פיצול יחידה" : amArea?.amendment_prev?.split_in ? "קבלת חלק מיחידה מפוצלת" : "שינוי יחידות",
+    };
+  }
+  var areaChangeText = areaChange
+    ? "במקור " + areaChange.from.toLocaleString("he-IL") + ' מ"ר — עודכן בתוספת' + (areaChange.number != null ? " מס' " + areaChange.number : "") + (areaChange.date ? " מ-" + new Date(areaChange.date).toLocaleDateString("he-IL") : "") + " (" + areaChange.kind + ")"
+    : "";
 
   const investPerSqm = selContract && effectiveArea > 0 && selContract.investment_addition
     ? Math.round(selContract.investment_addition / effectiveArea * 100) / 100 : 0;
@@ -1227,7 +1249,7 @@ export default function ContractsPage() {
   // the KPIs read ₪0.00 for a contract that collects a guaranteed minimum. Fall
   // back to the floor — labelled as such in the box below.
   var revenueFloorMonthly = selContract?.rent_type === "revenue_pct"
-    ? (Number(selContract?.min_rent_per_sqm) || 0) * contractArea(selContract) || (Number(selContract?.minimum_rent) || 0)
+    ? (Number(selContract?.min_rent_per_sqm) || 0) * effectiveContractArea || (Number(selContract?.minimum_rent) || 0)
     : 0;
   // הצמדה על חניות (החלטת 14.08.2026): דמי החניה צמודים כמו שכ"ד —
   // בחוזה יחידות לפי יחס המדד של החוזה; בחוזה חניות טהור התוצאה הצמודה
@@ -1799,8 +1821,8 @@ export default function ContractsPage() {
                           for a contract that has one. */}
                       {Number(selContract.min_rent_per_sqm) > 0
                         ? `מינימום: ${fmtMoney(Number(selContract.min_rent_per_sqm))}/מ"ר לחודש` +
-                          (contractArea(selContract) > 0
-                            ? ` · ${fmtMoney(Number(selContract.min_rent_per_sqm) * contractArea(selContract))}/חודש`
+                          (effectiveContractArea > 0
+                            ? ` · ${fmtMoney(Number(selContract.min_rent_per_sqm) * effectiveContractArea)}/חודש`
                             : "")
                         : Number(selContract.minimum_rent) > 0
                           ? `מינימום: ${fmtMoney(Number(selContract.minimum_rent))}/חודש`
@@ -1970,8 +1992,8 @@ export default function ContractsPage() {
                           </div>
                           {/* Total monthly CPI-adjusted */}
                           <div className="rounded-lg bg-white border border-amber-200 p-2.5 text-center">
-                            <div className="text-lg font-black text-amber-900">₪{Math.round(cpiResult.adjustedRentPerSqm * contractArea(selContract)).toLocaleString()}</div>
-                            <div className="text-[10px] text-amber-600">סה&quot;כ שכ&quot;ד צמוד לחודש (לפני מע&quot;מ)</div>
+                            <div className="text-lg font-black text-amber-900">₪{Math.round(cpiResult.adjustedRentPerSqm * effectiveContractArea).toLocaleString()}</div>
+                            <div className="text-[10px] text-amber-600">סה&quot;כ שכ&quot;ד צמוד לחודש (לפני מע&quot;מ) · {effectiveContractArea.toLocaleString("he-IL")} מ&quot;ר</div>
                           </div>
                         </>
                       )}
@@ -1983,7 +2005,7 @@ export default function ContractsPage() {
                       <div className="flex justify-between"><span>שכ&quot;ד בסיס:</span><span className="font-semibold">₪{cpiResult.baseRentPerSqm.toFixed(2)}/מ&quot;ר</span></div>
                       <div className="flex justify-between"><span>שינוי מצטבר:</span><span className="font-semibold">{cpiResult.changePct != null ? cpiResult.changePct + "%" : "—"}</span></div>
                       <div className="flex justify-between"><span>שנת בסיס מדד:</span><span className="font-semibold">{cpiResult.baseYear}</span></div>
-                      <div className="flex justify-between"><span>שטח מחויב:</span><span className="font-semibold">{selContract.charged_area} מ&quot;ר</span></div>
+                      <div className="flex justify-between"><span>שטח מחויב:</span><span className="font-semibold">{effectiveContractArea.toLocaleString("he-IL")} מ&quot;ר{areaChange && <span className="mr-1 rounded-full bg-amber-200 text-amber-900 px-1.5 py-0.5 text-[10px]" title={areaChangeText}>⟲ במקור {areaChange.from.toLocaleString("he-IL")}</span>}</span></div>
                     </div>
 
                     {/* Self cross-check: the rent the calculator used must equal
@@ -2128,7 +2150,7 @@ export default function ContractsPage() {
                     {l:"סיום",    v:fmtEndDate(effectiveEndDate, selContract.start_date)},
                     selContract.contract_type === "parking"
                       ? {l:"חניות", v: (function(){ var n = parkingSubs.reduce(function(s:number,p:any){ return (p.is_included_in_rent||p.subscription_type==="visitor") ? s : s + (Number(p.quantity)||1); }, 0); return n > 0 ? n + " מקומות" : "—"; })()}
-                      : {l:"שטח",  v:selContract.charged_area?selContract.charged_area+' מ"ר':"—"},
+                      : {l:"שטח",  v:effectiveContractArea > 0 ? effectiveContractArea.toLocaleString("he-IL") + ' מ"ר' + (areaChange ? " ⟲ " + areaChangeText : "") : (selContract.charged_area ? selContract.charged_area + ' מ"ר' : "—")},
                     {l:"הצמדה",  v:selContract.indexation_method==="highest_in_period"?"מדד גבוה":selContract.indexation_method==="none"?"ללא":"t-2"},
                     {l:"מדד בסיס",v:selContract.index_base_value ? ("📊 מדד " + (selContract.index_base_date ? baseIndexLabel(selContract.index_base_date) + " = " : "= ") + selContract.index_base_value) : "—"},
                     {l:'מע"מ',  v:selContract.vat_type==="taxable"?(Math.round(vatPct*100)+"%"):"פטור"},
@@ -2782,7 +2804,7 @@ export default function ContractsPage() {
                             <div className="mt-1.5 rounded bg-rose-50 border border-rose-200 px-2 py-1.5 text-xs text-rose-700">
                               <div className="font-semibold">⚖️ פיצוי על אי מימוש: {describePenaltyTerms(penalty, selContract, opt)}</div>
                               {penalty.type === "per_sqm_month" && (function() {
-                                const area = contractArea(selContract);
+                                const area = effectiveContractArea;
                                 const months = penaltyMonths(penalty, selContract, opt);
                                 if (!(area > 0 && months > 0)) return null;
                                 return (
