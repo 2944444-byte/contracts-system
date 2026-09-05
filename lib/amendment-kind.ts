@@ -112,6 +112,8 @@ export function classifyAmendment(params: {
 
   // החלפת ביטחונות מתועדת בצילום שלפני-השינוי של התוספת עצמה.
   if (ap && ap.guarantee_change) changes.push("guarantees");
+  // פיצול יחידה (מסך היחידות) מתועד בצילום שלפני-השינוי של התוספת.
+  if (ap && (ap.split || ap.split_in) && changes.indexOf("units") === -1) changes.push("units");
 
   if (changes.length === 0) changes.push("other");
 

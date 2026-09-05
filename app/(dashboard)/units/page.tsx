@@ -6,6 +6,7 @@ import { logAudit } from '@/lib/audit-log';
 import PropertyHierarchyFilter from '@/components/PropertyHierarchyFilter';
 import { PageHero } from '@/components/ui';
 import { getScopeIds, scopeRows } from '@/lib/permissions';
+import SplitUnitModal from '@/components/SplitUnitModal';
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 const SPACE_TYPES = [{v:"office",l:"משרדים",icon:"💼"},{v:"retail",l:"מסחר",icon:"🏪"},{v:"store",l:"חנות",icon:"🏬"},{v:"warehouse",l:"מחסן",icon:"📦"},{v:"industrial",l:"תעשיה",icon:"🏭"},{v:"shed",l:"סככה",icon:"🏚"},{v:"yard",l:"חצר צמודה",icon:"🌳"},{v:"other",l:"אחר",icon:"🚪"}];
@@ -15,6 +16,7 @@ export default function UnitsPage() {
   const searchParams = useSearchParams();
   const urlPropertyId = searchParams.get("propertyId");
   const [spaces,     setSpaces]     = useState<any[]>([]);
+  const [splitSpace, setSplitSpace] = useState<any | null>(null);
   const [properties, setProperties] = useState<any[]>([]);
   const [contracts,  setContracts]  = useState<any[]>([]);
   const [loading,    setLoading]    = useState(true);
@@ -253,6 +255,7 @@ export default function UnitsPage() {
                         {tenant&&<div className={"text-xs font-semibold mt-1 cursor-pointer hover:underline "+(isFuture?"text-amber-800":"text-green-700")} onClick={function(e){e.stopPropagation();router.push(tenant?.contractId ? "/contracts?select=" + tenant.contractId : "/contracts");}}>👤 {tenant.name}{isFuture?" 🔜":""} <span className="text-[10px] text-green-500">📄</span></div>}
                         <div className="mt-2 flex gap-1">
                           <button onClick={function(){openEdit(s);}} className="flex-1 text-[10px] border border-slate-200 rounded py-1 text-slate-600 hover:bg-slate-50">עריכה</button>
+                          <button onClick={function(){setSplitSpace(s);}} className="text-[10px] border border-slate-200 rounded py-1 px-2 text-slate-600 hover:bg-slate-50" title="פיצול היחידה לחלקים">✂️</button>
                           <button onClick={function(){handleDelete(s.id);}} className="text-[10px] border border-red-200 rounded py-1 px-2 text-red-500 hover:bg-red-50">🗑</button>
                         </div>
                       </div>
@@ -263,6 +266,19 @@ export default function UnitsPage() {
             );
           })}
         </div>
+      )}
+
+      {splitSpace && (
+        <SplitUnitModal
+          space={splitSpace}
+          holder={(function(){ var t = tenantForSpace(splitSpace.id); return t && t.contractId ? { contractId: t.contractId, tenantName: t.name } : null; })()}
+          onClose={function(){ setSplitSpace(null); }}
+          onDone={function(r){
+            setSplitSpace(null);
+            loadAll();
+            alert("הפיצול בוצע: " + (1 + r.newSpaceIds.length) + " חלקים" + (r.amendments.length ? " · נוצרו " + r.amendments.length + " תוספות להסכם (ניתן לראותן במסך החוזים)" : ""));
+          }}
+        />
       )}
 
       {/* Edit/Create modal */}
