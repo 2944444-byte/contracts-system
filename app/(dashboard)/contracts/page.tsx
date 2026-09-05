@@ -351,7 +351,7 @@ export default function ContractsPage() {
 
   async function loadContracts() {
     const { data } = await supabase.from("contracts")
-      .select("*, tenants(name,phone,primary_email,company_name), properties(name,city), contract_options(id,option_number,duration_months,duration_years,start_date,end_date,notice_days_before_end,notice_type,status,is_exercised,rent_mechanism,rent_increase_pct,new_rent_value,option_group,exit_points,price_schedule_type,price_tiers,non_exercise_penalty_type,non_exercise_penalty_value,non_exercise_penalty_basis,non_exercise_penalty_months,non_exercise_penalty_indexed,non_exercise_penalty_vat,non_exercise_penalty_days,non_exercise_penalty_notes,declined_at,non_exercise_charge_id,cancels_revenue_protection), guarantees(id,guarantee_type,status,amount_required,amount_actual,end_date,bank,document_url,documents,delivery_trigger,delivery_offset_days,delivery_due_date,delivery_condition,delivered_at), contract_ti(id,description,ti_type,ti_amount,recovery_method,recovery_amount_monthly,recovery_start_date,recovery_end_date,payment_trigger,payment_days_after,payment_due_date,payment_installments,requires_invoice,requires_report,paid_at,paid_amount,payment_notes,notes), contract_spaces(area_override,space_id,charge_method,fixed_rent,price_per_sqm,index_base_value,index_base_date,use_original_index,spaces(space_name,area))")
+      .select("*, tenants(name,phone,primary_email,company_name), properties(name,city), contract_options(id,option_number,duration_months,duration_years,start_date,end_date,notice_days_before_end,notice_type,status,is_exercised,rent_mechanism,rent_increase_pct,new_rent_value,option_group,exit_points,price_schedule_type,price_tiers,non_exercise_penalty_type,non_exercise_penalty_value,non_exercise_penalty_basis,non_exercise_penalty_months,non_exercise_penalty_indexed,non_exercise_penalty_vat,non_exercise_penalty_days,non_exercise_penalty_notes,declined_at,non_exercise_charge_id,cancels_revenue_protection), guarantees(id,guarantee_type,status,amount_required,amount_actual,end_date,bank,document_url,documents,delivery_trigger,delivery_offset_days,delivery_due_date,delivery_condition,delivered_at), contract_ti(id,description,ti_type,ti_amount,recovery_method,recovery_amount_monthly,recovery_start_date,recovery_end_date,payment_trigger,payment_days_after,payment_due_date,payment_installments,requires_invoice,requires_report,paid_at,paid_amount,payment_notes,notes), contract_spaces(area_override,follows_contract_options,space_id,charge_method,fixed_rent,price_per_sqm,index_base_value,index_base_date,use_original_index,spaces(space_name,area))")
       .order("end_date");
     // Data-level scoping: managers/viewers see only contracts of their
     // allowed properties (admin scope is null = everything).
@@ -393,7 +393,7 @@ export default function ContractsPage() {
     if (!selContract) { setAmendments([]); setParkingSubs([]); setSpaceOverlaps([]); return; }
     // Load amendments first, then check overlaps using ALL spaces (base + amendments)
     supabase.from("contracts")
-      .select("id,amendment_number,amendment_date,amendment_notes,document_url,start_date,end_date,rent_per_sqm,charged_area,payment_method,payment_frequency,payment_day,amendment_prev,contract_spaces(area_override,space_id,charge_method,fixed_rent,price_per_sqm,index_base_value,index_base_date,use_original_index,spaces(space_name,area))")
+      .select("id,amendment_number,amendment_date,amendment_notes,document_url,start_date,end_date,rent_per_sqm,charged_area,payment_method,payment_frequency,payment_day,amendment_prev,contract_spaces(area_override,follows_contract_options,space_id,charge_method,fixed_rent,price_per_sqm,index_base_value,index_base_date,use_original_index,spaces(space_name,area))")
       .eq("parent_contract_id", selContract.id)
       .eq("is_amendment", true)
       .order("amendment_number")
@@ -448,7 +448,7 @@ export default function ContractsPage() {
                 var baseIdArr = Array.from(otherBaseIds);
                 // Load latest amendment spaces for each base contract
                 var { data: otherAmends } = await supabase.from("contracts")
-                  .select("parent_contract_id, amendment_number, contract_spaces(area_override,space_id)")
+                  .select("parent_contract_id, amendment_number, contract_spaces(area_override,follows_contract_options,space_id)")
                   .in("parent_contract_id", baseIdArr)
                   .eq("is_amendment", true)
                   .order("amendment_number", { ascending: false });
@@ -1205,7 +1205,7 @@ export default function ContractsPage() {
       ? (Number(cs.fixed_rent) || 0)
       : (Number(cs.price_per_sqm) || Number(effectiveRentPerSqm) || 0) * area;
     if (!selContract) return raw;
-    var sched = buildSpaceRentSchedule({
+    var sched = buildSpaceRentSchedule({ space: cs,
       contractStartDate: selContract.start_date,
       spaceArea: area,
       isFixed: isFx,
@@ -3998,12 +3998,12 @@ export default function ContractsPage() {
                       for (var swapInfo of crossSwapContracts) {
                         // Load the other contract's effective spaces
                         var { data: otherContract } = await supabase.from("contracts")
-                          .select("*, tenants(name), contract_spaces(area_override,space_id,charge_method,fixed_rent,price_per_sqm,index_base_value,index_base_date,use_original_index,spaces(space_name,area))")
+                          .select("*, tenants(name), contract_spaces(area_override,follows_contract_options,space_id,charge_method,fixed_rent,price_per_sqm,index_base_value,index_base_date,use_original_index,spaces(space_name,area))")
                           .eq("id", swapInfo.contractId).single();
                         if (!otherContract) continue;
                         // Get latest amendment's spaces for the other contract
                         var { data: otherAmends } = await supabase.from("contracts")
-                          .select("id, contract_spaces(area_override,space_id,charge_method,fixed_rent,price_per_sqm,index_base_value,index_base_date,use_original_index,spaces(space_name,area))")
+                          .select("id, contract_spaces(area_override,follows_contract_options,space_id,charge_method,fixed_rent,price_per_sqm,index_base_value,index_base_date,use_original_index,spaces(space_name,area))")
                           .eq("parent_contract_id", swapInfo.contractId).eq("is_amendment", true)
                           .order("amendment_number", { ascending: false }).limit(1);
                         var otherEffSpaces = (otherAmends && otherAmends.length > 0 && otherAmends[0].contract_spaces?.length > 0)

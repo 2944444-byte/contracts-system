@@ -38,7 +38,7 @@ export default function ParkingPage() {
 
   async function loadAll() {
     const [{ data: s }, { data: p }, { data: t }] = await Promise.all([
-      supabase.from("parking_subscriptions").select("*, properties(name,parking_spaces), tenants(name), contracts(id,contract_spaces(area_override,spaces(space_name)))").order("created_at"),
+      supabase.from("parking_subscriptions").select("*, properties(name,parking_spaces), tenants(name), contracts(id,contract_spaces(area_override,follows_contract_options,spaces(space_name)))").order("created_at"),
       supabase.from("properties").select("id,name,parking_spaces").order("name"),
       supabase.from("tenants").select("id,name").order("name"),
     ]);

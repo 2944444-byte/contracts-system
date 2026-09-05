@@ -105,7 +105,7 @@ export async function autoCreateGuaranteeRenewalLetters(
 ): Promise<Array<{ tenantName: string; ref: string; deadline: string; needsUpdate: boolean }>> {
   const out: Array<{ tenantName: string; ref: string; deadline: string; needsUpdate: boolean }> = [];
   const { data: guarantees } = await supabase.from("guarantees")
-    .select("*, contracts(id, property_id, guarantee_months, guarantee_amount, tenants(name), contract_spaces(area_override,charge_method, fixed_rent, price_per_sqm, revenue_pct, min_rent, spaces(area)))")
+    .select("*, contracts(id, property_id, guarantee_months, guarantee_amount, tenants(name), contract_spaces(area_override,follows_contract_options,charge_method, fixed_rent, price_per_sqm, revenue_pct, min_rent, spaces(area)))")
     .eq("status", "active");
 
   const compCache: Record<string, any> = {};

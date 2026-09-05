@@ -33,7 +33,7 @@ export async function buildAppraiserWorkbook(params: { propertyIds: string[]; ti
   const [{ data: props }, { data: contracts }, { data: allSpaces }, cpiRes, vatPct] = await Promise.all([
     supabase.from("properties").select("id,name,city,total_area").in("id", pids),
     supabase.from("contracts")
-      .select("id, property_id, tenant_id, contract_type, status, start_date, end_date, rent_per_sqm, charged_area, investment_addition, rent_type, revenue_pct, min_rent_per_sqm, minimum_rent, payment_method, payment_frequency, payment_day, indexation_method, index_mechanism, index_base_value, index_base_date, early_termination_allowed, termination_notice_days, termination_by, grace_months, grace_days, grace_phase2_days, grace_type, grace_discount_pct, grace_mgmt_discount_pct, grace_ends_on_opening, mgmt_charge_starts, mgmt_free_max_days, works_start_date, planned_handover_date, actual_handover_date, planned_opening_date, actual_opening_date, opening_rule, opening_max_days_from_handover, lease_period_value, lease_period_unit, tenants(name), contract_spaces(area_override,space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area,space_type))")
+      .select("id, property_id, tenant_id, contract_type, status, start_date, end_date, rent_per_sqm, charged_area, investment_addition, rent_type, revenue_pct, min_rent_per_sqm, minimum_rent, payment_method, payment_frequency, payment_day, indexation_method, index_mechanism, index_base_value, index_base_date, early_termination_allowed, termination_notice_days, termination_by, grace_months, grace_days, grace_phase2_days, grace_type, grace_discount_pct, grace_mgmt_discount_pct, grace_ends_on_opening, mgmt_charge_starts, mgmt_free_max_days, works_start_date, planned_handover_date, actual_handover_date, planned_opening_date, actual_opening_date, opening_rule, opening_max_days_from_handover, lease_period_value, lease_period_unit, tenants(name), contract_spaces(area_override,follows_contract_options,space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area,space_type))")
       .in("property_id", pids).in("status", LIVE).eq("is_amendment", false).order("start_date"),
     supabase.from("spaces").select("id,property_id,space_name,space_type,area,floor,status").in("property_id", pids).order("space_name"),
     supabase.from("cpi_records").select("year,month,value").eq("base_year", 2022).order("year", { ascending: false }).order("month", { ascending: false }).limit(1),
@@ -44,7 +44,7 @@ export async function buildAppraiserWorkbook(params: { propertyIds: string[]; ti
   const knownIdx = (cpiRes.data && cpiRes.data[0]) ? { y: Number(cpiRes.data[0].year), m: Number(cpiRes.data[0].month), v: Number(cpiRes.data[0].value) } : null;
 
   const [{ data: amends }, { data: tiers }, { data: options }, { data: parking }] = await Promise.all([
-    cids.length ? supabase.from("contracts").select("id,parent_contract_id,end_date,amendment_date,amendment_number,start_date,rent_per_sqm,contract_spaces(area_override,space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area,space_type))").eq("is_amendment", true).in("parent_contract_id", cids) : Promise.resolve({ data: [] } as any),
+    cids.length ? supabase.from("contracts").select("id,parent_contract_id,end_date,amendment_date,amendment_number,start_date,rent_per_sqm,contract_spaces(area_override,follows_contract_options,space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area,space_type))").eq("is_amendment", true).in("parent_contract_id", cids) : Promise.resolve({ data: [] } as any),
     cids.length ? supabase.from("contract_price_tiers").select("*").in("contract_id", cids).is("option_id", null) : Promise.resolve({ data: [] } as any),
     cids.length ? supabase.from("contract_options").select("id,contract_id,option_number,is_exercised,status,start_date,end_date,duration_months,duration_years").in("contract_id", cids) : Promise.resolve({ data: [] } as any),
     cids.length ? supabase.from("parking_subscriptions").select("contract_id,monthly_fee,quantity,is_included_in_rent,subscription_type,status").eq("status", "active") : Promise.resolve({ data: [] } as any),
@@ -134,7 +134,7 @@ export async function buildAppraiserWorkbook(params: { propertyIds: string[]; ti
       }
       const isFixed = cs.charge_method === "fixed" && Number(cs.fixed_rent) > 0;
       const baseRent = isFixed ? Number(cs.fixed_rent) : (Number(cs.price_per_sqm) || effRps || 0) * area;
-      const sched = buildSpaceRentSchedule({ contractStartDate: c.start_date, spaceArea: area, isFixed: isFixed, spaceBaseRent: baseRent, spaceTiers: [], contractTiers: cTiers, exercisedOptions: exercised });
+      const sched = buildSpaceRentSchedule({ space: cs, contractStartDate: c.start_date, spaceArea: area, isFixed: isFixed, spaceBaseRent: baseRent, spaceTiers: [], contractTiers: cTiers, exercisedOptions: exercised });
       schedByCs["u" + i] = sched;
       const mNow = rentAtDate(sched, today);
       units.push({

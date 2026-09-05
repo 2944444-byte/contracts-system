@@ -135,7 +135,7 @@ export default function SavedAdvancesTab({ properties }: Props) {
   // Load contracts for manual add
   async function openAddModal() {
     var { data } = await supabase.from("contracts")
-      .select("id, rent_per_sqm, vat_type, tenants(name), contract_spaces(area_override,space_id, spaces(space_name, area))")
+      .select("id, rent_per_sqm, vat_type, tenants(name), contract_spaces(area_override,follows_contract_options,space_id, spaces(space_name, area))")
       .eq("property_id", propId)
       .in("status", ["active", "extended"])
       .eq("is_amendment", false);

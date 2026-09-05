@@ -167,7 +167,7 @@ export async function generateTransferCharges(params: {
       "mgmt_charge_starts, mgmt_free_max_days, works_start_date, works_end_date, " +
       "planned_handover_date, actual_handover_date, planned_opening_date, actual_opening_date, " +
       "opening_rule, opening_max_days_from_handover, term_starts_at, " +
-      "tenants(name), contract_spaces(area_override,space_id, charge_method, fixed_rent, price_per_sqm, spaces(space_name, area, space_type)), " +
+      "tenants(name), contract_spaces(area_override,follows_contract_options,space_id, charge_method, fixed_rent, price_per_sqm, spaces(space_name, area, space_type)), " +
       "contract_options(id, is_exercised, status, start_date, end_date, rent_mechanism, rent_increase_pct, new_rent_value, price_tiers, option_group)")
     .in("payment_method", TRANSFER_METHODS)
     // "upcoming"/"future" נכללים בכוונה: חוזה שמתחיל ב-1 בחודש הבא עדיין
@@ -249,7 +249,7 @@ export async function generateTransferCharges(params: {
         // spaceMonthlyBase: יחידת "כלול במחיר" (סככה/חצר) תורמת ₪0 —
         // ולא נופלת ל-fallback של מחיר החוזה למ"ר.
         const spaceBase = spaceMonthlyBase(cs, Number(c.rent_per_sqm) || 0);
-        return buildSpaceRentSchedule({
+        return buildSpaceRentSchedule({ space: cs,
           contractStartDate: cBill.start_date, spaceArea: area, isFixed: isFixed,
           spaceBaseRent: spaceBase, spaceTiers: [], contractTiers: tiers, exercisedOptions: exercised,
         });

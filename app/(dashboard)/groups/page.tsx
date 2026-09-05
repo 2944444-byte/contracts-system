@@ -57,7 +57,7 @@ export default function GroupsPage() {
       supabase.from("properties").select("id,name,group_id,total_area,city,property_type").order("name"),
       // upcoming/future included: a signed lease holds its units in the group's
       // occupancy even before its term begins. Income filters them out below.
-      supabase.from("contracts").select("id, status, start_date, rent_type, revenue_pct, min_rent_per_sqm, minimum_rent, rent_per_sqm, charged_area, investment_addition, property_id, end_date, tenants(name), contract_spaces(area_override,space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area))").in("status",["active","expiring","extended","upcoming","future"]),
+      supabase.from("contracts").select("id, status, start_date, rent_type, revenue_pct, min_rent_per_sqm, minimum_rent, rent_per_sqm, charged_area, investment_addition, property_id, end_date, tenants(name), contract_spaces(area_override,follows_contract_options,space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area))").in("status",["active","expiring","extended","upcoming","future"]),
       supabase.from("spaces").select("id, property_id, status, space_name, area").order("space_name"),
       supabase.from("guarantees").select("id,contract_id,guarantee_type,amount_required,end_date,status").eq("status","active"),
     ]);

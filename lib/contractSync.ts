@@ -208,7 +208,7 @@ export async function syncContractStatuses(client?: any): Promise<number> {
   const [{ data: allSpaces }, { data: liveFam }] = await Promise.all([
     supabase.from("spaces").select("id,status").in("status", ["occupied", "vacant"]),
     supabase.from("contracts")
-      .select("id,status,start_date,is_amendment,parent_contract_id,amendment_number,amendment_date,contract_spaces(area_override,space_id)")
+      .select("id,status,start_date,is_amendment,parent_contract_id,amendment_number,amendment_date,contract_spaces(area_override,follows_contract_options,space_id)")
       .in("status", HOLDING_STATUSES),
   ]);
   const fams: Record<string, any[]> = {};

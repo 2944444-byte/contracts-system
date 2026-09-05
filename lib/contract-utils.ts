@@ -196,8 +196,17 @@ export function buildSpaceRentSchedule(params: {
   spaceTiers: any[];
   contractTiers: any[];
   exercisedOptions: any[];
+  // The contract_spaces row. A unit priced by ANOTHER contract's mechanism
+  // (part of a split unit transferred at the holder's price) carries
+  // follows_contract_options=false: its price is its own — the host contract's
+  // exercised options and contract-level tiers do not re-price it. Per-space
+  // tiers still apply.
+  space?: any;
 }): RentScheduleEntry[] {
-  const { contractStartDate, spaceArea, isFixed, spaceBaseRent, spaceTiers, contractTiers, exercisedOptions } = params;
+  const { contractStartDate, spaceArea, isFixed, spaceBaseRent, spaceTiers } = params;
+  const ownSchedule = !!params.space && params.space.follows_contract_options === false;
+  const contractTiers = ownSchedule ? [] : params.contractTiers;
+  const exercisedOptions = ownSchedule ? [] : params.exercisedOptions;
   const schedule: RentScheduleEntry[] = [];
   const contractStart = new Date(contractStartDate);
 

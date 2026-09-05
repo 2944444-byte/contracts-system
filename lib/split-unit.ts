@@ -19,6 +19,7 @@
 
 import { supabase } from "@/lib/supabase";
 import { logAudit } from "@/lib/audit-log";
+import { buildSpaceRentSchedule, rentAtDate } from "@/lib/contract-utils";
 
 export type SplitDisposition = "keep" | "vacant" | "transfer";
 
@@ -45,7 +46,7 @@ export type SplitPart = {
 
 // What the holder pays for this unit today — the "holder" price/CPI options.
 export type HolderTerms = {
-  pricePerSqm: number | null;   // null when charged as a fixed amount
+  pricePerSqm: number | null;   // the holder's EFFECTIVE price per m² at the effective date (after its steps/options); null when charged as a fixed amount
   fixedRent: number | null;
   chargeMethod: string;
   indexBaseValue: number | null;
@@ -75,7 +76,7 @@ export type SplitResult = {
   amendments: Array<{ contractId: string; amendmentId: string; kind: "holder" | "transfer" }>;
 };
 
-const CS_SELECT = "space_id,charge_method,fixed_rent,price_per_sqm,index_base_value,index_base_date,use_original_index,area_override";
+const CS_SELECT = "space_id,charge_method,fixed_rent,price_per_sqm,index_base_value,index_base_date,use_original_index,area_override,follows_contract_options";
 
 export function partsTotal(parts: SplitPart[]): number {
   return Math.round(parts.reduce(function (s, p) { return s + (Number(p.area) || 0); }, 0) * 100) / 100;
@@ -119,12 +120,32 @@ async function loadEffectiveSpaces(contractId: string): Promise<{ base: any; eff
   if (error || !base) throw new Error("החוזה לא נטען: " + (error?.message || contractId));
   const { data: baseCs } = await supabase.from("contract_spaces").select(CS_SELECT).eq("contract_id", contractId);
   const { data: amends, count } = await supabase.from("contracts")
-    .select("id, contract_spaces(area_override," + CS_SELECT + ")", { count: "exact" })
+    .select("id, contract_spaces(area_override,follows_contract_options," + CS_SELECT + ")", { count: "exact" })
     .eq("parent_contract_id", contractId).eq("is_amendment", true)
     .order("amendment_number", { ascending: false });
   const latestWithSpaces: any = ((amends || []) as any[]).find(function (a: any) { return (a.contract_spaces || []).length > 0; });
   const effective: any[] = latestWithSpaces ? latestWithSpaces.contract_spaces : (baseCs || []);
   return { base: base, effective: effective, amendCount: count || (amends || []).length };
+}
+
+// The price the holder actually pays for this unit at `atDate` — its base price
+// run through the holder contract's own step tiers and exercised options. This
+// is what "מחיר המחזיק לפני הפיצול" means: the price in force, not the figure
+// typed at signing.
+export async function holderEffectivePerSqm(holderBase: any, origCs: any, spaceId: string, area: number, atDate: string): Promise<number | null> {
+  if (!holderBase || !(area > 0)) return null;
+  const { data: tiers } = await supabase.from("contract_price_tiers").select("*").eq("contract_id", holderBase.id);
+  const { data: opts } = await supabase.from("contract_options").select("*").eq("contract_id", holderBase.id).eq("is_exercised", true);
+  const isFixed = origCs?.charge_method === "fixed" && Number(origCs?.fixed_rent) > 0;
+  const base = isFixed ? Number(origCs.fixed_rent) : (Number(origCs?.price_per_sqm) || Number(holderBase.rent_per_sqm) || 0) * area;
+  const sched = buildSpaceRentSchedule({
+    contractStartDate: holderBase.start_date, spaceArea: area, isFixed: isFixed, spaceBaseRent: base,
+    spaceTiers: (tiers || []).filter(function (t: any) { return t.space_id === spaceId; }),
+    contractTiers: (tiers || []).filter(function (t: any) { return !t.space_id; }),
+    exercisedOptions: opts || [], space: origCs,
+  });
+  const monthly = rentAtDate(sched, new Date(atDate));
+  return Math.round(monthly / area * 100) / 100;
 }
 
 function amendmentPayloadFrom(base: any, effectiveDate: string, amendNumber: number, chargedArea: number, notes: string, prev: any, docUrl: string | null) {
@@ -247,7 +268,7 @@ export async function performUnitSplit(input: SplitInput): Promise<SplitResult> 
     const origCs = h.effective.find(function (cs: any) { return cs.space_id === space.id; });
     holderTerms = {
       chargeMethod: origCs?.charge_method || "per_sqm",
-      pricePerSqm: origCs?.charge_method === "fixed" ? null : (origCs?.price_per_sqm != null ? Number(origCs.price_per_sqm) : (h.base.rent_per_sqm != null ? Number(h.base.rent_per_sqm) : null)),
+      pricePerSqm: origCs?.charge_method === "fixed" ? null : await holderEffectivePerSqm(h.base, origCs, space.id, origArea, date),
       fixedRent: origCs?.fixed_rent != null ? Number(origCs.fixed_rent) : null,
       indexBaseValue: (origCs && origCs.use_original_index === false && origCs.index_base_value != null) ? Number(origCs.index_base_value) : (h.base.index_base_value != null ? Number(h.base.index_base_value) : null),
       indexBaseDate: (origCs && origCs.use_original_index === false && origCs.index_base_date) ? String(origCs.index_base_date).slice(0, 10) : (h.base.index_base_date ? String(h.base.index_base_date).slice(0, 10) : null),
@@ -270,13 +291,14 @@ export async function performUnitSplit(input: SplitInput): Promise<SplitResult> 
           index_base_value: origCs?.index_base_value ?? null,
           index_base_date: origCs?.index_base_date ?? null,
           area_override: null as number | null,
+          follows_contract_options: origCs?.follows_contract_options ?? true,
         };
       });
     const rows = others.map(function (cs: any) {
       return {
         space_id: cs.space_id, charge_method: cs.charge_method || "per_sqm", price_per_sqm: cs.price_per_sqm ?? null, fixed_rent: cs.fixed_rent ?? null,
         use_original_index: cs.use_original_index ?? true, index_base_value: cs.index_base_value ?? null, index_base_date: cs.index_base_date ?? null,
-        area_override: cs.area_override ?? null,
+        area_override: cs.area_override ?? null, follows_contract_options: cs.follows_contract_options ?? true,
       };
     }).concat(keepRows);
     await areasFor(rows.map(function (r) { return r.space_id; }), areaKnown);
@@ -305,7 +327,7 @@ export async function performUnitSplit(input: SplitInput): Promise<SplitResult> 
       return {
         space_id: cs.space_id, charge_method: cs.charge_method || "per_sqm", price_per_sqm: cs.price_per_sqm ?? null, fixed_rent: cs.fixed_rent ?? null,
         use_original_index: cs.use_original_index ?? true, index_base_value: cs.index_base_value ?? null, index_base_date: cs.index_base_date ?? null,
-        area_override: cs.area_override ?? null,
+        area_override: cs.area_override ?? null, follows_contract_options: cs.follows_contract_options ?? true,
       };
     });
     const added: string[] = [];
@@ -320,10 +342,14 @@ export async function performUnitSplit(input: SplitInput): Promise<SplitResult> 
         : cm === "holder" ? { value: holderTerms?.indexBaseValue ?? null, date: holderTerms?.indexBaseDate ?? null }
         : null;
       const useOriginal = !idx || idx.value == null;
+      // מחיר המחזיק = המחיר בתוקף לפי מנגנון ההסכם המוסר; החלק שומר עליו ואינו
+      // מתומחר מחדש על ידי אופציות/מדרגות של ההסכם המקבל. מחיר המקבל / מחיר חדש
+      // — עוקבים אחרי מנגנון ההסכם המקבל כמו כל יחידה שנוספת בתוספת.
       rows.push({ space_id: idOf(i), charge_method: "per_sqm", price_per_sqm: price, fixed_rent: null,
-        use_original_index: useOriginal, index_base_value: useOriginal ? null : idx!.value, index_base_date: useOriginal ? null : idx!.date, area_override: null });
+        use_original_index: useOriginal, index_base_value: useOriginal ? null : idx!.value, index_base_date: useOriginal ? null : idx!.date, area_override: null,
+        follows_contract_options: pm !== "holder" });
       added.push(p.name.trim() + " (" + fmtArea(Number(p.area)) + ' מ"ר, ₪' + price.toLocaleString("he-IL") + '/מ"ר ' +
-        (pm === "holder" ? "לפי מחיר המחזיק לפני הפיצול" : pm === "custom" ? "מחיר חדש" : "לפי מחיר ההסכם המקבל") +
+        (pm === "holder" ? "לפי מחיר המחזיק בתוקף לפני הפיצול — קבוע, לפי מנגנון ההסכם המוסר" : pm === "custom" ? "מחיר חדש — לפי מנגנון ההסכם המקבל" : "לפי מחיר ההסכם המקבל — לפי מנגנון ההסכם המקבל") +
         ", הצמדה " + (cm === "receiver" || useOriginal ? "למדד הבסיס של ההסכם המקבל" : cm === "holder" ? "למדד הבסיס של המחזיק (" + idx!.value + (idx!.date ? " · " + fmtDate(idx!.date) : "") + ")" : "למדד " + idx!.value + (idx!.date ? " · " + fmtDate(idx!.date) : "")) + ")");
     });
     await areasFor(rows.map(function (r) { return r.space_id; }), areaKnown);

@@ -179,7 +179,7 @@ export default function PropertiesPage() {
       supabase.from("properties").select("*, companies(company_name)").order("name"),
       // upcoming/future included so a signed-not-started lease HOLDS its units
       // in the occupancy figures. Income sums filter them back out below.
-      supabase.from("contracts").select("id, status, contract_type, start_date, rent_type, revenue_pct, min_rent_per_sqm, minimum_rent, rent_per_sqm, charged_area, investment_addition, property_id, end_date, indexation_method, index_mechanism, index_base_date, index_base_value, is_amendment, parent_contract_id, mgmt_fee_per_sqm, mgmt_included_in_revenue, grace_months, grace_days, grace_phase2_days, grace_type, grace_discount_pct, grace_mgmt_discount_pct, grace_ends_on_opening, mgmt_charge_starts, mgmt_free_max_days, works_start_date, planned_handover_date, actual_handover_date, planned_opening_date, actual_opening_date, opening_rule, opening_max_days_from_handover, tenants(name, contact_name, phone, primary_email), contract_spaces(area_override,space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area))").in("status",["active","expiring","extended","upcoming","future"]),
+      supabase.from("contracts").select("id, status, contract_type, start_date, rent_type, revenue_pct, min_rent_per_sqm, minimum_rent, rent_per_sqm, charged_area, investment_addition, property_id, end_date, indexation_method, index_mechanism, index_base_date, index_base_value, is_amendment, parent_contract_id, mgmt_fee_per_sqm, mgmt_included_in_revenue, grace_months, grace_days, grace_phase2_days, grace_type, grace_discount_pct, grace_mgmt_discount_pct, grace_ends_on_opening, mgmt_charge_starts, mgmt_free_max_days, works_start_date, planned_handover_date, actual_handover_date, planned_opening_date, actual_opening_date, opening_rule, opening_max_days_from_handover, tenants(name, contact_name, phone, primary_email), contract_spaces(area_override,follows_contract_options,space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area))").in("status",["active","expiring","extended","upcoming","future"]),
       supabase.from("spaces").select("id, property_id, status, space_name, area").order("space_name"),
       supabase.from("companies").select("id,company_name").order("company_name"),
     ]);
@@ -373,7 +373,7 @@ export default function PropertiesPage() {
     // לצפי בלבד, לא לתפוסה ולא להכנסה החודשית הנוכחית.
     var yearStart = new Date().getFullYear() + "-01-01";
     supabase.from("contracts")
-      .select("id, status, contract_type, start_date, rent_type, revenue_pct, min_rent_per_sqm, minimum_rent, rent_per_sqm, charged_area, investment_addition, property_id, end_date, is_amendment, parent_contract_id, grace_months, grace_days, grace_phase2_days, grace_type, grace_discount_pct, grace_mgmt_discount_pct, grace_ends_on_opening, mgmt_charge_starts, mgmt_free_max_days, works_start_date, planned_handover_date, actual_handover_date, planned_opening_date, actual_opening_date, opening_rule, opening_max_days_from_handover, contract_spaces(area_override,space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area))")
+      .select("id, status, contract_type, start_date, rent_type, revenue_pct, min_rent_per_sqm, minimum_rent, rent_per_sqm, charged_area, investment_addition, property_id, end_date, is_amendment, parent_contract_id, grace_months, grace_days, grace_phase2_days, grace_type, grace_discount_pct, grace_mgmt_discount_pct, grace_ends_on_opening, mgmt_charge_starts, mgmt_free_max_days, works_start_date, planned_handover_date, actual_handover_date, planned_opening_date, actual_opening_date, opening_rule, opening_max_days_from_handover, contract_spaces(area_override,follows_contract_options,space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area))")
       .eq("property_id", selected).eq("is_amendment", false)
       .eq("status", "ended").gte("end_date", yearStart)
       .then(function(endedRes) {
@@ -411,7 +411,7 @@ export default function PropertiesPage() {
       var area = csArea(cs);
       var isFixed = cs.charge_method === "fixed" && Number(cs.fixed_rent) > 0;
       var base = cs.charge_method === "included" ? 0 : isFixed ? Number(cs.fixed_rent) : (Number(cs.price_per_sqm) || Number(c.rent_per_sqm) || 0) * area;
-      var sched = buildSpaceRentSchedule({ contractStartDate: c.start_date, spaceArea: area, isFixed: isFixed, spaceBaseRent: base, spaceTiers: [], contractTiers: tiers, exercisedOptions: exercised });
+      var sched = buildSpaceRentSchedule({ space: cs, contractStartDate: c.start_date, spaceArea: area, isFixed: isFixed, spaceBaseRent: base, spaceTiers: [], contractTiers: tiers, exercisedOptions: exercised });
       total += rentAtDate(sched, date);
     });
     if (total === 0) total = (Number(c.rent_per_sqm) || 0) * (Number(c.charged_area) || 0);

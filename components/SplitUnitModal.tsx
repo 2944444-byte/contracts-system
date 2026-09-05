@@ -3,7 +3,7 @@
 // לשוכר אחר). ההרצה עצמה ב-lib/split-unit.ts.
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
-import { performUnitSplit, validateSplit, partsTotal, type SplitPart, type SplitCandidateContract, type SplitResult, type HolderTerms } from "@/lib/split-unit";
+import { performUnitSplit, validateSplit, partsTotal, holderEffectivePerSqm, type SplitPart, type SplitCandidateContract, type SplitResult, type HolderTerms } from "@/lib/split-unit";
 
 const ic = "w-full rounded-lg border border-slate-300 px-3 py-2 text-right text-sm text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400";
 
@@ -42,8 +42,8 @@ export default function SplitUnitModal(props: {
       if (holder) {
         // How the holder is charged for this unit — the retained part inherits it,
         // and a transferred part may take it as its price / CPI base.
-        const { data: hBase } = await supabase.from("contracts").select("rent_per_sqm, index_base_value, index_base_date").eq("id", holder.contractId).single();
-        const { data: amends } = await supabase.from("contracts").select("id, contract_spaces(area_override,space_id,charge_method,fixed_rent,price_per_sqm,use_original_index,index_base_value,index_base_date)")
+        const { data: hBase } = await supabase.from("contracts").select("id, start_date, rent_per_sqm, index_base_value, index_base_date").eq("id", holder.contractId).single();
+        const { data: amends } = await supabase.from("contracts").select("id, contract_spaces(area_override,follows_contract_options,space_id,charge_method,fixed_rent,price_per_sqm,use_original_index,index_base_value,index_base_date)")
           .eq("parent_contract_id", holder.contractId).eq("is_amendment", true).order("amendment_number", { ascending: false });
         const latest = (amends || []).find(function (a: any) { return (a.contract_spaces || []).length > 0; });
         let cs: any = latest ? (latest.contract_spaces || []).find(function (x: any) { return x.space_id === space.id; }) : null;
@@ -53,14 +53,14 @@ export default function SplitUnitModal(props: {
         }
         setHolderCharge({
           chargeMethod: cs?.charge_method || "per_sqm",
-          pricePerSqm: cs?.charge_method === "fixed" ? null : (cs?.price_per_sqm != null ? Number(cs.price_per_sqm) : (hBase?.rent_per_sqm != null ? Number(hBase.rent_per_sqm) : null)),
+          pricePerSqm: cs?.charge_method === "fixed" ? null : await holderEffectivePerSqm(hBase, cs, space.id, origArea, date),
           fixedRent: cs?.fixed_rent != null ? Number(cs.fixed_rent) : null,
           indexBaseValue: (cs && cs.use_original_index === false && cs.index_base_value != null) ? Number(cs.index_base_value) : (hBase?.index_base_value != null ? Number(hBase.index_base_value) : null),
           indexBaseDate: (cs && cs.use_original_index === false && cs.index_base_date) ? String(cs.index_base_date).slice(0, 10) : (hBase?.index_base_date ? String(hBase.index_base_date).slice(0, 10) : null),
         });
       }
     })();
-  }, [space.id, space.property_id, holder?.contractId]);
+  }, [space.id, space.property_id, holder?.contractId, date]);
 
   const total = partsTotal(parts);
   const diff = Math.round((total - origArea) * 100) / 100;
@@ -175,9 +175,9 @@ export default function SplitUnitModal(props: {
                             <div className={pm === "custom" ? "col-span-8" : "col-span-12"}>
                               <label className="mb-1 block text-[11px] text-slate-500">מחיר למ"ר לחלק המועבר</label>
                               <select value={pm} onChange={function (e) { setPart(i, { priceMode: e.target.value as any }); }} className={ic}>
-                                <option value="receiver">מחיר ההסכם המקבל{c && c.rent_per_sqm != null ? " (₪" + c.rent_per_sqm.toLocaleString("he-IL") + ')' : ""}</option>
-                                {holder && <option value="holder">מחיר המחזיק ליחידה לפני הפיצול{holderPriceLabel ? " (" + holderPriceLabel + ")" : ""}</option>}
-                                <option value="custom">מחיר חדש…</option>
+                                <option value="receiver">מחיר ההסכם המקבל{c && c.rent_per_sqm != null ? " (₪" + c.rent_per_sqm.toLocaleString("he-IL") + ' בסיס)' : ""} — לפי מנגנון ההסכם המקבל</option>
+                                {holder && <option value="holder">מחיר המחזיק בתוקף לפני הפיצול{holderPriceLabel ? " (" + holderPriceLabel + ")" : ""} — קבוע, לפי מנגנון ההסכם המוסר</option>}
+                                <option value="custom">מחיר חדש… (לפי מנגנון ההסכם המקבל)</option>
                               </select>
                             </div>
                             {pm === "custom" && (

@@ -169,7 +169,7 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
     setProgress({ current: 0, total: 0, label: "טוען נתוני חוזים...", startedAt: calcStart });
     try {
       var { data: contracts } = await supabase.from("contracts")
-        .select("id, rent_per_sqm, charged_area, investment_addition, payment_method, payment_frequency, vat_type, indexation_method, index_mechanism, index_base_date, index_base_value, start_date, end_date, is_amendment, grace_months, grace_days, grace_phase2_days, grace_type, grace_discount_pct, grace_mgmt_discount_pct, grace_ends_on_opening, mgmt_charge_starts, mgmt_free_max_days, works_start_date, works_end_date, planned_handover_date, actual_handover_date, planned_opening_date, actual_opening_date, rent_type, minimum_rent, mgmt_included_in_revenue, tenants(name), contract_spaces(area_override,space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area))")
+        .select("id, rent_per_sqm, charged_area, investment_addition, payment_method, payment_frequency, vat_type, indexation_method, index_mechanism, index_base_date, index_base_value, start_date, end_date, is_amendment, grace_months, grace_days, grace_phase2_days, grace_type, grace_discount_pct, grace_mgmt_discount_pct, grace_ends_on_opening, mgmt_charge_starts, mgmt_free_max_days, works_start_date, works_end_date, planned_handover_date, actual_handover_date, planned_opening_date, actual_opening_date, rent_type, minimum_rent, mgmt_included_in_revenue, tenants(name), contract_spaces(area_override,follows_contract_options,space_id,charge_method,fixed_rent,price_per_sqm,spaces(space_name,area))")
         .eq("property_id", propId)
         .in("status", ["active", "extended"])
         .eq("is_amendment", false);
@@ -246,7 +246,7 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
       // to respect mid-year amendments — the diff calc reflects what
       // each unit ACTUALLY required at each moment in time.
       var { data: allAmendments } = await supabase.from("contracts")
-        .select("id, parent_contract_id, amendment_date, amendment_notes, start_date, end_date, contract_spaces(area_override,space_id, charge_method, fixed_rent, price_per_sqm, spaces(space_name, area))")
+        .select("id, parent_contract_id, amendment_date, amendment_notes, start_date, end_date, contract_spaces(area_override,follows_contract_options,space_id, charge_method, fixed_rent, price_per_sqm, spaces(space_name, area))")
         .in("parent_contract_id", contractIds)
         .eq("is_amendment", true)
         .order("amendment_date", { ascending: true });
@@ -330,7 +330,7 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
             var baseRentPerSqm = Number(cs.price_per_sqm) || Number(c.rent_per_sqm) || 0;
             var spaceStart = cs.charge_method === "included" ? 0 : isFixed ? (Number(cs.fixed_rent) || 0) : baseRentPerSqm * area;
             var spaceTiers = (allTiers ?? []).filter(function(t: any) { return t.contract_id === c.id && t.space_id === cs.space_id; });
-            var sched = buildSpaceRentSchedule({
+            var sched = buildSpaceRentSchedule({ space: cs,
               contractStartDate: c.start_date,
               spaceArea: area,
               isFixed: isFixed,
@@ -362,7 +362,7 @@ export default function CpiDiffTab({ properties }: { properties: any[] }) {
           startMonthly += spaceStart;
 
           var spaceTiers = (allTiers ?? []).filter(function(t: any) { return t.contract_id === c.id && t.space_id === cs.space_id; });
-          var schedule = buildSpaceRentSchedule({
+          var schedule = buildSpaceRentSchedule({ space: cs,
             contractStartDate: c.start_date,
             spaceArea: area,
             isFixed: isFixed,

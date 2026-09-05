@@ -101,7 +101,7 @@ export default function DocumentsPage() {
     const scope = await getScopeIds();
     const [docRes, conRes, guarRes, insTRes, insBRes, safRes, revRes] = await Promise.all([
       supabase.from("documents").select("*, contracts(property_id, tenants(name), properties(name))").order("created_at", { ascending: false }),
-      supabase.from("contracts").select("id, document_url, property_id, status, start_date, tenants(name), properties(name), contract_spaces(area_override,spaces(space_name))").in("status", ["active","expiring","extended","upcoming","ended"]),
+      supabase.from("contracts").select("id, document_url, property_id, status, start_date, tenants(name), properties(name), contract_spaces(area_override,follows_contract_options,spaces(space_name))").in("status", ["active","expiring","extended","upcoming","ended"]),
       supabase.from("guarantees").select("id, status, document_url, documents, created_at, contract_id, contracts(property_id, tenants(name), properties(name))"),
       supabase.from("insurances_tenant").select("id, certificate_url, documents, created_at, end_date, contract_id, contracts(property_id, tenants(name), properties(name))"),
       supabase.from("insurances_building").select("id, document_url, documents, created_at, end_date, property_id, properties(name)"),
